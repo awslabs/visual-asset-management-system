@@ -62,4 +62,27 @@ describe("ErrorBoundary", () => {
         fireEvent.click(screen.getByRole("button", { name: "Reload" }));
         expect(reloadPage).toHaveBeenCalledTimes(1);
     });
+
+    it("passes the caught error to a function fallback", () => {
+        failure = new Error("render failed");
+        const fallback = jest.fn((error: Error | null) => <div>fallback: {error?.message}</div>);
+        render(
+            <ErrorBoundary fallback={fallback}>
+                <Thrower />
+            </ErrorBoundary>
+        );
+        expect(screen.getByText("fallback: render failed")).toBeInTheDocument();
+        expect(fallback).toHaveBeenCalledWith(failure);
+    });
+
+    it("renders an element fallback as given", () => {
+        failure = new Error("render failed");
+        render(
+            <ErrorBoundary fallback={<div>static fallback</div>}>
+                <Thrower />
+            </ErrorBoundary>
+        );
+        expect(screen.getByText("static fallback")).toBeInTheDocument();
+        expect(screen.queryByText("Component failed to load")).not.toBeInTheDocument();
+    });
 });
