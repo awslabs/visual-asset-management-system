@@ -29,7 +29,7 @@ web/
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table, lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -172,7 +172,7 @@ web/
 #### **Step 3: Page and Route Setup**
 
 -   [ ] **Create thin page wrapper**: In `src/pages/`
--   [ ] **Add lazy import**: `React.lazy(() => import("./pages/MyPage"))` in `routes.tsx`
+-   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
 -   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
 
@@ -258,11 +258,11 @@ window.location.href = "/databases/mydb/assets";
 
 ### **Rule 4: Lazy Load All Pages in routes.tsx**
 
-Every page component in `routes.tsx` MUST be lazy-loaded with `React.lazy`:
+Every page component in `routes.tsx` MUST be lazy-loaded with `lazyWithRetry` (`src/utils/chunkLoadRecovery.ts`), which retries a chunk that failed to download and then reloads the page once:
 
 ```typescript
 // CORRECT
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // INCORRECT -- defeats code splitting
 import MyPage from "./pages/MyPage";
@@ -642,7 +642,7 @@ export default MyPage;
 Then in `routes.tsx`:
 
 ```typescript
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -919,7 +919,7 @@ npm run prettier-fix
 1. **Importing apiClient in components/pages** -- use service layer files
 2. **Importing Cloudscape from barrel export** -- use individual subpaths
 3. **Using BrowserRouter** -- must use HashRouter
-4. **Eagerly importing pages** -- must use React.lazy
+4. **Eagerly importing pages** -- must use lazyWithRetry
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken

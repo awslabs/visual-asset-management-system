@@ -100,7 +100,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Clone automated security helper
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
@@ -111,6 +111,45 @@ jobs:
                   # ASH v3.7.1
                   ref: af1206aff596f1288ad066828058b3011de2a998 # pragma: allowlist secret
                   path: ./ash
+
+            # ASH installs Trivy into its image with Trivy's install script, which downloads the
+            # archive from get.trivy.dev; that host is not reliably reachable from runners. The same
+            # Trivy version is downloaded here from its GitHub release, checked against the SHA-256
+            # pinned below, and copied into the ASH image in place of the install script. The step
+            # fails if the ASH Dockerfile no longer has that install line or names another version,
+            # so an ASH bump cannot skip the swap silently.
+            - name: Provide a pinned Trivy to the ASH image build
+              env:
+                  # The version ASH's Dockerfile pins at the ASH ref above. Bump both pins with every
+                  # ASH ref change; infra/test/ci/ciWorkflow.test.ts fails when they move apart.
+                  TRIVY_VERSION: "0.69.3"
+                  # sha256 of trivy_0.69.3_Linux-64bit.tar.gz, from the release's checksums file
+                  TRIVY_SHA256: 1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75 # pragma: allowlist secret
+              run: |
+                  set -euo pipefail
+                  test "$(uname -m)" = "x86_64"
+                  archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+                  curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$archive" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+                  echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+                  mkdir -p ash/ci-trivy
+                  tar -xzf "$RUNNER_TEMP/$archive" -C ash/ci-trivy trivy
+                  ash/ci-trivy/trivy --version
+                  python3 - <<'PY'
+                  import os, re, sys
+                  path = "ash/Dockerfile"
+                  text = open(path, encoding="utf-8").read()
+                  version = os.environ["TRIVY_VERSION"]
+                  if f'ARG TRIVY_VERSION="v{version}"' not in text:
+                      print(f"::error title=Trivy pin::the ASH Dockerfile does not pin Trivy v{version}")
+                      sys.exit(1)
+                  pattern = re.compile(r"^RUN .*aquasecurity/trivy/\$\{TRIVY_VERSION\}/contrib/install\.sh.*$", re.M)
+                  text, count = pattern.subn("COPY ci-trivy/trivy /usr/local/bin/trivy", text)
+                  if count != 1:
+                      print(f"::error title=Trivy pin::expected one Trivy install line in the ASH Dockerfile, found {count}")
+                      sys.exit(1)
+                  open(path, "w", encoding="utf-8").write(text)
+                  PY
+                  grep -n "ci-trivy" ash/Dockerfile
 
             # ASH builds its scanner image on the base image named in its Dockerfile, hosted on public
             # ECR. Anonymous public ECR pulls are rate limited per source IP, which shared runners hit,
@@ -240,7 +279,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install VamsCLI dependencies
               working-directory: tools/VamsCLI
@@ -566,7 +605,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install the system packages the group's suites need
               # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner
@@ -611,7 +650,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install VamsMCP dependencies
               working-directory: tools/VamsMCP
