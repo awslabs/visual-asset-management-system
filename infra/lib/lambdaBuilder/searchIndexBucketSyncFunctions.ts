@@ -252,10 +252,10 @@ export function buildAssetIndexingFunction(
  *
  * The deleted-events handler makes no S3 write that re-enters its own queue, so it keeps the default.
  *
- * Set in the partitions that have the detection: commercial (`aws`) and the AWS European Sovereign Cloud
- * (`aws-eusc`), which gained it in 2026-09, on by default. The AWS GovCloud (US) user guide lists it as
- * not available, so `aws-us-gov` and any other partition omit the property: there is nothing to opt out
- * of, and the function template stays unchanged there.
+ * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the
+ * AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not available,
+ * so `aws-us-gov` and any other partition omit the property: there is nothing to opt out of, and the
+ * function template stays unchanged there.
  *
  * shortcut: this is a stopgap. Core upload and indexing must not depend on a partition-specific Lambda
  * setting, and a partition that gains the detection later drops records again until it is added here.
