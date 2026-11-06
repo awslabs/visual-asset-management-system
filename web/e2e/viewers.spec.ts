@@ -4,13 +4,22 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
 import {
-    cspViolations,
-    pixelStats,
-    recordCspViolations,
-    trackForeignHosts,
-} from "./support/viewerRender";
+    type AssetFileRef,
+    expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -30,52 +39,6 @@ import {
  * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
  * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -105,28 +68,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -225,9 +166,9 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -280,82 +221,261 @@ for (const c of cases) {
 }
 
 /**
- * The VNTANA viewer is a licensed add-on, disabled by default: its install step builds the bundle
- * into /viewers/vntana/ only when addonViewerConfig.json enables it. The case skips when the
- * deployment does not serve the bundle (a disabled viewer is not offered for .glb).
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
+ *
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
-async function servesVntanaBundle(page: Page): Promise<boolean> {
+
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    viewer: string;
+    kind: RenderKind;
+    /** Viewer to choose when the file's extension matches more than one viewer. */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+    /**
+     * A web path the deployment serves only when the viewer is enabled (a licensed add-on's
+     * bundle). The case skips, with the reason, when the path is not served as JavaScript.
+     */
+    servedBundle?: string;
+}
+
+/** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
+async function servesScript(page: Page, path: string): Promise<boolean> {
     const origin = new URL(page.url()).origin;
-    const res = await page.request.get(`${origin}/viewers/vntana/vntana-viewer.bundle.js`);
-    // A missing file may come back as the SPA's index.html with 200, so check the type too.
+    const res = await page.request.get(`${origin}${path}`);
     return res.ok() && /javascript/i.test(res.headers()["content-type"] ?? "");
 }
 
-/**
- * CSP violations the VNTANA case tolerates. Empty: the viewer draws with WebGL and runs its
- * WebAssembly under the deployment's `'wasm-unsafe-eval'`, and needs nothing else.
- */
-const VNTANA_CSP_BASELINE: string[] = [];
+/** The VNTANA bundle, built only when `vntana-viewer` is enabled in addonViewerConfig.json. */
+const VNTANA_BUNDLE = "/viewers/vntana/vntana-viewer.bundle.js";
 
-// The empty scene is the viewer's flat background: one colour, no luminance spread. A model adds
-// shaded, lit surfaces. The measured centre region keeps the scene-graph panel (top left) and the
-// toolbars (bottom right) out of the numbers.
-const VNTANA_RENDER = {
-    region: { x: 0.4, y: 0.2, width: 0.3, height: 0.5 },
-    minColours: 24,
-    minLumStd: 8,
-};
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // Licensed add-on, disabled by default: these cases run only on a build that enables it.
+    {
+        sample: "vntana-glb-box",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    {
+        sample: "vntana-glb-avocado",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+];
 
-test("viewer renders a .glb file (VNTANA, licensed add-on) with no CSP, error or third-party request", async ({
-    page,
-}) => {
-    const subject = await viewerSubject(page, ".glb");
-    test.skip(!subject, `No .glb file was found via the API in ${LOOKUP_SCOPE}`);
-    test.skip(
-        !(await servesVntanaBundle(page)),
-        "This deployment does not serve the VNTANA bundle (vntana-viewer is disabled in " +
-            "addonViewerConfig.json, the default)"
-    );
-    const api = await apiContext(page);
-    const allowedHosts = [new URL(page.url()).hostname];
-    if (api) allowedHosts.push(new URL(api.base).hostname);
-    const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
-    console.log(`[viewers] VNTANA .glb subject=${JSON.stringify(subject)}`);
+const seeded = viewerSamples();
 
-    await recordCspViolations(page);
-    const errors = watchErrors(page);
-    const foreign = trackForeignHosts(page, allowedHosts);
-    await openFile(page, subject!);
-    await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
-        timeout: 60_000,
-    });
-    await chooseViewer(page, /VNTANA/i);
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
 
-    // The component shows its info panel only after the element's `load` event, and an error box
-    // after its `error` event.
-    const root = page.locator(".vntana-viewer-root");
-    await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
-    await expect(root.getByText("VNTANA 3D Viewer")).toBeVisible({ timeout: 90_000 });
-    const canvas = root.locator("vntana-viewer canvas").first();
-    await expect(canvas).toBeVisible();
-    // The viewer's own controls, registered by the bundle, are on the page.
-    await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
-    await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
 
-    // Let a few frames settle, then measure the drawing.
-    await page.waitForTimeout(3000);
-    const stats = await pixelStats(page, root.locator("vntana-viewer"), VNTANA_RENDER.region);
-    console.log(`[viewers] VNTANA ${fileName} pixels=${JSON.stringify(stats)}`);
-    expect(
-        stats.colours,
-        `${fileName} rendered ${stats.colours} colours in the centre of the VNTANA canvas, ` +
-            `an empty scene renders 1`
-    ).toBeGreaterThanOrEqual(VNTANA_RENDER.minColours);
-    expect(stats.lumStd).toBeGreaterThanOrEqual(VNTANA_RENDER.minLumStd);
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
+            }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
 
-    expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
-    expect(await cspViolations(page), "CSP violations while VNTANA rendered").toEqual(
-        VNTANA_CSP_BASELINE
-    );
-    expect(foreign.hosts(), "requests to hosts outside the app, its API and AWS").toEqual([]);
+            if (c.servedBundle) {
+                test.skip(
+                    !(await servesScript(page, c.servedBundle)),
+                    `this deployment does not serve ${c.servedBundle}: ${c.viewer} is not enabled`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.select);
+            }
+
+            if (c.servedBundle) {
+                // The VNTANA component shows its info panel after the element's `load` event and an
+                // error box after its `error` event (3.x reports what failed in `detail.type`).
+                await expect(page.getByText(/Error Loading Model/i)).toHaveCount(0);
+                await expect(page.getByText("VNTANA 3D Viewer", { exact: true })).toBeVisible({
+                    timeout: 90_000,
+                });
+                await expect(page.locator("vntana-zoom-in-button")).toHaveCount(1);
+                await expect(page.locator("vntana-scene-graph-button")).toHaveCount(1);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                const headers = page.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await page.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
 });

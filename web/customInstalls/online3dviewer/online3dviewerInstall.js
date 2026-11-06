@@ -9,7 +9,9 @@ const path = require("path");
 const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 
 // Configurations
-const viewerId = "online3d-viewer";
+// Both registry entries render with this one bundle: the Online 3D Viewer and its Rhinoceros 3D
+// (.3dm) entry, which is offered only with ALLOWUNSAFEEVAL because rhino3dm compiles with eval (#921).
+const viewerIds = ["online3d-viewer", "online3d-viewer-rhino"];
 const npmPackageDir = "./customInstalls/online3dviewer";
 const npmRepoSourceDestDir = "./customInstalls/online3dviewer/node_modules";
 const publicDestinationDir = "./public/viewers/online3dviewer";
@@ -204,8 +206,12 @@ const main = async () => {
         await previousCleanUp();
 
         // Check if viewer is enabled in config
-        if (!checkViewerEnabled(viewerId)) {
-            console.log(`Online3DViewer: Viewer "${viewerId}" is disabled in viewerConfig.json`);
+        if (!viewerIds.some((viewerId) => checkViewerEnabled(viewerId))) {
+            console.log(
+                `Online3DViewer: Viewers "${viewerIds.join(
+                    '", "'
+                )}" are disabled in viewerConfig.json`
+            );
             console.log("Online3DViewer: Skipping installation");
             console.log("=".repeat(60));
             return;
