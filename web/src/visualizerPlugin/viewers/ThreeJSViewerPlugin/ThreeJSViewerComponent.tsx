@@ -18,7 +18,7 @@ import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import Alert from "@cloudscape-design/components/alert";
 import { isCadSupportError } from "./utils/fileLoaders";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
-import { loadWithDependencies } from "./utils/dependencyLoading";
+import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
 
 /** Referenced files listed by name in the notice before the rest are counted. */
@@ -1342,8 +1342,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }}
                 >
                     {error}
-                    {/* A CAD setup message is about the deployment or browser, not the file. */}
-                    {!isCadSupportError(error) && (
+                    {/* A CAD setup message is about the deployment or browser, not the file, and
+                        a USD scene with nothing to draw is a supported format. */}
+                    {!isCadSupportError(error) && error !== USD_NO_GEOMETRY_MESSAGE && (
                         <>
                             <br />
                             <br />

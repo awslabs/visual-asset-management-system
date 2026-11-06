@@ -174,6 +174,24 @@ function unique(values: string[]): string[] {
     return Array.from(new Set(values));
 }
 
+/** Shown instead of an empty canvas when a USD file opens but nothing in it can be drawn. */
+export const USD_NO_GEOMETRY_MESSAGE =
+    "This USD scene opened, but the viewer found nothing in it to display. The scene may use USD " +
+    "features this viewer cannot combine yet, such as variants or payloads. Flattening the scene " +
+    "into a single file, or packaging it with its files as one .usdz, can help; a desktop USD " +
+    "viewer shows the full scene.";
+
+/** True when the object holds at least one mesh, point cloud or line to draw. */
+export function hasDrawableGeometry(object: any): boolean {
+    let found = false;
+    object?.traverse?.((node: any) => {
+        if (node.isMesh || node.isPoints || node.isLine) {
+            found = true;
+        }
+    });
+    return found;
+}
+
 /** Loads a model and the files it references (see the module comment for each format). */
 export async function loadWithDependencies(
     request: DependencyLoadRequest
@@ -271,6 +289,11 @@ export async function loadWithDependencies(
         result = await loadFile(usdPackage.buffer, extension, fileName, managerFor());
     } else {
         result = await loadFile(arrayBuffer, extension, fileName, managerFor());
+    }
+
+    if (USD_FORMATS.includes(extension) && result.object && !hasDrawableGeometry(result.object)) {
+        disposeObjectTree(result.object);
+        throw new Error(USD_NO_GEOMETRY_MESSAGE);
     }
 
     const unloaded = resolver.notLoaded();

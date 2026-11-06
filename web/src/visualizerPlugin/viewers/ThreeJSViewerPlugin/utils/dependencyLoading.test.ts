@@ -17,6 +17,7 @@ import {
     extractMtlTextureRefs,
     extractObjMaterialLibraries,
     loadWithDependencies,
+    USD_NO_GEOMETRY_MESSAGE,
 } from "./dependencyLoading";
 import { loadFile } from "./fileLoaders";
 
@@ -67,6 +68,17 @@ function newResolver() {
 }
 
 const buffer = (value: string) => encoder.encode(value).buffer as ArrayBuffer;
+
+/** A parsed scene: a root group holding one child node with the given flags. */
+function sceneWith(child: Record<string, any>) {
+    return {
+        isGroup: true,
+        traverse(fn: (node: any) => void) {
+            fn(this);
+            fn(child);
+        },
+    };
+}
 
 describe("reference scanners", () => {
     it("reads OBJ material libraries the way OBJLoader does", () => {
@@ -282,7 +294,7 @@ describe("loadWithDependencies", () => {
         installFetch({ "part.usda": "#usda 1.0\n" });
         const zipSync = jest.fn(() => new Uint8Array([0x50, 0x4b, 0x03, 0x04]));
         installBundle({ fflate: { zipSync, unzipSync: jest.fn() } });
-        mockedLoadFile.mockResolvedValue({ object: {} });
+        mockedLoadFile.mockResolvedValue({ object: sceneWith({ isMesh: true }) });
 
         await loadWithDependencies({
             arrayBuffer: buffer("prepend references = @./part.usda@"),
@@ -294,6 +306,54 @@ describe("loadWithDependencies", () => {
 
         expect(Object.keys((zipSync.mock.calls[0] as any)[0])).toEqual(["scene.usda", "part.usda"]);
         expect(new Uint8Array(mockedLoadFile.mock.calls[0][0])[0]).toBe(0x50);
+    });
+
+    it("says so when a USD scene composes nothing to draw, instead of a blank canvas", async () => {
+        installFetch({ "geo/teapot.usd": "#usda 1.0\n" });
+        const zipSync = jest.fn(() => new Uint8Array([0x50, 0x4b, 0x03, 0x04]));
+        installBundle({ fflate: { zipSync, unzipSync: jest.fn() } });
+        const dispose = jest.fn();
+        mockedLoadFile.mockResolvedValue({
+            object: sceneWith({ isGroup: true, geometry: { dispose } }),
+        });
+
+        await expect(
+            loadWithDependencies({
+                arrayBuffer: buffer("payload = @geo/teapot.usd@"),
+                extension: "usd",
+                fileKey: "Teapot.usd",
+                fileName: "Teapot.usd",
+                resolver: newResolver(),
+            })
+        ).rejects.toThrow(USD_NO_GEOMETRY_MESSAGE);
+        expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps USD scenes that hold points or lines, and other formats without meshes", async () => {
+        installFetch({});
+        installBundle({ fflate: { zipSync: jest.fn(), unzipSync: jest.fn() } });
+
+        mockedLoadFile.mockResolvedValue({ object: sceneWith({ isPoints: true }) });
+        await expect(
+            loadWithDependencies({
+                arrayBuffer: buffer("#usda 1.0\n"),
+                extension: "usda",
+                fileKey: "cloud.usda",
+                fileName: "cloud.usda",
+                resolver: newResolver(),
+            })
+        ).resolves.toBeDefined();
+
+        mockedLoadFile.mockResolvedValue({ object: sceneWith({ isGroup: true }) });
+        await expect(
+            loadWithDependencies({
+                arrayBuffer: new ArrayBuffer(8),
+                extension: "glb",
+                fileKey: "empty.glb",
+                fileName: "empty.glb",
+                resolver: newResolver(),
+            })
+        ).resolves.toBeDefined();
     });
 
     it("rewrites glTF URIs to blob URLs", async () => {

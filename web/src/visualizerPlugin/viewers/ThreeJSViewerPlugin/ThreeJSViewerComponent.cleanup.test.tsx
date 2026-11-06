@@ -247,6 +247,7 @@ describe("ThreeJSViewerComponent cleanup", () => {
     it("lists referenced files that were not loaded, ten by name", async () => {
         const model = new FakeObject3D();
         model.type = "Mesh";
+        (model as any).isMesh = true;
         const warnings = Array.from({ length: 12 }, (_, i) => `tex${i}.png (not found)`);
         mockedLoadFile.mockResolvedValue({ object: model, warnings });
 
@@ -266,6 +267,7 @@ describe("ThreeJSViewerComponent cleanup", () => {
     it("names the notice's dismiss button and lets the keyboard reach it", async () => {
         const model = new FakeObject3D();
         model.type = "Mesh";
+        (model as any).isMesh = true;
         mockedLoadFile.mockResolvedValue({ object: model, warnings: ["x.png (not found)"] });
 
         const view = renderViewer("models/scene.usda");
@@ -282,9 +284,22 @@ describe("ThreeJSViewerComponent cleanup", () => {
         view.unmount();
     });
 
+    it("explains a USD scene with nothing to draw instead of showing a blank canvas", async () => {
+        mockedLoadFile.mockResolvedValue({ object: new FakeObject3D() });
+
+        const view = renderViewer("models/Teapot.usd");
+
+        expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
+        expect(screen.getByText(/such as variants or payloads/)).toBeTruthy();
+        expect(screen.queryByText(/Please ensure the file is a supported 3D format/)).toBeNull();
+
+        view.unmount();
+    });
+
     it("releases the renderer and its context exactly once after a successful load", async () => {
         const model = new FakeObject3D();
         model.type = "Mesh";
+        (model as any).isMesh = true;
         mockedLoadFile.mockResolvedValue({ object: model });
 
         const view = renderViewer("models/part.glb");
