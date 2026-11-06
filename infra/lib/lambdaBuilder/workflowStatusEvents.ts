@@ -10,7 +10,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import { Duration, Names } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
-import { IAMArn } from "../helper/service-helper";
+import { IAMArn, Service } from "../helper/service-helper";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 /**
@@ -107,13 +107,13 @@ export function buildWorkflowStatusChangeRule(
     const permission = new lambda.CfnPermission(scope, WORKFLOW_STATUS_CHANGE_PERMISSION_ID, {
         action: "lambda:InvokeFunction",
         functionName: executionServiceFunction.functionArn,
-        principal: "events.amazonaws.com",
+        principal: Service("EVENTS").PrincipalString,
         sourceArn: ruleArn,
     });
     dlq.addToResourcePolicy(
         new iam.PolicyStatement({
             sid: "AllowWorkflowStatusChangeRule",
-            principals: [new iam.ServicePrincipal("events.amazonaws.com")],
+            principals: [Service("EVENTS").Principal],
             effect: iam.Effect.ALLOW,
             actions: ["sqs:SendMessage"],
             resources: [dlq.queueArn],
