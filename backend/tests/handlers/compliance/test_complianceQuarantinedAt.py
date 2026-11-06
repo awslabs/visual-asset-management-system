@@ -88,9 +88,11 @@ class World:
             "databaseId:assetId": f"{DB}:{ASSET}", "schemaName": OLD, "schemaVersion": 1,
             "evaluatedAt": at, "status": "completed", "verdict": compliance_state,
             "ruleResults": "[]"})
-        assert store._write_evaluation_state(
-            DB, ASSET, USER, evaluation_id, at, at, OLD, 1, self.state(), compliance_state,
-            "completed", [], {})
+        # The state write is stamped with the time of the write (D155): `at` here.
+        with patch.object(store, "now_iso", return_value=at):
+            assert store._write_evaluation_state(
+                DB, ASSET, USER, evaluation_id, at, OLD, 1, self.state(), compliance_state,
+                "completed", [], {})
 
     def call(self, service, method, path, params=None, body=None, query=None):
         response = service.lambda_handler(
@@ -154,8 +156,8 @@ class TestTheQuarantineTime:
         with World() as world:
             world.evaluate("quarantined", QUARANTINED)
             assert store._write_evaluation_state(
-                DB, ASSET, USER, "ev-error", "2026-11-05T03:00:00+00:00",
-                "2026-11-05T03:00:00+00:00", OLD, 1, world.state(), None, "error", [], {})
+                DB, ASSET, USER, "ev-error", "2026-11-05T03:00:00+00:00", OLD, 1, world.state(),
+                None, "error", [], {})
             assert world.state()["quarantinedAt"] == QUARANTINED
 
     def test_a_release_clears_it(self):

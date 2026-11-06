@@ -418,9 +418,10 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
                              event=event)
 
     actor = claims_and_roles["tokens"][0]
-    now = datetime.now(timezone.utc).isoformat()
     schema_name = item.get("schemaName") or None
     schema_version = _current_schema_version(schema_name)
+    # The time of the write, taken after the reads it depends on (D155).
+    now = datetime.now(timezone.utc).isoformat()
 
     store.update_asset_state(database_id, asset_id, {
         "complianceState": engine.STATE_EXCEPTION,
@@ -477,7 +478,6 @@ def revoke_exception(event, database_id, asset_id):
         return general_error(body={"message": "No active exception"}, event=event)
 
     actor = claims_and_roles["tokens"][0]
-    now = datetime.now(timezone.utc).isoformat()
     previous_state = item.get("complianceState")
     last_evaluation_id = item.get("lastEvaluationId") or None
     evaluation = store.get_evaluation(last_evaluation_id) if last_evaluation_id else None
@@ -494,6 +494,8 @@ def revoke_exception(event, database_id, asset_id):
         rule_results = []
     schema_name = (evaluation or {}).get("schemaName") or item.get("schemaName") or ""
 
+    # The time of the write, taken after the reads it depends on (D155).
+    now = datetime.now(timezone.utc).isoformat()
     updates = {
         "complianceState": new_state,
         "quarantineReason": None,

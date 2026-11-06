@@ -1743,7 +1743,7 @@ def run_evaluation(
             _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
                                           {"ruleNames": error_rules, "verdict": verdict.value})
         _write_evaluation_state(
-            database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
+            database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name,
             schema_version, previous, compliance_state, status, rule_results, audit_details)
         return result
 
@@ -1753,7 +1753,7 @@ def run_evaluation(
         _write_evaluation_error_audit(database_id, asset_id, actor, schema_name, evaluation_id,
                                       {"ruleNames": error_rules, "verdict": verdict.value})
     _write_evaluation_state(
-        database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
+        database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name,
         schema_version, previous, compliance_state, status, rule_results, audit_details)
 
     # The rules launched or waiting; a waiting rule's completion is recorded like a launched one's.
@@ -2000,7 +2000,7 @@ def _superseded_result(evaluation_id: str, previous: Dict[str, Any]) -> Dict[str
     }
 
 
-def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at, updated_at,
+def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluated_at,
                             schema_name, schema_version, previous, compliance_state,
                             evaluation_status, rule_results, audit_details,
                             notify_held_quarantine: bool = True) -> bool:
@@ -2009,6 +2009,10 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
     `lastEvaluationStatus`; never the binding), the quarantine reason, the clearing of an exception
     the evaluation supersedes (audited as `exception_superseded`), the `compliance_check` entry, and
     the release audit / quarantine notification a state transition calls for.
+
+    `updatedAt`, and `quarantinedAt` when the write starts a quarantine, are the time of this write,
+    taken just before it: never the evaluation's start or a time read earlier, so `updatedAt` does
+    not move backwards past the claim's or another writer's (D155).
 
     The row is written only while this evaluation owns it (`engine.evaluation_owns_state_row` on
     the row as read, and `evaluation_ownership_condition` on the write itself, so an evaluation that
@@ -2030,12 +2034,13 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
                     "is left as it is")
         return False
     ownership = evaluation_ownership_condition(evaluation_id, evaluated_at)
+    written_at = now_iso()
 
     updates: Dict[str, Any] = {
         "lastEvaluationId": evaluation_id,
         "lastEvaluatedAt": evaluated_at,
         "lastEvaluationStatus": evaluation_status,
-        "updatedAt": updated_at,
+        "updatedAt": written_at,
     }
     if compliance_state is None:
         # An asset with no state yet is `unknown` (what a missing row reads as), so the row an error
@@ -2056,7 +2061,7 @@ def _write_evaluation_state(database_id, asset_id, actor, evaluation_id, evaluat
         updates.update(_quarantine_state_fields(compliance_state, rule_results))
         # When the quarantine started: this write's time when it quarantines the asset, kept when
         # it was quarantined already (D137).
-        updates.update(engine.quarantined_at_fields(previous_state, compliance_state, updated_at))
+        updates.update(engine.quarantined_at_fields(previous_state, compliance_state, written_at))
     superseded = engine.exception_is_superseded(previous, schema_name, schema_version)
     if superseded:
         updates.update(engine.cleared_exception_fields())
@@ -2177,7 +2182,7 @@ def _record_error(evaluation_id, database_id, asset_id, schema_name, error_messa
     # removes.
     previous = get_compliance_record(database_id, asset_id, consistent_read=True) or {}
     _write_evaluation_state(
-        database_id, asset_id, actor, evaluation_id, evaluated_at, evaluated_at, schema_name,
+        database_id, asset_id, actor, evaluation_id, evaluated_at, schema_name,
         None, previous, None, engine.EVALUATION_STATUS_ERROR, [], audit_details={})
     return {
         "evaluationId": evaluation_id,
@@ -2418,7 +2423,7 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
         verdict, previous, schema_name, schema_version)
     return _write_evaluation_state(
         database_id, asset_id, SYSTEM_ACTOR, evaluation_id,
-        evaluation.get("evaluatedAt") or now_iso(), now_iso(), schema_name, schema_version,
+        evaluation.get("evaluatedAt") or now_iso(), schema_name, schema_version,
         previous, compliance_state, evaluation.get("status", ""), all_results,
         audit_details={
             "verdict": verdict.value,
@@ -2516,7 +2521,7 @@ def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
     # synchronous evaluation begun during the pipeline run is the newer of the two.
     _write_evaluation_state(
         database_id, asset_id, SYSTEM_ACTOR, evaluation_id,
-        evaluation.get("evaluatedAt") or finished_at, finished_at, schema_name, schema_version,
+        evaluation.get("evaluatedAt") or finished_at, schema_name, schema_version,
         previous, compliance_state, status, all_results,
         audit_details={
             "verdict": verdict.value,

@@ -287,8 +287,8 @@ class TestTheMarkerEndsWithAVerdict:
 
     def _write(self, world, compliance_state, previous):
         return store._write_evaluation_state(
-            DB, "quarantined", USER, "ev-new", "2026-11-05T00:00:00+00:00",
-            "2026-11-05T00:00:01+00:00", NEW, 1, previous, compliance_state,
+            DB, "quarantined", USER, "ev-new", "2026-11-05T00:00:00+00:00", NEW, 1, previous,
+            compliance_state,
             "completed", [], {})
 
     def test_a_verdict_removes_it_and_an_error_keeps_it(self):
