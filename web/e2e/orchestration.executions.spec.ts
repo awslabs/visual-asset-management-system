@@ -1047,6 +1047,11 @@ test.describe("Executions board — skipped trigger launches", () => {
         await expect(panel).toContainText(REASON);
         await expect(panel).toContainText("/e2e-asset/upload-02.glb");
         await expect(panel.getByRole("link", { name: BLOCKING_ID })).toBeVisible();
+        // The header shows the skip dates, not the fields of a run that ran (#998 D3).
+        await expect(page.getByText("First skipped:").first()).toBeVisible();
+        await expect(page.getByText("Duration:")).toHaveCount(0);
+        await expect(page.getByText("Output Type:")).toHaveCount(0);
+        await expect(page.getByText("Output Asset ID:")).toHaveCount(0);
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 });
