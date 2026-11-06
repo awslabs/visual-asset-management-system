@@ -18,6 +18,7 @@ bucket).
 import json
 import os
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
 
@@ -26,9 +27,23 @@ os.environ.setdefault("SEND_EMAIL_FUNCTION_NAME", "test-send-email-function")
 # Module-level import ensures the real backend.backend.handlers.assets package is
 # populated in sys.modules before the root conftest's autouse fixture runs.
 from backend.backend.handlers.assets import sqsUploadFileLarge  # noqa: F401,E402
-from common.s3MetadataKeys import UPLOAD_ID_METADATA_KEY  # noqa: E402
+from common.s3MetadataKeys import (  # noqa: E402
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+)
 
 GIB = 1024 * 1024 * 1024
+# SentTimestamp of the queued message, and times before and after it
+SENT_MS = 1_793_000_000_000
+STORED_AFTER_SEND = datetime.fromtimestamp(SENT_MS / 1000 + 30, tz=timezone.utc)
+STORED_BEFORE_SEND = datetime.fromtimestamp(SENT_MS / 1000 - 3600, tz=timezone.utc)
 
 
 def _client_error(code, operation="CompleteMultipartUpload", status=500):
@@ -69,11 +84,46 @@ def _external_upload_file_info(**overrides):
     return file_info
 
 
-def _event(file_info, receive_count=1):
+def _event(file_info, receive_count=1, sent_timestamp_ms=None):
+    attributes = {"ApproximateReceiveCount": str(receive_count)}
+    if sent_timestamp_ms is not None:
+        attributes["SentTimestamp"] = str(sent_timestamp_ms)
     return {"Records": [{
         "body": json.dumps({"fileInfo": file_info}),
-        "attributes": {"ApproximateReceiveCount": str(receive_count)},
+        "attributes": attributes,
     }]}
+
+
+def _upload_final_metadata(user_id="user-1"):
+    """Metadata copy_s3_object stamps on the final object of a user upload."""
+    return {
+        DATABASE_ID_METADATA_KEY: "db-1",
+        ASSET_ID_METADATA_KEY: "asset-1",
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id,
+    }
+
+
+def _workflow_final_metadata():
+    """Metadata copy_s3_object stamps on the final object of a workflow output."""
+    return {
+        DATABASE_ID_METADATA_KEY: "db-1",
+        ASSET_ID_METADATA_KEY: "asset-1",
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: "user-1",
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "wf-1",
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "exec-1",
+    }
+
+
+def _head_after_finish(final_key, final_metadata=None, last_modified=STORED_AFTER_SEND):
+    """head_object as S3 answers it once a file finished: the staged object is gone and the
+    final object exists (when final_metadata is given)."""
+    def head(Bucket, Key, **_):
+        if Key == final_key and final_metadata is not None:
+            return {"Metadata": final_metadata, "ContentLength": 2 * GIB, "LastModified": last_modified}
+        raise _client_error("404", "HeadObject", status=404)
+    return head
 
 
 def _context():
@@ -265,6 +315,104 @@ class TestDeterministicRejectionsAreConsumed:
 
         mock_delete.assert_called_once_with("asset-bucket", "temp-uploads/up-1/scan.laz")
         mock_s3.abort_multipart_upload.assert_called_once()
+
+
+@pytest.mark.unit
+class TestDuplicateDeliveryOfAStoredFile:
+    """SQS delivers at least once: a second delivery of a message whose file an earlier
+    receive already stored is consumed with no cleanup and no audit entry."""
+
+    def _assert_consumed_quietly(self, env):
+        env.copy.assert_not_called()
+        env.delete.assert_not_called()
+        env.s3.abort_multipart_upload.assert_not_called()
+        env.audit.assert_not_called()
+
+    def test_no_such_upload_with_file_already_stored_writes_no_denied_entry(self):
+        file_info = _user_upload_file_info()
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _upload_final_metadata())
+            env.sq.lambda_handler(_event(file_info, receive_count=1, sent_timestamp_ms=SENT_MS), _context())
+
+        self._assert_consumed_quietly(env)
+
+    def test_duplicate_on_final_receive_is_consumed_without_abort(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _upload_final_metadata())
+            env.sq.lambda_handler(
+                _event(_user_upload_file_info(), receive_count=env.sq.LARGE_FILE_MAX_RECEIVE_COUNT,
+                       sent_timestamp_ms=SENT_MS),
+                _context())
+
+        self._assert_consumed_quietly(env)
+
+    def test_repeat_complete_accepted_with_file_already_stored_is_consumed(self):
+        """S3 can accept a repeat CompleteMultipartUpload on a completed upload; the staged
+        object is gone because the earlier receive moved it."""
+        with _Env() as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _upload_final_metadata())
+            env.sq.lambda_handler(_event(_user_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        self._assert_consumed_quietly(env)
+
+    def test_external_upload_already_stored_is_consumed(self):
+        with _Env() as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _workflow_final_metadata())
+            env.sq.lambda_handler(_event(_external_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        self._assert_consumed_quietly(env)
+
+    def test_final_object_from_an_earlier_upload_is_still_rejected(self):
+        """An older version at the final key (an earlier upload of the same path) does not
+        make a vanished upload a duplicate: the rejection is audited as before."""
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish(
+                "asset-1/big/scan.laz", _upload_final_metadata(), last_modified=STORED_BEFORE_SEND)
+            env.sq.lambda_handler(_event(_user_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        env.copy.assert_not_called()
+        env.audit.assert_called_once()
+        assert env.audit.call_args.args[4] is True  # denied
+
+    def test_final_object_with_other_provenance_is_still_rejected(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish(
+                "asset-1/big/scan.laz", _upload_final_metadata(user_id="someone-else"))
+            env.sq.lambda_handler(_event(_user_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        env.audit.assert_called_once()
+        assert env.audit.call_args.args[4] is True
+
+    def test_no_final_object_is_still_rejected(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", None)
+            env.sq.lambda_handler(_event(_user_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        env.s3.abort_multipart_upload.assert_called_once()
+        env.audit.assert_called_once()
+        assert env.audit.call_args.args[4] is True
+
+    def test_without_sent_timestamp_the_file_is_not_treated_as_stored(self):
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = _head_after_finish("asset-1/big/scan.laz", _upload_final_metadata())
+            env.sq.lambda_handler(_event(_user_upload_file_info()), _context())
+
+        env.audit.assert_called_once()
+        assert env.audit.call_args.args[4] is True
+
+    def test_failed_read_of_final_object_is_retryable(self):
+        def head(Bucket, Key, **_):
+            if Key == "asset-1/big/scan.laz":
+                raise _client_error("InternalError", "HeadObject")
+            raise _client_error("404", "HeadObject", status=404)
+
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
+            env.s3.head_object.side_effect = head
+            with pytest.raises(Exception):
+                env.sq.lambda_handler(_event(_user_upload_file_info(), sent_timestamp_ms=SENT_MS), _context())
+
+        env.audit.assert_not_called()
+        env.s3.abort_multipart_upload.assert_not_called()
 
 
 @pytest.mark.unit

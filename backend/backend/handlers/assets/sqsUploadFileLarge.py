@@ -63,6 +63,11 @@ LARGE_FILE_MAX_RECEIVE_COUNT = 3
 DETERMINISTIC_COMPLETE_ERROR_CODES = (
     'InvalidPart', 'InvalidPartOrder', 'EntityTooSmall', 'MalformedXML', 'InvalidArgument',
 )
+# head_object error codes for a key with no current version.
+S3_NOT_FOUND_ERROR_CODES = ('404', 'NoSuchKey', 'NotFound')
+# Tolerance, in seconds, when comparing the stored file's LastModified (whole seconds) with the
+# SQS SentTimestamp of the message (milliseconds) to decide whether the file was stored by it.
+ALREADY_STORED_CLOCK_TOLERANCE_SECONDS = 1
 # Sample size for asset-type detection. This is a best-effort visibility
 # classification (empty vs. single-file vs. folder), not a correctness-critical
 # read, so it is intentionally capped rather than scanning the entire asset —
@@ -81,6 +86,15 @@ except Exception as e:
 
 # Initialize DynamoDB tables
 asset_table = dynamodb.Table(asset_storage_table_name)
+
+
+class LargeFileAlreadyProcessed(Exception):
+    """A redelivered message names a file that an earlier receive already stored.
+
+    SQS standard queues deliver at least once, so the same message can arrive after an
+    earlier receive finished the file. The message is consumed with no cleanup and no new
+    audit entry: the earlier receive wrote the completion entry.
+    """
 
 
 def build_upload_change_metadata(user_id):
@@ -122,6 +136,52 @@ def resolve_change_metadata(file_info: Dict[str, Any]) -> Dict[str, str]:
     if not change_metadata:
         change_metadata = build_upload_change_metadata(user_id)
     return change_metadata
+
+
+def is_large_file_already_stored(file_info: Dict[str, Any], sent_timestamp_ms: int = None) -> bool:
+    """Whether an earlier receive of this message already stored the file at its final key.
+
+    Called only once the staged object is gone, so the message is either a duplicate of a
+    finished file or names a file that can no longer be finished. The final object counts
+    as stored by this message when it carries this file's asset, database and change
+    provenance and was written after the message was sent; an older version at the same key
+    (an earlier upload of the same path) does not. Without the message's SentTimestamp the
+    answer is False, so the file is treated as not stored.
+
+    Args:
+        file_info: Dictionary containing file processing information
+        sent_timestamp_ms: The SQS SentTimestamp of the message, in epoch milliseconds
+
+    Returns:
+        True if the final object was stored by this message
+
+    Raises:
+        ClientError: a failed read other than a missing key, which is retryable
+    """
+    if not sent_timestamp_ms:
+        return False
+
+    try:
+        head = s3.head_object(Bucket=file_info['bucketName'], Key=file_info['finalS3Key'])
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') in S3_NOT_FOUND_ERROR_CODES:
+            return False
+        raise
+
+    stored_metadata = head.get('Metadata') or {}
+    expected_metadata = {
+        DATABASE_ID_METADATA_KEY: file_info.get('databaseId'),
+        ASSET_ID_METADATA_KEY: file_info.get('assetId'),
+        # Blank provenance entries are left off the stored object (replace_metadata_copy_args)
+        **{key: value for key, value in resolve_change_metadata(file_info).items() if value not in ('', None)},
+    }
+    if any(stored_metadata.get(key) != value for key, value in expected_metadata.items()):
+        return False
+
+    last_modified = head.get('LastModified')
+    if last_modified is None:
+        return False
+    return last_modified.timestamp() >= sent_timestamp_ms / 1000 - ALREADY_STORED_CLOCK_TOLERANCE_SECONDS
 
 
 def validate_sqs_message(message_data: Dict[str, Any], correlation_id: str = None) -> bool:
@@ -860,7 +920,8 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         raise
 
 
-def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str]) -> bool:
+def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str],
+                                             sent_timestamp_ms: int = None) -> bool:
     """
     Complete the multipart upload for a large file at the temporary location.
     Ported from uploadFile.py complete_upload function.
@@ -868,6 +929,8 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
     Args:
         file_info: Dictionary containing file processing information
         correlation_ids: Dictionary containing correlation IDs for logging
+        sent_timestamp_ms: The SQS SentTimestamp of the message, in epoch milliseconds, used
+            to recognise a redelivery of a file an earlier receive already stored
         
     Returns:
         True if multipart upload completion was successful, False when the file is rejected
@@ -875,6 +938,8 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         can change
 
     Raises:
+        LargeFileAlreadyProcessed: the staged object is gone and an earlier receive of this
+            message already stored the file
         Exception: a retryable failure (S3 5xx, throttling, timeouts); the multipart upload
         and any staged object are kept so a redelivery can finish the file
     """
@@ -894,6 +959,15 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         # already fully written at the temporary key by the external producer, so there is
         # no multipart upload to complete.
         if upload_id_s3 == EXTERNAL_UPLOAD_ID:
+            # A redelivery after an earlier receive moved the file finds the staged object gone
+            source_bucket = file_info.get('sourceBucketName') or bucket_name
+            try:
+                s3.head_object(Bucket=source_bucket, Key=temp_s3_key)
+            except ClientError as head_error:
+                if head_error.response.get('Error', {}).get('Code') not in S3_NOT_FOUND_ERROR_CODES:
+                    raise
+                if is_large_file_already_stored(file_info, sent_timestamp_ms):
+                    raise LargeFileAlreadyProcessed(f"External upload {relative_key} was already stored")
             logger.info(f"External upload {relative_key} already staged at {temp_s3_key}, nothing to complete")
             return True
 
@@ -952,7 +1026,11 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
                     s3.head_object(Bucket=bucket_name, Key=temp_s3_key)
                     logger.info(f"Multipart upload for {relative_key} already completed by an earlier receive")
                 except ClientError as head_error:
-                    if head_error.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+                    if head_error.response.get('Error', {}).get('Code') in S3_NOT_FOUND_ERROR_CODES:
+                        # No upload and no staged object: either an earlier receive finished the
+                        # file (a duplicate delivery) or the file can no longer be finished.
+                        if is_large_file_already_stored(file_info, sent_timestamp_ms):
+                            raise LargeFileAlreadyProcessed(f"File {relative_key} was already stored")
                         logger.error(f"Multipart upload for {relative_key} no longer exists and no staged object was found")
                         return False
                     raise
@@ -964,11 +1042,19 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
                 raise
 
         # Verify the metadata of the completed object. A failed read is retryable and is
-        # raised, keeping the staged object for the redelivery.
-        head_response = s3.head_object(
-            Bucket=bucket_name,
-            Key=temp_s3_key
-        )
+        # raised, keeping the staged object for the redelivery. S3 can accept a repeated
+        # CompleteMultipartUpload on an upload that already completed, so a duplicate delivery
+        # can get here after an earlier receive moved the file and deleted the staged object.
+        try:
+            head_response = s3.head_object(
+                Bucket=bucket_name,
+                Key=temp_s3_key
+            )
+        except ClientError as head_error:
+            if (head_error.response.get('Error', {}).get('Code') in S3_NOT_FOUND_ERROR_CODES
+                    and is_large_file_already_stored(file_info, sent_timestamp_ms)):
+                raise LargeFileAlreadyProcessed(f"File {relative_key} was already stored")
+            raise
         # Extract metadata
         metadata = head_response.get('Metadata', {})
         s3_upload_id = metadata.get(UPLOAD_ID_METADATA_KEY)
@@ -990,6 +1076,8 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
 
         return True
 
+    except LargeFileAlreadyProcessed:
+        raise
     except Exception as e:
         logger.exception(f"Error completing multipart upload for large file: {e}")
         raise
@@ -1035,7 +1123,7 @@ def audit_rejected_large_file(file_info: Dict[str, Any], correlation_ids: Dict[s
 
 
 def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str],
-                       receive_count: int = 1) -> bool:
+                       receive_count: int = 1, sent_timestamp_ms: int = None) -> bool:
     """
     Process a single large file from SQS message with comprehensive error handling.
 
@@ -1051,11 +1139,14 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         file_info: Dictionary containing file processing information
         correlation_ids: Dictionary containing correlation IDs for logging
         receive_count: The SQS ApproximateReceiveCount of the message
+        sent_timestamp_ms: The SQS SentTimestamp of the message, in epoch milliseconds
 
     Returns:
         True if processing was successful, False if the file was rejected
 
     Raises:
+        LargeFileAlreadyProcessed: a duplicate delivery of a file already stored; nothing is
+            cleaned up or audited
         Exception: a retryable failure
     """
     start_time = utc_now()
@@ -1074,7 +1165,7 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")
         step1_start = utc_now()
 
-        if not complete_multipart_upload_for_large_file(file_info, correlation_ids):
+        if not complete_multipart_upload_for_large_file(file_info, correlation_ids, sent_timestamp_ms):
             logger.error(f"Step 1 rejected: multipart upload completion - {correlation_str}")
             cleanup_failed_processing(file_info, correlation_ids)
             audit_rejected_large_file(file_info, correlation_ids, "Multipart upload completion rejected")
@@ -1100,6 +1191,8 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         logger.info(f"Large file processing completed successfully in {total_duration:.2f}s - {correlation_str}")
         return True
 
+    except LargeFileAlreadyProcessed:
+        raise
     except Exception as e:
         total_duration = (utc_now() - start_time).total_seconds()
         if receive_count >= LARGE_FILE_MAX_RECEIVE_COUNT:
@@ -1185,11 +1278,22 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 receive_count = int(record.get('attributes', {}).get('ApproximateReceiveCount', 1))
             except (TypeError, ValueError):
                 receive_count = 1
+            try:
+                sent_timestamp_ms = int(record.get('attributes', {}).get('SentTimestamp'))
+            except (TypeError, ValueError):
+                sent_timestamp_ms = None
 
             # Process the large file. A retryable failure is raised; it is recorded and
             # re-raised after the loop so SQS redelivers the message.
             try:
-                success = process_large_file(file_info, correlation_ids, receive_count)
+                success = process_large_file(file_info, correlation_ids, receive_count, sent_timestamp_ms)
+            except LargeFileAlreadyProcessed:
+                # The earlier receive that stored the file wrote its audit entry
+                logger.info(f"Duplicate delivery of a file already stored, message consumed with no new "
+                            f"audit entry - {format_correlation_ids(correlation_ids)}")
+                success_count += 1
+                processed_count += 1
+                continue
             except Exception as process_error:
                 retryable_errors.append(process_error)
                 failure_count += 1
