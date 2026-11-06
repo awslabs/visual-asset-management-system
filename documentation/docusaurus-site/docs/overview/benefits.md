@@ -93,7 +93,7 @@ VAMS implements a two-tier authorization model using Casbin policy enforcement, 
 -   **Tier 1 (API-level)** -- Controls which API endpoints and web routes a role can access
 -   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles, user roles) a role can access
 -   Both tiers must independently authorize a request for access to succeed (defense-in-depth)
--   Pre-built permission templates for common profiles: database admin, database user, database read-only, database tag admin, global read-only, deny-tagged-assets, compliance admin, and compliance read-only
+-   Pre-built permission templates for common profiles: database admin, database user, database read-only, database tag admin, global read-only, deny-tagged-assets, compliance admin, compliance read-only, and compliance global admin
 -   Bulk import of permission constraints via JSON templates with server-side variable substitution
 -   Support for Amazon Cognito user pools, SAML federation, or external OAuth2 identity providers
 -   API key management for application-to-application integration with user ID impersonation

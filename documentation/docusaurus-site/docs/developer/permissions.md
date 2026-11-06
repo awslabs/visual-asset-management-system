@@ -325,7 +325,7 @@ The split between the two constraint pairs is what makes the pattern work. Read 
 
 Compliance management for one database: the database's schemas, read access to `GLOBAL` schemas (bindable, not editable), schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and approval of the database's cascades.
 
-**Key constraints (10 constraints):**
+**Key constraints (15 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
 -   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
@@ -337,6 +337,8 @@ Compliance management for one database: the database's schemas, read access to `
 -   `complianceBinding` -- Allow GET, PUT, DELETE where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/{DATABASE_ID}/` or `/workflows/GLOBAL/`: the workflow execute route only (no workflow create, update, archive or re-run route)
+-   `workflow`, `pipeline` -- Allow GET where `databaseId equals {DATABASE_ID}`, and where `databaseId equals GLOBAL`, so the role may run those workflows and save pipeline rules that name them; no workflow or pipeline write
 
 Binding a schema is authorized on the database's `complianceBinding` object (`PUT` binds and `DELETE` unbinds, on the database and on each of its assets), on a `GET` of the schema in its scope, and on a `GET` of the database or asset the binding targets. The Database Admin template carries the same compliance constraints for its database. A binding changes compliance records only, so the `asset` and `database` constraints are read-only and the role adds no write on the database or its assets to any other role a user holds. The database list returns only the databases the caller may `GET`, which for this role is `{DATABASE_ID}`. A user who holds only this role binds, changes and removes the database's schema on the database compliance overview, with the API or with `vamscli compliance bind`; the Databases page shows the role **Create** disabled and no **Edit** or **Delete Selected** action, and links the database name to the compliance overview, because the role cannot search the database's assets. For the same reason the Databases page shows the role no **Metadata** link, and the compliance pages show the database name in the breadcrumb and each asset name as plain text rather than as links to pages the role cannot open. The role reads an asset's evaluation history and revokes an exception from the asset's row on the database compliance overview (**History**, **Revoke exception**), since it cannot open the asset's Compliance tab.
 
@@ -344,7 +346,7 @@ Binding a schema is authorized on the database's `complianceBinding` object (`PU
 
 Read-only compliance access: the database's and `GLOBAL` schemas, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database. The Database User template carries the same compliance constraints for its database.
 
-**Key constraints (15 constraints):**
+**Key constraints (10 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
 -   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`
@@ -356,8 +358,6 @@ Read-only compliance access: the database's and `GLOBAL` schemas, and the evalua
 -   `complianceCascade` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
--   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/{DATABASE_ID}/` or `/workflows/GLOBAL/`: the workflow execute route only (no workflow create, update, archive or re-run route)
--   `workflow`, `pipeline` -- Allow GET where `databaseId equals {DATABASE_ID}`, and where `databaseId equals GLOBAL`, so the role may run those workflows and save pipeline rules that name them; no workflow or pipeline write
 
 The role reads each asset's evaluation history from **History** on the database compliance overview. Neither compliance template grants the `/assets` or `/search` API routes or any route below `/database/`; both grant only the database list (`GET /database`). To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
 
@@ -373,8 +373,10 @@ Management of `GLOBAL` compliance schemas and read access to every database's co
 -   `api` -- Allow GET on the path that `equals` `/database`
 -   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals GLOBAL`, and GET where `databaseId contains .*`
 -   `complianceEvaluation`, `complianceCascade`, `database` -- Allow GET where `databaseId contains .*`
+-   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/GLOBAL/`: the execute route of `GLOBAL` workflows only
+-   `workflow`, `pipeline` -- Allow GET where `databaseId equals GLOBAL`, so the role may run `GLOBAL` workflows and save pipeline rules in `GLOBAL` schemas that name them; no workflow or pipeline write
 
-The role binds no schema, evaluates nothing, releases nothing and approves no cascade; a sweep it starts would evaluate no asset.
+The role binds no schema, evaluates nothing, releases nothing and approves no cascade: outside `/compliance/schemas` its `api` constraints grant `GET` only, so the binding, evaluation, sweep, quarantine and cascade routes refuse it at Tier 1.
 
 ### Multi-database access
 

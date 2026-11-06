@@ -1,6 +1,17 @@
 # Compliance
 
-Compliance management enforces structural and content standards on assets through schema-driven evaluation. You register compliance schemas, bind them to databases or individual assets, evaluate assets against them, quarantine assets that fail, and propagate re-evaluation through asset relationships. This page walks through the web interface and the API calls behind it; the rule format, states and architecture are described in [Compliance (Concepts)](../concepts/compliance.md).
+Compliance checks your assets against the rules your organization sets for them, such as "every CAD model in this database carries a part number and converts cleanly to GLB". It tells you, for every asset, whether it meets those rules, holds back assets that break a strict rule in quarantine, and records every verdict and decision in an audit log. For the reasons to use it, a worked example and a diagram of how the parts fit together, start with the [Compliance overview](../concepts/compliance.md#overview).
+
+In short, the parts you work with on this page are:
+
+-   **Compliance schemas** -- named sets of rules, each with an enforcement level: `quarantine` (the asset is quarantined when the rule fails), `warn` (it is marked non-compliant) or `inform` (the failure is only recorded). See [Managing schemas](#managing-schemas).
+-   **Bindings** -- a schema bound to a database governs every asset in it; a schema bound to one asset overrides the database's. See [Binding schemas to databases](#binding-schemas-to-databases).
+-   **Evaluations** -- an asset is checked automatically when it changes, or when you choose **Evaluate Now**, **Evaluate All Assets** or **Sweep**. The result is the asset's compliance state. See [Viewing compliance status](#viewing-compliance-status) and [Evaluating assets](#evaluating-assets).
+-   **Quarantine, releases and exceptions** -- a reviewer releases a quarantined asset or grants it an exception with a recorded reason. See [Quarantine](#quarantine).
+-   **Cascades** -- after an asset is evaluated, its child assets can be re-evaluated once a reviewer approves. See [Cascade approvals](#cascade-approvals).
+-   **The audit log** -- every compliance action, with who made it and when. See [Audit log](#audit-log).
+
+To get a first verdict on a new deployment, follow [First steps](../concepts/compliance.md#first-steps): bind the seeded `default-compliance-schema` (or your own) to a database, let the binding evaluate its assets, and read the result on the database's compliance overview. This page walks through each page of the web interface and the API calls behind it; the rule format, states and behavior in full are described in [Compliance (Concepts)](../concepts/compliance.md), and the [Behaviors to know about](../concepts/compliance.md#behaviors-to-know-about) list the ones that most often surprise new users.
 
 :::info[Navigation]
 The **Compliance** section of the left sidebar — **Compliance Schemas**, **Quarantine**, **Cascade Approvals** and **Audit Log** — and the database compliance overview appear to users whose role grants the `/compliance` and `/databases` web routes. If you do not see them, ask your administrator to apply one of the compliance [permission templates](#permissions).
@@ -14,7 +25,7 @@ The **Compliance** section of the left sidebar — **Compliance Schemas**, **Qua
 
 Each asset detail view includes a **Compliance** tab showing:
 
--   **Current state** -- the compliance state as a colored indicator: green (compliant), yellow (non-compliant), red (quarantined), blue (pending evaluation), or the blue **Exception** indicator for an asset released from quarantine by a granted exception. A red **Evaluation error** indicator beside it means the last evaluation produced no verdict — every rule of it errored, or its schema could not be loaded — so the state shown is the one the asset held before that evaluation; the evaluation history shows the cause. An archived asset shows **Archived (not evaluated)** with a notice and its **Recorded State** beneath: it is not evaluated while it is archived, is left out of the database overview and the quarantine list, and offers no evaluation, release or exception action. Its recorded state applies again once the asset is unarchived.
+-   **Current state** -- the compliance state as a colored indicator: green (compliant), yellow (non-compliant), red (quarantined), grey (pending evaluation or unknown), or the blue **Exception** indicator for an asset released from quarantine by a granted exception. The same state shows as a badge beside the asset name at the top of the asset view. A red **Evaluation error** indicator beside it means the last evaluation produced no verdict — every rule of it errored, or its schema could not be loaded — so the state shown is the one the asset held before that evaluation; the evaluation history shows the cause. An archived asset shows **Archived (not evaluated)** with a notice and its **Recorded State** beneath: it is not evaluated while it is archived, is left out of the database overview and the quarantine list, and offers no evaluation, release or exception action. Its recorded state applies again once the asset is unarchived.
 -   **Schema binding** -- which schema governs the asset and whether it is inherited from the database or set on the asset.
 -   **Active exception** -- when an exception holds, its reason, grantor, time and the schema and version it was granted against, with a **Revoke exception** action (a confirmation dialog, no reason) that returns the asset to the state of its last evaluation.
 -   **Evaluate Now** -- evaluates the asset and, when it has child assets, opens a cascade awaiting approval (unless one for this asset is already pending).
@@ -490,8 +501,10 @@ If an asset must remain available despite the failure:
 
 1. In the quarantine list, locate the asset.
 2. Choose **Exception**.
-3. Enter the reason for the exception in the confirmation dialog.
-4. Choose **Confirm**.
+3. Enter the reason for the exception in the confirmation dialog. It is required and recorded in the audit log.
+4. Choose **Grant exception**.
+
+The asset's **Compliance** tab offers the same two actions, **Release** and **Grant Exception**, on a quarantined asset.
 
 The asset's compliance state changes to `exception`, and the reason, the grantor, the time and the schema name and version the exception was granted against are recorded on the asset's compliance record and in the audit log.
 
@@ -556,7 +569,7 @@ The compliance audit log records every compliance action across the deployment.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `compliance_check`                 | An asset was evaluated against a schema                                                                                  |
 | `evaluation_error`                 | A rule's tooling failed in an evaluation, or its schema could not be loaded; the entry names the rules                   |
-| `quarantine_released`              | An asset left quarantine, by release or by a passing re-evaluation                                                       |
+| `quarantine_released`              | An asset left quarantine, by release or by a re-evaluation that moved it to compliant                                    |
 | `exception_granted`                | An exception was granted to a quarantined asset                                                                          |
 | `exception_revoked`                | An exception was revoked; the asset returned to its last verdict                                                         |
 | `exception_superseded`             | An evaluation against another schema or version cleared an exception                                                     |
@@ -616,7 +629,7 @@ A schema's `databaseId` is its scope: a database ID, or `GLOBAL` for a schema an
 
 The compliance pages show each action only on the items the caller may act on: the service returns the caller's allowed actions with every listed schema, cascade and quarantined asset. A sweep of a `GLOBAL` schema, **Evaluate All** and a cascade evaluate only the databases the caller (for a cascade, its approver) may evaluate and the assets the caller may read, and report the other assets as skipped (not authorized).
 
-A user whose permissions include constraints on assets sees an asset's compliance data only if they may open the asset: a deny that hides an asset, such as a `GET` deny on a tag, also hides its compliance state, evaluation history, quarantine, audit entries and cascade node. A user with compliance permissions only (the global Compliance Admin template) is not asked for asset access, and sees archived assets' compliance history too.
+A user whose permissions include constraints on assets sees an asset's compliance data only if they may open the asset: a deny that hides an asset, such as a `GET` deny on a tag, also hides its compliance state, evaluation history, quarantine, audit entries and cascade node. A user with compliance permissions only (the Compliance Global Admin template) is not asked for asset access, and sees archived assets' compliance history too.
 
 ### Default admin access
 

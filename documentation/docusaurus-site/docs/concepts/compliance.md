@@ -1,6 +1,164 @@
 # Compliance
 
-Compliance (also known as federated model management) adds schema-driven compliance enforcement to VAMS. Assets are evaluated against registered compliance schemas, non-compliant assets can be quarantined, and a change to a parent asset can propagate re-evaluation through the asset relationship graph.
+Compliance (also known as federated model management) lets you write down the rules your assets must meet, checks every asset against those rules whenever it changes, and keeps a record of each verdict and of every decision made about it. An asset that breaks a strict rule can be held back in quarantine until it is fixed or someone with the authority to do so releases it.
+
+This page first explains what compliance is for and how its parts fit together, then gives the shortest path to a first verdict and the behaviors worth knowing before you rely on it. The sections from [Configuration](#configuration) onward are the reference. For the web interface walkthrough, see [Compliance (User Guide)](../user-guide/compliance.md).
+
+## Overview
+
+### What compliance is for
+
+Teams that manage engineering, survey or 3D content usually have standards that every deliverable must meet: required metadata, an expected file layout, a successful automated check, a link to the assembly it belongs to. Compliance turns those standards into rules that VAMS checks for you, so that:
+
+-   **You know, for each asset, whether it meets the rules that apply to it.** Every asset bound to a set of rules carries a compliance state (`compliant`, `non_compliant`, `quarantined` and others), shown on the asset, in a per-database overview and through the CLI and API.
+-   **Content that fails a strict rule does not leave unnoticed.** A failure at the `quarantine` level puts the asset in quarantine, lists it on the Quarantine page and notifies the asset's subscribers. A deployment can also refuse downloads of quarantined assets (`app.compliance.quarantineBlocksDownload`).
+-   **An auditor can see who decided what, and when.** Every evaluation, release, exception, binding change and cascade decision is written to a compliance audit trail with the actor, the time and, where the asset's state changed, its previous and new state.
+
+### Who uses it
+
+| Role                                 | Typical work                                                                                                              | Permission template                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Central compliance team              | Writes the `GLOBAL` rule sets every database may use, and reads compliance across all databases                           | `compliance-global-admin.json`                      |
+| Database or compliance administrator | Writes the database's own rule sets, binds rule sets to the database or to single assets, evaluates assets                | `compliance-admin.json`, or `database-admin.json`   |
+| Reviewer for a database              | Decides what happens to a quarantined asset (release or exception) and approves or rejects re-evaluation of linked assets | `compliance-admin.json`, or `database-admin.json`   |
+| Auditor or viewer                    | Reads states, evaluation history, the quarantine list and the audit trail without changing anything                       | `compliance-readonly.json`, or `database-user.json` |
+
+The built-in `admin` role can do all of these. See [Authorization model](#authorization-model) for what each template grants.
+
+### A worked example
+
+Suppose every CAD model in the `cad-models` database must carry a part number and pass a mesh check before it is released, and the team would also like to see which models are tagged `released`. One compliance schema expresses that with three rules:
+
+```json
+{
+    "schemaFormat": "vams-rules-v1",
+    "rules": {
+        "part-number-recorded": {
+            "ruleType": "metadata",
+            "enforcement": "quarantine",
+            "metadataSchemaRef": { "schemaName": "defaultAsset" },
+            "checks": [
+                {
+                    "name": "part-number",
+                    "validateRequired": true,
+                    "validateTypes": true,
+                    "additionalRequiredFields": ["part_number"]
+                }
+            ]
+        },
+        "mesh-converts": {
+            "ruleType": "pipeline",
+            "enforcement": "quarantine",
+            "pipelineRef": {
+                "databaseId": "GLOBAL",
+                "workflowId": "conversion-3d-basic",
+                "pipelineDatabaseId": "GLOBAL",
+                "pipelineId": "conversion-3d-basic",
+                "templateId": "convert-to-glb"
+            },
+            "inputFiles": { "mode": "matching", "filter": ["*.stl", "*.obj"] },
+            "checks": [
+                {
+                    "name": "conversion-succeeds",
+                    "outputField": "execution_success",
+                    "tolerance": { "operator": "eq", "value": 1 }
+                }
+            ]
+        },
+        "released-tag": {
+            "ruleType": "assetAttributes",
+            "enforcement": "inform",
+            "checks": [{ "name": "released", "field": "tags", "requiredTags": ["released"] }]
+        }
+    }
+}
+```
+
+1. The database already holds the asset `bracket`, with one file, `bracket.stl`, and no `part_number` metadata. A compliance administrator registers the schema and binds it to `cad-models`, with automatic evaluation on. Every asset of the database is now governed by the schema, and the binding queues an evaluation of each one.
+2. The evaluation of `bracket` checks the metadata rule at once, and it fails. The mesh check runs the built-in 3D conversion workflow on `bracket.stl`, and the asset reads `pending_evaluation` until that run ends. When it ends, the verdict is `quarantined`, because a `quarantine`-level rule failed: the asset appears on the Quarantine page and its subscribers are notified.
+3. The engineer adds the `part_number` metadata. That change evaluates the asset again. The conversion runs again, and when it succeeds both strict rules have passed and the asset becomes `compliant`. The GLB file the conversion writes back into the asset is never taken as an input of the rule.
+4. The asset carries no `released` tag. That rule is at the `inform` level, so its failure is recorded on the evaluation and the state stays `compliant`.
+5. An auditor opens the Audit Log, filters on the asset and sees an entry for each evaluation (`compliance_check`) with its verdict, the state before and after, and who or what started it.
+
+If the asset had to stay available despite the missing part number, a reviewer could instead have granted an exception, with a recorded reason.
+
+## How it works
+
+### The parts
+
+| Part                  | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance schema** | A named, versioned set of rules. It is available to every database (`GLOBAL`) or to one database. Each save writes a new version. See [Compliance schemas](#compliance-schemas).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Rule**              | One requirement, of one of six types: `metadata` (the asset's, its files' or its links' metadata has the required fields, for example a `part_number`), `relationship` (the asset has the required links, for example at least one parent assembly), `pipeline` (a workflow run on the asset reports measurements within tolerance, for example the model converts to GLB within ten minutes), `fileStructure` (required or forbidden file paths and file counts, for example a `models/` folder and no `.tmp` files), `versionCoverage` (every current file is recorded in an asset version) and `assetAttributes` (the asset name, description or tags, for example a naming convention or a `released` tag). See [The vams-rules-v1 format](#the-vams-rules-v1-format). |
+| **Enforcement level** | What a failed rule does: `quarantine` quarantines the asset, `warn` marks it `non_compliant`, and `inform` only records the failure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Binding**           | Which schema governs which assets. A database binding governs every asset of the database; an asset override replaces it for one asset. A database binding also says whether assets are evaluated automatically when they change (`complianceAutoEval`, on by default). See [Schema binding](#schema-binding).                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Evaluation**        | One check of one asset against its schema, producing a verdict. It starts automatically when the asset is created or changed, or on request: **Evaluate Now** for one asset, **Evaluate All** for a database, **Sweep** for every asset bound to a schema, or a cascade. See [Evaluation](#evaluation).                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Compliance state**  | The asset's standing after its last verdict: `unknown`, `pending_evaluation`, `compliant`, `non_compliant`, `quarantined` or `exception`. See [Compliance states](#compliance-states).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Quarantine**        | The state of an asset that failed a `quarantine`-level rule. It is listed on the Quarantine page, its subscribers are notified and, if the deployment says so, its downloads are refused. See [Quarantine](#quarantine).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Release**           | A reviewer's decision to return a quarantined asset to `compliant` without recording an exception; the next failing evaluation quarantines it again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Exception**         | A reviewer's recorded decision, with a reason, that a quarantined asset stays available despite the failure. It holds for the schema version it was granted against. See [Exceptions](#exceptions).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Cascade**           | Re-evaluation of the assets that depend on an evaluated asset (its `parentChild` descendants), parents before children. A cascade opened after an evaluation waits for a reviewer's approval. See [Cascades](#cascades).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Audit trail**       | The record of every compliance action, queried per asset or across the deployment. See [Audit trail](#audit-trail).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Permissions**       | Four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`) in the standard two-tier model, and three templates for compliance roles. See [Authorization model](#authorization-model).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+### The lifecycle
+
+The diagram follows one asset from a bound schema to a recorded verdict.
+
+```mermaid
+flowchart TD
+    schema["Compliance schema<br/>rules and enforcement levels"] --> bind["Bound to a database,<br/>or to one asset as an override"]
+    bind --> start(["Asset created or changed, Evaluate Now,<br/>Evaluate All, Sweep or cascade"])
+    start --> eval["Evaluation"]
+    eval --> direct["Metadata, relationship, file-structure,<br/>version-coverage and asset-attribute rules<br/>checked at once"]
+    eval --> pipe["Pipeline rule launches its workflow"]
+    pipe -. "workflow already running on the asset" .-> wait["Rule waits for that run to end"]
+    wait --> pipe
+    pipe --> measured["Run completes,<br/>measurements checked against tolerances"]
+    direct --> verdict{"Verdict"}
+    measured --> verdict
+    verdict -->|"every rule passed,<br/>or only inform rules failed"| ok["compliant"]
+    verdict -->|"a warn rule failed"| nc["non_compliant"]
+    verdict -->|"a quarantine rule failed"| q["quarantined,<br/>subscribers notified"]
+    q -->|"Release"| ok
+    q -->|"Exception granted"| ex["exception"]
+    q -->|"asset fixed"| start
+    verdict -->|"asset has child assets"| cascade["Cascade awaits approval"]
+    cascade -->|"approved"| children["Child assets evaluated,<br/>parents before children"]
+    verdict --> audit[("Audit trail")]
+```
+
+A rule whose tooling fails before it can decide (a workflow that cannot start, a metadata schema that does not exist) records an `error` result instead of a pass or fail. It takes no part in the verdict, so it never quarantines an asset; see [Tooling failures](#tooling-failures).
+
+## First steps
+
+The shortest route from a new deployment to a first verdict uses the default schema that a deployment seeds while `app.compliance.autoLoadDefaultSchema` is on (the default). That schema, `default-compliance-schema`, is `GLOBAL` and holds one `warn`-level rule that checks an asset's metadata against the `GLOBAL` `defaultAsset` metadata schema. As seeded, `defaultAsset` declares one optional field, `Location`, of a type the rule does not type-check, so every asset passes it: the first verdict is `compliant` until you make fields of `defaultAsset` required or bind a schema of your own. The built-in `admin` role, or a role from one of the [permission templates](#authorization-model) with administrator rights for the database, can do every step.
+
+| Step                         | Web interface                                                                                                                                                                    | CLI                                                                                                                                             | API                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| 1. Find a schema             | **Compliance > Compliance Schemas** lists `default-compliance-schema`                                                                                                            | `vamscli compliance schema list`                                                                                                                | `GET /compliance/schemas`                |
+| 2. Write your own (optional) | **Create Schema**, then **Start from template** for a working example to adjust                                                                                                  | `vamscli compliance schema create -n <name> --schema-file <file>`                                                                               | `POST /compliance/schemas`               |
+| 3. Bind it to a database     | **Databases**, the database's **Compliance** link, then select the schema in **Bound schema** and choose **Bind**                                                                | `vamscli compliance bind -n <schemaName> -d <databaseId>`                                                                                       | `PUT /compliance/bind/{databaseId}`      |
+| 4. Evaluate                  | Nothing to do with automatic evaluation on: the binding queues an evaluation of every asset. Otherwise **Evaluate All Assets** on the overview, or **Evaluate Now** on one asset | `vamscli compliance sweep -d <databaseId>` or `vamscli compliance evaluate -d <databaseId> -a <assetId>`                                        | `POST /compliance/evaluate/{databaseId}` |
+| 5. Read the result           | The database's compliance overview (counts per state and a table of assets), and the asset's **Compliance** tab with its evaluation history                                      | `vamscli compliance state -d <databaseId>` (add `-a <assetId>` for one asset) and `vamscli compliance evaluations -d <databaseId> -a <assetId>` | `GET /compliance/state/{databaseId}`     |
+
+From there, the [user guide](../user-guide/compliance.md) covers the Quarantine, Cascade Approvals and Audit Log pages, the [CLI reference](../cli/commands/compliance.md) every `vamscli compliance` command, and the [Compliance API](../api/compliance.md) every endpoint.
+
+## Behaviors to know about
+
+-   **A tooling failure does not count against an asset.** When a rule cannot run (its workflow cannot start, its input selection does not resolve, its metadata schema is missing), it records an `error` result and its enforcement does not apply. The verdict comes from the other rules; when every rule errored, the asset keeps its state and shows an **Evaluation error** indicator. See [Tooling failures](#tooling-failures).
+-   **A pipeline rule can wait, and nothing re-checks it on a timer.** If the rule's workflow restricts concurrency and is already running on the asset, the rule waits for that run to end and the asset stays `pending_evaluation`. The wait limit is checked only when that workflow ends a run or the asset is evaluated again, so a run that never reports its end leaves the rule waiting until **Evaluate Now**, a sweep, a change to the asset or another run of the workflow. See [Rules that wait for a running execution](#rules-that-wait-for-a-running-execution).
+-   **A binding change does not lift a quarantine.** Binding another schema, removing the binding, or setting or clearing an asset override keeps a quarantined asset quarantined (and download-blocked, where downloads are blocked) until an evaluation under the binding now in force decides it, or someone releases it. See [Schema binding](#schema-binding).
+-   **Only assets with a compliance record are tracked.** An asset gets a record when a schema binding reaches it, or when it is evaluated on demand against a named schema. The overview counts and lists only those assets, and removing a database binding deletes the records of the assets that inherited it, except a quarantined asset's.
+-   **Evaluation after an upload waits about a minute.** An upload is evaluated once, about 60 seconds after it completes, so that an upload sent as several requests is evaluated over all its files. See [Evaluation](#evaluation).
+-   **A version-coverage rule fails after every upload** until an asset version records the new files. Use `warn` for it unless that is the intended workflow. See [Version-coverage rules](#version-coverage-rules).
+-   **A missing parent schema is ignored.** A schema whose `extends` names a schema that does not exist is saved, and evaluates with its own rules only. See [Schema inheritance](#schema-inheritance).
+-   **Deleting a database moves its compliance history.** The records, evaluations, cascades, database-scoped schemas and audit entries move under `<databaseId>#deleted`, so a database created later with the same id starts with none. See [Deleted databases](#deleted-databases).
+-   **Archived assets are left out.** An archived asset is not evaluated and is left out of the database overview and the quarantine list; its record returns when it is unarchived. See [Archived assets](#archived-assets).
+-   **Compliance data follows asset access.** A user whose permissions restrict assets sees an asset's compliance state, history, quarantine and audit entries only if they may open the asset itself. See [Who sees an asset's compliance data](#who-sees-an-assets-compliance-data).
+-   **Saving a pipeline rule needs the right to run its workflow.** The save is refused (`403`) unless the user may run that workflow. The current Compliance Admin and Compliance Global Admin templates include those rights; a role built from an earlier copy of either needs a few constraints added, as described in [Adding the pipeline-rule run rights to an existing role](../user-guide/compliance.md#adding-the-pipeline-rule-run-rights-to-an-existing-role). See [Authorization model](#authorization-model).
+
+## Configuration
 
 Compliance is part of every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions and the `/compliance/*` API routes are always created, and the compliance pages of the web interface appear to a user whose role grants them like every other page. Two configuration settings tune it:
 
@@ -256,7 +414,7 @@ An edit to the asset's name, description or tags records `assetEdit` as the asse
 
 #### Schema inheritance
 
-A schema names a parent in `extends` and inherits every rule of the parent. A rule of the same name in the child replaces the parent's definition; rules defined only in the parent apply unchanged. Inheritance resolves through up to ten levels of parents.
+A schema names a parent in `extends` and inherits every rule of the parent. A rule of the same name in the child replaces the parent's definition; rules defined only in the parent apply unchanged. Inheritance resolves through up to ten levels of parents. The parent is not checked when the schema is saved, and is read when the schema is evaluated: a parent that does not exist, or is not a `vams-rules-v1` document, ends the chain there without an error, and the evaluation uses the rules defined below it (logged by the compliance service, not recorded on the evaluation). A chain deeper than ten levels ends the same way.
 
 #### Pipeline rules
 
@@ -331,7 +489,7 @@ The built-in conversion workflows take exactly one input file. When an asset hol
 
 #### Tooling failures
 
-A rule result carries a `status`: `evaluated` for a rule that produced a pass or fail, `error` for a rule whose tooling failed before it could — an input selection that was not accepted by the workflow, that did not match exactly one file, or that named a file the asset does not have, or a workflow execution that could not be launched (a launch the workflow's concurrency restriction holds back is not one: the rule [waits](#rules-that-wait-for-a-running-execution)), or a rule that waited longer than its bound; for a metadata rule, a schema not found under the entity type its scope reads, or more than 500 links in a `links` scope. An `error` result is not a verdict. Its `passed` is `false` and its message names the condition, but the rule's enforcement does not apply: a `quarantine`-level rule that errored neither quarantines the asset nor opens a cascade, so a mistake in a schema's input selection cannot quarantine every asset it is bound to.
+A rule result carries a `status`: `evaluated` for a rule that produced a pass or fail, `error` for a rule whose tooling failed before it could — an input selection that was not accepted by the workflow, that did not match exactly one file, or that named a file the asset does not have, or a workflow execution that could not be launched (a launch the workflow's concurrency restriction holds back is not one: the rule [waits](#rules-that-wait-for-a-running-execution)), or a rule that waited longer than its bound; for a metadata rule, a schema not found under the entity type its scope reads, a schema whose fields cannot be read, or more than 500 links in a `links` scope; asset data the rule needs that cannot be read (the asset's files, versions, metadata or links); and a stored pattern that does not compile. An `error` result is not a verdict. Its `passed` is `false` and its message names the condition, but the rule's enforcement does not apply: a `quarantine`-level rule that errored neither quarantines the asset nor opens a cascade, so a mistake in a schema's input selection cannot quarantine every asset it is bound to.
 
 The evaluation's outcome follows from the rules that were evaluated. When some rules errored, the verdict is determined from the remaining rules and the evaluation is `completed` with `hasRuleErrors: true` and the errored rule names in `errorRules`; its violations list the failed rules only. When every rule errored, or no rule remains, the evaluation itself is an `error` with no verdict and the asset's compliance state is left unchanged. Either way the asset's compliance record is updated with `lastEvaluationId`, `lastEvaluatedAt` and `lastEvaluationStatus` (`completed`, `pending_pipeline` or `error`), and an `evaluation_error` audit entry naming the errored rules (`ruleNames`) is written. An evaluation whose schema cannot be loaded, or whose body is not a `vams-rules-v1` document, is recorded the same way: an `error` evaluation, `lastEvaluationStatus: error`, the state unchanged, and an `evaluation_error` entry.
 
@@ -411,12 +569,14 @@ Every asset with a compliance record has a compliance state:
 
 | State                | Meaning                                                                                                             | Indicator |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- | --------- |
-| `unknown`            | No evaluation has produced a verdict (also the answer for an asset with no record)                                  | —         |
-| `pending_evaluation` | The asset is bound but not yet evaluated, or a pipeline rule's execution is awaited                                 | Blue      |
+| `unknown`            | No evaluation has produced a verdict (also the answer for an asset with no record)                                  | Grey      |
+| `pending_evaluation` | The asset is bound but not yet evaluated, or a pipeline rule's execution is awaited                                 | Grey      |
 | `compliant`          | Every rule passed, or only `inform`-level rules failed                                                              | Green     |
 | `non_compliant`      | A `warn`-level rule failed and no `quarantine`-level rule did                                                       | Yellow    |
 | `quarantined`        | A `quarantine`-level rule failed                                                                                    | Red       |
-| `exception`          | A rule failed while an [exception](#exceptions) is active: the asset stays released and the violations are recorded | Info      |
+| `exception`          | A rule failed while an [exception](#exceptions) is active: the asset stays released and the violations are recorded | Blue      |
+
+The indicator is the state's colour on the compliance pages and the asset's Compliance tab. The badge beside the asset name in the asset view uses the same colours, except that `non_compliant` is red there.
 
 Beside its state, a compliance record carries `lastEvaluationStatus` — `completed`, `pending_pipeline` or `error`. An `error` status means the last evaluation produced no verdict (every rule of it errored, or its schema could not be loaded — see [Tooling failures](#tooling-failures)), so the state shown is the one the asset held before that evaluation. The interface flags such a record with an **Evaluation error** indicator beside the state badge, and the database overview's `summary` carries an `error` count of these assets. That count is an overlay on the state buckets rather than a state of its own: an asset with an errored last evaluation is also counted under the state it kept, so the overlay is not part of their sum.
 
@@ -448,11 +608,11 @@ The verdict follows the highest-severity failure among the rules that were evalu
 
 ## Quarantine
 
-An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name and **Quarantined At**, the time its quarantine started (`quarantinedAt` on its compliance record). A re-evaluation that quarantines it again, or a binding change that keeps the quarantine, does not move that time; a release, an exception or another verdict clears it, and a later quarantine records its own. Subscribers of the asset are notified through its Amazon SNS topic. Whether quarantine blocks the asset's download, stream, export and auxiliary-preview endpoints is set by `app.compliance.quarantineBlocksDownload`.
+An asset that fails a `quarantine`-level rule enters the `quarantined` state and appears on the Quarantine page with its asset name and **Quarantined At**, the time its quarantine started (`quarantinedAt` on its compliance record). A re-evaluation that quarantines it again, or a binding change that keeps the quarantine, does not move that time; a release, an exception or any other state clears it, and a later quarantine records its own. Subscribers of the asset are notified through its Amazon SNS topic each time an evaluation quarantines it. Whether quarantine blocks the asset's download, stream, export and auxiliary-preview endpoints is set by `app.compliance.quarantineBlocksDownload`; an asset with an active exception is never blocked.
 
 A quarantined asset leaves quarantine in three ways:
 
--   **Re-evaluation** — an evaluation in which every `quarantine`-level rule passes moves the asset to the state its verdict maps to; a return to `compliant` records a `quarantine_released` audit entry.
+-   **Re-evaluation** — an evaluation in which every `quarantine`-level rule passes moves the asset to the state its verdict maps to. A move from `quarantined` to `compliant` also records a `quarantine_released` audit entry.
 -   **Release** — sets the asset to `compliant` without recording an exception. The next failing evaluation quarantines it again.
 -   **Exception** — moves the asset to the `exception` state and records the exception on its compliance record and in the audit trail with the reason and the user who granted it, documenting why the asset remains available despite the failure. An exception outlives re-evaluation; see [Exceptions](#exceptions).
 
@@ -529,12 +689,12 @@ Compliance operations use the two-tier Casbin ABAC/RBAC system described in the 
 
 **Tier 2** enforces four compliance object types, with the object action mirroring the HTTP method:
 
-| Object type            | Constraint fields               | Governs                                                                                                                |
-| ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `complianceSchema`     | `complianceSchemaName`          | Schema registration, update and deletion, the schema named in a binding, and sweeps                                    |
-| `complianceBinding`    | `databaseId`                    | Binding (`PUT`) and unbinding (`DELETE`) a schema in a database, on the database itself or on one of its assets        |
-| `complianceEvaluation` | `databaseId`, `complianceState` | Evaluation, evaluation history, compliance state and overview, the quarantine listing and actions, and the audit trail |
-| `complianceCascade`    | `cascadeId`                     | Cascade creation, listing, detail, approval and rejection                                                              |
+| Object type            | Constraint fields                                                                    | Governs                                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `complianceSchema`     | `databaseId` (the schema's scope: a database ID or `GLOBAL`), `complianceSchemaName` | Schema registration, update and deletion, the schema named in a binding, and sweeps                                    |
+| `complianceBinding`    | `databaseId`                                                                         | Binding (`PUT`) and unbinding (`DELETE`) a schema in a database, on the database itself or on one of its assets        |
+| `complianceEvaluation` | `databaseId`, `complianceState`                                                      | Evaluation, evaluation history, compliance state and overview, the quarantine listing and actions, and the audit trail |
+| `complianceCascade`    | `databaseId` (the database of the cascade's parent asset), `cascadeId`               | Cascade creation, listing, detail, approval and rejection                                                              |
 
 Binding or unbinding a schema is authorized on the database's `complianceBinding` object, on a `GET` of the schema in its scope (its `databaseId`: a database ID or `GLOBAL`), and on a `GET` of the target `database` or `asset` object, so constraints on the target's attributes (an asset's tags, for example) still apply. A binding changes compliance records only, so it needs no write permission on the database or the asset. Reading a database's bindings is authorized on a `GET` of the database and of its bound schema.
 
@@ -588,7 +748,7 @@ A deny that hides archived records from the asset routes, such as `databaseId co
 
 Deciding this takes no extra read for a role allowed on both ids and on reading the database's archived assets, or refused on the database. Otherwise a single record costs one read of the asset's archived key, and a listing one read of the database's archived assets, whatever the page size. When a role's rules read an asset's own fields (a rule on its name, type or tags), the archived assets are read with those fields and each distinct combination of their values is checked once; a role whose asset rules read only the database id is decided once per database. The overview and the quarantine listing read the database's archived asset ids once per request for every role, and the overview reads the records of those assets by key to leave them out of its counts (a role whose asset rules read an asset's own fields instead counts only the records of the live assets it may read, from the reads the counts make anyway); a state read reads the asset's archived key once.
 
-Permission templates in `documentation/permissionsTemplates/` set up non-admin roles: `compliance-admin.json` (management of a `DATABASE_ID`'s schemas, `GET` on `GLOBAL` schemas, schema binding, evaluation and quarantine actions, and approval of the database's cascades, the web and API routes, `GET` on the database list route by exact path, and `GET` on that database and its assets, which binding a schema requires), `compliance-readonly.json` (`GET` on the database's and `GLOBAL` schemas, and on the cascades, evaluations, database entity and assets of a `DATABASE_ID`) and `compliance-global-admin.json` (management of `GLOBAL` schemas and read access to every database's compliance, without binding, evaluation or any asset or database write). `database-admin.json` includes the Compliance Admin grants for its database and `database-user.json` the Compliance Readonly grants. Constraint criteria narrow access further — for example `databaseId equals my-database` on a `complianceEvaluation` constraint, `complianceSchemaName equals my-schema` on a `complianceSchema` constraint, or `complianceState equals quarantined` to grant only the quarantine operations. See [Compliance (User Guide) — Permissions](../user-guide/compliance.md#permissions).
+Permission templates in `documentation/permissionsTemplates/` set up non-admin roles: `compliance-admin.json` (management of a `DATABASE_ID`'s schemas, `GET` on `GLOBAL` schemas, schema binding, evaluation and quarantine actions, and approval of the database's cascades, the web and API routes, `GET` on the database list route by exact path, `GET` on that database and its assets, which binding a schema requires, and the right to run the database's and `GLOBAL` workflows, which saving a pipeline rule requires), `compliance-readonly.json` (`GET` on the database's and `GLOBAL` schemas, and on the cascades, evaluations, database entity and assets of a `DATABASE_ID`) and `compliance-global-admin.json` (management of `GLOBAL` schemas, read access to every database's compliance and the right to run `GLOBAL` workflows, without binding, evaluation or any asset or database write). `database-admin.json` includes the Compliance Admin grants for its database and `database-user.json` the Compliance Readonly grants. Constraint criteria narrow access further — for example `databaseId equals my-database` on a `complianceEvaluation` constraint, `complianceSchemaName equals my-schema` on a `complianceSchema` constraint, or `complianceState equals quarantined` to grant only the quarantine operations. See [Compliance (User Guide) — Permissions](../user-guide/compliance.md#permissions).
 
 ## Amazon DynamoDB tables
 

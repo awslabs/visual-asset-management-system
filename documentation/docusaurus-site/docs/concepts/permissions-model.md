@@ -162,7 +162,7 @@ Each object type supports specific constraint fields that can be used in criteri
 | `complianceCascade`    | `databaseId`, `cascadeId`                                               | Cascade approval and execution operations. `databaseId` is the database of the cascade's parent asset.                          |
 
 :::info[Compliance object types]
-The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. A constraint with no `databaseId` criterion matches every scope, so a compliance role stored before `complianceSchema` and `complianceCascade` gained `databaseId` keeps its earlier reach until it is re-imported from the current templates. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
+The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. A constraint with no `databaseId` criterion matches every scope, so a compliance role stored before `complianceSchema` and `complianceCascade` gained `databaseId` keeps its earlier reach until it is re-imported from the current templates. For non-admin roles, use the `compliance-admin`, `compliance-readonly` or `compliance-global-admin` permission templates for quick setup (the `database-admin` and `database-user` templates also include compliance for their database); see [Compliance](compliance.md#authorization-model).
 :::
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
@@ -247,7 +247,7 @@ Search results follow the same rule: an archived asset, and a file of an archive
 
 ## Common role patterns
 
-For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, Database Tag Admin, Compliance Administrator, Compliance Read-Only, Multi-Database Access, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
+For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, Database Tag Admin, Compliance Administrator, Compliance Read-Only, Compliance Global Administrator, Multi-Database Access, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
 
 :::warning[Archive versus permanent delete]
 The Database User role demonstrates a key pattern: the `asset` entity constraint grants DELETE (needed for archive operations), but the `api` route constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`. This blocks permanent delete paths (`deleteAsset`, `deleteFile`) at Tier 1 while allowing soft delete at Tier 2.
@@ -266,12 +266,12 @@ A common mistake is creating a `database` constraint and assuming it automatical
 -   **Using `criteriaAnd` for multiple databases** -- If you need access to multiple databases, use `criteriaOr` (not `criteriaAnd`). A single entity can only have one `databaseId`, so multiple `equals` conditions in `criteriaAnd` will never match simultaneously.
 -   **Forgetting non-mutating POST routes for read-only roles** -- Routes like `/search` and `/auth/routes` use POST but do not modify data. Read-only roles must allow POST on these specific paths for the UI to function.
 -   **Using wildcards for GLOBAL access** -- When granting access to GLOBAL resources, use `databaseId equals GLOBAL` (not `databaseId contains .*`). A wildcard inadvertently matches all databases.
--   **Missing compliance object types** -- Granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceBinding`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin` or `compliance-readonly` templates for correct setup.
+-   **Missing compliance object types** -- Granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceBinding`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin`, `compliance-readonly` or `compliance-global-admin` templates for correct setup.
 -   **Granting a route prefix where one route is meant** -- `route__path starts_with /database` grants Tier 1 access to the database list and to every route below it, such as the asset and file routes (`/database/{databaseId}/assets`, ...). To grant one route, use `equals` with its exact path, as the Compliance Admin template does for the database list (`route__path equals /database`).
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Asset Editing, Compliance Admin, and Compliance Readonly). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Asset Editing, Compliance Admin, Compliance Readonly, and Compliance Global Admin). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
