@@ -118,7 +118,8 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs,
+                                #   ZipDownloadsTab ("My zip downloads", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       filemanager/            # Asset file manager (Cloudscape)
@@ -136,9 +137,15 @@ web/
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
+                                #   selection -> request entries, names, polling rule),
+                                #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
+                                #   global page; polls every 5 s only while a job is queued/running,
+                                #   the surface is active and the browser tab is visible)
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
+      ZipDownloadsPage.tsx    # #/zipdownloads "My zip downloads" (nav item only with ZIPDOWNLOADS)
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
@@ -926,6 +933,7 @@ Known feature flags:
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.zipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **My zip downloads** tab and the side navigation no **My zip downloads** link; `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are greyed the same way from the URL and DELETE routes. A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client.
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
