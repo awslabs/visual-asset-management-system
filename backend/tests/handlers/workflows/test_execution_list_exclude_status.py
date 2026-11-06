@@ -89,9 +89,10 @@ class TestTheRoutesAnswerFixed400s:
 # Asset list: excluded during the walk
 # --------------------------------------------------------------------------- #
 
-def _run_asset(input_pages, statuses, query_params=None, cfg_pages=None, reported=None):
+def _run_asset(input_pages, statuses, query_params=None, cfg_pages=None, reported=None, refused=()):
     """The asset listing over canned input pages, with each execution's main row carrying the status in
-    `statuses` (default SUCCEEDED); `reported` overrides the status the builder reports (a reconcile).
+    `statuses` (default SUCCEEDED); `reported` overrides the status the builder reports (a reconcile),
+    and the caller is refused the executions in `refused`.
     Returns (message, ids handed to the builder, main-row reads)."""
     le.claims_and_roles = {"tokens": ["u1"]}
     inputs_table, cfg_table, main_table = MagicMock(), MagicMock(), MagicMock()
@@ -125,7 +126,8 @@ def _run_asset(input_pages, statuses, query_params=None, cfg_pages=None, reporte
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
             patch(f"{MOD}.get_asset_details",
                   side_effect=lambda d, a: {"databaseId": d, "assetId": a}), \
-            patch(f"{MOD}._execution_access_check", return_value=(True, "")), \
+            patch(f"{MOD}._execution_access_check",
+                  side_effect=lambda eid, *a, **k: (False, "denied") if eid in refused else (True, "")), \
             patch(f"{MOD}.build_execution_items", side_effect=_echo), \
             patch(f"{MOD}.sfn"):
         ddb.Table.side_effect = _table
@@ -206,6 +208,31 @@ class TestAssetListExclusion:
         assert token["inputsKey"]["workflowExecutionId"] == rows[le.MAX_EXECUTIONS_INSPECTED - 1][
             "workflowExecutionId"]
         assert "checked against excludeStatus" in message["warnings"][0]
+
+    @pytest.mark.parametrize("page_size", ["1", "2", "3"])
+    def test_a_refused_rows_status_cannot_be_inferred(self, page_size):
+        # Every SKIPPED row is one the caller is refused. With or without excludeStatus=SKIPPED the
+        # page and its cursor are the same, so the parameter says nothing about those rows' status.
+        rows = _input_rows(6)
+        refused = {rows[0]["workflowExecutionId"], rows[2]["workflowExecutionId"],
+                   rows[3]["workflowExecutionId"]}
+        statuses = {eid: SKIPPED for eid in (rows[0]["workflowExecutionId"],
+                                             rows[2]["workflowExecutionId"])}
+        plain, plain_handed, _ = _run_asset([{"Items": rows}], statuses, {"pageSize": page_size},
+                                            refused=refused)
+        excluded, excluded_handed, _ = _run_asset(
+            [{"Items": rows}], statuses, {"pageSize": page_size, "excludeStatus": "SKIPPED"},
+            refused=refused)
+        assert excluded == plain
+        assert excluded_handed == plain_handed
+        assert not set(plain_handed) & refused
+
+    def test_a_refused_row_is_never_status_checked(self):
+        rows = _input_rows(3)
+        refused = {rows[1]["workflowExecutionId"]}
+        _message, _handed, reads = _run_asset([{"Items": rows}], {}, {"excludeStatus": "SKIPPED"},
+                                              refused=refused)
+        assert rows[1]["workflowExecutionId"] not in reads
 
     def test_an_output_only_row_of_an_excluded_status_is_dropped(self):
         cfg = _cfg_rows(2)
@@ -318,6 +345,41 @@ class TestGlobalListExclusion:
             plain = table.query.call_args.kwargs
         assert "FilterExpression" not in plain
         assert with_status["FilterExpression"].get_expression()["operator"] == "="
+
+    @mock_aws
+    @pytest.mark.parametrize("page_size", ["1", "2", "4"])
+    def test_exclusion_says_no_more_than_the_status_filter(self, page_size):
+        # The global list's exclusion is a query filter, like `status`. With rows that are SUCCEEDED or
+        # SKIPPED, excludeStatus=SKIPPED and status=SUCCEEDED produce the same pages and cursors,
+        # including when the caller is refused some of the rows, so it gives no new signal.
+        resource, table = _global_table()
+        rows = _main_rows(12)
+        for row in rows:
+            table.put_item(Item=row)
+        refused = {r["workflowExecutionId"] for r in rows[1::4]} | {
+            r["workflowExecutionId"] for r in rows if r["executionStatus"] == SKIPPED}
+
+        def _pages(params):
+            pages, token = [], None
+            with patch(f"{MOD}._execution_visible_to_caller",
+                       side_effect=lambda eid, *a, **k: eid not in refused):
+                while True:
+                    query = dict(params, pageSize=page_size)
+                    if token:
+                        query["startingToken"] = token
+                    le.claims_and_roles = {"tokens": ["u1"]}
+                    with patch.object(le, "dynamodb", resource), \
+                            patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+                            patch(f"{MOD}.get_workflow_execution_configuration_row", return_value={}):
+                        response = le.get_global_executions(
+                            {}, dict(query, filterStartDate="2026-01-01T00:00:00Z"))
+                    message = json.loads(response["body"])["message"]
+                    token = message.get("NextToken")
+                    pages.append((_ids(message["Items"]), token))
+                    if not token:
+                        return pages
+
+        assert _pages({"excludeStatus": "SKIPPED"}) == _pages({"status": "SUCCEEDED"})
 
     def test_the_matcher_safety_net(self):
         assert not le._global_list_matches_filters({"executionStatus": SKIPPED},

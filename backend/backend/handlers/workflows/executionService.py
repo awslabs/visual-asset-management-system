@@ -1010,18 +1010,61 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 main_row_memo[execution_id] = rows[0] if rows else None
             return main_row_memo[execution_id]
 
-        # excludeStatus (validated by the route handler). A candidate whose stored status it names is
-        # dropped DURING the walk, before the page is cut, so the page is filled from the rows that
-        # remain and the cursor moves past the dropped ones. Each check reads the candidate's main row
-        # (the same memoized read every listed row already costs), bounded by
-        # MAX_EXECUTIONS_INSPECTED checks per page; a page that spends the bound stops at the last row
-        # it decided, with a continuation and a warning. Empty: the walk is exactly as before.
+        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
+        # outputTypes projection share one read per execution. Output-only executions seed it for free
+        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
+        # lazily through the config_row_loader threaded into the auth check.
+        config_row_memo = {}
+        # One enforcer for the whole listing, and one Tier-2 decision per candidate, shared by the
+        # excludeStatus check during the walk and the authorization pass after it.
+        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+        access_decisions = {}
+
+        def _authorize_candidate(candidate_id, input_item):
+            """(allowed, reason) for one candidate, by the same _execution_access_check rule the
+            details/logs paths use, memoized for the request."""
+            if candidate_id not in access_decisions:
+                if casbin_enforcer is None:
+                    access_decisions[candidate_id] = (False, "no tokens")
+                else:
+                    # The workflow ids come from the input row when it carries them — written at launch
+                    # from the same workflow as the main row — and otherwise from the main row, which
+                    # the output-direction placeholder rows need because they carry no workflow ids.
+                    authorization_item = input_item
+                    if not input_item.get('workflowId', ''):
+                        authorization_item = _fetch_main_row(candidate_id) or input_item
+
+                    def _config_row_loader(eid=candidate_id):
+                        # The one config-row read the auth pass pays for this candidate lands in the
+                        # memo, so the outputTypes projection reuses it rather than re-reading.
+                        if eid not in config_row_memo:
+                            config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
+                        return config_row_memo[eid]
+
+                    access_decisions[candidate_id] = _execution_access_check(
+                        candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
+                        config_row_loader=_config_row_loader)
+            return access_decisions[candidate_id]
+
+        # excludeStatus (validated by the route handler). It is applied only to a candidate that has
+        # passed the read check: such a candidate whose stored status it names is dropped DURING the
+        # walk, before the page is cut, so the page is filled from the rows that remain and the cursor
+        # moves past the dropped ones. A candidate the caller may not read is never dropped here — it
+        # is handled exactly as it is without the parameter (it takes its place in the walk and the
+        # authorization pass withholds it), so the page and its cursor do not depend on the status of
+        # an execution the caller cannot read. Each status check is the memoized main-row read every
+        # listed row already costs. At most MAX_EXECUTIONS_INSPECTED rows are dropped per page; a page
+        # that reaches that bound stops at the last row it decided, with a continuation and a warning.
+        # Empty: the walk is exactly as before.
         excluded_statuses, _message = parse_list_status_filter(query_params)
         excluded_ids = set()
-        exclusion_checks = 0
+        exclusion_drops = 0
         exclusion_budget_spent = False
 
-        def _is_excluded(execution_id):
+        def _is_excluded(execution_id, input_item):
+            allowed, _reason = _authorize_candidate(execution_id, input_item)
+            if not allowed:
+                return False
             row = _fetch_main_row(execution_id) or {}
             return row.get('executionStatus', '') in excluded_statuses
 
@@ -1061,7 +1104,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 if not execution_id or execution_id in deduped_inputs or execution_id in excluded_ids:
                     continue
                 if excluded_statuses:
-                    if exclusion_checks >= MAX_EXECUTIONS_INSPECTED:
+                    if exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
                         # The check budget is spent, so this row cannot be decided: resume at the last
                         # row this page decided (kept or dropped), deferring this one.
                         bounded = True
@@ -1073,8 +1116,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             served_through_id = (last_input_row_key.get('workflowExecutionId', '')
                                                  or served_through_id)
                         break
-                    exclusion_checks += 1
-                    if _is_excluded(execution_id):
+                    if _is_excluded(execution_id, input_item):
+                        exclusion_drops += 1
                         excluded_ids.add(execution_id)
                         last_input_row_key = _asset_list_input_row_key(input_item)
                         continue
@@ -1115,11 +1158,6 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Queried second and merged, so an execution that is BOTH an input and the output target keeps
         # its input row (first-seen wins) and is listed once. Bounded by the same
         # MAX_EXECUTIONS_INSPECTED budget across both directions.
-        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
-        # outputTypes projection share one read per execution. Output-only executions seed it for free
-        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
-        # lazily through the config_row_loader threaded into the auth check.
-        config_row_memo = {}
         # A page that spent its excludeStatus check budget on the input side stops there, with the input
         # cursor, rather than starting the output walk.
         if len(deduped_inputs) < inspect_cap and not exclusion_budget_spent:
@@ -1177,7 +1215,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             output_last_evaluated_key = (
                                 last_output_row_key or out_resp.get('LastEvaluatedKey'))
                             break
-                        if excluded_statuses and exclusion_checks >= MAX_EXECUTIONS_INSPECTED:
+                        if excluded_statuses and exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
                             # Same deferral for the excludeStatus check budget.
                             bounded = True
                             exclusion_budget_spent = True
@@ -1216,8 +1254,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             # a sibling never returned.
                             continue
                         if excluded_statuses:
-                            exclusion_checks += 1
-                            if _is_excluded(execution_id):
+                            # The configuration row is this GSI item, so the read check reuses it.
+                            config_row_memo.setdefault(execution_id, cfg_item)
+                            placeholder = {'workflowExecutionId': execution_id}
+                            if _is_excluded(execution_id, placeholder):
+                                exclusion_drops += 1
                                 excluded_ids.add(execution_id)
                                 continue
                         # A placeholder input row: this execution has no input file for the asset (it
@@ -1295,26 +1336,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # response builder also uses. One enforcer for the whole listing, and the configuration row is
         # read lazily per candidate, only after its workflow GET passes.
         authorized_inputs = []
-        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
         for input_item in deduped_inputs.values():
             if casbin_enforcer is None:
                 continue
             candidate_id = input_item.get('workflowExecutionId', '')
-            authorization_item = input_item
-            if not input_item.get('workflowId', ''):
-                authorization_item = _fetch_main_row(candidate_id) or input_item
-
-            def _config_row_loader(eid=candidate_id):
-                # The one config-row read the auth pass pays for this candidate lands in the memo, so
-                # the outputTypes projection in build_execution_items reuses it rather than re-reading.
-                # An output-only execution was already seeded above, so this never runs for one.
-                if eid not in config_row_memo:
-                    config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
-                return config_row_memo[eid]
-
-            allowed, reason = _execution_access_check(
-                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
-                config_row_loader=_config_row_loader)
+            allowed, reason = _authorize_candidate(candidate_id, input_item)
             if allowed:
                 authorized_inputs.append(input_item)
             else:
