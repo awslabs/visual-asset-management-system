@@ -99,8 +99,10 @@ class LargeFileAlreadyProcessed(Exception):
     """A redelivered message names a file that an earlier receive already stored.
 
     SQS standard queues deliver at least once, so the same message can arrive after an
-    earlier receive finished the file. The message is consumed with no cleanup and no new
-    audit entry: the earlier receive wrote the completion entry.
+    earlier receive stored the file, including one that timed out or failed after it deleted
+    the staged object and before it wrote its audit entry or the file's outcome. The message
+    is consumed with no cleanup; finish_stored_file writes what the earlier receive did not
+    (the audit entry once, the outcome) when the upload record tracks the file.
     """
 
 
@@ -947,14 +949,86 @@ def upload_table():
     return _upload_table
 
 
-def record_file_outcome(file_info: Dict[str, Any], succeeded: bool, reason: str = ""):
-    """Record a queued file's outcome on its upload record (common.uploadStatus). Never raises."""
+def record_file_outcome(file_info: Dict[str, Any], succeeded: bool, reason: str = "",
+                        raise_errors: bool = False):
+    """Record a queued file's outcome on its upload record (common.uploadStatus). Idempotent. Never
+    raises unless ``raise_errors``, which the stored-file path uses so a failed write returns the
+    message to the queue and its redelivery records the outcome."""
     try:
         uploadStatus.record_async_file_outcome(
             upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
-            file_info.get('relativeKey'), succeeded, reason)
+            file_info.get('relativeKey'), succeeded, reason, raise_errors=raise_errors)
     except Exception as e:
         logger.warning(f"Could not record the outcome of {file_info.get('relativeKey')}: {e}")
+        if raise_errors:
+            raise
+
+
+def audit_stored_file(file_info: Dict[str, Any], correlation_id: str):
+    """Write the completion audit entry of a file this consumer stored. Never raises."""
+    try:
+        log_file_upload(
+            build_async_audit_event(file_info),
+            file_info.get('databaseId'),
+            file_info.get('assetId'),
+            file_info.get('relativeKey'),
+            False,  # Not denied
+            None,
+            {
+                "uploadId": file_info.get('uploadId'),
+                "uploadType": file_info.get('uploadType'),
+                "status": "completed_async",
+                "processingType": "large_file_async",
+                "correlationId": correlation_id
+            }
+        )
+    except Exception as audit_error:
+        logger.exception(f"Failed to log large file upload audit - {correlation_id}: {audit_error}")
+
+
+def finish_stored_file(file_info: Dict[str, Any], correlation_id: str, redelivered_stored: bool):
+    """The completion audit entry and the outcome of a file this consumer stored, written once
+    across receives of its message.
+
+    When the upload record tracks the file, the audit entry is claimed on its entry first, so a
+    receive that stops after the staged object is deleted (a timeout, a failed outcome write) and
+    its redelivery write one entry between them, and the outcome is written last and raises when it
+    fails, so the message returns to the queue and the redelivery (``redelivered_stored``: the
+    file is found already stored) writes it. A file the record does not track (no record, or one
+    that expired) keeps the earlier behaviour: the receive that stored it writes the entry, and a
+    redelivery writes nothing.
+
+    A redelivery whose file the copy engine may have stored (a copy job exists, or its row cannot be
+    read) writes nothing: the engine writes that file's entry and outcome.
+
+    Raises when the upload record cannot be read or written, so the message is redelivered."""
+    if redelivered_stored and copy_job_state(file_info) != COPY_JOB_NONE:
+        return
+    claim = uploadStatus.claim_async_file_audit(
+        upload_table(), file_info.get('uploadId'), file_info.get('assetId'),
+        file_info.get('relativeKey'))
+    if claim is True or (claim is None and not redelivered_stored):
+        audit_stored_file(file_info, correlation_id)
+    if claim is not None:
+        record_file_outcome(file_info, True, raise_errors=True)
+
+
+COPY_JOB_NONE = "none"
+COPY_JOB_EXISTS = "exists"
+COPY_JOB_UNKNOWN = "unknown"
+
+
+def copy_job_state(file_info: Dict[str, Any]) -> str:
+    """Whether the copy engine owns this file: COPY_JOB_EXISTS (a job row exists), COPY_JOB_NONE
+    (no engine, or no job), or COPY_JOB_UNKNOWN (the job row could not be read)."""
+    if not loc.state_machine_arn() or not file_info.get('uploadId') or not file_info.get('relativeKey'):
+        return COPY_JOB_NONE
+    job_id = loc.job_id_for(file_info['uploadId'], file_info['relativeKey'])
+    try:
+        return COPY_JOB_EXISTS if loc.get_job_row(copy_jobs_table(), job_id) else COPY_JOB_NONE
+    except Exception as e:
+        logger.warning(f"Could not read copy job {job_id}: {e}")
+        return COPY_JOB_UNKNOWN
 
 
 def already_handed_off(file_info: Dict[str, Any]) -> str:
@@ -1404,9 +1478,18 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
             try:
                 success = process_large_file(file_info, correlation_ids, receive_count, sent_timestamp_ms)
             except LargeFileAlreadyProcessed:
-                # The earlier receive that stored the file wrote its audit entry
-                logger.info(f"Duplicate delivery of a file already stored, message consumed with no new "
-                            f"audit entry - {format_correlation_ids(correlation_ids)}")
+                # An earlier receive stored the file, but it may have stopped before its audit
+                # entry or the file's outcome: write what is missing (once) when the upload
+                # record tracks the file.
+                logger.info(f"Duplicate delivery of a file already stored, message consumed - "
+                            f"{format_correlation_ids(correlation_ids)}")
+                try:
+                    finish_stored_file(file_info, record_correlation_id, redelivered_stored=True)
+                except Exception as outcome_error:
+                    retryable_errors.append(outcome_error)
+                    failure_count += 1
+                    processed_count += 1
+                    continue
                 success_count += 1
                 processed_count += 1
                 continue
@@ -1423,29 +1506,17 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 success_count += 1
             elif success:
                 logger.info(f"Successfully processed large file - {format_correlation_ids(correlation_ids)}")
-                success_count += 1
-                record_file_outcome(file_info, True)
-                
-                # AUDIT LOG: Large file upload completed asynchronously, with the actor
-                # resolved by build_async_audit_event.
+                # AUDIT LOG (once across receives, actor resolved by build_async_audit_event) and
+                # the file's outcome. A failed outcome write returns the message to the queue; its
+                # redelivery finds the file stored and writes the outcome.
                 try:
-                    log_file_upload(
-                        build_async_audit_event(file_info),
-                        file_info.get('databaseId'),
-                        file_info.get('assetId'),
-                        file_info.get('relativeKey'),
-                        False,  # Not denied
-                        None,
-                        {
-                            "uploadId": file_info.get('uploadId'),
-                            "uploadType": file_info.get('uploadType'),
-                            "status": "completed_async",
-                            "processingType": "large_file_async",
-                            "correlationId": record_correlation_id
-                        }
-                    )
-                except Exception as audit_error:
-                    logger.exception(f"Failed to log large file upload audit - {format_correlation_ids(correlation_ids)}: {audit_error}")
+                    finish_stored_file(file_info, record_correlation_id, redelivered_stored=False)
+                except Exception as outcome_error:
+                    retryable_errors.append(outcome_error)
+                    failure_count += 1
+                    processed_count += 1
+                    continue
+                success_count += 1
             else:
                 logger.error(f"Large file rejected and cleaned up, message consumed - {format_correlation_ids(correlation_ids)}")
                 failure_count += 1

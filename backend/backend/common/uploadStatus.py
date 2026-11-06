@@ -11,9 +11,10 @@ writer of a file's outcome records it here. Once no file is pending the record's
 ``completed`` or ``completed_with_errors``. ``GET /uploads/{uploadId}`` returns it, and the web app,
 ``vamscli file upload --wait-async`` and ``vamscli file upload-status`` show it.
 
-Import has no AWS or environment side effect: the table is passed in. Every writer is best-effort
-and never raises, since the file's own outcome must not fail because its status could not be
-recorded.
+Import has no AWS or environment side effect: the table is passed in. Writers never raise unless
+asked to (``raise_errors``): the copy engine and the queue consumer ask, so a write that failed is
+retried by their own retry (a Step Functions retry, a redelivered message) instead of leaving the
+file PENDING until the record expires.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -89,11 +90,18 @@ def begin_async_tracking(table, upload_id, asset_id, relative_keys, has_sync_fai
         return False
 
 
-def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeeded, reason=""):
+def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeeded, reason="",
+                              raise_errors=False):
     """Record one asynchronously ingested file's outcome on its upload record and, when no file is
     pending any more, the upload's final status. A record that does not track the file (an upload
     completed before this was recorded, or one whose record expired) is left alone. Returns True when
-    the file's outcome was written."""
+    the file's outcome was written.
+
+    Idempotent and monotonic: a file's entry moves from PENDING to one outcome only, so repeating the
+    write (a retried task, a redelivered message) writes the same outcome again and settles the
+    upload if it is not settled yet, and a different outcome never overwrites a recorded one.
+    ``raise_errors`` re-raises a write that failed for any other reason than the record not tracking
+    the file, so the caller's retry records it (otherwise logged and False)."""
     if not (upload_id and asset_id and relative_key):
         return False
     status = FILE_SUCCEEDED if succeeded else FILE_FAILED
@@ -104,22 +112,63 @@ def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeede
         response = table.update_item(
             Key={"uploadId": upload_id, "assetId": asset_id},
             UpdateExpression="SET asyncFiles.#rel = :entry, updatedAt = :u",
-            ConditionExpression="attribute_exists(asyncFiles.#rel)",
-            ExpressionAttributeNames={"#rel": relative_key},
-            ExpressionAttributeValues={":entry": entry, ":u": entry["updatedAt"]},
+            ConditionExpression="attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st IN (:p, :s)",
+            ExpressionAttributeNames={"#rel": relative_key, "#st": "status"},
+            ExpressionAttributeValues={":entry": entry, ":u": entry["updatedAt"],
+                                       ":p": FILE_PENDING, ":s": status},
             ReturnValues="ALL_NEW",
         )
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            logger.info(f"Upload {upload_id} does not track {relative_key}; no status recorded")
-        else:
-            logger.warning(f"Could not record the outcome of {relative_key} on upload {upload_id}: {e}")
+            logger.info(f"Upload {upload_id} does not track {relative_key} or already recorded "
+                        f"another outcome for it; no status recorded")
+            return False
+        logger.warning(f"Could not record the outcome of {relative_key} on upload {upload_id}: {e}")
+        if raise_errors:
+            raise
         return False
     except Exception as e:
         logger.warning(f"Could not record the outcome of {relative_key} on upload {upload_id}: {e}")
+        if raise_errors:
+            raise
         return False
     _settle(table, response.get("Attributes") or {})
     return True
+
+
+def claim_async_file_audit(table, upload_id, asset_id, relative_key):
+    """Claim the right to write the completion audit entry of a tracked file whose outcome is still
+    PENDING (stamped on its entry; not part of the API view). True for exactly one receive of the
+    file's message, so a redelivery that finds the file stored writes the entry only if no earlier
+    receive did. False when an earlier receive claimed it or the outcome is recorded; None when the
+    record does not track the file. Raises when the record cannot be written."""
+    if not (upload_id and asset_id and relative_key):
+        return None
+    try:
+        table.update_item(
+            Key={"uploadId": upload_id, "assetId": asset_id},
+            UpdateExpression="SET asyncFiles.#rel.#ac = :n",
+            ConditionExpression=("attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st = :p AND "
+                                 "attribute_not_exists(asyncFiles.#rel.#ac)"),
+            ExpressionAttributeNames={"#rel": relative_key, "#st": "status", "#ac": "auditClaimedAt"},
+            ExpressionAttributeValues={":n": _iso(), ":p": FILE_PENDING},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+    return False if async_file_status(table, upload_id, asset_id, relative_key) else None
+
+
+def async_file_status(table, upload_id, asset_id, relative_key):
+    """The recorded status of one asynchronously ingested file (PENDING, SUCCEEDED or FAILED), or
+    None when the upload record does not track it. Raises when the record cannot be read."""
+    if not (upload_id and asset_id and relative_key):
+        return None
+    record = table.get_item(Key={"uploadId": upload_id, "assetId": asset_id},
+                            ConsistentRead=True).get("Item") or {}
+    entry = (record.get("asyncFiles") or {}).get(relative_key)
+    return (entry or {}).get("status") if isinstance(entry, dict) else None
 
 
 def _settle(table, record):

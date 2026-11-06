@@ -15,11 +15,18 @@ The state machines (infra: lambdaBuilder/largeObjectCopyEngine.ts) run, per job:
 - copyBatch: copy the missing parts of one batch with UploadPartCopy (ListParts first, so a retry
              copies only what is missing). An in-VPC copy between Regions streams the parts instead,
              since an S3 interface endpoint does not serve UploadPartCopy across Regions.
-- complete:  verify the parts, complete the upload, check the new version, delete the staged source
-             (by version), run the post-landing side effects (asset type, subscription email, audit)
-             and mark the job SUCCEEDED.
-- fail:      abort the multipart upload, delete an upload's staged object (a workflow output's staged
-             object is kept for inspection), audit, and mark the job FAILED with a generic reason.
+- complete:  verify the parts, complete the upload, check the new version, mark the job SUCCEEDED,
+             then delete the staged source (by version) and run the post-landing side effects (asset
+             type, subscription email, audit, upload outcome).
+- fail:      mark the job FAILED with a generic reason, then abort the multipart upload, delete an
+             upload's staged object (a workflow output's staged object is kept for inspection) and
+             audit.
+
+The job status is monotonic: every status write is conditional on the job being open (QUEUED or
+RUNNING), and Prepare and Complete stop (aborting their upload) when they find it finalized. The work
+after a terminal status (_finish) runs for whichever writer finalized the job and again, safely, for
+any later one: deletes and aborts are idempotent, the audit entry and post-landing work are claimed
+once on the job row, and the upload outcome is an idempotent write that raises so a retry records it.
 - notify:    count the job on its ingestion batch exactly once and, when the batch is complete,
              report it once: SendTaskSuccess to the waiting workflow, or (for a workflow running a
              definition that does not wait) an asynchronous finalize of its output step.
@@ -110,9 +117,31 @@ def _error_code(error):
     return getattr(error, "response", {}).get("Error", {}).get("Code", "")
 
 
-def _ensure_not_cancelled(job_id):
-    if loc.get_job_row(jobs_table, job_id).get("status") == loc.STATUS_CANCELLED:
-        raise loc.CopyRefused(loc.REASON_CANCELLED)
+def _finished_reason(row):
+    """The refusal a task raises for a job that is already finalized (cancelled, or finalized by the
+    reconcile while this task of the stopped execution was still running)."""
+    if row.get("status") == loc.STATUS_CANCELLED:
+        return loc.REASON_CANCELLED
+    return row.get("error") or loc.REASON_COPY_FAILED
+
+
+def _ensure_open(job_id):
+    """Refuse to act for a job that is already finalized. Returns the row."""
+    row = loc.get_job_row(jobs_table, job_id)
+    if row and not loc.is_open_job(row):
+        raise loc.CopyRefused(_finished_reason(row))
+    return row
+
+
+def _dest_identity(dest):
+    """loc.object_identity of what the destination holds before this job's upload is created."""
+    try:
+        return loc.object_identity(_client_for_bucket(dest["bucket"]).head_object(
+            Bucket=dest["bucket"], Key=dest["key"]))
+    except ClientError as e:
+        if _error_code(e) in ("404", "NoSuchKey", "NotFound"):
+            return loc.object_identity(None)
+        raise
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -122,7 +151,7 @@ def _ensure_not_cancelled(job_id):
 def prepare(job):
     _register_regions(job)
     job_id = job["jobId"]
-    _ensure_not_cancelled(job_id)
+    _ensure_open(job_id)
     source = job["source"]
     dest = job["dest"]
 
@@ -164,9 +193,11 @@ def prepare(job):
     job = {**job, "source": source, "partSize": part_size, "partCount": part_count,
            "threads": cfg["threadsPerBatch"]}
 
-    row = loc.get_job_row(jobs_table, job_id)
+    row = _ensure_open(job_id)
     upload_id = row.get("uploadIdS3", "")
     if not upload_id:
+        # What the destination holds now, so a reconcile can tell this job's landed object from it.
+        prior_identity = _dest_identity(dest)
         # Metadata, content headers and the ACL are set once, here, on the final object. The
         # metadata is exactly what the synchronous path's REPLACE copy writes (2 KB check included).
         copy_args = replace_metadata_copy_args(
@@ -177,21 +208,21 @@ def prepare(job):
         created = _client_for_bucket(dest["bucket"]).create_multipart_upload(
             Bucket=dest["bucket"], Key=dest["key"], ACL="bucket-owner-full-control", **copy_args)
         upload_id = created["UploadId"]
-        # Recorded only while the job is not cancelled: a cancel that read the row before the
-        # upload existed could not abort it, so this attempt aborts it instead.
+        # Recorded only while the job is open: a cancel or a reconcile that read the row before the
+        # upload existed could not abort it, so this attempt aborts it instead, and a finalized job
+        # never goes back to RUNNING.
         recorded = loc.update_job_row(
             jobs_table, job_id,
             {"uploadIdS3": upload_id, "status": loc.STATUS_RUNNING, "partSize": part_size,
-             "partCount": part_count, "sourceSize": size, "sourceVersionId": source["versionId"]},
-            condition="attribute_not_exists(uploadIdS3) AND (attribute_not_exists(#s) OR #s <> :c)",
-            condition_values={":c": loc.STATUS_CANCELLED})
+             "partCount": part_count, "sourceSize": size, "sourceVersionId": source["versionId"],
+             "destPriorIdentity": prior_identity},
+            condition="attribute_not_exists(uploadIdS3) AND " + loc.OPEN_JOB_CONDITION,
+            condition_values=dict(loc.OPEN_JOB_VALUES))
         if not recorded:
-            # Cancelled meanwhile, or a concurrent attempt recorded its upload first: drop this
-            # upload, and use the recorded one unless the job was cancelled.
+            # Finalized meanwhile, or a concurrent attempt recorded its upload first: drop this
+            # upload, and use the recorded one unless the job was finalized.
             _abort_quietly(dest["bucket"], dest["key"], upload_id)
-            row = loc.get_job_row(jobs_table, job_id)
-            if row.get("status") == loc.STATUS_CANCELLED:
-                raise loc.CopyRefused(loc.REASON_CANCELLED)
+            row = _ensure_open(job_id)
             upload_id = row.get("uploadIdS3", "")
     job["uploadIdS3"] = upload_id
     logger.info(f"Prepared copy job {job_id}: {size} bytes in {part_count} parts of {part_size} "
@@ -328,6 +359,17 @@ def complete(job):
     dest = job["dest"]
     source = job["source"]
     client = _client_for_bucket(dest["bucket"])
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    if row.get("status") == loc.STATUS_SUCCEEDED:
+        # An earlier attempt, the reconcile or the cancel path already finalized the landed file:
+        # finish whatever post-landing work is still missing, once.
+        _finish(job, row)
+        return {"job": {**job, "destVersionId": row.get("destVersionId", "")}}
+    if row and not loc.is_open_job(row):
+        # Finalized FAILED or CANCELLED while this task was queued or running (the reconcile of a
+        # stopped execution, or the cancel path): the upload is not completed.
+        _abort_quietly(dest["bucket"], dest["key"], job["uploadIdS3"])
+        raise loc.CopyRefused(_finished_reason(row))
     expected = {n: (lambda r: r[1] - r[0] + 1)(loc.part_range(n, job["partSize"], source["size"]))
                 for n in range(1, job["partCount"] + 1)}
     try:
@@ -351,22 +393,66 @@ def complete(job):
         raise RuntimeError(f"Copy job {job['jobId']}: the landed object does not match the plan")
     version_id = head.get("VersionId", "") or ""
 
-    if job.get("deleteSourceOnSuccess"):
+    loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_SUCCEEDED, {"destVersionId": version_id})
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    if row.get("status") != loc.STATUS_SUCCEEDED:
+        # Finalized as failed after this attempt completed the upload. The reconcile and the cancel
+        # path abort the upload before they decide, and S3 completes or aborts an upload, never both,
+        # so this needs an upload removed outside VAMS; the stored outcome stands.
+        logger.error(f"Copy job {job['jobId']} completed its upload after the job was finalized "
+                     f"{row.get('status')}; keeping the stored outcome")
+        raise loc.CopyRefused(_finished_reason(row))
+    _finish(job, row)
+    return {"job": {**job, "destVersionId": row.get("destVersionId", version_id)}}
+
+
+def _finish(job, row):
+    """The work that follows a job's terminal status, done by whichever writer finalized it and
+    repeated safely by any later one (a retried task, a redelivered reconcile):
+
+    - SUCCEEDED: delete the staged source, then the asset type and subscription email (once), the
+      completion audit entry (once) and the upload outcome.
+    - FAILED / CANCELLED: abort the multipart upload, delete an upload's staged object, then the
+      rejection audit entry (once) and the upload outcome.
+
+    Deletes and aborts are idempotent; the once-only steps are claimed on the job row; the upload
+    outcome is an idempotent write that raises when it cannot be written, so the caller's retry
+    records it. A row finalized before finalizedAt existed (an execution in flight across the
+    upgrade) was finished by the writer that finalized it and is left alone."""
+    status = row.get("status")
+    if not row.get("finalizedAt") or status not in loc.TERMINAL_JOB_STATUSES:
+        return
+    source = {**job["source"], "versionId": job["source"].get("versionId") or row.get("sourceVersionId", "")}
+    if status == loc.STATUS_SUCCEEDED:
+        if job.get("deleteSourceOnSuccess"):
+            _delete_source(source)
+        if loc.claim_job_flag(jobs_table, job["jobId"], "landedEffectsAt"):
+            _after_landing(job)
+        _audit_once(job, False, None, "completed_async")
+        _record_upload_outcome(job, True)
+        return
+    reason = row.get("error") or loc.REASON_COPY_FAILED
+    upload_id = row.get("uploadIdS3") or job.get("uploadIdS3", "")
+    if upload_id:
+        # Failed copies discard their partial upload at once.
+        _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
+    if job.get("kind") == loc.KIND_UPLOAD:
+        # An upload's staged object is not kept (the queue consumer's cleanup behaves the same way);
+        # a workflow output's stays under the run's pipelines/ folder for inspection or a re-run.
         _delete_source(source)
-    _after_landing(job)
-    loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_SUCCEEDED,
-                                                  "destVersionId": version_id})
-    _record_upload_outcome(job, True)
-    return {"job": {**job, "destVersionId": version_id}}
+    _audit_once(job, True, reason, "rejected_async")
+    _record_upload_outcome(job, False, reason)
 
 
 def _record_upload_outcome(job, succeeded, reason=""):
     """An API upload's copy records its file's outcome on the upload record, where the uploader
-    reads it (GET /uploads/{uploadId}). A workflow output reports through its execution instead."""
+    reads it (GET /uploads/{uploadId}). A workflow output reports through its execution instead.
+    Idempotent; raises when the record cannot be written, so the task or reconcile is retried."""
     if job.get("kind") != loc.KIND_UPLOAD:
         return
     uploadStatus.record_async_file_outcome(upload_table, job.get("uploadId"), job.get("assetId"),
-                                           job.get("relativeKey"), succeeded, reason)
+                                           job.get("relativeKey"), succeeded, reason,
+                                           raise_errors=True)
 
 
 def _delete_source(source):
@@ -396,14 +482,26 @@ def _audit_event(job):
 
 
 def _audit(job, denied, reason, status):
+    """Write the job's audit entry. Returns False (logged) when it could not be written."""
     try:
         log_file_upload(_audit_event(job), job.get("databaseId"), job.get("assetId"),
                         job.get("relativeKey"), denied, reason,
                         {"uploadId": job.get("uploadId"), "uploadType": job.get("uploadType"),
                          "status": status, "processingType": "large_file_async",
                          "copyJobId": job.get("jobId")})
+        return True
     except Exception as e:
         logger.exception(f"Failed to write the audit entry of copy job {job.get('jobId')}: {e}")
+        return False
+
+
+def _audit_once(job, denied, reason, status):
+    """One audit entry per job, whichever writer finalized it: the entry is claimed on the job row
+    before it is written, and the claim is released when the write fails so a retry writes it."""
+    if not loc.claim_job_flag(jobs_table, job["jobId"], "auditedAt"):
+        return
+    if not _audit(job, denied, reason, status):
+        loc.release_job_flag(jobs_table, job["jobId"], "auditedAt")
 
 
 def _determine_asset_type(bucket, prefix):
@@ -427,8 +525,8 @@ def _determine_asset_type(bucket, prefix):
 
 
 def _after_landing(job):
-    """Asset type, subscription email and audit entry for a landed file. Best-effort: the file is in
-    the asset, so a failure here is logged and does not fail the job."""
+    """Asset type and subscription email for a landed file (once per job, claimed by _finish).
+    Best-effort: the file is in the asset, so a failure here is logged and does not fail the job."""
     try:
         asset = asset_table.get_item(Key={"databaseId": job["databaseId"], "assetId": job["assetId"]}).get("Item")
         if asset:
@@ -447,7 +545,6 @@ def _after_landing(job):
                                                  "assetId": job["assetId"]}))
     except Exception as e:
         logger.exception(f"Could not send the subscription email after copy job {job['jobId']}: {e}")
-    _audit(job, False, None, "completed_async")
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -507,22 +604,16 @@ def fail(job, error):
     row = loc.get_job_row(jobs_table, job["jobId"])
     reason = _failure_reason(error, row)
     logger.error(f"Copy job {job.get('jobId')} failed: {(error or {}).get('Error', '')}")
-    upload_id = job.get("uploadIdS3") or row.get("uploadIdS3", "")
-    if upload_id:
-        # Failed copies discard their partial upload at once.
-        _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
-    if job.get("kind") == loc.KIND_UPLOAD:
-        # An upload's staged object is not kept (the queue consumer's cleanup behaves the same way);
-        # a workflow output's stays under the run's pipelines/ folder for inspection or a re-run.
-        _delete_source(job["source"])
-    _audit(job, True, reason, "rejected_async")
-    loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_FAILED, "error": reason},
-                       condition="attribute_not_exists(#s) OR #s <> :c",
-                       condition_values={":c": loc.STATUS_CANCELLED})
-    _record_upload_outcome(job, False, reason)
+    # Finalized FAILED only while open; a job the cancel path marked CANCELLED keeps its status and
+    # is finished here once. A job another writer already finalized keeps that outcome.
+    loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_FAILED, {"error": reason}, from_cancelled=True)
+    row = loc.get_job_row(jobs_table, job["jobId"]) or row
+    _finish(job, row)
+    stored = (row.get("error") or reason) if row.get("status") != loc.STATUS_SUCCEEDED else ""
     # refused: the state machine ends a refused copy in its own end state, so the failed-copy alarm
-    # counts only copies that broke.
-    return {"job": {**job, "error": reason}, "refused": reason in loc.REFUSAL_REASONS}
+    # counts only copies that broke (a job another writer finalized as landed did not break).
+    return {"job": {**job, "error": stored},
+            "refused": row.get("status") == loc.STATUS_SUCCEEDED or stored in loc.REFUSAL_REASONS}
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -542,9 +633,18 @@ def reconcile(execution_arn):
     times out, or is stopped in the console or the API runs no Catch, Fail or notify state, so its
     job row would stay QUEUED or RUNNING and its run would wait out maxOutputIngestionWaitHours.
     Invoked by the copy state machine's status change rule, and by the execution details read for a
-    job it finds in that state. Idempotent: the job row moves to FAILED with a conditional write and
-    only the caller that moved it cleans up and audits; notify counts the job on its batch exactly
-    once. A job the cancel path marked CANCELLED, or a stop the cancel path made, is left alone."""
+    job it finds in that state. A job the cancel path marked CANCELLED, or a stop the cancel path
+    made, is left alone.
+
+    StopExecution does not stop a Lambda invocation already running, so a Prepare or Complete of the
+    stopped execution can still be in flight. One truth, whatever the order: a landed object wins.
+    The reconcile first aborts the job's multipart upload, which S3 then refuses to complete, so
+    from that moment no task can land the file; if the upload was already gone, Complete completed
+    it, and the job is finalized SUCCEEDED when the destination holds the planned object. Otherwise
+    it is finalized FAILED. The status write is conditional on the job still being open (Prepare
+    and Complete write the same way and stop when the job is finalized), the audit entry is claimed
+    on the job row, and the upload outcome is an idempotent write, so every ordering ends with one
+    status, one audit entry and one upload outcome. notify counts the job on its batch once."""
     if not _is_own_execution(execution_arn):
         logger.warning("Reconcile skipped: not an execution of this deployment's copy state machine")
         return {"reconciled": False}
@@ -564,30 +664,45 @@ def reconcile(execution_arn):
     if row.get("executionArn") and row["executionArn"] != execution_arn:
         return {"reconciled": False}
 
-    if row.get("status") not in loc.TERMINAL_JOB_STATUSES:
-        reason = loc.REASON_COPY_FAILED
-        claimed = loc.update_job_row(
-            jobs_table, job["jobId"], {"status": loc.STATUS_FAILED, "error": reason,
-                                       "reconciledStatus": described.get("status", "")},
-            condition="attribute_not_exists(#s) OR #s IN (:q, :r)",
-            condition_values={":q": loc.STATUS_QUEUED, ":r": loc.STATUS_RUNNING})
-        if claimed:
+    _register_regions(job)
+    if loc.is_open_job(row):
+        landed, version_id = _landed_after_abort(job, row)
+        values = {"reconciledStatus": described.get("status", "")}
+        if landed:
+            values["destVersionId"] = version_id
+        else:
+            values["error"] = loc.REASON_COPY_FAILED
+        status = loc.STATUS_SUCCEEDED if landed else loc.STATUS_FAILED
+        if loc.finalize_job(jobs_table, job["jobId"], status, values):
             logger.error(f"Copy job {job['jobId']} ended {described.get('status')} outside its "
-                         f"states; finalizing it as failed")
-            _register_regions(job)
-            upload_id = row.get("uploadIdS3", "")
-            if upload_id:
-                _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
-            if job.get("kind") == loc.KIND_UPLOAD:
-                # The version Prepare pinned, when the starter's job did not carry one.
-                _delete_source({**job["source"], "versionId": job["source"].get("versionId")
-                                or row.get("sourceVersionId", "")})
-            _audit(job, True, reason, "rejected_async")
-            _record_upload_outcome(job, False, reason)
-    # SUCCEEDED or FAILED but possibly never counted (the notify states did not run): count and
-    # report now. A job already counted is not counted again.
-    result = notify(job, loc.STATUS_FAILED)
+                         f"states; finalized it as {status.lower()}")
+    # Finish what is missing (any writer may have finalized it; each step runs once), then count
+    # and report: a job the notify states never counted is counted now, and only once.
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    _finish(job, row)
+    result = notify(job, row.get("status") or loc.STATUS_FAILED)
     return {"reconciled": True, "status": result.get("status")}
+
+
+def _landed_after_abort(job, row):
+    """(landed, version_id) for an open job of an execution that ended outside its states. Aborts
+    the job's multipart upload first, so no task still running can complete it afterwards; an
+    upload already gone was completed by Complete (loc.landed_object_version checks the object).
+    Raises when the abort fails for another reason, so the reconcile is retried rather than guess."""
+    upload_id = row.get("uploadIdS3", "")
+    if not upload_id:
+        # Prepare never recorded an upload; one it creates now is refused and aborted by Prepare.
+        return False, ""
+    client = _client_for_bucket(job["dest"]["bucket"])
+    try:
+        client.abort_multipart_upload(Bucket=job["dest"]["bucket"], Key=job["dest"]["key"],
+                                      UploadId=upload_id)
+        return False, ""
+    except ClientError as e:
+        if _error_code(e) != "NoSuchUpload":
+            raise
+    return loc.landed_object_version(client, {**row, "destBucket": job["dest"]["bucket"],
+                                              "destKey": job["dest"]["key"]})
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -596,10 +711,18 @@ def reconcile(execution_arn):
 
 def notify(job, status):
     row = loc.get_job_row(jobs_table, job["jobId"])
+    if loc.is_open_job(row):
+        # Not finalized by Complete or Fail (should not happen on the current definition): finalize
+        # it with the state machine's status so the count below never changes an outcome.
+        values = {} if status == loc.STATUS_SUCCEEDED else {"error": loc.REASON_COPY_FAILED}
+        loc.finalize_job(jobs_table, job["jobId"], status, values)
+        row = loc.get_job_row(jobs_table, job["jobId"])
+        _finish(job, row)
     final_status = row.get("status") if row.get("status") in loc.TERMINAL_JOB_STATUSES else status
     batch_id = job.get("batchId", "")
+    # The status is written only for a row that has none yet (not recorded); otherwise it is kept.
     counted = loc.count_job_terminal(dynamodb_client, jobs_table_name, job["jobId"], batch_id,
-                                     final_status)
+                                     None if row else final_status)
     if counted and job.get("workflowExecutionId") and batch_id:
         _record_progress(job, final_status)
     if batch_id:

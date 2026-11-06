@@ -67,6 +67,14 @@ def env():
             BillingMode="PAY_PER_REQUEST")
         assets.put_item(Item={"databaseId": "db", "assetId": "a1",
                               "assetLocation": {"Key": "a1/"}, "assetType": "none"})
+        # The upload records table (empty: a test that tracks a file adds it with _uploads_table).
+        uploads = ddb.create_table(
+            TableName="t-uploads",
+            KeySchema=[{"AttributeName": "uploadId", "KeyType": "HASH"},
+                       {"AttributeName": "assetId", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "uploadId", "AttributeType": "S"},
+                                  {"AttributeName": "assetId", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST")
         lambda_client = MagicMock()
         sfn_client = MagicMock()
         audit = MagicMock()
@@ -74,6 +82,7 @@ def env():
                 patch.object(engine, "_client_for_bucket", lambda bucket: s3), \
                 patch.object(engine, "jobs_table", jobs), \
                 patch.object(engine, "asset_table", assets), \
+                patch.object(engine, "upload_table", uploads), \
                 patch.object(engine, "dynamodb_client", boto3.client("dynamodb", region_name=REGION)), \
                 patch.object(engine, "lambda_client", lambda_client), \
                 patch.object(engine, "sfn_client", sfn_client), \
@@ -338,14 +347,8 @@ def test_a_cancel_during_prepare_aborts_the_new_upload(env):
 
 
 def _uploads_table():
-    ddb = boto3.resource("dynamodb", region_name=REGION)
-    table = ddb.create_table(
-        TableName="t-uploads",
-        KeySchema=[{"AttributeName": "uploadId", "KeyType": "HASH"},
-                   {"AttributeName": "assetId", "KeyType": "RANGE"}],
-        AttributeDefinitions=[{"AttributeName": "uploadId", "AttributeType": "S"},
-                              {"AttributeName": "assetId", "AttributeType": "S"}],
-        BillingMode="PAY_PER_REQUEST")
+    """The fixture's upload records table, now tracking big.bin of upload y1 as PENDING."""
+    table = boto3.resource("dynamodb", region_name=REGION).Table("t-uploads")
     table.put_item(Item={"uploadId": "y1", "assetId": "a1", "databaseId": "db", "status": "processing_async",
                          "asyncFiles": {"big.bin": {"status": "PENDING"}}})
     return table

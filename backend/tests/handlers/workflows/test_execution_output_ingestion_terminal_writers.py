@@ -94,9 +94,10 @@ class TestDetailsFields:
     def test_phase_and_progress_are_reported_when_present(self):
         files = [{"relativeKey": "big.e57", "status": "RUNNING", "bytesTotal": 10, "partsTotal": 4,
                   "partsDone": 1, "error": ""}]
+        row = _ingesting_row()
         with patch.object(le, "_ingestion_file_progress", return_value=(files, False)) as progress:
-            fields = le._output_ingestion_fields(_ingesting_row())
-        progress.assert_called_once_with(EXEC)
+            fields = le._output_ingestion_fields(row)
+        progress.assert_called_once_with(EXEC, row)
         assert fields == {"executionPhase": "INGESTING_OUTPUTS",
                           "outputIngestion": {"filesTotal": 2, "filesDone": 1, "bytesTotal": 10,
                                               "bytesDone": 5, "files": files,
@@ -156,7 +157,7 @@ class TestDetailsReadReconcilesEndedCopies:
                 patch.object(le, "sfn", sfn), patch.object(le, "lambda_client", lam):
             if not function_name:
                 le.os.environ.pop(loc.ENV_ENGINE_FUNCTION_NAME, None)
-            files, _ = le._ingestion_file_progress(EXEC)
+            files, _ = le._ingestion_file_progress(EXEC, _ingesting_row())
         return files, lam, sfn
 
     def test_an_ended_copy_is_handed_to_the_engine_asynchronously(self):
@@ -182,6 +183,73 @@ class TestDetailsReadReconcilesEndedCopies:
                                       lam=failing)
         assert len(files) == 2
         lam.invoke.assert_called_once()  # the first failure ends the hand-over for this read
+
+    def test_a_read_without_the_run_row_checks_nothing(self):
+        sfn = MagicMock()
+        with patch.dict(le.os.environ, {loc.ENV_ENGINE_FUNCTION_NAME: "copyEngine"}), \
+                patch.object(le, "get_table_name", return_value="t-copy-jobs"), \
+                patch.object(le.dynamodb, "Table", return_value=MagicMock()), \
+                patch.object(le.loc, "jobs_for_execution", return_value=[dict(r) for r in self.ROWS]), \
+                patch.object(le, "sfn", sfn):
+            le._ingestion_file_progress(EXEC)
+        sfn.describe_execution.assert_not_called()
+
+    def test_finished_copies_cost_no_stamp_and_no_describe(self):
+        sfn = MagicMock()
+        claim = MagicMock(return_value=True)
+        rows = [{**r, "status": "SUCCEEDED"} for r in self.ROWS]
+        with patch.dict(le.os.environ, {loc.ENV_ENGINE_FUNCTION_NAME: "copyEngine"}), \
+                patch.object(le, "_claim_copy_reconcile_check", claim), patch.object(le, "sfn", sfn):
+            le._reconcile_ended_copies(rows, _ingesting_row())
+        claim.assert_not_called()
+        sfn.describe_execution.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestDetailsReadCheckInterval:
+    """#1123 round-3 L11: the details read checks a run's copy executions at most once per
+    COPY_RECONCILE_CHECK_INTERVAL_SECONDS, however many viewers poll it (5 s each): the check is
+    claimed on the run's row with a conditional stamp."""
+
+    ROWS = TestDetailsReadReconcilesEndedCopies.ROWS
+
+    def _check(self, table, sfn):
+        with patch.dict(le.os.environ, {loc.ENV_ENGINE_FUNCTION_NAME: "copyEngine"}), \
+                patch.object(le, "dynamodb", MagicMock(Table=lambda name: table)), \
+                patch.object(le, "sfn", sfn), patch.object(le, "lambda_client", MagicMock()):
+            le._reconcile_ended_copies([dict(r) for r in self.ROWS], _ingesting_row())
+
+    def test_many_reads_within_the_interval_describe_once(self):
+        sfn = MagicMock(**{"describe_execution.return_value": {"status": "RUNNING"}})
+        with hooks._main_table(_ingesting_row()) as table:
+            for _ in range(10):  # ten viewers or polls within the interval
+                self._check(table, sfn)
+            stamp = hooks._stored(table)[loc.COPY_RECONCILE_CHECK_ATTRIBUTE]
+        assert sfn.describe_execution.call_count == len(self.ROWS)  # one check: each open copy once
+        assert stamp
+
+    def test_a_stamp_older_than_the_interval_allows_the_next_check(self):
+        sfn = MagicMock(**{"describe_execution.return_value": {"status": "RUNNING"}})
+        old = _iso(datetime.now(timezone.utc) - timedelta(seconds=loc.COPY_RECONCILE_CHECK_INTERVAL_SECONDS + 5))
+        with hooks._main_table({**_ingesting_row(), loc.COPY_RECONCILE_CHECK_ATTRIBUTE: old}) as table:
+            self._check(table, sfn)
+            assert hooks._stored(table)[loc.COPY_RECONCILE_CHECK_ATTRIBUTE] > old
+        assert sfn.describe_execution.call_count == len(self.ROWS)
+
+    def test_a_recent_stamp_skips_the_check(self):
+        sfn = MagicMock()
+        recent = _iso(datetime.now(timezone.utc) - timedelta(seconds=5))
+        with hooks._main_table({**_ingesting_row(), loc.COPY_RECONCILE_CHECK_ATTRIBUTE: recent}) as table:
+            self._check(table, sfn)
+        sfn.describe_execution.assert_not_called()
+
+    def test_a_row_that_no_longer_exists_is_not_created_or_checked(self):
+        sfn = MagicMock()
+        with hooks._main_table() as table:
+            self._check(table, sfn)
+            assert table.scan()["Items"] == []
+        sfn.describe_execution.assert_not_called()
 
     def test_an_ingested_output_file_reports_its_outcome(self):
         out = le._scrub_output_file({"relativeFilePath": "a", "fileType": "file",
