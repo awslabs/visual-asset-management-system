@@ -198,6 +198,16 @@ async function callService<T>(serviceFn: () => Promise<[boolean, T | string]>): 
     return data as T;
 }
 
+/**
+ * A server list page as the paged hooks hand it on: `Items` is always an array. A response without
+ * an `Items` array (an empty body, a message-only body, `Items: null`) is a page with no rows, so the
+ * poll cadence and every list view can read the rows without guarding each page.
+ */
+function withItems<T extends { Items: unknown[] }>(page: unknown): T {
+    const body = page && typeof page === "object" ? (page as Record<string, unknown>) : {};
+    return { ...body, Items: Array.isArray(body.Items) ? body.Items : [] } as unknown as T;
+}
+
 // ============================================================================
 // PIPELINE HOOKS
 // ============================================================================
@@ -216,8 +226,10 @@ export function usePipelines(databaseId?: string, includeArchived?: boolean, pag
             const params: Record<string, string> = { pageSize: String(pageSize) };
             if (includeArchived) params.includeArchived = "true";
             if (pageParam) params.startingToken = pageParam;
-            return callService<PipelineListPage>(() =>
-                pipelineService.listPipelines(databaseId, params)
+            return withItems<PipelineListPage>(
+                await callService<PipelineListPage>(() =>
+                    pipelineService.listPipelines(databaseId, params)
+                )
             );
         },
         getNextPageParam: (lastPage: PipelineListPage) => lastPage.NextToken,
@@ -514,8 +526,10 @@ export function useWorkflows(databaseId?: string, includeArchived?: boolean, pag
             const params: Record<string, string> = { pageSize: String(pageSize) };
             if (includeArchived) params.includeArchived = "true";
             if (pageParam) params.startingToken = pageParam;
-            return callService<WorkflowListPage>(() =>
-                workflowService.listWorkflows(databaseId, params)
+            return withItems<WorkflowListPage>(
+                await callService<WorkflowListPage>(() =>
+                    workflowService.listWorkflows(databaseId, params)
+                )
             );
         },
         getNextPageParam: (lastPage: WorkflowListPage) => lastPage.NextToken,
@@ -619,7 +633,7 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
             if (scope.kind === "global") {
                 const [ok, data] = await executionService.listExecutionsGlobal(params);
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
-                return data as ExecutionListResponse;
+                return withItems<ExecutionListResponse>(data);
             } else if (scope.kind === "workflow") {
                 // The global-list endpoint matches workflowId and workflowDatabaseId independently.
                 // A workflow id is unique across every database including GLOBAL, so the id alone
@@ -633,7 +647,7 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                 };
                 const [ok, data] = await executionService.listExecutionsGlobal(workflowParams);
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
-                return data as ExecutionListResponse;
+                return withItems<ExecutionListResponse>(data);
             } else {
                 // Asset scope
                 const [ok, data] = await executionService.listExecutionsForAsset(
@@ -642,7 +656,7 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                     params
                 );
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
-                return data as ExecutionListResponse;
+                return withItems<ExecutionListResponse>(data);
             }
         },
         getNextPageParam: (lastPage: ExecutionListResponse) => lastPage.NextToken,
@@ -719,8 +733,10 @@ export function useExecutionDetailMetadata(
                 pageSize: String(DETAIL_METADATA_PAGE_SIZE),
             };
             if (pageParam) params.startingToken = pageParam;
-            return callService<DetailMetadataPage>(() =>
-                executionService.getExecutionDetailsMetadata(executionId, params)
+            return withItems<DetailMetadataPage>(
+                await callService<DetailMetadataPage>(() =>
+                    executionService.getExecutionDetailsMetadata(executionId, params)
+                )
             );
         },
         getNextPageParam: (lastPage: DetailMetadataPage) => lastPage.NextToken,

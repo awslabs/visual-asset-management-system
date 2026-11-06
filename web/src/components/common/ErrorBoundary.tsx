@@ -11,7 +11,8 @@ import { isChunkLoadError, reloadPage } from "../../utils/chunkLoadRecovery";
 
 interface Props {
     children: ReactNode;
-    fallback?: ReactNode;
+    /** Shown instead of the built-in alert. A function receives the caught error. */
+    fallback?: ReactNode | ((error: Error | null) => ReactNode);
     onReset?: () => void;
     componentName?: string;
 }
@@ -50,6 +51,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
     render(): ReactNode {
         if (this.state.hasError) {
+            if (typeof this.props.fallback === "function") {
+                return this.props.fallback(this.state.error);
+            }
             if (this.props.fallback) {
                 return this.props.fallback;
             }

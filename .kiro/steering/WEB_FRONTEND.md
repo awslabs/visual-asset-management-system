@@ -19,7 +19,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
 -   Plugin-based 3D viewer architecture (19 viewer plugin directories)
--   React.lazy + Suspense for route-level code splitting
+-   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
 
@@ -46,7 +46,7 @@ web/
     vntana/
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, React.lazy, permission filtering
+    routes.tsx              # Centralized route table, lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -356,7 +356,7 @@ Every page component in `routes.tsx` MUST be lazy-loaded:
 
 ```typescript
 // CORRECT
-const MyNewPage = React.lazy(() => import("./pages/MyNewPage"));
+const MyNewPage = lazyWithRetry(() => import("./pages/MyNewPage"));
 
 // INCORRECT
 import MyNewPage from "./pages/MyNewPage";
@@ -773,7 +773,7 @@ export default MyPage;
 
 ```typescript
 // In routes.tsx:
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -1229,7 +1229,7 @@ After modifying code:
 -   [ ] No broken imports (check relative paths carefully)
 -   [ ] Cloudscape components imported from subpaths (not barrel exports)
 -   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
--   [ ] New routes added to `routeTable` in `routes.tsx` with `React.lazy`
+-   [ ] New routes added to `routeTable` in `routes.tsx` with `lazyWithRetry`
 -   [ ] No hardcoded strings where `Synonyms` should be used
 
 ---
@@ -1306,7 +1306,7 @@ import { HashRouter } from "react-router-dom";
 import SearchPage from "./pages/search/SearchPage";
 
 // CORRECT -- lazy load for route-level splitting
-const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+const SearchPage = lazyWithRetry(() => import("./pages/search/SearchPage"));
 ```
 
 ### 13.6 Do NOT Bypass the Auth Token Utilities
