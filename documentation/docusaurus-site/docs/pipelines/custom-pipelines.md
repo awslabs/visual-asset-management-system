@@ -1379,6 +1379,13 @@ These points determine whether a registered pipeline is actually usable:
     is rejected on save at every level, including triggers: exclude is applied last, so it would remove
     every file. Leave the list empty to exclude nothing.
 
+    Extension patterns do not reach a whole-asset (`/`) or folder (`/folder/`) selection, which names a
+    container rather than a file: the `*.ext` and `.ext` forms are dropped from both lists for such a
+    selection, and `assetScope` decides it instead. A pipeline that processes one file at a time
+    therefore sets `assetScope.wholeAssetAllowed` and `assetScope.folderAllowed` to `false`, as the
+    built-in pipelines do. An `allow` list of `*.stl` alone does not keep a whole-asset selection out,
+    and the pipeline receives the whole asset.
+
 -   **A template can raise the pipeline's input requirements.** When one pipeline supports several modes
     that consume different inputs, set the pipeline's `inputFileArity` to the **lowest** value any of its
     templates needs — usually `none` — and let each template raise it through its `overrides`, which may
