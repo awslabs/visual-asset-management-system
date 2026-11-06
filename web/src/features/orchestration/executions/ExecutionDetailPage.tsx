@@ -27,6 +27,7 @@ import StoppedRunSubProcessesHint, {
     stillRunningSubProcessCount,
 } from "./StoppedRunSubProcessesHint";
 import ResultText from "./ResultText";
+import SkippedLaunchPanel from "./SkippedLaunchPanel";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -931,8 +932,12 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
 
     const stillRunningSubs = stillRunningSubProcessCount(execution);
 
+    // A SKIPPED record (file-upload trigger launches a concurrency restriction refused) never ran, so
+    // the run-only fields (duration, pipeline progress, output target) are replaced by its skip dates.
+    const isSkipped = execution.executionStatus === "SKIPPED";
+
     const duration =
-        execution.executionStartDate && execution.executionStopDate
+        !isSkipped && execution.executionStartDate && execution.executionStopDate
             ? calculateDuration(execution.executionStartDate, execution.executionStopDate)
             : null;
 
@@ -966,7 +971,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 <div className="flex items-center gap-3 mb-4 flex-wrap">
                     <h1 className="text-text-primary">Execution Detail</h1>
                     <StatusBadge status={execution.executionStatus as ExecutionStatus} />
-                    <PipelineProgress pipelines={execution.pipelines || []} />
+                    {!isSkipped && <PipelineProgress pipelines={execution.pipelines || []} />}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
                     <Field label="Execution ID" mono>
@@ -992,60 +997,87 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         {execution.triggerType || "N/A"}{" "}
                         {execution.triggeredByUserId && `by ${execution.triggeredByUserId}`}
                     </Field>
-                    <Field label="Start">
-                        {execution.executionStartDate
-                            ? formatDate(execution.executionStartDate)
-                            : "N/A"}
-                    </Field>
-                    <Field label="Stop">
-                        {execution.executionStopDate
-                            ? formatDate(execution.executionStopDate)
-                            : "N/A"}
-                    </Field>
+                    {isSkipped ? (
+                        <>
+                            <Field label="First skipped">
+                                {execution.skip?.firstSkippedDate || execution.executionStartDate
+                                    ? formatDate(
+                                          execution.skip?.firstSkippedDate ||
+                                              execution.executionStartDate ||
+                                              ""
+                                      )
+                                    : "N/A"}
+                            </Field>
+                            <Field label="Last skipped">
+                                {execution.skip?.lastSkippedDate
+                                    ? formatDate(execution.skip.lastSkippedDate)
+                                    : "N/A"}
+                            </Field>
+                        </>
+                    ) : (
+                        <>
+                            <Field label="Start">
+                                {execution.executionStartDate
+                                    ? formatDate(execution.executionStartDate)
+                                    : "N/A"}
+                            </Field>
+                            <Field label="Stop">
+                                {execution.executionStopDate
+                                    ? formatDate(execution.executionStopDate)
+                                    : "N/A"}
+                            </Field>
+                        </>
+                    )}
                     {duration && <Field label="Duration">{duration}</Field>}
                     {execution.executionGroupId && (
                         <Field label="Group ID" mono>
                             {execution.executionGroupId}
                         </Field>
                     )}
-                    {/* The output target is broken out into its three parts, matching the executions
+                    {!isSkipped && (
+                        <>
+                            {/* The output target is broken out into its three parts, matching the executions
                         list columns, so the destination is readable field-by-field rather than as one
                         composite string. */}
-                    <Field label="Output Type">
-                        {execution.outputLocationType === "none"
-                            ? "Results only (no asset output)"
-                            : execution.outputLocationType || "N/A"}
-                    </Field>
-                    <Field label="Output Database ID" mono>
-                        {execution.outputDatabaseId || "N/A"}
-                    </Field>
-                    <Field label="Output Asset ID">
-                        {execution.outputAssetId ? (
-                            execution.outputDatabaseId ? (
-                                // Link the output asset to its asset view.
-                                <a
-                                    href={buildFileManagerLink(
-                                        execution.outputDatabaseId,
-                                        execution.outputAssetId,
-                                        ""
-                                    )}
-                                    className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
-                                >
-                                    {execution.outputAssetId}
-                                </a>
-                            ) : (
-                                <span className="font-mono">{execution.outputAssetId}</span>
-                            )
-                        ) : (
-                            "N/A"
-                        )}
-                    </Field>
-                    {/* Always shown, alongside the other three output fields: "no prefix" is itself
+                            <Field label="Output Type">
+                                {execution.outputLocationType === "none"
+                                    ? "Results only (no asset output)"
+                                    : execution.outputLocationType || "N/A"}
+                            </Field>
+                            <Field label="Output Database ID" mono>
+                                {execution.outputDatabaseId || "N/A"}
+                            </Field>
+                            <Field label="Output Asset ID">
+                                {execution.outputAssetId ? (
+                                    execution.outputDatabaseId ? (
+                                        // Link the output asset to its asset view.
+                                        <a
+                                            href={buildFileManagerLink(
+                                                execution.outputDatabaseId,
+                                                execution.outputAssetId,
+                                                ""
+                                            )}
+                                            className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
+                                        >
+                                            {execution.outputAssetId}
+                                        </a>
+                                    ) : (
+                                        <span className="font-mono">{execution.outputAssetId}</span>
+                                    )
+                                ) : (
+                                    "N/A"
+                                )}
+                            </Field>
+                            {/* Always shown, alongside the other three output fields: "no prefix" is itself
                         information about where the run wrote, and hiding the row made the answer
                         indistinguishable from the field not existing. */}
-                    <Field label="Output Path Prefix" mono>
-                        {outputPathPrefixText(execution.outputFileBaseExecutionPathExtension)}
-                    </Field>
+                            <Field label="Output Path Prefix" mono>
+                                {outputPathPrefixText(
+                                    execution.outputFileBaseExecutionPathExtension
+                                )}
+                            </Field>
+                        </>
+                    )}
                 </div>
                 {execution.executionError && (
                     <div className="orch-outline mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
@@ -1058,6 +1090,9 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             {execution.executionError}
                         </pre>
                     </div>
+                )}
+                {execution.executionStatus === "SKIPPED" && execution.skip && (
+                    <SkippedLaunchPanel skip={execution.skip} />
                 )}
                 {stillRunningSubs > 0 && (
                     <StoppedRunSubProcessesHint
@@ -1383,26 +1418,35 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         {/* The output TARGET, before the file list: where this run wrote (or that it
                             wrote no asset at all), so the destination is stated on the tab that shows
                             the files rather than only in the page header. */}
-                        <Card title="Output Target">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
-                                <Field label="Output Type">
-                                    {execution.outputLocationType === "none"
-                                        ? "Results only (no asset output)"
-                                        : execution.outputLocationType || "N/A"}
-                                </Field>
-                                <Field label="Output Database ID" mono>
-                                    {execution.outputDatabaseId || "N/A"}
-                                </Field>
-                                <Field label="Output Asset ID" mono>
-                                    {execution.outputAssetId || "N/A"}
-                                </Field>
-                                <Field label="Output Path Prefix" mono>
-                                    {outputPathPrefixText(
-                                        execution.outputFileBaseExecutionPathExtension
-                                    )}
-                                </Field>
-                            </div>
-                        </Card>
+                        {isSkipped ? (
+                            <Card title="Output Target">
+                                <p className="text-text-secondary">
+                                    These launches were skipped and did not run, so they wrote no
+                                    outputs.
+                                </p>
+                            </Card>
+                        ) : (
+                            <Card title="Output Target">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
+                                    <Field label="Output Type">
+                                        {execution.outputLocationType === "none"
+                                            ? "Results only (no asset output)"
+                                            : execution.outputLocationType || "N/A"}
+                                    </Field>
+                                    <Field label="Output Database ID" mono>
+                                        {execution.outputDatabaseId || "N/A"}
+                                    </Field>
+                                    <Field label="Output Asset ID" mono>
+                                        {execution.outputAssetId || "N/A"}
+                                    </Field>
+                                    <Field label="Output Path Prefix" mono>
+                                        {outputPathPrefixText(
+                                            execution.outputFileBaseExecutionPathExtension
+                                        )}
+                                    </Field>
+                                </div>
+                            </Card>
+                        )}
 
                         {/* Files */}
                         {(!!execution.outputs?.files?.length || isTruncated("outputs.files")) && (

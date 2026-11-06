@@ -235,6 +235,11 @@ global, cross-asset list. A workflow id is unique across every database includin
 an additional narrowing filter rather than a disambiguator, and a value that is not
 the workflow's own database empties the result instead of erroring.
 
+Both list tools accept `exclude_status`, one status or a comma-separated list (for
+example `SKIPPED`), which the service drops before it cuts the page, so pages stay
+full. A `SKIPPED` row is not a run: it records file-upload trigger launches a
+concurrency restriction refused (`skippedLaunchCount`, `skipScope`, `skipReason`).
+
 Both accept the same equality filters (`workflow_id`, `workflow_database_id`,
 `status`, `trigger_type`, `group_id`, `triggered_by_user_id`) and the same date
 window (`filter_start_date`, `filter_end_date`, UTC `YYYY-MM-DDTHH:MM:SSZ`). Both

@@ -53,12 +53,46 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
+    # concurrency restriction refused (one row per blocking run and lock key; see
+    # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
+    # existed lack them, which reads as "not skipped": a count of 0 and empty strings.
+    skippedLaunchCount: Optional[int] = 0
+    lastSkippedDate: Optional[str] = ""
+    skipScope: Optional[str] = ""
+    skipReason: Optional[str] = ""
+    blockingExecutionId: Optional[str] = ""
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
         if v not in TRIGGER_TYPES:
             raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
         return v
+
+
+class ExecutionSkipFileModel(BaseModel, extra='ignore'):
+    """One file a refused trigger launch named, in the details view's `skip` block (the same scrubbed
+    shape as a details inputFiles row)."""
+    databaseId: str = ""
+    assetId: str = ""
+    inputAssetFileKey: str = ""
+    versionId: str = ""
+
+
+class ExecutionSkipDetailsModel(BaseModel, extra='ignore'):
+    """The details view's optional `skip` block, sent only for a SKIPPED execution.
+
+    blockingExecutionId is the run that held the lock. It is set only when the caller passes the read
+    check on that run; otherwise it is omitted, whether the run is unreadable or gone, so the block
+    never reveals that a run the caller cannot read exists."""
+    reason: str = ""
+    scope: str = ""
+    count: int = 0
+    firstSkippedDate: str = ""
+    lastSkippedDate: str = ""
+    files: List[ExecutionSkipFileModel] = []
+    filesTruncated: bool = False
+    blockingExecutionId: Optional[str] = None
 
 
 class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -307,6 +341,9 @@ class WorkflowExecutionConfigurationRecord(
     # Result order). Written [] at launch and UPDATEd at completion/failure. A row written before the
     # attribute existed resolves to [] on read (no migration), which is the default here.
     outputTypes: Optional[List[str]] = []
+    # SKIPPED records only: the refused trigger launch's per-pipeline template parameters, which a
+    # re-run replays (the record has no pipeline rows). Absent on every other row.
+    pipelineExecutionParameters: Optional[Dict[str, Any]] = {}
 
 
 #######################
@@ -611,6 +648,59 @@ class ListExecutionsRequestModel(BaseModel, extra='ignore'):
         if not valid:
             raise ValueError(message)
         return values
+
+
+# Every main-row executionStatus a list can return, in display order. SKIPPED is the record of
+# file-upload trigger launches a concurrency restriction refused.
+EXECUTION_LIST_STATUSES = ("NEW", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "SKIPPED")
+EXCLUDE_STATUS_UNKNOWN_MESSAGE = (
+    "excludeStatus must be one status, or a comma-separated list of statuses, from: "
+    + ", ".join(EXECUTION_LIST_STATUSES) + ".")
+EXCLUDE_STATUS_CONFLICT_MESSAGE = "excludeStatus cannot exclude the status that the status filter selects."
+
+
+class ExecutionListStatusFilterModel(BaseModel, extra='ignore'):
+    """The status query parameters of the asset and global execution lists.
+
+    `status` is the existing exact-match filter and is passed through unvalidated, as before.
+    `excludeStatus` (optional) names one status or a comma-separated list of them; every value must be
+    one of EXECUTION_LIST_STATUSES, and it may not exclude the status `status` selects. Parsed into
+    `excludedStatuses` (deduplicated, in the order given); empty when the parameter is absent."""
+    status: Optional[str] = ""
+    excludeStatus: Optional[str] = ""
+    excludedStatuses: List[str] = []
+
+    @root_validator(skip_on_failure=True)
+    def validate_exclude_status(cls, values):
+        raw = (values.get('excludeStatus') or '').strip()
+        excluded = []
+        if raw:
+            for part in raw.split(','):
+                value = part.strip()
+                if value not in EXECUTION_LIST_STATUSES:
+                    raise ValueError(EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+                if value not in excluded:
+                    excluded.append(value)
+        status = (values.get('status') or '').strip()
+        if status and status in excluded:
+            raise ValueError(EXCLUDE_STATUS_CONFLICT_MESSAGE)
+        values['excludedStatuses'] = excluded
+        return values
+
+
+def parse_list_status_filter(query_params):
+    """(excluded statuses, error message) for a list request's query parameters. The message is one of
+    the two fixed texts above, never the caller's value."""
+    params = query_params or {}
+    try:
+        model = ExecutionListStatusFilterModel(
+            status=params.get('status') or '', excludeStatus=params.get('excludeStatus') or '')
+    except ValueError as error:
+        text = str(error)
+        message = (EXCLUDE_STATUS_CONFLICT_MESSAGE if EXCLUDE_STATUS_CONFLICT_MESSAGE in text
+                   else EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+        return [], message
+    return list(model.excludedStatuses), ""
 
 
 class RerunExecutionRequestModel(BaseModel, extra='ignore'):
