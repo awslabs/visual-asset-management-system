@@ -396,21 +396,19 @@ class TestTheLogsOfASkipRecord:
 
 @pytest.mark.unit
 class TestActionsOnASkipRecord:
-    def test_abort_changes_nothing_on_a_skip_record(self):
-        # SKIPPED is terminal: the main row is not rewritten, nothing is stopped, and the lock release
-        # deletes only rows the skip record itself holds (it holds none).
+    def test_abort_of_a_skip_record_is_refused_and_writes_nothing(self):
+        # SKIPPED has nothing to stop: the abort answers 400 after authorization (owner decision
+        # 2026-11-06); test_execution_list_exclude_status.py covers the refused caller and the group.
         with patch(f"{SVC}.get_execution_main_row", return_value=dict(SKIP_ROW)), \
                 patch(f"{SVC}.authorize_abort", return_value=(True, "")), \
-                patch(f"{SVC}.get_pipeline_execution_rows", return_value=[]), \
                 patch(f"{SVC}._persist_reconciled_main_row") as persist, \
                 patch(f"{SVC}.sfn") as sfn, \
-                patch(f"{SVC}.el.release_locks_for_execution") as release, \
-                patch(f"{SVC}.log_actions"):
+                patch(f"{SVC}.el.release_locks_for_execution") as release:
             response = es.abort_execution({}, SKIP_ID)
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 400
         persist.assert_not_called()
         sfn.stop_execution.assert_not_called()
-        assert release.call_args.kwargs["workflow_execution_id"] == SKIP_ID
+        release.assert_not_called()
 
     def test_rerun_replays_the_skipped_files_as_a_manual_launch(self):
         row = er.build_workflow_execution_input_record(

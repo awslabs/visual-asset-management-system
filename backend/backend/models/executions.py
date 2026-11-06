@@ -647,6 +647,59 @@ class ListExecutionsRequestModel(BaseModel, extra='ignore'):
         return values
 
 
+# Every main-row executionStatus a list can return, in display order. SKIPPED is the record of
+# file-upload trigger launches a concurrency restriction refused.
+EXECUTION_LIST_STATUSES = ("NEW", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "SKIPPED")
+EXCLUDE_STATUS_UNKNOWN_MESSAGE = (
+    "excludeStatus must be one status, or a comma-separated list of statuses, from: "
+    + ", ".join(EXECUTION_LIST_STATUSES) + ".")
+EXCLUDE_STATUS_CONFLICT_MESSAGE = "excludeStatus cannot exclude the status that the status filter selects."
+
+
+class ExecutionListStatusFilterModel(BaseModel, extra='ignore'):
+    """The status query parameters of the asset and global execution lists.
+
+    `status` is the existing exact-match filter and is passed through unvalidated, as before.
+    `excludeStatus` (optional) names one status or a comma-separated list of them; every value must be
+    one of EXECUTION_LIST_STATUSES, and it may not exclude the status `status` selects. Parsed into
+    `excludedStatuses` (deduplicated, in the order given); empty when the parameter is absent."""
+    status: Optional[str] = ""
+    excludeStatus: Optional[str] = ""
+    excludedStatuses: List[str] = []
+
+    @root_validator(skip_on_failure=True)
+    def validate_exclude_status(cls, values):
+        raw = (values.get('excludeStatus') or '').strip()
+        excluded = []
+        if raw:
+            for part in raw.split(','):
+                value = part.strip()
+                if value not in EXECUTION_LIST_STATUSES:
+                    raise ValueError(EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+                if value not in excluded:
+                    excluded.append(value)
+        status = (values.get('status') or '').strip()
+        if status and status in excluded:
+            raise ValueError(EXCLUDE_STATUS_CONFLICT_MESSAGE)
+        values['excludedStatuses'] = excluded
+        return values
+
+
+def parse_list_status_filter(query_params):
+    """(excluded statuses, error message) for a list request's query parameters. The message is one of
+    the two fixed texts above, never the caller's value."""
+    params = query_params or {}
+    try:
+        model = ExecutionListStatusFilterModel(
+            status=params.get('status') or '', excludeStatus=params.get('excludeStatus') or '')
+    except ValueError as error:
+        text = str(error)
+        message = (EXCLUDE_STATUS_CONFLICT_MESSAGE if EXCLUDE_STATUS_CONFLICT_MESSAGE in text
+                   else EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+        return [], message
+    return list(model.excludedStatuses), ""
+
+
 class RerunExecutionRequestModel(BaseModel, extra='ignore'):
     """Re-run reconstructs the execute request from stored records; the caller may optionally reuse
     the original executionGroupId or supply a new one."""
