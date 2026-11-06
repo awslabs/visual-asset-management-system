@@ -106,19 +106,20 @@ describe("SKIPPED executions", () => {
         expect(screen.getByText("Running")).toBeInTheDocument();
     });
 
-    it("lists skipped records by default and can hide them", async () => {
+    it("lists skipped records by default and hides them through excludeStatus", async () => {
         renderBoard();
         expect(screen.getByText("s1")).toBeInTheDocument();
-        expect(screen.getByText("r1")).toBeInTheDocument();
+        const firstFilters = useExecutions.mock.calls[0][1];
+        expect(firstFilters.excludeStatus).toBeUndefined();
+        expect(firstFilters.status).toBeUndefined();
 
         await userEvent.selectOptions(
             screen.getByLabelText("Filter by status"),
             EXCLUDE_SKIPPED_FILTER
         );
-        expect(screen.queryByText("s1")).not.toBeInTheDocument();
-        expect(screen.getByText("r1")).toBeInTheDocument();
-        // Hiding skipped records is applied to the loaded rows; no status is sent to the API.
+        // The server drops the rows; the board sends the exclusion and no status filter.
         const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+        expect(lastFilters.excludeStatus).toBe("SKIPPED");
         expect(lastFilters.status).toBeUndefined();
     });
 

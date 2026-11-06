@@ -727,6 +727,25 @@ def test_list_executions_returns_skipped_rows_with_their_fields(real_paginate_cl
     assert params["status"] == "SKIPPED"
 
 
+@pytest.mark.parametrize("tool, api_name, args", [
+    ("list_executions", "list_executions", {}),
+    ("list_workflow_executions", "list_workflow_executions", {"database_id": "db1", "asset_id": "a1"}),
+])
+def test_the_list_tools_send_exclude_status(real_paginate_client, tool, api_name, args):
+    # #998: exclude_status rides as excludeStatus; absent, nothing is sent.
+    api = getattr(real_paginate_client.api, api_name)
+    api.side_effect = [{"message": {"Items": []}}, {"message": {"Items": []}}]
+
+    def _sent():
+        call = api.call_args
+        return call.kwargs.get("params") or call.args[-1]
+
+    getattr(server, tool)(exclude_status="SKIPPED", **args)
+    assert _sent()["excludeStatus"] == "SKIPPED"
+    getattr(server, tool)(**args)
+    assert "excludeStatus" not in _sent()
+
+
 def test_the_execution_tools_describe_skipped_records():
     for tool in (server.list_executions, server.list_workflow_executions,
                  server.get_execution_details):

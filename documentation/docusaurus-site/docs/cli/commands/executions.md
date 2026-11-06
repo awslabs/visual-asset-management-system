@@ -61,6 +61,7 @@ vamscli execution list --triggered-by user@example.com --json-output
 | `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
 | `--workflow-database-id`          | Filter by workflow database ID                                                                         |
 | `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
+| `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
 | `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
 | `--group-id`                      | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |

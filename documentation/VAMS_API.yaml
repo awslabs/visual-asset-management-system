@@ -4563,6 +4563,13 @@ paths:
                     type: string
                 description: "Exact-match status filter (NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED). Omitted, every status is listed, SKIPPED records included."
               - in: query
+                name: excludeStatus
+                required: false
+                schema:
+                    type: string
+                    example: SKIPPED
+                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list each check reads the candidate's execution record and a page makes at most 200 such checks; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
+              - in: query
                 name: triggerType
                 required: false
                 schema:
@@ -7920,6 +7927,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     type: string
                 description: "Exact-match status filter (NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED). Omitted, every status is listed, SKIPPED records included."
               - in: query
+                name: excludeStatus
+                required: false
+                schema:
+                    type: string
+                    example: SKIPPED
+                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list each check reads the candidate's execution record and a page makes at most 200 such checks; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
+              - in: query
                 name: triggerType
                 required: false
                 schema:
@@ -8029,9 +8043,15 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         top-level notAbortable array when a member registered a sub-process of a type
                         VAMS cannot stop — the member's own notAbortable entries, each with an added
                         executionId naming that member. Both arrays are absent when every member
-                        stopped cleanly.
+                        stopped cleanly. A SKIPPED member is never aborted and does not fail the group
+                        call; it is reported as status "skipped-terminal", like any finished member.
                 "400":
-                    description: Invalid or missing executionId.
+                    description: >-
+                        Invalid or missing executionId; or the execution is SKIPPED (a record of
+                        refused file-upload trigger launches, which has nothing to stop): "This
+                        execution was skipped and has nothing to abort." Nothing is written. That
+                        answer comes after authorization, so a caller refused the execution gets the
+                        403 instead. Every other finished execution still answers 200.
                     content:
                         application/json:
                             schema:

@@ -945,11 +945,13 @@ test.describe("Executions board — skipped trigger launches", () => {
     };
 
     test.beforeEach(async ({ page }) => {
-        await page.route(LIST_ROUTE, (route) =>
-            route.request().method() === "GET"
-                ? route.fulfill({ json: { message: { Items: [skippedRow, runningRow] } } })
-                : route.continue()
-        );
+        // Answers like the list API: excludeStatus=SKIPPED drops the SKIPPED row server-side.
+        await page.route(LIST_ROUTE, (route) => {
+            if (route.request().method() !== "GET") return route.continue();
+            const excluded = new URL(route.request().url()).searchParams.get("excludeStatus");
+            const items = excluded === "SKIPPED" ? [runningRow] : [skippedRow, runningRow];
+            return route.fulfill({ json: { message: { Items: items } } });
+        });
         await page.route(DETAILS_ROUTE, (route) =>
             route.fulfill({
                 json: {
@@ -1008,7 +1010,13 @@ test.describe("Executions board — skipped trigger launches", () => {
         const status = facet(page, "Filter by status");
         await expect(status.locator('option[value="SKIPPED"]')).toHaveCount(1);
         await expect(page.getByText(SKIP_ID)).toBeVisible({ timeout: 30_000 });
+        const excludeRequest = page.waitForRequest(
+            (r) =>
+                LIST_ROUTE.test(r.url()) &&
+                new URL(r.url()).searchParams.get("excludeStatus") === "SKIPPED"
+        );
         await status.selectOption({ label: "All except skipped" });
+        await excludeRequest;
         await expect(page.getByText(SKIP_ID)).toHaveCount(0);
         await expect(page.getByText(BLOCKING_ID)).toBeVisible();
     });

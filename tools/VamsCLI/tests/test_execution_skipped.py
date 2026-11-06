@@ -93,3 +93,29 @@ class TestSkippedAssetExecutionList:
             assert result.exit_code == 0, result.output
             assert 'Status: SKIPPED' in result.output
             assert 'Skipped launches: 49' in result.output
+
+
+class TestExcludeStatusOption:
+    def test_execution_list_sends_exclude_status(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--exclude-status', 'SKIPPED,FAILED'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].list_executions.call_args.kwargs['params']
+            assert params['excludeStatus'] == 'SKIPPED,FAILED'
+
+    def test_execution_list_without_it_sends_no_exclusion(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'excludeStatus' not in mocks['api_client'].list_executions.call_args.kwargs['params']
+
+    def test_the_asset_list_sends_exclude_status(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['workflow', 'list-executions', '-d', 'db1', '-a', 'a1',
+                                             '--exclude-status', 'SKIPPED'])
+            assert result.exit_code == 0, result.output
+            params = mocks['api_client'].list_workflow_executions.call_args.kwargs['params']
+            assert params['excludeStatus'] == 'SKIPPED'
