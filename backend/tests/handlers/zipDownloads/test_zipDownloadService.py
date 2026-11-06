@@ -592,4 +592,5 @@ class TestCancelLandedArchive:
         assert h.body_of(response)["action"] == "deleted"
         assert statuses == ["SUCCEEDED"], "never CANCELLED over a landed archive"
         assert env.zip.items == {}
-        assert not [c for c in env.lam.calls if c[0] == "executionServiceFn"]
+        # Only the create's launch: no abort of a run whose archive already landed.
+        assert [c[0] for c in env.lam.calls] == ["executeFn"]
