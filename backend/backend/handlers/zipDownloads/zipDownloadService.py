@@ -437,10 +437,14 @@ def _launch(row, request_entries, pinned):
     inner = json.loads(payload.read().decode("utf-8")) if payload else {}
     status_code = inner.get("statusCode", 500)
     inner_body = json.loads(inner["body"]) if isinstance(inner.get("body"), str) and inner.get("body") else {}
-    if status_code != 200 or not inner_body.get("executionId"):
+    # The execute handler answers {"message": ExecuteWorkflowResponseModel} on success, and
+    # {"message": "<reason>"} on a refusal (the same envelope the execution service's re-run reads).
+    message = inner_body.get("message")
+    execution_id = message.get("executionId") if isinstance(message, dict) else None
+    if status_code != 200 or not execution_id:
         raise RuntimeError(f"zipArchive workflow launch answered {status_code}: "
-                           f"{str(inner_body.get('message', ''))[:500]}")
-    return inner_body["executionId"]
+                           f"{str(message if isinstance(message, str) else '')[:500]}")
+    return execution_id
 
 
 def _abort_execution(execution_id):
