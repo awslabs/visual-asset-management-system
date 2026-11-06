@@ -132,6 +132,43 @@ class TestOpen:
         assert "junk" not in sent and sent["externalSfnTaskToken"] == "t" and sent["mode"] == "zipDownload"
 
 
+class TestOpenPipelineInvokeIsSentOnce:
+    """Each openPipeline call starts a new archive run on the task token, so it is never repeated
+    (the #1205 rule, #1125 in-dev D8); only a throttle the function never ran for is retried."""
+
+    def _throttle(self):
+        from botocore.exceptions import ClientError
+        return ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "Rate"}}, "Invoke")
+
+    def test_client_config(self):
+        assert vams_execute.invoke_config.retries["total_max_attempts"] == 1
+        # Above openPipeline's 300 s (5 minute) timeout.
+        assert vams_execute.invoke_config.read_timeout == vams_execute.OPEN_PIPELINE_READ_TIMEOUT_SECONDS > 300
+
+    def test_a_timed_out_invoke_is_not_repeated(self):
+        from botocore.exceptions import ReadTimeoutError
+        lam = MagicMock()
+        lam.invoke.side_effect = ReadTimeoutError(endpoint_url="https://lambda")
+        with patch.object(vams_execute, "lambda_client", lam), pytest.raises(ReadTimeoutError):
+            vams_execute.invoke_open_pipeline({"mode": "archiveRun"})
+        lam.invoke.assert_called_once()
+        assert lam.invoke.call_args.kwargs["InvocationType"] == "RequestResponse"
+
+    def test_a_throttle_is_retried_within_the_bound(self):
+        lam = MagicMock()
+        lam.invoke.side_effect = [self._throttle(), {"StatusCode": 200}]
+        with patch.object(vams_execute, "lambda_client", lam), patch.object(vams_execute.time, "sleep"):
+            assert vams_execute.invoke_open_pipeline({}) == {"StatusCode": 200}
+        assert lam.invoke.call_count == 2
+        lam.invoke.reset_mock()
+        lam.invoke.side_effect = self._throttle()
+        from botocore.exceptions import ClientError
+        with patch.object(vams_execute, "lambda_client", lam), patch.object(vams_execute.time, "sleep"), \
+                pytest.raises(ClientError):
+            vams_execute.invoke_open_pipeline({})
+        assert lam.invoke.call_count == vams_execute.OPEN_PIPELINE_THROTTLE_ATTEMPTS
+
+
 class TestBundle:
     def _load(self, *parts):
         with open(os.path.join(_SCHEMA_DIR, *parts), encoding="utf-8") as handle:

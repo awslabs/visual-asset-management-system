@@ -85,6 +85,29 @@ class TestZipArchiveWriteBack:
 
 
 @pytest.mark.unit
+class TestTheArchiveWriteBackIsSentOnce:
+    """A mode 2 archive is written back through the no-retry synchronous client (#1205): a
+    completion that outlives the read timeout is not sent a second time, and the retrying client
+    (Event invokes only) is never used for it."""
+
+    def test_a_timed_out_archive_completion_is_not_repeated(self):
+        from botocore.exceptions import ReadTimeoutError
+        from unittest.mock import MagicMock
+        po = wb.po
+        invoke_client = MagicMock()
+        invoke_client.invoke.side_effect = ReadTimeoutError(endpoint_url="https://lambda")
+        event_client = MagicMock()
+        with patch.object(po, "invoke_client", invoke_client), patch.object(po, "client", event_client):
+            result = po.process_external_upload(
+                "upl-1", "asset1", wb.DB, "assetFile", [wb.FILES_PREFIX + "asset1-archive.zip"],
+                wb.FILES_PREFIX, {"http": {}})
+        assert result is None
+        invoke_client.invoke.assert_called_once()
+        assert invoke_client.invoke.call_args.kwargs["InvocationType"] == "RequestResponse"
+        event_client.invoke.assert_not_called()
+
+
+@pytest.mark.unit
 def test_a_zip_download_runs_output_step_has_nothing_to_write_back():
     resp, ingestion, m = _zip_archive_run([])
     assert resp["statusCode"] == 200

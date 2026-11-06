@@ -14,9 +14,11 @@ Two modes, decided from the run manifest:
 """
 import json
 import os
+import time
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 import manifestHelper
 from customLogging.logger import safeLogger
@@ -24,7 +26,16 @@ from customLogging.logger import safeLogger
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="VamsExecuteZipArchivePipeline")
-lambda_client = boto3.client('lambda', config=retry_config)
+# The open-pipeline invoke is synchronous and not safe to repeat: each call starts a new archive state
+# machine run (and Batch job) on the same task token. So botocore neither retries it nor gives up on
+# it while it still runs (the #1205 rule): the read timeout is above openPipeline's 300 s (5 minute)
+# timeout, and only a throttle the function never ran for is retried (invoke_open_pipeline).
+OPEN_PIPELINE_READ_TIMEOUT_SECONDS = 310
+OPEN_PIPELINE_THROTTLE_ATTEMPTS = 4
+OPEN_PIPELINE_THROTTLE_BACKOFF_SECONDS = 1
+invoke_config = Config(retries={'total_max_attempts': 1}, read_timeout=OPEN_PIPELINE_READ_TIMEOUT_SECONDS,
+                       connect_timeout=10)
+lambda_client = boto3.client('lambda', config=invoke_config)
 s3_client = boto3.client('s3', config=retry_config)
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'),
                           config=retry_config)
@@ -98,6 +109,23 @@ def build_open_payload(data, manifest, resolved, external_task_token):
     return payload
 
 
+def invoke_open_pipeline(payload):
+    """Invoke openPipeline synchronously, once. Lambda refuses a throttled invoke before the function
+    runs (TooManyRequestsException), so that one is retried with a short backoff; any other error,
+    including a read timeout, is raised and never repeated, since the call may have started a run."""
+    body = json.dumps(payload).encode('utf-8')
+    for attempt in range(OPEN_PIPELINE_THROTTLE_ATTEMPTS):
+        try:
+            return lambda_client.invoke(FunctionName=OPEN_PIPELINE_FUNCTION_NAME,
+                                        InvocationType='RequestResponse', Payload=body)
+        except ClientError as e:
+            throttled = e.response.get('Error', {}).get('Code') == 'TooManyRequestsException'
+            if not throttled or attempt == OPEN_PIPELINE_THROTTLE_ATTEMPTS - 1:
+                raise
+            logger.warning(f"Invoke of openPipeline throttled; retrying (attempt {attempt + 2})")
+            time.sleep(OPEN_PIPELINE_THROTTLE_BACKOFF_SECONDS * (2 ** attempt))
+
+
 def lambda_handler(event, context):
     logger.info(event)
     external_task_token = None
@@ -122,9 +150,7 @@ def lambda_handler(event, context):
         payload = build_open_payload(data, manifest, resolved, external_task_token)
         logger.info(f"Starting the zipArchive pipeline in mode {payload['mode']}")
 
-        response = lambda_client.invoke(FunctionName=OPEN_PIPELINE_FUNCTION_NAME,
-                                        InvocationType='RequestResponse',
-                                        Payload=json.dumps(payload).encode('utf-8'))
+        response = invoke_open_pipeline(payload)
         if response.get('StatusCode') != 200 or response.get('FunctionError'):
             raise Exception("Invoke Open Pipeline Lambda Failed: " + str(response.get('FunctionError')))
         return {'statusCode': 200, 'body': 'Success'}

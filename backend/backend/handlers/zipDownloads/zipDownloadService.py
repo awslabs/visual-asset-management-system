@@ -81,7 +81,21 @@ from models.zipDownloads import CreateZipDownloadRequestModel, ListZipDownloadsQ
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-lambda_client = boto3.client("lambda", config=retry_config)
+# Read timeout of the synchronous cross-calls (launch, abort, details read): above the 900 s
+# (15 minute) timeout of the invoked functions, so a call is never abandoned while it still runs.
+CROSS_CALL_READ_TIMEOUT_SECONDS = 910
+CROSS_CALL_CONNECT_TIMEOUT_SECONDS = 10
+# Attempts of a synchronous cross-call that Lambda throttled (refused before the function ran).
+CROSS_CALL_THROTTLE_ATTEMPTS = 4
+CROSS_CALL_THROTTLE_BACKOFF_SECONDS = 1
+# Every invoke here is synchronous (RequestResponse), and the launch is not safe to repeat: a second
+# send starts a second zipArchive run the job row never records. So botocore neither retries these
+# calls nor gives up on them while they still run (the #1205 rule, as in the output step and the
+# trigger dispatch); only a throttle the function never ran for is retried (_invoke_request_response).
+invoke_config = Config(retries={"total_max_attempts": 1},
+                       read_timeout=CROSS_CALL_READ_TIMEOUT_SECONDS,
+                       connect_timeout=CROSS_CALL_CONNECT_TIMEOUT_SECONDS)
+lambda_client = boto3.client("lambda", config=invoke_config)
 s3 = region_routing_s3_client()
 logger = safeLogger(service_name="ZipDownloadService")
 claims_and_roles = {}
@@ -406,6 +420,23 @@ def _resolve_current(bucket, base_key, request):
 # Launch, reconcile, cleanup
 # ---------------------------------------------------------------------------
 
+def _invoke_request_response(function_name, invoke_event):
+    """Invoke a function synchronously, once. Lambda refuses a throttled invoke before the function
+    runs (TooManyRequestsException), so that one is retried with a short backoff; any other error,
+    including a read timeout, is raised and never repeated, since the call may have done its work."""
+    body = json.dumps(invoke_event).encode("utf-8")
+    for attempt in range(CROSS_CALL_THROTTLE_ATTEMPTS):
+        try:
+            return lambda_client.invoke(FunctionName=function_name, InvocationType="RequestResponse",
+                                        Payload=body)
+        except ClientError as e:
+            throttled = e.response.get("Error", {}).get("Code") == "TooManyRequestsException"
+            if not throttled or attempt == CROSS_CALL_THROTTLE_ATTEMPTS - 1:
+                raise
+            logger.warning(f"Invoke of {function_name} throttled; retrying (attempt {attempt + 2})")
+            time.sleep(CROSS_CALL_THROTTLE_BACKOFF_SECONDS * (2 ** attempt))
+
+
 def _launch(row, request_entries, pinned):
     """Launch the zipArchive system workflow for a job as SYSTEM_USER. Returns the execution id."""
     if not EXECUTE_FUNCTION:
@@ -431,8 +462,7 @@ def _launch(row, request_entries, pinned):
         sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": zd.ZIP_DOWNLOAD_REQUEST_TRIGGER,
                                         "context": context},
     }
-    response = lambda_client.invoke(FunctionName=EXECUTE_FUNCTION, InvocationType="RequestResponse",
-                                    Payload=json.dumps(invoke_event).encode("utf-8"))
+    response = _invoke_request_response(EXECUTE_FUNCTION, invoke_event)
     payload = response.get("Payload")
     inner = json.loads(payload.read().decode("utf-8")) if payload else {}
     status_code = inner.get("statusCode", 500)
@@ -461,9 +491,7 @@ def _abort_execution(execution_id):
         "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME},
     }
     try:
-        response = lambda_client.invoke(FunctionName=EXECUTION_SERVICE_FUNCTION,
-                                        InvocationType="RequestResponse",
-                                        Payload=json.dumps(invoke_event).encode("utf-8"))
+        response = _invoke_request_response(EXECUTION_SERVICE_FUNCTION, invoke_event)
         payload = response.get("Payload")
         inner = json.loads(payload.read().decode("utf-8")) if payload else {}
         if inner.get("statusCode") != 200:
@@ -559,9 +587,7 @@ def _check_run_ended(execution_id):
         "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME},
     }
     try:
-        response = lambda_client.invoke(FunctionName=EXECUTION_SERVICE_FUNCTION,
-                                        InvocationType="RequestResponse",
-                                        Payload=json.dumps(invoke_event).encode("utf-8"))
+        response = _invoke_request_response(EXECUTION_SERVICE_FUNCTION, invoke_event)
         payload = response.get("Payload")
         inner = json.loads(payload.read().decode("utf-8")) if payload else {}
         if inner.get("statusCode") != 200:
