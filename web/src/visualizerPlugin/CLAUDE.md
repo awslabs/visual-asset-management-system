@@ -12,6 +12,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for all plugins
 -   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
+-   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
@@ -147,6 +148,37 @@ export const VIEWER_COMPONENTS = {
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+
+---
+
+## Stacking Over the Scene
+
+`core/viewerLayers.ts` holds the one stacking scale for what a viewer draws over its scene,
+`VIEWER_LAYER`, lowest first: `info` (1000, the read-only box with the viewer name, controls hint and
+scene stats), `panel` (1010, the side panel with its tabs, buttons, scene tree and resize handle, and the
+Panel button that shows it again), `notice` (1020, dismissible notices across the top, such as
+files that failed to load) and `cover` (1030, the shared `LoadingSpinner` and a message that replaces the
+scene). A viewer with a side panel takes each such element's `zIndex` from it and writes no number of
+its own; at an equal z-index the element later in the document is drawn above, which is how the info box,
+rendered after the panel, took the clicks on the panel's tabs and Clear Selection on a narrow window
+(#1094). The scale mirrors `features/orchestration/components/zLayers.ts`.
+
+-   **Local to the viewer.** `DynamicViewer` mounts every viewer inside `.visualizer-container-canvases`,
+    whose `transform` (`web/src/styles/index.scss`) makes it a stacking context and the containing block
+    of a panel's `position: fixed`. The values order one viewer's elements only: they cannot rise above
+    the application header (1002), toasts (4000) or Cloudscape modals, and the host's wide and fullscreen
+    controls (`.visualizer-footer`, painted after that container) stay above the whole viewer. Do not
+    raise a viewer value to win against something outside the viewer.
+-   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material
+    dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered
+    within the panel and keeps its own value.
+-   **Who uses it.** The Three.js and Needle USD viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts`
+    fails when one of those files writes a z-index number; `ThreeJSViewerComponent.stacking.test.tsx` and
+    `NeedleUSDViewerComponent.stacking.test.tsx` check the rendered order. A new viewer with a side panel
+    uses the scale and joins that list.
+-   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
+    Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
+    wide one.
 
 ---
 

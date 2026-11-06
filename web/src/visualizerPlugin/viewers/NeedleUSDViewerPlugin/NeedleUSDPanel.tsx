@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import NeedleUSDControls from "./NeedleUSDControls";
 import NeedleUSDSceneGraph from "./NeedleUSDSceneGraph";
 import NeedleUSDMaterialLibrary, { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface NeedleUSDPanelProps {
     scene: any;
@@ -116,7 +117,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
