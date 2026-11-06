@@ -100,7 +100,9 @@ secrets** — just the command:
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
-                "check_subscription"
+                "check_subscription",
+                "list_zip_downloads",
+                "get_zip_download"
             ]
         }
     }
@@ -146,6 +148,17 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Zip downloads: `list_zip_downloads`, `get_zip_download`. A zip download is a
+server-side job that archives part or all of one asset; jobs are private to the
+user who created them and expire after the deployment's retention period.
+`list_zip_downloads` takes `database_id` and `asset_id` together for one asset, or
+neither for every asset, and is paginated like every other list.
+`get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
+CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
+zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
+API's 404) every zip tool returns `error_type` `ZipDownloadDisabledError` with
+"Zip downloads are not available for this deployment".
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -415,6 +428,24 @@ that window keeps working until it expires, a key refused within it stays refuse
 for the same time after re-enabling, and a disabled key not in use is refused on
 its next call.
 
+Zip downloads: `create_zip_download`, `get_zip_download_url`.
+
+`create_zip_download` selects with `files` (asset-relative paths; `PATH@VERSIONID`
+pins one file, and a path that itself contains `@` ends in a bare `@`), `folders`,
+or `whole_asset` alone, up to 1000 entries; `asset_version_id` or
+`asset_version_alias` archives the selection as recorded in that asset version and
+cannot be combined with per-file versions. `archive_format` is `zip`, `tar` or
+`tar.gz`, and `compression` (`store` or `deflate`) applies to zip only. The whole
+job is refused when a selected file is archived, deleted, in an archive storage
+tier or of a blocked type, or the selection exceeds the deployment's limits. It
+starts a Batch job that can run for hours on a large asset, and
+`ZipDownloadLimitError` means the caller already has the maximum number of active
+jobs, which retrying does not clear. `get_zip_download_url` returns a presigned
+URL for a SUCCEEDED job: a bearer credential to the whole archive until it expires,
+which lands in the transcript and the host's logs once returned. Keep both out of
+`autoApprove`, and prefer `vamscli zip-download download`, which streams the
+archive to a file without exposing the URL.
+
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
@@ -449,6 +480,13 @@ deleted comments and the routes' `showDeleted` flag is ignored, so it is
 unrecoverable from an agent's position. `delete_metadata_schema` is not
 reversible and has no archived state; metadata already stored against the schema
 is left in place, unvalidated.
+
+Zip downloads: `cancel_zip_download`, `delete_zip_download`. Both use the one
+DELETE route, which cancels an active job and deletes a finished one, so each tool
+reads the job first and refuses the other state with `ZipDownloadStateError`.
+`cancel_zip_download` stops a QUEUED or RUNNING job and discards its partial
+archive; the job stays listed as CANCELLED. `delete_zip_download` permanently
+removes a finished job and its archive, and any URL already issued stops working.
 
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
 out every client still presenting the key at once; `update_api_key` /

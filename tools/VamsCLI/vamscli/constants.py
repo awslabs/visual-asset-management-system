@@ -40,6 +40,19 @@ API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
 API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
 API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
 
+# Download as Zip (prepared downloads) API Endpoints
+# A job belongs to the user who created it. The asset route carries POST (create) and GET (the
+# caller's jobs for that asset); the request route carries GET (one job) and DELETE, which CANCELS a
+# job that is still queued or running and DELETES one that has finished. The /url route issues a
+# short-lived presigned URL for a finished archive. Every route answers 404 with
+# ZIP_DOWNLOADS_DISABLED_API_MESSAGE while the deployment's app.zipDownloads is disabled.
+API_ZIP_DOWNLOADS_ASSET = "/database/{databaseId}/assets/{assetId}/download/zip"
+API_ZIP_DOWNLOADS_ASSET_REQUEST = "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}"
+API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = (
+    "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url"
+)
+API_ZIP_DOWNLOADS_GLOBAL = "/download/zip"
+
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"
 API_REVERT_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}"
@@ -293,6 +306,32 @@ FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
+FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
+
+# Download as Zip. The archive formats and compressions the create route accepts
+# (CreateZipDownloadRequestModel in backend/backend/models/zipDownloads.py), the job statuses, and
+# the two "feature off" texts: the API's 404 body, and the business error the CLI and the MCP server
+# raise for it (from the profile's feature switches first, the 404 body second).
+ZIP_DOWNLOAD_FORMATS = ("zip", "tar", "tar.gz")
+ZIP_DOWNLOAD_COMPRESSIONS = ("store", "deflate")
+ZIP_DOWNLOAD_MAX_SELECTION_ENTRIES = 1000
+ZIP_DOWNLOAD_ACTIVE_STATUSES = ("QUEUED", "RUNNING")
+ZIP_DOWNLOAD_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELLED")
+ZIP_DOWNLOADS_DISABLED_API_MESSAGE = "Zip downloads are not enabled for this deployment"
+ZIP_DOWNLOADS_DISABLED_MESSAGE = "Zip downloads are not available for this deployment"
+ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE = "Zip download not found"
+# A 429 with this exact body is the per-user active-job cap, a business refusal that retrying in a
+# few seconds does not clear; the client's throttling backoff skips it.
+ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE = "You already have the maximum number of active zip downloads"
+# --wait: how often a job is polled, and how long the CLI waits by default before giving up (the job
+# keeps running; 'zip-download get' or 'download --wait' picks it up again).
+ZIP_DOWNLOAD_POLL_INTERVAL_SECONDS = 5
+ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS = 3600
+# Streaming an archive from its presigned URL: connect and per-read timeouts, chunk size, and how
+# often (in bytes) a text-mode progress line is printed.
+ZIP_DOWNLOAD_STREAM_TIMEOUT = (30, 300)
+ZIP_DOWNLOAD_STREAM_CHUNK_BYTES = 1024 * 1024
+ZIP_DOWNLOAD_PROGRESS_STEP_BYTES = 64 * 1024 * 1024
 
 # What an administrator does with a request the deployment's AWS WAF web ACL blocked.
 WAF_ADMIN_HINT = (
