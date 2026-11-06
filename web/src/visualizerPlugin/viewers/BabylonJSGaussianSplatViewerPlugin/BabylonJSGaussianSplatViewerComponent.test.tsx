@@ -249,7 +249,7 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
             const alert = await findByRole("alert");
             expect(alert.textContent).toBe(
                 "ball.spz uses SPZ format version 4. The BabylonJS Gaussian Splat viewer opens " +
-                    "SPZ versions 2 and 3 and PLY files."
+                    "SPZ versions 2 and 3, PLY, SOG and SPLAT files."
             );
             expect(babylon.SceneLoader.ImportMeshAsync).not.toHaveBeenCalled();
             expect(queryByText("Downloading asset...")).toBeNull();
@@ -265,6 +265,25 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
 
             await waitFor(() => expect(babylon.SceneLoader.ImportMeshAsync).toHaveBeenCalled());
             expect(queryByRole("alert")).toBeNull();
+        });
+
+        it("hands a SOG archive and a headerless .splat file to the loader", async () => {
+            for (const [assetKey, head] of [
+                ["splats/scene.sog", [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]],
+                ["splats/scene.splat", [0x00, 0x10, 0x3f, 0xbe, 0x9a, 0x01]],
+            ] as const) {
+                const babylon = makeBabylon();
+                mockLoadBabylonJS.mockResolvedValue(babylon);
+                respondWithHead([...head]);
+
+                const { queryByRole, unmount } = render(
+                    <BabylonJSGaussianSplatViewerComponent {...props} assetKey={assetKey} />
+                );
+
+                await waitFor(() => expect(babylon.SceneLoader.ImportMeshAsync).toHaveBeenCalled());
+                expect(queryByRole("alert")).toBeNull();
+                unmount();
+            }
         });
     });
 });

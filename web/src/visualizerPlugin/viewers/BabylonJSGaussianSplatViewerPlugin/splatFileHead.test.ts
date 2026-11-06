@@ -30,6 +30,16 @@ describe("identifySplatFile", () => {
         });
     });
 
+    it("recognizes the zip container of a SOG file", () => {
+        expect(identifySplatFile(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]))).toEqual({
+            kind: "sog",
+        });
+        // An empty or spanned zip signature is not a SOG archive.
+        expect(identifySplatFile(new Uint8Array([0x50, 0x4b, 0x05, 0x06]))).toEqual({
+            kind: "unknown",
+        });
+    });
+
     it("recognizes a PLY header and nothing else", () => {
         expect(identifySplatFile(new TextEncoder().encode("ply\nformat binary"))).toEqual({
             kind: "ply",
@@ -54,18 +64,27 @@ describe("unsupportedSplatMessage", () => {
     it("lets the files the loader reads through", () => {
         expect(unsupportedSplatMessage({ kind: "spz-gzip" }, "a.spz")).toBe(null);
         expect(unsupportedSplatMessage({ kind: "ply" }, "a.ply")).toBe(null);
+        expect(unsupportedSplatMessage({ kind: "sog" }, "a.sog")).toBe(null);
+    });
+
+    it("hands a headerless file over only when it is named .splat", () => {
+        expect(unsupportedSplatMessage({ kind: "unknown" }, "scene.splat")).toBe(null);
+        expect(unsupportedSplatMessage({ kind: "unknown" }, "SCENE.SPLAT")).toBe(null);
+        expect(unsupportedSplatMessage({ kind: "unknown" }, "scene.splat.txt")).toContain(
+            "is not an SPZ, PLY, SOG or SPLAT Gaussian splat file"
+        );
     });
 
     it("names the file and its SPZ version when the loader cannot read it", () => {
         expect(unsupportedSplatMessage({ kind: "spz-ngsp", version: 4 }, "ball.spz")).toBe(
             "ball.spz uses SPZ format version 4. The BabylonJS Gaussian Splat viewer opens SPZ " +
-                "versions 2 and 3 and PLY files."
+                "versions 2 and 3, PLY, SOG and SPLAT files."
         );
         expect(unsupportedSplatMessage({ kind: "spz-ngsp", version: null }, "b.spz")).toContain(
             "version 4 or later"
         );
         expect(unsupportedSplatMessage({ kind: "unknown" }, "c.spz")).toContain(
-            "c.spz is not an SPZ or PLY Gaussian splat file"
+            "c.spz is not an SPZ, PLY, SOG or SPLAT Gaussian splat file"
         );
     });
 });
