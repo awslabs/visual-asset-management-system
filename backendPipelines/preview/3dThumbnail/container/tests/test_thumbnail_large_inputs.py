@@ -6,8 +6,9 @@
 * Budgets come from the memory limit and CPU quota; ``VAMS_COMPUTE_TIER`` is only logged. The memory
   limit is the smallest of the cgroup limit, the task memory the state machine passes and physical
   memory, since on AWS Fargate the cgroup has no limit and physical memory is the micro-VM's (#1131).
-* A mesh coloured per face keeps its colours through decimation (#1130), and a mesh drawn with
-  per-face colours is held to a triangle cap that covers the renderer's corner copy (#1116).
+* A mesh coloured per face keeps its colours through decimation, each triangle its own polygon's or
+  strip's, whatever lines, polygons and strips it mixes (#1130), and a mesh drawn with per-face
+  colours is held to a triangle cap that covers the renderer's corner copy (#1116).
 * The 100 GB constant is replaced by a free-disk check before the download, and the download runs as
   parallel ranged GETs.
 * FARO (.fls/.fws) is removed from every list: Open3D has no FARO reader, so each such run failed.
@@ -341,6 +342,90 @@ def _half_red_half_blue_sphere(resolution):
     return mesh
 
 
+def _cell_codes(n):
+    """A distinct colour for each of ``n`` cells, none of them white."""
+    index = np.arange(1, n + 1)
+    return np.column_stack([index % 256, index // 256 % 256, np.full(n, 7)]).astype(np.uint8)
+
+
+def _plane(resolution, triangles):
+    """The points and the polygons (point ids) of a plane of triangles or quads, as copies."""
+    import pyvista as pv
+
+    plane = pv.Plane(i_resolution=resolution, j_resolution=resolution)
+    if triangles:
+        plane = plane.triangulate()
+    corners = 3 if triangles else 4
+    return (np.array(plane.points, dtype=np.float64),
+            np.array(plane.faces).reshape(-1, corners + 1)[:, 1:].tolist())
+
+
+def _with_strip(points):
+    """``points`` and six more above them, and the strip of four triangles those six make."""
+    first = len(points)
+    above = [[x, y, 1.0] for x in (0.0, 0.5, 1.0) for y in (0.0, 0.5)]
+    return np.vstack([points, above]), [list(range(first, first + 6))]
+
+
+def _coloured_cells(points, polygons, strips=(), lines=()):
+    """A mesh of ``lines``, ``polygons`` and ``strips`` (point ids) on ``points``, built from its own
+    arrays. Cell data runs lines, polygons, then strips: each line is white, and each polygon and strip
+    has its own colour (``_cell_codes``)."""
+    import pyvista as pv
+
+    def cell_array(cells):
+        return np.concatenate([[len(cell), *cell] for cell in cells]).astype(np.int64)
+
+    arrays = {"faces": cell_array(polygons)}
+    if strips:
+        arrays["strips"] = cell_array(strips)
+    if lines:
+        arrays["lines"] = cell_array(lines)
+    mesh = pv.PolyData(np.array(points, dtype=np.float64), **arrays)
+    mesh.cell_data["RGB"] = np.vstack([np.full((len(lines), 3), 255, dtype=np.uint8),
+                                       _cell_codes(len(polygons) + len(strips))])
+    assert mesh.n_lines == len(lines) and mesh.n_strips == len(strips)
+    return mesh
+
+
+def _triangles_each_cell_makes(points, cells, strips):
+    """How many triangles VTK's triangle filter makes of each cell, run on that cell alone."""
+    import pyvista as pv
+
+    counts = []
+    for cell in cells:
+        kind = "strips" if strips else "faces"
+        one = pv.PolyData(np.array(points, dtype=np.float64), **{kind: np.array([len(cell), *cell])})
+        counts.append(int(one.triangulate().n_cells))
+    return counts
+
+
+def _assert_each_triangle_has_its_cells_colour(reduced, points, polygons, strips):
+    """Every triangle of ``reduced`` has the colour of the polygon or strip whose corners it joins, and
+    every polygon and strip keeps all the triangles the filter makes of it."""
+    assert "RGB" in reduced.cell_data, "the per-face colours are kept"
+    rgb = np.asarray(reduced.cell_data["RGB"])
+    assert len(rgb) == reduced.n_cells and rgb.dtype == np.uint8
+    cells = list(polygons) + list(strips)
+    owner = {tuple(code.tolist()): k for k, code in enumerate(_cell_codes(len(cells)))}
+    made = [0] * len(cells)
+    for triangle, colour in zip(np.asarray(reduced.faces).reshape(-1, 4)[:, 1:].tolist(), rgb.tolist()):
+        k = owner.get(tuple(colour))
+        assert k is not None and set(triangle) <= set(cells[k]), \
+            f"triangle {triangle} has colour {colour}, not its own polygon's or strip's"
+        made[k] += 1
+    expected = (_triangles_each_cell_makes(points, polygons, strips=False)
+                + _triangles_each_cell_makes(points, strips, strips=True))
+    assert made == expected, "every polygon and strip keeps all its triangles"
+
+
+def _identity_clustering(monkeypatch):
+    """Clustering that returns its input, so the mesh ``limit_triangles`` builds comes out as it is."""
+    from preview_pipeline import geometry_budget
+
+    monkeypatch.setattr(geometry_budget, "_cluster", lambda polydata, divisions: polydata)
+
+
 @pytest.mark.unit
 @requires_real("pyvista", "vtk")
 class TestTriangleBudget:
@@ -451,6 +536,96 @@ class TestTriangleBudget:
         centres = np.asarray(reduced.cell_centers().points)[:, 0]
         assert len(rgb) == reduced.n_cells <= 500 and not (rgb == 255).all(axis=1).any()
         assert (rgb[centres < -0.15] == _RED).all() and (rgb[centres > 0.15] == _BLUE).all()
+
+    # With the clustering replaced by the identity, the next tests compare the colour of every triangle
+    # that goes into the clustering with the colour of the polygon or strip it comes from.
+
+    def test_triangles_beside_a_line_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        mesh = _coloured_cells(points, triangles, lines=[[0, 1, 2]])
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, [])
+
+    def test_triangles_beside_a_strip_keep_each_face_colour_and_the_strip(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, triangles, strips=strips)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, strips)
+
+    def test_triangles_beside_a_line_and_a_strip_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, triangles, strips=strips, lines=[[0, 1], [2, 3, 4]])
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, triangles, strips)
+
+    def test_quads_beside_a_strip_keep_each_face_colour(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, quads = _plane(20, triangles=False)
+        points, strips = _with_strip(points)
+        mesh = _coloured_cells(points, quads, strips=strips)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, quads, strips)
+
+    def test_polygons_of_more_than_four_corners_keep_each_face_colour(self, monkeypatch):
+        # Beside a plane of triangles: a pentagon with a repeated corner, of which VTK makes fewer than
+        # n - 2 triangles, so counting n - 2 would move every later colour, then a concave hexagon and
+        # an octagon.
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, polygons = _plane(20, triangles=True)
+        shapes = [
+            [[9, 0, 0], [10, 0, 0], [10, 1, 0], [10, 1, 0], [9, 1, 0]],
+            [[3, 0, 0], [5, 0, 0], [5, 1, 0], [4, 1, 0], [4, 2, 0], [3, 2, 0]],
+            [[7 + math.cos(a), math.sin(a), 0] for a in np.linspace(0, 2 * math.pi, 9)[:-1]],
+        ]
+        for shape in shapes:
+            polygons.append(list(range(len(points), len(points) + len(shape))))
+            points = np.vstack([points, shape])
+        mesh = _coloured_cells(points, polygons)
+        assert _triangles_each_cell_makes(points, polygons[-3:], strips=False) == [2, 4, 6]
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        _assert_each_triangle_has_its_cells_colour(reduced, points, polygons, [])
+
+    @pytest.mark.parametrize("colours", ["point", "none"])
+    def test_a_strip_beside_triangles_is_kept_with_point_colours_or_none(self, monkeypatch, colours):
+        import pyvista as pv
+
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        points, triangles = _plane(20, triangles=True)
+        points, strips = _with_strip(points)
+        mesh = pv.PolyData(points, faces=np.array([[3, *t] for t in triangles]).ravel(),
+                           strips=np.array([len(strips[0]), *strips[0]]))
+        if colours == "point":
+            mesh.point_data["RGB"] = np.full((mesh.n_points, 3), 120, dtype=np.uint8)
+        reduced = geometry_budget.limit_triangles(mesh, 100, max_bins=1_000)
+        made = np.asarray(reduced.faces).reshape(-1, 4)[:, 1:]
+        assert reduced.n_cells == len(triangles) + 4
+        assert np.isin(made, strips[0]).all(axis=1).sum() == 4, "the strip's four triangles are kept"
+
+    def test_face_colours_the_filter_cannot_place_are_dropped_and_the_mesh_is_kept(self, monkeypatch):
+        from preview_pipeline import geometry_budget
+
+        _identity_clustering(monkeypatch)
+        monkeypatch.setattr(geometry_budget, "_triangulated", lambda points, cells, strips: None)
+        points, quads = _plane(20, triangles=False)
+        reduced = geometry_budget.limit_triangles(_coloured_cells(points, quads), 100, max_bins=1_000)
+        assert reduced.n_cells == 2 * len(quads) and "RGB" not in reduced.cell_data
 
     def test_a_mesh_drawn_with_per_face_colours_is_held_to_the_corner_copys_cap(self, monkeypatch):
         import pyvista as pv

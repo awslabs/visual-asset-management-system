@@ -165,6 +165,88 @@ def _cluster(polydata, divisions):
     return pv.wrap(clustering.GetOutput())
 
 
+# The cell array that carries each polygon's or strip's index through the triangle filter.
+_SOURCE_CELL = "vamsPreviewSourceCell"
+
+
+def _triangulated(points, cells, strips: bool):
+    """The polygons (or, with ``strips``, the strips) of ``cells`` on ``points`` as a triangle mesh,
+    and for each triangle the index in ``cells`` of the cell it comes from; None if the triangle
+    filter does not return one index per triangle.
+
+    vtkTriangleFilter gives each cell's triangles one after another, in cell order, but not always
+    n - 2 of them: a polygon with a repeated corner yields fewer (VTK 9.6). So each cell's index
+    travels with its triangles as cell data."""
+    import pyvista as pv
+    import vtk
+
+    part = vtk.vtkPolyData()
+    part.SetPoints(points)
+    if strips:
+        part.SetStrips(cells)
+    else:
+        part.SetPolys(cells)
+    n_cells = cells.GetNumberOfCells()
+    # ``index`` stays referenced until the filter has run, since the VTK array views its memory.
+    index = np.arange(n_cells, dtype=np.int32 if n_cells < 2 ** 31 else np.int64)
+    index_array = pv.convert_array(index)
+    index_array.SetName(_SOURCE_CELL)
+    part.GetCellData().AddArray(index_array)
+    triangle_filter = vtk.vtkTriangleFilter()
+    triangle_filter.SetInputData(part)
+    triangle_filter.Update()
+    triangles = pv.wrap(triangle_filter.GetOutput())
+    source_cell = triangles.cell_data.get(_SOURCE_CELL)
+    if source_cell is None or len(source_cell) != triangles.n_cells:
+        return None
+    source_cell = np.asarray(source_cell)
+    if len(source_cell) and (source_cell.min() < 0 or source_cell.max() >= n_cells):
+        return None
+    return triangles, source_cell
+
+
+def _triangles_with_face_colours(pv_data):
+    """The triangles of ``pv_data``'s polygons and strips, each with the cell ``RGB`` of the polygon or
+    strip it comes from; None when ``pv_data`` has no polygons or strips, or a colour cannot be
+    placed.
+
+    Cell data runs vertices, lines, polygons, then strips (``renderer._CELL_KINDS``), so the polygons'
+    colours start after the vertices' and lines', and the strips' after the polygons'. Polygons that
+    are all triangles keep their cells and colours as they are. Other polygons, and strips, are
+    triangulated on their own (``_triangulated``): on a mesh whose polygons are all triangles and that
+    also holds lines, vertices or strips, vtkTriangleFilter returns cell data with more rows than cells
+    (VTK 9.6), so its own copy of the colours cannot be used. The triangles come out in the filter's
+    order, the polygons' before the strips'."""
+    import pyvista as pv
+
+    rgb = np.asarray(pv_data.cell_data["RGB"])
+    first = int(pv_data.n_verts) + int(pv_data.n_lines)
+    faces, colours = [], []
+    for cells, strips in ((pv_data.GetPolys(), False), (pv_data.GetStrips(), True)):
+        n_cells = cells.GetNumberOfCells()
+        if not n_cells:
+            continue
+        cell_rgb = rgb[first:first + n_cells, :3]
+        first += n_cells
+        if not strips and cells.IsHomogeneous() == 3:
+            faces.append(np.asarray(pv_data.faces))
+            colours.append(cell_rgb.astype(np.uint8))
+            continue
+        triangulated = _triangulated(pv_data.GetPoints(), cells, strips)
+        if triangulated is None:
+            logger.warning("Triangle budget: the per-face colours could not be matched to the "
+                           "triangles; decimating without them")
+            return None
+        triangles, source_cell = triangulated
+        faces.append(np.asarray(triangles.faces))
+        colours.append(cell_rgb[source_cell].astype(np.uint8, copy=False))
+    if not faces:
+        return None
+    mesh = pv.PolyData(np.asarray(pv_data.points), faces[0] if len(faces) == 1 else np.concatenate(faces))
+    mesh.cell_data["RGB"] = colours[0] if len(colours) == 1 else np.concatenate(colours)
+    return mesh
+
+
 def limit_triangles(pv_data, max_triangles: int, max_bins: int = None):
     """Decimate a mesh above ``max_triangles`` triangles with quadric clustering on a grid of at most
     ``max_bins`` bins (default: ``cluster_bin_limit`` of the running container's memory)."""
@@ -179,19 +261,22 @@ def limit_triangles(pv_data, max_triangles: int, max_bins: int = None):
                        f"mixes points and faces; rendering it undecimated")
         return pv_data
 
-    source = pv_data if pv_data.is_all_triangles else pv_data.triangulate()
-    mesh = pv.PolyData(np.asarray(source.points), np.asarray(source.faces))
     rgb = _bake_texture(pv_data)
     if rgb is None and "RGB" in pv_data.point_data and len(pv_data.point_data["RGB"]) == pv_data.n_points:
         rgb = np.asarray(pv_data.point_data["RGB"])[:, :3]
-    if rgb is not None:
-        mesh.point_data["RGB"] = rgb.astype(np.uint8)
-        mesh = mesh.point_data_to_cell_data(pass_point_data=False)
-    elif "RGB" in source.cell_data and len(source.cell_data["RGB"]) == source.n_cells:
-        # Per-face colours (STEP, 3MF, COLLADA). ``mesh`` holds the source's triangles only, which come
-        # after any line cells the source kept, so their colours are the last ones.
-        face_rgb = np.asarray(source.cell_data["RGB"])[source.n_cells - mesh.n_cells:, :3]
-        mesh.cell_data["RGB"] = face_rgb.astype(np.uint8)
+    # The mesh to cluster holds the triangles of ``pv_data``'s polygons and strips; lines are dropped.
+    mesh = None
+    if rgb is None and "RGB" in pv_data.cell_data and len(pv_data.cell_data["RGB"]) == pv_data.n_cells:
+        # Per-face colours (STEP, 3MF, COLLADA): each triangle takes its own polygon's or strip's colour.
+        mesh = _triangles_with_face_colours(pv_data)
+    if mesh is None:
+        # pyvista's ``is_all_triangles`` does not count strips, so a mesh with strips is triangulated
+        # even when its polygons are all triangles, which keeps the strips' triangles.
+        source = pv_data if pv_data.is_all_triangles and not pv_data.n_strips else pv_data.triangulate()
+        mesh = pv.PolyData(np.asarray(source.points), np.asarray(source.faces))
+        if rgb is not None:
+            mesh.point_data["RGB"] = rgb.astype(np.uint8)
+            mesh = mesh.point_data_to_cell_data(pass_point_data=False)
 
     if max_bins is None:
         max_bins = cluster_bin_limit(resources.memory_limit_bytes())

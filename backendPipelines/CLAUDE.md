@@ -898,6 +898,18 @@ to 3D at once.
     smooth normals; a mesh that still carries an atlas keeps its uv seams split, since welding them would
     leave the uv array addressing positions that no longer exist.
 
+6.  **Carry a per-face colour by its cell's index, not through VTK's own cell data.** `vtkPolyData` orders
+    its cells, and their cell data, vertices, lines, polygons, then strips. `vtkTriangleFilter` gives each
+    cell's triangles one after another in that order, but on a mesh whose polygons are all triangles and
+    that also holds lines, vertices or strips it returns more cell-data rows than cells (1,601 rows for 801
+    cells in VTK 9.6, some of them garbage), and it makes fewer than n - 2 triangles of a polygon with a
+    repeated corner. pyvista's `is_all_triangles` ignores strips, so code that skips the filter on it drops
+    the strips and every colour after them moves by a cell. The 3D Thumbnail decimation
+    (`geometry_budget._triangles_with_face_colours`) reads the polygons' and the strips' colours at their
+    own offsets, keeps polygons that are all triangles as they are, and triangulates the other polygons and
+    the strips on their own with each cell's index as cell data, using it only when there is one index per
+    triangle.
+
 **Get ground truth by switching the transformation off.** None of the above was separable from "the model's
 texture is bad" until a run with `MESH_CLEANUP=false` shipped each model's atlas untouched. That reference
 settled it in one round: two models' own textures were clean likenesses, so everything wrong in a cleaned
