@@ -1471,6 +1471,8 @@ GET /workflows/executions/{executionId}/details
 
 The route is keyed on the execution identifier because an execution may span input files across multiple assets.
 
+While output files over 1 GiB are still being copied into the asset, the execution stays `RUNNING` and the response adds `executionPhase: "INGESTING_OUTPUTS"` and `outputIngestion` (`filesTotal`, `filesDone`, `bytesTotal`, `bytesDone`). Both fields are absent for every other execution. Once such a file has landed, its `outputs.files` row carries `ingestionStatus: "SUCCEEDED"`. A file whose copy failed is left out of `outputs.files`, and `executionError` names it.
+
 ### Path parameters
 
 | Parameter     | Type   | Required | Description          |

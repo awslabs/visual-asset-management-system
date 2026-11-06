@@ -236,7 +236,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. The listing includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. The listing includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one. The large object copy jobs table (`LargeObjectCopyJobsStorageTable`) is the same: it holds the progress of copies into assets, which expire 30 days after they finish, and needs no backup.
 
 ```bash
 # List remaining VAMS tables
@@ -261,6 +261,7 @@ The key named log groups are:
 
 -   `/aws/vendedlogs/VAMSAudit*-{hash}` — Audit log groups (authentication, authorization, file upload/download, actions, errors)
 -   `/aws/vendedlogs/vamsPipelineWorkflows-{hash}` — Step Functions workflow execution logs
+-   `/aws/vendedlogs/VAMSStateMachine-LargeObjectCopy{hash}` — Large object copy state machine logs
 -   `/aws/vendedlogs/VAMSOrchestrationBusAudit-{hash}` — EventBridge orchestration bus audit
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)

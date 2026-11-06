@@ -128,6 +128,8 @@ Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSyste
 
 A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect, and takes over a row whose holder never wrote its execution record once the row is older than the launch function's timeout plus a margin; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them, the abort and the failed launch only once the state machine is known to have stopped. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder. Contract: `backend/CLAUDE.md` "Workflow Execution Locks".
 
+Workflow outputs over 1 GiB and API uploads over `app.largeFileIngestion.apiUploadEngineThresholdBytes` are copied into their asset by the large object copy engine (Step Functions + `handlers/assets/largeObjectCopy.py`, resumable multipart copy); a run waits for its copies (ASL v2 `AwaitOutputIngestion`) and ends FAILED naming any file that did not land. Contract: `backend/CLAUDE.md` "Large Object Copy Engine".
+
 ### **Deployment Modes**
 
 | Mode           | Distribution             | Notes                                                                             |
