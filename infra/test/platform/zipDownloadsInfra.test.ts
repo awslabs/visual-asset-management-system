@@ -1,0 +1,362 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * Download as Zip (app.zipDownloads) in the synthesized templates.
+ *
+ * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
+ * `preparedDownloads/`, the table's SSM name, the zip download service with its six routes, and the
+ * terminal callback function. Only with `enabled`: the archive system pipeline stack, the
+ * ZIPDOWNLOADS feature switch, the callback's registration under Zip-Download, and the service's two
+ * cross-call grants (launch and abort), each on an exact function ARN.
+ */
+
+import {
+    ALL_TEMPLATES,
+    Resource,
+    SynthResult,
+    TemplateName,
+    synthTemplate,
+} from "../support/templateSynth";
+import { SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV } from "../../lib/lambdaBuilder/systemPipelineCallbacks";
+import { ZIP_DOWNLOAD_ROUTES } from "../../lib/lambdaBuilder/zipDownloadFunctions";
+
+jest.setTimeout(900_000);
+
+const SERVICE_HANDLER = "handlers.zipDownloads.zipDownloadService.lambda_handler";
+const CALLBACK_HANDLER = "handlers.zipDownloads.zipDownloadCallback.lambda_handler";
+const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteArchivePipeline.lambda_handler";
+
+function enabledMutate(retentionDays: number) {
+    return (c: any) => {
+        c.app.zipDownloads.enabled = true;
+        c.app.zipDownloads.retentionDays = retentionDays;
+        c.app.zipDownloads.computeVcpu = 8;
+        c.app.zipDownloads.computeMemoryGiB = 24;
+        c.app.useGlobalVpc.enabled = true;
+    };
+}
+
+const synthOff = (name: TemplateName): SynthResult => synthTemplate(name);
+const synthOn = (name: TemplateName): SynthResult =>
+    synthTemplate(name, { mutate: enabledMutate(14), mutateKey: "zip-downloads-on-14" });
+
+function functionByHandler(synth: SynthResult, handler: string): Resource {
+    const found = synth.where("AWS::Lambda::Function", (r) => r.properties.Handler === handler);
+    expect(found).toHaveLength(1);
+    return found[0];
+}
+
+function envOf(fn: Resource): Record<string, unknown> {
+    return fn.properties.Environment?.Variables ?? {};
+}
+
+/** Every statement of every inline policy attached to a function's role. */
+function roleStatements(synth: SynthResult, fn: Resource): any[] {
+    const roleRef = JSON.stringify(fn.properties.Role);
+    const roleId = (fn.properties.Role?.["Fn::GetAtt"] ?? [])[0];
+    return synth
+        .ofType("AWS::IAM::Policy")
+        .filter((p) => p.stack === fn.stack)
+        .filter((p) => JSON.stringify(p.properties.Roles ?? []).includes(roleId ?? roleRef))
+        .flatMap((p) => p.properties.PolicyDocument.Statement as any[]);
+}
+
+function actionsOf(statement: any): string[] {
+    return ([] as string[]).concat(statement.Action);
+}
+
+describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (name) => {
+    let synth: SynthResult;
+    beforeAll(() => {
+        synth = synthOff(name);
+    });
+
+    test("the job table: userId/requestId keys, UserAssetIndex, TTL, PITR, retained", () => {
+        const tables = synth.where("AWS::DynamoDB::Table", (r) =>
+            r.logicalId.startsWith("ZipDownloadRequestsStorageTable")
+        );
+        expect(tables).toHaveLength(1);
+        const table = tables[0];
+        expect(table.properties.KeySchema).toEqual([
+            { AttributeName: "userId", KeyType: "HASH" },
+            { AttributeName: "requestId", KeyType: "RANGE" },
+        ]);
+        expect(table.properties.TimeToLiveSpecification).toEqual({
+            AttributeName: "expiresAt",
+            Enabled: true,
+        });
+        expect(table.properties.BillingMode).toBe("PAY_PER_REQUEST");
+        expect(table.properties.PointInTimeRecoverySpecification?.PointInTimeRecoveryEnabled).toBe(
+            true
+        );
+        expect(table.raw.DeletionPolicy).toBe("Retain");
+        expect(table.properties.TableName).toBeUndefined();
+        const indexes = table.properties.GlobalSecondaryIndexes as any[];
+        expect(indexes).toHaveLength(1);
+        expect(indexes[0].IndexName).toBe("UserAssetIndex");
+        expect(indexes[0].KeySchema).toEqual([
+            { AttributeName: "userAssetKey", KeyType: "HASH" },
+            { AttributeName: "requestId", KeyType: "RANGE" },
+        ]);
+        expect(indexes[0].Projection).toEqual({ ProjectionType: "ALL" });
+    });
+
+    test("the table name is published to SSM for the handlers and migration tooling", () => {
+        expect(
+            synth.where("AWS::SSM::Parameter", (r) =>
+                SynthResult.flatten(r.properties.Name).endsWith(
+                    "/resourceNames/dynamoTables/zipDownloadRequestsStorage"
+                )
+            )
+        ).toHaveLength(1);
+    });
+
+    test("the auxiliary bucket expires preparedDownloads/ after the retention, and its markers", () => {
+        const buckets = synth.where("AWS::S3::Bucket", (r) =>
+            JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
+                "PreparedDownloadsExpiration"
+            )
+        );
+        expect(buckets).toHaveLength(1);
+        const rules = buckets[0].properties.LifecycleConfiguration.Rules as any[];
+        const expiry = rules.find((r) => r.Id === "PreparedDownloadsExpiration");
+        expect(expiry).toMatchObject({
+            Status: "Enabled",
+            Prefix: "preparedDownloads/",
+            ExpirationInDays: 7,
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
+        });
+        const markers = rules.find((r) => r.Id === "PreparedDownloadsDeleteMarkers");
+        expect(markers).toMatchObject({
+            Status: "Enabled",
+            Prefix: "preparedDownloads/",
+            ExpiredObjectDeleteMarker: true,
+        });
+    });
+
+    test("the service is deployed off, with no cross-call name or grant", () => {
+        const service = functionByHandler(synth, SERVICE_HANDLER);
+        const env = envOf(service);
+        expect(env.ZIPDOWNLOADS_ENABLED).toBe("false");
+        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBe("7");
+        expect(env.ZIP_ARCHIVE_WORKFLOW_DATABASE_ID).toBe("GLOBAL");
+        expect(env.ZIP_ARCHIVE_WORKFLOW_ID).toBe("vams-archive");
+        expect(env.PRESIGNED_URL_TIMEOUT_SECONDS).toBe("900");
+        expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeUndefined();
+        expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeUndefined();
+        const invoke = roleStatements(synth, service).filter((s) =>
+            actionsOf(s).includes("lambda:InvokeFunction")
+        );
+        expect(invoke).toEqual([]);
+    });
+
+    test("the callback function exists but no terminal writer names it", () => {
+        functionByHandler(synth, CALLBACK_HANDLER);
+        const writersWithRegistry = synth.where(
+            "AWS::Lambda::Function",
+            (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
+        );
+        expect(writersWithRegistry).toEqual([]);
+    });
+
+    test("no archive pipeline and no ZIPDOWNLOADS switch", () => {
+        expect(
+            synth.where(
+                "AWS::Lambda::Function",
+                (r) => r.properties.Handler === ARCHIVE_EXECUTE_HANDLER
+            )
+        ).toEqual([]);
+        expect(
+            synth.ofType("AWS::Batch::JobDefinition").filter((r) => /Archive/.test(r.stack))
+        ).toEqual([]);
+        expect(synth.grep("ZIPDOWNLOADS").filter((r) => !r.type.startsWith("AWS::Lambda"))).toEqual(
+            []
+        );
+    });
+
+    test("the service's job-prefix grants are scoped to preparedDownloads/", () => {
+        const service = functionByHandler(synth, SERVICE_HANDLER);
+        const statements = roleStatements(synth, service);
+        const put = statements.filter((s) => actionsOf(s).includes("s3:PutObject"));
+        expect(put).toHaveLength(1);
+        expect(SynthResult.flatten(put[0].Resource)).toMatch(/\/preparedDownloads\/\*$/);
+        const list = statements.find((s) => actionsOf(s).includes("s3:ListBucketVersions"));
+        expect(list.Condition).toEqual({ StringLike: { "s3:prefix": ["preparedDownloads/*"] } });
+    });
+});
+
+describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
+    let synth: SynthResult;
+    beforeAll(() => {
+        synth = synthOn(name);
+    });
+
+    test("the service is on, with the configured limits", () => {
+        const env = envOf(functionByHandler(synth, SERVICE_HANDLER));
+        expect(env.ZIPDOWNLOADS_ENABLED).toBe("true");
+        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBe("14");
+        expect(env.ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST).toBe("100000");
+        expect(env.ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST).toBe("5497558138880");
+        expect(env.ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER).toBe("5");
+        expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeDefined();
+        expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeDefined();
+    });
+
+    test("the service may invoke exactly the execute and execution service functions", () => {
+        const service = functionByHandler(synth, SERVICE_HANDLER);
+        const invoke = roleStatements(synth, service).filter((s) =>
+            actionsOf(s).includes("lambda:InvokeFunction")
+        );
+        expect(invoke).toHaveLength(1);
+        const resources = [].concat(invoke[0].Resource);
+        expect(resources).toHaveLength(2);
+        const executeId = functionByHandler(
+            synth,
+            "handlers.workflows.executeWorkflow.lambda_handler"
+        ).logicalId;
+        const flattened = resources.map((r) => SynthResult.flatten(r));
+        expect(flattened.some((r) => r.includes(executeId))).toBe(true);
+        for (const r of flattened) {
+            expect(r).not.toContain("*");
+        }
+    });
+
+    test("the callback is registered under Zip-Download on the terminal writers", () => {
+        const callbackId = functionByHandler(synth, CALLBACK_HANDLER).logicalId;
+        const writers = synth.where(
+            "AWS::Lambda::Function",
+            (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
+        );
+        expect(writers).toHaveLength(3);
+        for (const writer of writers) {
+            const registry = SynthResult.flatten(
+                envOf(writer)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV]
+            );
+            expect(registry).toContain('"Zip-Download"');
+            expect(registry).toContain(callbackId);
+        }
+    });
+
+    test("the lifecycle rule follows retentionDays", () => {
+        const bucket = synth.where("AWS::S3::Bucket", (r) =>
+            JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
+                "PreparedDownloadsExpiration"
+            )
+        )[0];
+        const rule = (bucket.properties.LifecycleConfiguration.Rules as any[]).find(
+            (r) => r.Id === "PreparedDownloadsExpiration"
+        );
+        expect(rule.ExpirationInDays).toBe(14);
+    });
+
+    test("the ZIPDOWNLOADS feature switch is written", () => {
+        expect(synth.grep("ZIPDOWNLOADS").some((r) => !r.type.startsWith("AWS::Lambda"))).toBe(
+            true
+        );
+    });
+
+    test("the archive job: Fargate size from config, 11 h bound, the job table env", () => {
+        const jobs = synth
+            .ofType("AWS::Batch::JobDefinition")
+            .filter((r) => /ArchiveBuilder/.test(r.stack));
+        expect(jobs).toHaveLength(1);
+        const container = jobs[0].properties.ContainerProperties;
+        expect(container.ResourceRequirements).toEqual(
+            expect.arrayContaining([
+                { Type: "VCPU", Value: "8" },
+                { Type: "MEMORY", Value: "24576" },
+            ])
+        );
+        expect(jobs[0].properties.Timeout).toEqual({ AttemptDurationSeconds: 39600 });
+        expect(jobs[0].properties.PlatformCapabilities).toEqual(["FARGATE"]);
+        const names = (container.Environment as any[]).map((e) => e.Name);
+        expect(names).toEqual(
+            expect.arrayContaining([
+                "ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME",
+                "ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME",
+                "ASSET_AUXILIARY_BUCKET_NAME",
+                "PREPARED_DOWNLOADS_PREFIX",
+            ])
+        );
+    });
+
+    test("the archive state machine ends before the workflow's 12 h task timeout", () => {
+        const machines = synth
+            .ofType("AWS::StepFunctions::StateMachine")
+            .filter((r) => /ArchiveBuilder/.test(r.stack));
+        expect(machines).toHaveLength(1);
+        const definition = SynthResult.flatten(machines[0].properties.DefinitionString);
+        expect(definition).toContain('"TimeoutSeconds":41400');
+        expect(definition).toContain('"ArchiveBatchJob"');
+    });
+
+    test("the system pipeline registers with fixed GLOBAL/vams-archive ids", () => {
+        const registrations = synth.where(
+            "AWS::CloudFormation::CustomResource",
+            (r) => /ArchiveBuilder/.test(r.stack) && JSON.stringify(r.raw).includes("vams-archive")
+        );
+        expect(registrations).toHaveLength(1);
+        const text = JSON.stringify(registrations[0].raw);
+        expect(text).toContain('\\"pipelineId\\":\\"vams-archive\\"');
+        expect(text).toContain('\\"workflowDatabaseId\\":\\"GLOBAL\\"');
+    });
+
+    test("the container job role writes only under preparedDownloads/ in the auxiliary bucket", () => {
+        const roles = synth
+            .ofType("AWS::IAM::Role")
+            .filter(
+                (r) =>
+                    /ArchiveBuilder/.test(r.stack) &&
+                    r.logicalId.includes("ArchiveContainerJobRole")
+            );
+        expect(roles).toHaveLength(1);
+        const output = (roles[0].properties.Policies as any[]).find(
+            (p) => p.PolicyName === "OutputBucketPolicy"
+        );
+        for (const statement of output.PolicyDocument.Statement as any[]) {
+            if (!actionsOf(statement).some((a) => a.startsWith("s3:"))) continue;
+            expect(SynthResult.flatten(statement.Resource)).toMatch(/\/preparedDownloads\/\*$/);
+        }
+        const table = (roles[0].properties.Policies as any[]).find(
+            (p) => p.PolicyName === "TablePolicy"
+        );
+        const actions = (table.PolicyDocument.Statement as any[]).flatMap(actionsOf).sort();
+        expect(actions).toEqual(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem"]);
+    });
+
+    test("every literal ARN in the archive stack names the template's own partition", () => {
+        const archive = synth.resources.filter((r) => /ArchiveBuilder/.test(r.stack));
+        expect(archive.length).toBeGreaterThan(20);
+        const partitions = new Set(
+            Array.from(
+                JSON.stringify(archive.map((r) => r.raw)).matchAll(/arn:(aws[a-z-]*):/g)
+            ).map((m) => m[1])
+        );
+        expect(Array.from(partitions)).toEqual([synth.partition]);
+    });
+
+    test("the isolated subnets get the Batch and ECR endpoints the Fargate job pulls through", () => {
+        const services = synth
+            .ofType("AWS::EC2::VPCEndpoint")
+            .map((r) => SynthResult.flatten(r.properties.ServiceName));
+        expect(services.some((s) => s.endsWith(".batch"))).toBe(true);
+        expect(services.some((s) => s.endsWith(".ecr.dkr"))).toBe(true);
+    });
+});
+
+test("the six routes are registered in the CDK route list", () => {
+    expect(ZIP_DOWNLOAD_ROUTES.map((r) => `${r.method} ${r.routePath}`).sort()).toEqual(
+        [
+            "DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
+            "GET /database/{databaseId}/assets/{assetId}/download/zip",
+            "GET /database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
+            "GET /download/zip",
+            "POST /database/{databaseId}/assets/{assetId}/download/zip",
+            "POST /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url",
+        ].sort()
+    );
+});
