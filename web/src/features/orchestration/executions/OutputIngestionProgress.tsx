@@ -129,6 +129,12 @@ const OutputIngestionProgress: React.FC<Props> = ({ executionPhase, outputIngest
         ? outputIngestion.files
         : [];
     const summary = `Ingesting outputs (${filesDone} of ${filesTotal})`;
+    // The bar follows the bytes copied, the same share as the line under it, so one large file
+    // still copying moves it; a run that reports no byte total falls back to the files done.
+    const bytesTotal = outputIngestion.bytesTotal || 0;
+    const copiedBytes = copiedIngestionBytes(outputIngestion);
+    const summaryValue =
+        bytesTotal > 0 ? percent(copiedBytes, bytesTotal) : percent(filesDone, filesTotal);
     return (
         <section
             aria-label="Output ingestion"
@@ -136,11 +142,10 @@ const OutputIngestionProgress: React.FC<Props> = ({ executionPhase, outputIngest
             className="orch-outline mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded"
         >
             <p className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-1">{summary}</p>
-            <ProgressBar value={percent(filesDone, filesTotal)} label={summary} />
+            <ProgressBar value={summaryValue} label={summary} />
             <p className="text-xs text-blue-800 dark:text-blue-300 mt-1">
-                {formatIngestionBytes(copiedIngestionBytes(outputIngestion))} of{" "}
-                {formatIngestionBytes(outputIngestion.bytesTotal || 0)} copied into the asset. The
-                execution stays running until every file has landed.
+                {formatIngestionBytes(copiedBytes)} of {formatIngestionBytes(bytesTotal)} copied
+                into the asset. The execution stays running until every file has landed.
             </p>
             {!compact && files.length > 0 && (
                 <table className="mt-3 w-full text-sm" aria-label="Output files being copied">
