@@ -234,11 +234,11 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                               |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                            |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                            |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                           |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                        |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                        |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), or `las-to-ply` (an uncompressed `.las` with colour written as binary PLY vertices; stdlib only, LAZ refused) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
@@ -253,13 +253,19 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
 (`watchRequestHosts`). Run the spec on the development build first and record the pixel stats it logs;
 a case that passes there and fails on a change is a regression.
+
+A `potree` case reads the octree the Point Cloud Potree Viewer pipeline (`app.pipelines.usePreviewPcPotreeViewer`)
+wrote for the file, so after seeding run that pipeline on each `potree-*` sample; the case skips, naming the
+pipeline, while the file's `preview/PotreeViewer/metadata.json` is missing. It asserts `Potree.lru.numPoints > 0`
+and point pixels on `#potree_render_area > canvas` by red channel, because Potree's blue gradient background
+defeats the most-common-colour measure of `canvasStats`.
 
 ---
 

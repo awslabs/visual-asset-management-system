@@ -50,7 +50,7 @@ describe("viewer sample manifest", () => {
 
     it("[control] reads the seeder's transforms and generators", () => {
         expect(TRANSFORMS).toEqual(
-            expect.arrayContaining(["prepend-utf8-bom", "zip", "splat-transform"])
+            expect.arrayContaining(["prepend-utf8-bom", "zip", "splat-transform", "las-to-ply"])
         );
         expect(GENERATORS).toEqual(expect.arrayContaining(["off-cube", "text"]));
     });
@@ -82,6 +82,12 @@ describe("viewer sample manifest", () => {
             expect(sources.length).toBeGreaterThan(0);
             sources.forEach((src) => expect(samples.map((x) => x.id)).toContain(src));
             if (s.transform !== "zip") expect(sources).toHaveLength(1);
+            if (s.transform === "las-to-ply") {
+                // The seeder reads uncompressed LAS only (LAZ needs a native decompressor).
+                const source = samples.find((x) => x.id === sources[0]);
+                expect(source.path.toLowerCase().endsWith(".las")).toBe(true);
+                expect(s.path.toLowerCase().endsWith(".ply")).toBe(true);
+            }
             if (s.transform === "splat-transform") expect(s.version).toMatch(/^\d+\.\d+\.\d+$/);
         }
         if ("requiresFeature" in s) {
