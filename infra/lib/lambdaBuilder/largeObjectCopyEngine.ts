@@ -28,11 +28,10 @@
  */
 
 import * as cdk from "aws-cdk-lib";
-import { Duration } from "aws-cdk-lib";
+import { Duration, Names } from "aws-cdk-lib";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as events from "aws-cdk-lib/aws-events";
-import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -56,7 +55,7 @@ import {
     suppressCdkNagLambda,
 } from "../helper/security";
 import * as s3AssetBuckets from "../helper/s3AssetBuckets";
-import { IAMArn } from "../helper/service-helper";
+import { IAMArn, Service } from "../helper/service-helper";
 import {
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
     storageResources,
@@ -455,6 +454,11 @@ export const LARGE_OBJECT_COPY_RECONCILE_STATUSES = ["FAILED", "TIMED_OUT", "ABO
  * job the cancel path stopped. The same pattern as the workflow status change rule
  * (workflowStatusEvents.ts), which matches only vams-* workflow state machines. A missed event is
  * picked up by the execution details read, which checks a run's unfinished copies.
+ *
+ * As with the workflow status change rule (#1122 D2), the rule is created only after the engine's
+ * resource policy and the dead-letter queue's policy, so it never goes live unable to deliver. Both
+ * policies name the rule by an ARN built from its fixed name rather than by a reference to the rule
+ * (a reference would make that dependency a cycle).
  */
 function buildCopyStatusChangeRule(
     scope: Construct,
@@ -473,14 +477,57 @@ function buildCopyStatusChangeRule(
             },
         },
     });
-    rule.addTarget(
-        new eventsTargets.LambdaFunction(fun, {
-            deadLetterQueue: dlq,
-            retryAttempts: 3,
-            maxEventAge: Duration.hours(2),
+    const cfnRule = rule.node.defaultChild as events.CfnRule;
+    cfnRule.name = largeObjectCopyStatusRuleName(rule);
+    const ruleArn = IAMArn(cfnRule.name).eventRule;
+
+    // What the aws-events-targets LambdaFunction target adds (the engine's resource policy for this
+    // rule, the queue policy statement, the target), with the rule named by its built ARN.
+    const permission = new lambda.CfnPermission(scope, LARGE_OBJECT_COPY_STATUS_PERMISSION_ID, {
+        action: "lambda:InvokeFunction",
+        functionName: fun.functionArn,
+        principal: Service("EVENTS").PrincipalString,
+        sourceArn: ruleArn,
+    });
+    dlq.addToResourcePolicy(
+        new iam.PolicyStatement({
+            sid: "AllowLargeObjectCopyStatusChangeRule",
+            principals: [Service("EVENTS").Principal],
+            effect: iam.Effect.ALLOW,
+            actions: ["sqs:SendMessage"],
+            resources: [dlq.queueArn],
+            conditions: { ArnEquals: { "aws:SourceArn": ruleArn } },
         })
     );
+    // The queue's policy construct (created with the queue for enforceSSL, holding the statement above).
+    const queuePolicy = dlq.node.findChild("Policy") as sqs.QueuePolicy;
+
+    rule.addTarget({
+        bind: (): events.RuleTargetConfig => ({
+            arn: fun.functionArn,
+            deadLetterConfig: { arn: dlq.queueArn },
+            retryPolicy: {
+                maximumRetryAttempts: 3,
+                maximumEventAgeInSeconds: Duration.hours(2).toSeconds(),
+            },
+        }),
+    });
+    cfnRule.addDependency(permission);
+    cfnRule.node.addDependency(queuePolicy);
     return rule;
+}
+
+/**
+ * The copy status rule's name: unique per deployment (the top-level stack name and the construct
+ * path, with a hash suffix) and within EventBridge's 64-character limit. Fixed rather than generated
+ * by CloudFormation so its ARN is known without a reference to the rule.
+ */
+export function largeObjectCopyStatusRuleName(rule: Construct): string {
+    return Names.uniqueResourceName(rule, {
+        maxLength: 64,
+        separator: "-",
+        allowedSpecialCharacters: "-",
+    });
 }
 
 /** Engine memory when every part is copied server side (UploadPartCopy holds no object data). */
@@ -620,6 +667,7 @@ export const CHUNK_START_RETRY = {
 
 /** Construct ids, for the tests and the resource list in documentation. */
 export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
+export const LARGE_OBJECT_COPY_STATUS_PERMISSION_ID = "LargeObjectCopyStatusChangeInvokePermission";
 export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ID = "LargeObjectCopyReconcileDLQ";
 export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ALARM_ID = "LargeObjectCopyReconcileDLQAlarm";
 

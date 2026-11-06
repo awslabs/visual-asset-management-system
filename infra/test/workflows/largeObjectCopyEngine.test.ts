@@ -32,6 +32,8 @@ import {
     LARGE_OBJECT_COPY_RECONCILE_DLQ_ID,
     LARGE_OBJECT_COPY_RECONCILE_STATUSES,
     LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
+    LARGE_OBJECT_COPY_STATUS_PERMISSION_ID,
+    LARGE_OBJECT_COPY_STATUS_RULE_ID,
     MAP_ITERATION_EVENTS,
     MAX_BATCHES,
     NOTIFY_LAST_ATTEMPT_RETRY,
@@ -42,6 +44,18 @@ import { SynthResult, TemplateName, synthTemplate } from "../support/templateSyn
 import { nestedTemplateKeyFor } from "../support/iamPolicySize";
 
 jest.setTimeout(900_000);
+
+const PARTITION_OF: Record<TemplateName, string> = {
+    commercial: "aws",
+    govcloud: "aws-us-gov",
+    eusovereign: "aws-eusc",
+};
+
+const REGION_OF: Record<TemplateName, string> = {
+    commercial: "us-east-1",
+    govcloud: "us-gov-west-1",
+    eusovereign: "eusc-de-east-1",
+};
 
 interface Cell {
     name: string;
@@ -283,6 +297,54 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(dlqs).toHaveLength(1);
     });
 
+    // Same ordering as the workflow status change rule (#1122 D2): the rule never goes live before
+    // the engine's resource policy and the dead-letter queue's policy exist.
+    test("the copy status rule has a fixed name and is created after both of its policies", () => {
+        const rules = byPrefix(resources, "AWS::Events::Rule", LARGE_OBJECT_COPY_STATUS_RULE_ID);
+        expect(rules).toHaveLength(1);
+        const [ruleId, rule]: [string, any] = rules[0] as any;
+        const name = rule.Properties.Name;
+        expect(typeof name).toBe("string");
+        expect(name.length).toBeLessThanOrEqual(64);
+        expect(name).toMatch(/^[A-Za-z0-9-]+$/);
+        expect(name.startsWith(`vams-t1-${cell.template}`)).toBe(true);
+        const ruleArn =
+            `arn:${PARTITION_OF[cell.template]}:events:${REGION_OF[cell.template]}:123456789012:` +
+            `rule/${name}`;
+
+        const permissionId = LARGE_OBJECT_COPY_STATUS_PERMISSION_ID;
+        const permission = resources[permissionId];
+        expect(permission?.Type).toBe("AWS::Lambda::Permission");
+        expect(permission.Properties.Principal).toBe("events.amazonaws.com");
+        expect(permission.Properties.FunctionName).toEqual({
+            "Fn::GetAtt": [engineFunctionId, "Arn"],
+        });
+        expect(SynthResult.flatten(permission.Properties.SourceArn)).toBe(ruleArn);
+
+        const policies = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::SQS::QueuePolicy" &&
+                r.Properties.Queues.some(
+                    (q: any) =>
+                        q.Ref &&
+                        new RegExp(`^${LARGE_OBJECT_COPY_RECONCILE_DLQ_ID}[0-9A-F]{8}$`).test(q.Ref)
+                )
+        );
+        expect(policies).toHaveLength(1);
+        const [queuePolicyId, queuePolicy]: [string, any] = policies[0] as any;
+        expect(rule.DependsOn).toEqual(expect.arrayContaining([permissionId, queuePolicyId]));
+
+        // Neither policy references the rule, which would make the dependency a cycle.
+        expect(JSON.stringify(permission)).not.toContain(ruleId);
+        expect(JSON.stringify(queuePolicy)).not.toContain(ruleId);
+        const sends = queuePolicy.Properties.PolicyDocument.Statement.filter(
+            (s: any) => s.Action === "sqs:SendMessage" && s.Principal?.Service
+        );
+        expect(sends).toHaveLength(1);
+        expect(sends[0].Principal).toEqual({ Service: "events.amazonaws.com" });
+        expect(SynthResult.flatten(sends[0].Condition.ArnEquals["aws:SourceArn"])).toBe(ruleArn);
+    });
+
     test("the engine can describe its executions and the details read can hand it one", () => {
         const policies = JSON.stringify(
             Object.values(resources).filter(
@@ -492,5 +554,75 @@ describe("app.largeFileIngestion.engineReservedConcurrency validation", () => {
         const config = { app: {} } as unknown as Config.ConfigPublic;
         Config.applyLargeFileIngestionDefaults(config);
         expect(config.app.largeFileIngestion.engineReservedConcurrency).toBe(0);
+    });
+});
+
+// Every EventBridge rule with a fixed name (the workflow status change rule, #1122 D2, and the copy
+// status rule) must differ between two VAMS deployments in one account and Region, or the second
+// deployment's create fails (or, worse, takes over the first's rule). The names derive from the
+// top-level stack name, which CloudFormation keeps unique per account and Region. The second
+// deployment uses a long stack name so the 64-character truncation is exercised too.
+describe("fixed EventBridge rule names are unique per deployment", () => {
+    const OTHER_STACK = "vams-core-t1-a-much-longer-second-deployment-name-us-east-1";
+
+    const fixedRuleNames = (synth: SynthResult): Record<string, string> => {
+        const out: Record<string, string> = {};
+        for (const template of Object.values(synth.templates) as any[]) {
+            for (const [id, r] of Object.entries(template.Resources ?? {}) as [string, any][]) {
+                if (r.Type === "AWS::Events::Rule" && typeof r.Properties?.Name === "string") {
+                    // Keyed by the logical id without its hash suffix (the same construct in both).
+                    out[id.replace(/[0-9A-F]{8}$/, "")] = r.Properties.Name;
+                }
+            }
+        }
+        return out;
+    };
+
+    let first: Record<string, string>;
+    let second: Record<string, string>;
+
+    beforeAll(() => {
+        first = fixedRuleNames(synthTemplate("commercial"));
+        second = fixedRuleNames(
+            synthTemplate("commercial", {
+                mutate: (c) => {
+                    c.env.coreStackName = OTHER_STACK;
+                    c.app.baseStackName = "t1-a-much-longer-second-deployment-name";
+                },
+                mutateKey: "second-deployment-stack-name",
+            })
+        );
+    });
+
+    test("both fixed-name rules are present in each deployment", () => {
+        for (const names of [first, second]) {
+            expect(Object.keys(names)).toEqual(
+                expect.arrayContaining([
+                    "WorkflowExecutionStatusChangeRule",
+                    LARGE_OBJECT_COPY_STATUS_RULE_ID,
+                ])
+            );
+        }
+    });
+
+    test("each name carries its deployment's stack name and stays within 64 characters", () => {
+        for (const name of Object.values(first)) {
+            expect(name.startsWith("vams-t1-commercial-")).toBe(true);
+            expect(name.length).toBeLessThanOrEqual(64);
+        }
+        for (const name of Object.values(second)) {
+            // A long path is cut in the middle; the start of the stack name and the hash remain.
+            expect(name.startsWith(OTHER_STACK.slice(0, 20))).toBe(true);
+            expect(name.length).toBeLessThanOrEqual(64);
+            expect(name).toMatch(/[0-9A-F]{8}$/);
+        }
+    });
+
+    test("no fixed name repeats within or across the two deployments", () => {
+        const all = [...Object.values(first), ...Object.values(second)];
+        expect(new Set(all).size).toBe(all.length);
+        for (const key of Object.keys(first)) {
+            expect(second[key]).not.toBe(first[key]);
+        }
     });
 });
