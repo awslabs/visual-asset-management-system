@@ -21,6 +21,7 @@ def env():
     e.zip.items[("alice", REQUEST_ID)] = {
         "userId": "alice", "requestId": REQUEST_ID, "databaseId": "db1", "assetId": "asset1",
         "status": "RUNNING", "workflowExecutionId": "exec-1", "archiveKey": prefix + "x.zip",
+        "archiveUploadToken": h.UPLOAD_TOKEN,
         "manifestKey": prefix + "manifest.json"}
     e.s3.uploads.append({"Bucket": h.AUX, "Key": prefix + "x.zip", "UploadId": "u1"})
     e.prefix = prefix
@@ -70,7 +71,7 @@ class TestCallback:
         assert _row(env)["status"] == "FAILED"
 
     def test_succeeded_with_archive(self, env):
-        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX)
+        h.land_archive(env, _row(env), size=77)
         env.cb.lambda_handler(_payload("SUCCEEDED"), None)
         assert _row(env)["status"] == "SUCCEEDED" and _row(env)["archiveSizeBytes"] == 77
 
@@ -78,12 +79,28 @@ class TestCallback:
     def test_landed_archive_wins_over_a_failed_run(self, env, status):
         # The container completed its upload but its SUCCEEDED write had not landed when the run
         # was recorded as ended: one outcome, SUCCEEDED, never FAILED.
-        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX)
+        h.land_archive(env, _row(env), size=77)
         result = env.cb.lambda_handler(_payload(status), None)
         assert result == {"status": "finalized", "jobStatus": "SUCCEEDED"}
         assert _row(env)["status"] == "SUCCEEDED" and _row(env)["archiveSizeBytes"] == 77
         assert "errorMessage" not in _row(env)
         assert env.cb.lambda_handler(_payload(status), None)["status"] == "unchanged"
+
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
+    def test_earlier_same_size_object_is_not_this_jobs_archive(self, env, status):
+        # An object of the archive's size sits at the key, but not from this job's upload (no
+        # token, or another upload's token): it never counts as landed.
+        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX, version="old")
+        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX, version="other",
+                   metadata={env.zd.ARCHIVE_UPLOAD_TOKEN_METADATA: "tok-another-upload"})
+        assert env.cb.lambda_handler(_payload(status), None)["jobStatus"] == "FAILED"
+        assert _row(env)["status"] == "FAILED" and "archiveSizeBytes" not in _row(env)
+
+    def test_row_without_a_token_has_no_landed_archive(self, env):
+        del _row(env)["archiveUploadToken"]
+        env.s3.add(env.prefix + "x.zip", size=77, bucket=h.AUX)
+        env.cb.lambda_handler(_payload("SUCCEEDED"), None)
+        assert _row(env)["status"] == "FAILED"
 
     def test_open_upload_is_aborted_before_the_archive_check(self, env):
         order = []

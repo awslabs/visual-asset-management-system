@@ -107,7 +107,7 @@ class TestZipJobFinalizedExactlyOnce:
         assert _job(zipenv)["errorMessage"] == "The archive job timed out"
 
     def test_end_state_success_then_the_status_event(self, zipenv):
-        zipenv.s3.add(zipenv.prefix + "x.zip", size=42, bucket=h.AUX)
+        h.land_archive(zipenv, zipenv.zip.items[("alice", REQUEST_ID)], size=42)
         registry, client = _wired(zipenv)
         with hooks._main_table(_zip_row()) as table, registry, client:
             hooks._end_state(hooks._Dynamo(po.workflow_execution_database_v2, table))

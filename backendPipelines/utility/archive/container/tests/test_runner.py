@@ -85,8 +85,10 @@ class FakeS3:
     def put_object(self, Bucket, Key, Body, **_):
         self.add(Key, data=Body, bucket=Bucket, version="p")
 
-    def create_multipart_upload(self, Bucket, Key, **_):
+    def create_multipart_upload(self, Bucket, Key, Metadata=None, **_):
         self.uploads[(Bucket, Key)] = {}
+        self.upload_metadata = getattr(self, "upload_metadata", {})
+        self.upload_metadata[(Bucket, Key)] = dict(Metadata or {})
         return {"UploadId": "u1"}
 
     def upload_part(self, Bucket, Key, UploadId, PartNumber, Body):
@@ -101,7 +103,8 @@ class FakeS3:
         data = b"".join(parts[p["PartNumber"]] for p in MultipartUpload["Parts"])
         self.completed[(Bucket, Key)] = data
         version = f"m{len(self.completed)}"
-        self.add(Key, data=data, bucket=Bucket, version=version, content_type="application/zip")
+        self.add(Key, data=data, bucket=Bucket, version=version, content_type="application/zip",
+                 metadata=getattr(self, "upload_metadata", {}).get((Bucket, Key)))
         return {"VersionId": version}
 
     def abort_multipart_upload(self, Bucket, Key, UploadId):
@@ -282,8 +285,8 @@ class TestZipDownloadMode:
             def abort(self):
                 Sink.aborted = True
 
-            def object_exists(self):
-                return False
+            def head(self):
+                return None
         job.sink = Sink()
         job.stop()
         assert Sink.aborted and job.status._table.row["errorMessage"] == runner.STOPPED

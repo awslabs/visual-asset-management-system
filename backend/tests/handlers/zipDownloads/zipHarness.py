@@ -333,6 +333,21 @@ def load_handlers(enabled=True, env=None):
     return env_obj
 
 
+UPLOAD_TOKEN = "tok-this-job"
+
+
+def record_upload_token(row):
+    """What the container's RUNNING write records before it creates the archive upload."""
+    row["archiveUploadToken"] = UPLOAD_TOKEN
+
+
+def land_archive(env, row, size=10, token=UPLOAD_TOKEN, version="v1"):
+    """The archive object this job's upload created: it carries the row's upload token."""
+    record_upload_token(row)
+    env.s3.add(row["archiveKey"], size=size, bucket=AUX, version=version,
+               metadata={env.zd.ARCHIVE_UPLOAD_TOKEN_METADATA: token})
+
+
 def blocklist(key, content_type):
     """Stand-in for common.s3.validateUnallowedFileExtensionAndContentType: blocks .exe."""
     return not key.lower().endswith(".exe") and content_type != "application/x-msdownload"

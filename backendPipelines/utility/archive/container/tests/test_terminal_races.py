@@ -90,12 +90,26 @@ def _setup():
     return s3, table, job
 
 
-def _archive_exists(s3):
+def _own_archive_is_current(s3, table):
+    """Whether the key's current object is the one this job's upload created (its token)."""
     try:
-        s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)
-        return True
+        head = s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)
     except ClientError:
         return False
+    token = table.row.get("archiveUploadToken")
+    return bool(token) and head["Metadata"].get(zd.ARCHIVE_UPLOAD_TOKEN_METADATA) == token
+
+
+def _archive_bytes():
+    """The size of the archive this setup produces, measured on a clean run."""
+    s3, _, job = _setup()
+    job.run()
+    return len(s3.completed[(AUX, ARCHIVE_KEY)])
+
+
+def _add_earlier_same_size_object(s3):
+    s3.add(ARCHIVE_KEY, data=b"O" * _archive_bytes(), bucket=AUX, version="old",
+           content_type="application/zip")
 
 
 def _run(job):
@@ -109,7 +123,7 @@ def _run(job):
 def _assert_one_outcome(s3, table, expected):
     assert table.row["status"] == expected
     assert table.outcomes == [expected], "exactly one terminal write"
-    assert _archive_exists(s3) == (expected == zd.STATUS_SUCCEEDED)
+    assert _own_archive_is_current(s3, table) == (expected == zd.STATUS_SUCCEEDED)
     assert not [k for (b, k) in s3.uploads if b == AUX], "no upload left open"
 
 
@@ -263,3 +277,61 @@ class TestContainerNeverFailsALandedArchive:
         _hook(monkeypatch, "before_upload", _reconcile(s3, table, "FAILED"))
         _run(job)
         assert s3.deleted == [(ARCHIVE_KEY, "m1")]
+
+    def test_upload_token_key_matches_the_backend(self):
+        assert runner.ARCHIVE_UPLOAD_TOKEN_METADATA == zd.ARCHIVE_UPLOAD_TOKEN_METADATA
+
+
+class TestEarlierSameSizeObjectAtTheKey:
+    """'Landed' is the identity of THIS job's upload (its token or version id), never presence or
+    size: an earlier object of exactly the archive's size at the key must not count."""
+
+    def test_reconcile_while_the_upload_is_open_fails_the_job(self, monkeypatch):
+        s3, table, job = _setup()
+        _add_earlier_same_size_object(s3)
+        _hook(monkeypatch, "upload_open", _reconcile(s3, table, "FAILED"))
+        assert _run(job)["status"] == "raised"
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
+        assert s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)["VersionId"] == "old"
+
+    def test_cancel_while_the_upload_is_open_cancels_the_job(self, monkeypatch):
+        s3, table, job = _setup()
+        _add_earlier_same_size_object(s3)
+        results = []
+        _hook(monkeypatch, "upload_open", _cancel(s3, table, results))
+        _run(job)
+        assert results == [zd.CANCEL_CANCELLED]
+        _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
+
+    def test_succeeded_run_without_its_own_archive_fails(self):
+        s3, table, _ = _setup()
+        _add_earlier_same_size_object(s3)
+        table.row.update(status="RUNNING", archiveUploadToken="token-of-this-job")
+        assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "SUCCEEDED")[0] == zd.STATUS_FAILED
+        assert table.row["errorMessage"] == zd.MSG_NOT_PRODUCED
+
+    def test_container_failure_is_recorded_despite_the_earlier_object(self, monkeypatch):
+        s3, table, job = _setup()
+        _add_earlier_same_size_object(s3)
+
+        def broken(self):
+            raise IOError("network down")
+        monkeypatch.setattr(runner.MultipartSink, "close", broken)
+        assert _run(job)["reason"] == runner.GENERIC_FAILURE
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
+        assert table.row["errorMessage"] == runner.GENERIC_FAILURE
+
+    def test_own_archive_landing_over_the_earlier_object_still_wins(self, monkeypatch):
+        s3, table, job = _setup()
+        _add_earlier_same_size_object(s3)
+        _hook(monkeypatch, "landed_unrecorded", _reconcile(s3, table, "FAILED"))
+        assert _run(job)["status"] == "stopped"
+        _assert_one_outcome(s3, table, zd.STATUS_SUCCEEDED)
+
+    def test_late_archive_over_the_earlier_object_is_removed_and_the_earlier_one_kept(self, monkeypatch):
+        s3, table, job = _setup()
+        _add_earlier_same_size_object(s3)
+        _hook(monkeypatch, "before_upload", _reconcile(s3, table, "FAILED"))
+        _run(job)
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
+        assert s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)["VersionId"] == "old"

@@ -16,7 +16,8 @@ the status machine is defined once here:
 - A landed archive wins, with one outcome. Every writer that finalizes a job for a reason other
   than the archive (the terminal callback, the read-time reconcile, the user's cancel, the
   container's own failure and stop paths) first makes sure no archive landed: the API side aborts the
-  job's open uploads and then checks the archive object (finalize_ended_run, cancel_job); the
+  job's open uploads and then checks that the key's object is the one THIS job's upload created
+  (landed_archive: the row's archiveUploadToken, never presence or size) (finalize_ended_run, cancel_job); the
   container skips its FAILED write once its upload completed. An archive that lands after the job
   was finalized otherwise is deleted by the container that wrote it.
 - The container is the primary status source (live progress, its own refusal reason). The terminal
@@ -54,6 +55,10 @@ COMPRESSIONS = ("store", "deflate")
 
 CANCELLED_BY_USER = "user"
 CANCELLED_BY_EXECUTION = "execution"
+
+# User metadata key (x-amz-meta-...) the archive container stamps on its upload with the row's
+# archiveUploadToken; mirrored in the container (archive_pipeline/runner.py), pinned by its tests.
+ARCHIVE_UPLOAD_TOKEN_METADATA = "vams-zip-upload-token"
 
 # The archive system workflow and the system trigger its zip-download runs are recorded under
 # (common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
@@ -268,9 +273,10 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     Returns ``(status, fields)`` for finalize_row, or ``None`` when nothing should be written
     (a non-terminal run, or a row that is already terminal).
 
-    - A landed archive wins (``archive_exists() -> (exists, size)``): whatever the run's status,
-      the job is SUCCEEDED when its archive object exists. CompleteMultipartUpload is atomic, so an
-      object at the job's key is the whole archive. Callers abort the open uploads first
+    - A landed archive wins (``archive_exists() -> (landed, size)``, landed_archive): whatever the
+      run's status, the job is SUCCEEDED when the key's current object is the one this job's upload
+      created (its upload token), never because some object of some size is there.
+      CompleteMultipartUpload is atomic, so that object is the whole archive. Callers abort the open uploads first
       (finalize_ended_run), so no archive can land after this check except from an upload created
       since, which the container deletes when it finds the job finalized.
     - SUCCEEDED without the archive: FAILED (not produced).
@@ -299,6 +305,15 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     return None
 
 
+def _abort_then_reread(table, s3_client, bucket: str, row: dict, logger=None) -> Optional[dict]:
+    """Abort the job's open uploads, then read the row again (consistent): the decision must see
+    the archiveUploadToken the container may have recorded after the caller read the row."""
+    abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
+                                                         row["userId"], row["requestId"]), logger)
+    return table.get_item(Key=row_key(row["userId"], row["requestId"]),
+                          ConsistentRead=True).get("Item")
+
+
 def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_status: str,
                        execution_error: str = "", logger=None) -> Tuple[Optional[str], bool]:
     """Finalize a non-terminal job whose workflow run ended: the terminal callback and the API's
@@ -312,11 +327,10 @@ def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_statu
     if not row or row.get("status") not in ACTIVE_STATUSES \
             or execution_status not in RUN_TERMINAL_STATUSES:
         return None, False
-    abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
-                                                         row["userId"], row["requestId"]), logger)
+    row = _abort_then_reread(table, s3_client, bucket, row, logger)
     decision = decide_finalization(
         execution_status, row, execution_error,
-        archive_exists=lambda: archive_head(s3_client, bucket, row.get("archiveKey", "")))
+        archive_exists=lambda: landed_archive(s3_client, bucket, row))
     if not decision:
         return None, False
     status, fields = decision
@@ -337,9 +351,10 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
     Returns CANCEL_CANCELLED when this call cancelled the job, CANCEL_LANDED when the archive had
     landed (the job is SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when another
     writer finalized the job first."""
-    abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
-                                                         row["userId"], row["requestId"]), logger)
-    exists, size = archive_head(s3_client, bucket, row.get("archiveKey", ""))
+    row = _abort_then_reread(table, s3_client, bucket, row, logger)
+    if not row or row.get("status") not in ACTIVE_STATUSES:
+        return CANCEL_ENDED
+    exists, size = landed_archive(s3_client, bucket, row)
     if exists:
         finalize_row(table, row["userId"], row["requestId"], STATUS_SUCCEEDED, archive_size_bytes=size,
                      expected_execution_id=row.get("workflowExecutionId") or "")
@@ -473,6 +488,28 @@ def delete_prefix(s3_client, bucket: str, prefix: str) -> int:
         kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
         kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
     return deleted
+
+
+def landed_archive(s3_client, bucket: str, row: dict) -> Tuple[bool, Optional[int]]:
+    """(landed, size): whether the object at the job's archive key is the one THIS job's upload
+    created. Never decided by presence or size: an earlier object of the same size can sit at the
+    key. The container records a fresh ``archiveUploadToken`` on the row (conditional on the row
+    being open) before it creates the upload, and stamps the same token as object metadata
+    (ARCHIVE_UPLOAD_TOKEN_METADATA) on CreateMultipartUpload, so only that upload's completed object
+    carries it. A row without a token (its container never started the upload, or ran an image from
+    before the token) has no landed archive by this rule."""
+    token = row.get("archiveUploadToken")
+    if not token:
+        return False, None
+    try:
+        head = s3_client.head_object(Bucket=bucket, Key=row.get("archiveKey", ""))
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return False, None
+        raise
+    if (head.get("Metadata") or {}).get(ARCHIVE_UPLOAD_TOKEN_METADATA) != token:
+        return False, None
+    return True, int(head.get("ContentLength", 0))
 
 
 def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]:

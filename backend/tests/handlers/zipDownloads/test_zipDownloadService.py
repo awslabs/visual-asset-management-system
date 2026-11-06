@@ -129,6 +129,10 @@ class TestAuthorization:
         item = h.body_of(_create(env, FILE_SELECTION))
         for hidden in ("userId", "archiveKey", "manifestKey", "workflowExecutionId", "userAssetKey"):
             assert hidden not in item
+        row = next(iter(env.zip.items.values()))
+        h.record_upload_token(row)
+        listed = h.body_of(_job_route(env, "GET", item["requestId"]))
+        assert "archiveUploadToken" not in listed and h.UPLOAD_TOKEN not in json.dumps(listed)
 
 
 class TestCreate:
@@ -484,7 +488,7 @@ class TestReconcile:
 
     def test_succeeded_run_with_archive_succeeds(self, env):
         request_id, row = self._running(env)
-        env.s3.add(row["archiveKey"], size=99, bucket=h.AUX)
+        h.land_archive(env, row, size=99)
         self._execution(env, "SUCCEEDED")
         item = h.body_of(_job_route(env, "GET", request_id))
         assert item["status"] == "SUCCEEDED" and item["archiveSizeBytes"] == 99
@@ -514,7 +518,7 @@ class TestReconcile:
     @pytest.mark.parametrize("status", ["FAILED", "TIMED_OUT", "ABORTED"])
     def test_landed_archive_wins_over_a_failed_run(self, env, status):
         request_id, row = self._running(env)
-        env.s3.add(row["archiveKey"], size=99, bucket=h.AUX)
+        h.land_archive(env, row, size=99)
         self._execution(env, status)
         item = h.body_of(_job_route(env, "GET", request_id))
         assert item["status"] == "SUCCEEDED" and item["archiveSizeBytes"] == 99
@@ -522,6 +526,7 @@ class TestReconcile:
 
     def test_reconcile_aborts_the_open_upload_before_deciding(self, env):
         request_id, row = self._running(env)
+        h.record_upload_token(row)
         env.s3.uploads.append({"Bucket": h.AUX, "Key": row["archiveKey"], "UploadId": "u1"})
         order = []
         abort, head = env.s3.abort_multipart_upload, env.s3.head_object
@@ -532,10 +537,34 @@ class TestReconcile:
         assert order[:2] == ["abort", "head"]
 
 
+class TestEarlierSameSizeObject:
+    """An earlier object of the archive's size at the key is not this job's archive."""
+
+    def test_reconcile_of_a_failed_run_fails_the_job(self, env):
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = next(iter(env.zip.items.values()))
+        row["status"] = "RUNNING"
+        h.record_upload_token(row)
+        env.s3.add(row["archiveKey"], size=99, bucket=h.AUX, version="old")
+        env.executions.items[("exec-1", "GLOBAL:vams-archive")] = {
+            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:vams-archive",
+            "executionStatus": "FAILED", "executionError": ""}
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "FAILED"
+
+    def test_cancel_cancels_the_job(self, env):
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = next(iter(env.zip.items.values()))
+        h.record_upload_token(row)
+        env.s3.add(row["archiveKey"], size=99, bucket=h.AUX, version="old")
+        assert h.body_of(_job_route(env, "DELETE", request_id))["action"] == "cancelled"
+        assert next(iter(env.zip.items.values()))["status"] == "CANCELLED"
+
+
 class TestCancelLandedArchive:
     def test_cancel_aborts_the_open_upload_before_deciding(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         row = next(iter(env.zip.items.values()))
+        h.record_upload_token(row)
         env.s3.uploads.append({"Bucket": h.AUX, "Key": row["archiveKey"], "UploadId": "u1"})
         order = []
         abort, head = env.s3.abort_multipart_upload, env.s3.head_object
@@ -550,7 +579,7 @@ class TestCancelLandedArchive:
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         row = next(iter(env.zip.items.values()))
         row["status"] = "RUNNING"
-        env.s3.add(row["archiveKey"], size=5, bucket=h.AUX)
+        h.land_archive(env, row, size=5)
         statuses = []
         update = env.zip.update_item
 

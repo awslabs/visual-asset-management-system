@@ -54,12 +54,14 @@ class StatusWriter:
                 return False
             raise
 
-    def running(self, files_total, bytes_total, resolved_manifest_key):
+    def running(self, files_total, bytes_total, resolved_manifest_key, upload_token):
+        """Move the job to RUNNING and record the token the archive upload will carry, BEFORE the
+        upload exists, so a finalizer can tell this job's archive from any other object at the key."""
         return self._update(
             ["#status = :s", "filesTotal = :ft", "bytesTotal = :bt", "filesDone = :z", "bytesDone = :z",
-             "resolvedManifestKey = :rk"],
+             "resolvedManifestKey = :rk", "archiveUploadToken = :tok"],
             {":s": "RUNNING", ":ft": int(files_total), ":bt": int(bytes_total), ":z": 0,
-             ":rk": resolved_manifest_key})
+             ":rk": resolved_manifest_key, ":tok": upload_token})
 
     def progress(self, files_done, bytes_done, force=False):
         now = self._clock()

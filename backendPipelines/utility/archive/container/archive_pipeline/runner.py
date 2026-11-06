@@ -22,6 +22,7 @@ import re
 import signal
 import threading
 import time
+import uuid
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -39,6 +40,8 @@ RETRY_CONFIG = Config(retries={"max_attempts": 8, "mode": "adaptive"}, max_pool_
 REASON_PREFIX = "ZIPDOWNLOAD: "
 GENERIC_FAILURE = "The archive job failed"
 STOPPED = "The archive job was stopped"
+# Mirrors backend common/zipDownloads.ARCHIVE_UPLOAD_TOKEN_METADATA (pinned by the tests).
+ARCHIVE_UPLOAD_TOKEN_METADATA = "vams-zip-upload-token"
 CONTENT_TYPES = {"zip": "application/zip", "tar": "application/x-tar", "tar.gz": "application/gzip"}
 EXTENSIONS = {"zip": ".zip", "tar": ".tar", "tar.gz": ".tar.gz"}
 PROGRESS_EVERY_BYTES = 64 * 1024 * 1024
@@ -164,6 +167,7 @@ class Job:
         self.status = None
         self._stopped = False
         self._landed = None   # (archive size, files, bytes) once the archive upload completed
+        self._upload_token = None   # recorded on the row and stamped on the upload (mode 1)
 
     def stop(self):
         self._stopped = True
@@ -173,14 +177,25 @@ class Job:
             self.sink.abort()
         self._record_failure(STOPPED)
 
+    def _is_own_archive(self, head):
+        """Whether a HEAD describes the object THIS upload created: its version id when S3 returned
+        one, else the upload token stamped on CreateMultipartUpload. Never presence or size, since an
+        earlier object of the same size can sit at the key."""
+        if not head or not self._upload_token:
+            return False
+        if self.sink.version_id:
+            return head.get("VersionId") == self.sink.version_id
+        return (head.get("Metadata") or {}).get(ARCHIVE_UPLOAD_TOKEN_METADATA) == self._upload_token
+
     def _archive_landed(self):
-        """Whether this job's archive object exists. Asked only after the upload was aborted (or
-        failed), so the answer cannot change afterwards. An error answers True: skipping the FAILED
-        write is always safe, because the terminal callback finalizes the job from the object."""
+        """Whether this job's own archive is the key's current object. Asked only after the upload was
+        aborted (or failed), so the answer cannot change afterwards. An error answers True: skipping
+        the FAILED write is always safe, because the terminal callback finalizes the job from the
+        object's identity."""
         if self.sink is None:
             return False
         try:
-            return self.sink.object_exists()
+            return self._is_own_archive(self.sink.head())
         except Exception:
             return True
 
@@ -200,7 +215,14 @@ class Job:
         if row and row.get("status") == "SUCCEEDED":
             return
         try:
-            self.sink.delete_landed()
+            version_id = self.sink.version_id
+            if not version_id:
+                # No version id from S3: delete the current object only when it is provably ours.
+                head = self.sink.head()
+                if not self._is_own_archive(head):
+                    return
+                version_id = head.get("VersionId") or "null"
+            self.sink.delete_version(version_id)
             self.log("The job ended before its archive landed; the archive was deleted")
         except Exception as e:  # nosec B110 - the prepared-downloads retention rule is the backstop
             self.log(f"Could not delete an archive that landed after its job ended: {e!r}")
@@ -234,12 +256,15 @@ class Job:
                                          "size": m["size"]}) for m in members) + "\n"
         aux.put_object(Bucket=manifest["archiveBucket"], Key=manifest["resolvedManifestKey"],
                        Body=resolved.encode("utf-8"), ContentType="application/x-ndjson")
-        if not self.status.running(len(members), total, manifest["resolvedManifestKey"]):
+        token = uuid.uuid4().hex
+        if not self.status.running(len(members), total, manifest["resolvedManifestKey"], token):
             self.log("The job was cancelled or finalized before the archive started; stopping")
             return {"status": "stopped"}
+        self._upload_token = token
         self.sink = MultipartSink(aux, manifest["archiveBucket"], manifest["archiveKey"],
                                   part_size_bytes(estimate_archive_bytes(members, empty_dirs)),
-                                  content_type=CONTENT_TYPES[manifest["archiveFormat"]])
+                                  content_type=CONTENT_TYPES[manifest["archiveFormat"]],
+                                  extra_args={"Metadata": {ARCHIVE_UPLOAD_TOKEN_METADATA: token}})
 
         def on_progress(files, size):
             if not self.status.progress(files, size):

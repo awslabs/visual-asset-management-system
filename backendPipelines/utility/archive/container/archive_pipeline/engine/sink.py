@@ -111,23 +111,18 @@ class MultipartSink:
         self._pool.shutdown(wait=True)
         return self.bytes_written
 
-    def object_exists(self):
-        """Whether an object exists at the upload's key (HEAD; raises on errors other than 404)."""
+    def head(self):
+        """HEAD of the key's current object, or None when there is none (raises on other errors)."""
         try:
-            self._s3.head_object(Bucket=self.bucket, Key=self.key)
-            return True
+            return self._s3.head_object(Bucket=self.bucket, Key=self.key)
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
-                return False
+                return None
             raise
 
-    def delete_landed(self):
-        """Delete the object version this upload created (the key's current object on an
-        unversioned bucket)."""
-        args = {"Bucket": self.bucket, "Key": self.key}
-        if self.version_id:
-            args["VersionId"] = self.version_id
-        self._s3.delete_object(**args)
+    def delete_version(self, version_id):
+        """Delete exactly one object version of the key."""
+        self._s3.delete_object(Bucket=self.bucket, Key=self.key, VersionId=version_id)
 
     def abort(self):
         """Abort the upload (idempotent, never raises)."""
