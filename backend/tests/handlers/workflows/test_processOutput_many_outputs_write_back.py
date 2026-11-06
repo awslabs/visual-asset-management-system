@@ -190,6 +190,10 @@ class TestManyOutputsLand:
         assert len({call_args.args[3] for call_args in m["stamp"].call_args_list}) == len(sizes)
         assert sorted(call["files"][0]["tempKey"] for call in harness.calls) == sorted(
             call_args.args[0][0]["Key"] for call_args in m["stamp"].call_args_list)
+        # Each call's record is kept, settled, with its result for a repeated call (#1205).
+        assert len(m["records"]) == len(sizes)
+        assert {r["status"] for r in m["records"]} == {"completed"}
+        assert {int(r["completionStatusCode"]) for r in m["records"]} == {200}
 
     def test_large_files_of_every_call_join_the_one_batch(self, workflow_database_id):
         large = ("big/a.e57", "big/b.e57", "big/c.e57")

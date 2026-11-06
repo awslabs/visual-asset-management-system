@@ -7,6 +7,7 @@ import boto3
 import json
 import uuid
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from common.timestamps import utc_now
@@ -86,6 +87,13 @@ RESULT_CONTENT_READ_BYTES = er.MAX_TEXT_FIELD_BYTES + 4
 # record says it is partial rather than reading as the complete output set.
 OUTPUT_ROWS_TRUNCATED_NOTE = (
     "Some output provenance rows were not recorded: the per-execution recording cap was reached.")
+# Read timeout of the synchronous cross-calls (file completion, metadata service): above the 900 s
+# (15 minute) timeout of the invoked functions, so a call is never abandoned while it still runs.
+CROSS_CALL_READ_TIMEOUT_SECONDS = 910
+CROSS_CALL_CONNECT_TIMEOUT_SECONDS = 10
+# Attempts of a synchronous cross-call that Lambda throttled (refused before the function ran).
+CROSS_CALL_THROTTLE_ATTEMPTS = 4
+CROSS_CALL_THROTTLE_BACKOFF_SECONDS = 1
 # Generic write-back failure summary recorded on the execution when the asset file write-back did
 # not land every output file (specifics go to the log).
 FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
@@ -170,7 +178,18 @@ s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
 s3c = region_routing_s3_client()
 s3r = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
+# Asynchronous (Event) invokes only: they return at once and are safe to retry.
 client = boto3.client('lambda', config=retry_config)
+# Synchronous (RequestResponse) cross-calls to the file completion and the metadata service. Their
+# work is not safe to repeat, so botocore must neither retry them nor give up on them while they
+# still run: botocore's default 60 s read timeout with retries sent a completion that ran longer a
+# second (and third) time in parallel, which failed the run although its files had landed. The read
+# timeout is above the invoked functions' own timeout, and only a throttle the function never ran
+# for is retried (_invoke_request_response).
+invoke_config = Config(retries={'total_max_attempts': 1},
+                       read_timeout=CROSS_CALL_READ_TIMEOUT_SECONDS,
+                       connect_timeout=CROSS_CALL_CONNECT_TIMEOUT_SECONDS)
+invoke_client = boto3.client('lambda', config=invoke_config)
 logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
@@ -197,22 +216,31 @@ def copy_jobs_table():
     return _copy_jobs_table
 
 
+def _invoke_request_response(function_name, payload):
+    """Invoke a function synchronously, once. Lambda refuses a throttled invoke before the function
+    runs (TooManyRequestsException), so that one is retried with a short backoff; any other error,
+    including a read timeout, is raised and never repeated, since the call may have done its work."""
+    body = json.dumps(payload).encode('utf-8')
+    for attempt in range(CROSS_CALL_THROTTLE_ATTEMPTS):
+        try:
+            return invoke_client.invoke(
+                FunctionName=function_name, InvocationType='RequestResponse', Payload=body)
+        except ClientError as e:
+            throttled = e.response.get('Error', {}).get('Code') == 'TooManyRequestsException'
+            if not throttled or attempt == CROSS_CALL_THROTTLE_ATTEMPTS - 1:
+                raise
+            logger.warning(f"Invoke of {function_name} throttled; retrying (attempt {attempt + 2})")
+            time.sleep(CROSS_CALL_THROTTLE_BACKOFF_SECONDS * (2 ** attempt))
+
+
 def _lambda_metadata_service(payload):
     """Invoke metadata service lambda"""
-    return client.invoke(
-        FunctionName=metadata_service_function,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(payload).encode('utf-8')
-    )
+    return _invoke_request_response(metadata_service_function, payload)
 
 
 def _lambda_file_ingestion(payload):
     """Invoke file upload lambda"""
-    return client.invoke(
-        FunctionName=file_upload_function,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(payload).encode('utf-8')
-    )
+    return _invoke_request_response(file_upload_function, payload)
 
 
 def get_default_bucket_details(bucketId):
