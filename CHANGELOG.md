@@ -83,6 +83,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** The VNTANA viewer's exploded-view, center and zoom controls sit above the visualizer's wide and fullscreen buttons instead of under them, in the normal, wide and fullscreen views. ([#1206](https://github.com/awslabs/visual-asset-management-system/issues/1206))
 -   **Backend tests** Fixed cross-suite auth fixtures patching a different module object by unifying the auth import paths. ([#836](https://github.com/awslabs/visual-asset-management-system/issues/836))
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))

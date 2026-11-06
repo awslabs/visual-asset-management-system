@@ -8,6 +8,7 @@ import { downloadAsset } from "../../../services/APIService";
 import { VntanaDependencyManager } from "./dependencies";
 import { VntanaViewerProps, VntanaViewerElement, VntanaErrorEvent } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import "./VntanaViewerComponent.css";
 
 const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
     assetId,
