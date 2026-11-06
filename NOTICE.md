@@ -87,7 +87,7 @@ This software includes third party software subject to the following copyrights:
 | react-pdf                           | ^10.5.0       | MIT                     |
 | react-router                        | ^7.18.2       | MIT                     |
 | react-router-dom                    | ^7.18.2       | MIT                     |
-| react-syntax-highlighter            | ^16.1.1       | MIT                     |
+| react-syntax-highlighter            | ^16.1.2       | MIT                     |
 | reactflow                           | ^11.11.4      | MIT                     |
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
