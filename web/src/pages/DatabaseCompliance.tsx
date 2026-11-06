@@ -110,6 +110,13 @@ const optionFor = (options: SelectProps.Option[], value: string): SelectProps.Op
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
 // schema list fills the selector, PUT binds or changes the schema, DELETE removes it.
+/**
+ * What a failed binding read shows: the header's status label and the disabled schema select's
+ * placeholder. Short, so neither runs past its container at 390 px (D160); the reason follows the
+ * label as text.
+ */
+export const BINDING_NOT_LOADED_LABEL = "Not loaded";
+
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
 // Evaluate All (the database's tracked assets); offered only to a caller who may call it.
@@ -492,9 +499,16 @@ const DatabaseCompliancePage: React.FC = () => {
         bindingStatus === "loading" ? (
             <StatusIndicator type="loading">Loading the schema binding</StatusIndicator>
         ) : bindingStatus === "failed" ? (
-            <StatusIndicator type="error">
-                {`The schema binding could not be loaded: ${bindingError}`}
-            </StatusIndicator>
+            // A status indicator breaks words wherever it wraps, so it carries a short label and the
+            // reason follows as text that wraps between words (D160). Retry only reads the binding
+            // again, so every reader who sees the error gets it, binding control or not.
+            <SpaceBetween size="xxs">
+                <StatusIndicator type="error">{BINDING_NOT_LOADED_LABEL}</StatusIndicator>
+                <Box variant="span" color="inherit">
+                    {`The schema binding could not be loaded: ${bindingError}`}
+                </Box>
+                <Button onClick={() => loadBinding()}>Retry</Button>
+            </SpaceBetween>
         ) : databaseSchema ? (
             `Schema: ${databaseSchema}`
         ) : (
@@ -558,7 +572,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                             bindingStatus === "loading"
                                                 ? "Loading the bound schema"
                                                 : bindingStatus === "failed"
-                                                ? "The bound schema could not be loaded"
+                                                ? BINDING_NOT_LOADED_LABEL
                                                 : "Select a compliance schema"
                                         }
                                         loadingText="Loading schemas"
@@ -581,9 +595,6 @@ const DatabaseCompliancePage: React.FC = () => {
                                 >
                                     {databaseSchema ? "Change" : "Bind"}
                                 </Button>
-                            )}
-                            {bindingStatus === "failed" && (
-                                <Button onClick={() => loadBinding()}>Retry</Button>
                             )}
                             {canUnbind && bindingKnown && databaseSchema && (
                                 <Button

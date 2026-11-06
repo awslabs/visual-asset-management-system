@@ -314,7 +314,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
                 await screen.findByText("The schema binding could not be loaded: Not Authorized")
             ).toBeInTheDocument();
             expect(screen.queryByText("No compliance schema bound")).not.toBeInTheDocument();
-            expect(screen.getByText("The bound schema could not be loaded")).toBeInTheDocument();
+            expect(schemaSelect().findPlaceholder()?.getElement().textContent).toBe("Not loaded");
             expect(schemaSelect().isDisabled()).toBe(true);
             expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
 
@@ -322,6 +322,61 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
             fireEvent.click(screen.getByRole("button", { name: "Retry" }));
             expect(await screen.findByText("Schema: std")).toBeInTheDocument();
             expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+        });
+    });
+
+    describe("a failed binding read at narrow widths and for every reader (D160)", () => {
+        const failedRead = async (allowed: string[]) => {
+            mockAllowed = allowed;
+            service().getDatabaseBindings.mockResolvedValue([false, "Not Authorized"]);
+            await mount();
+            return screen.findByText("The schema binding could not be loaded: Not Authorized");
+        };
+        const indicatorTexts = () =>
+            createWrapper()
+                .findAllStatusIndicators()
+                .map((indicator) => indicator.getElement().textContent || "");
+
+        it("puts a short label in the status indicator and the reason in text that wraps between words", async () => {
+            const reason = await failedRead(COMPLIANCE_ADMIN);
+            // A status indicator breaks words wherever it wraps: it holds the label only.
+            expect(indicatorTexts()).toContain("Not loaded");
+            expect(indicatorTexts().some((text) => text.includes("could not be loaded"))).toBe(
+                false
+            );
+            expect(createWrapper(reason).findStatusIndicator()).toBeNull();
+            expect(reason.closest("[data-testid='database-compliance-bound-schema']")).toBeNull();
+        });
+
+        it("gives the disabled select a placeholder short enough for a 390 px column", async () => {
+            await failedRead(COMPLIANCE_ADMIN);
+            const placeholder = schemaSelect().findPlaceholder()?.getElement().textContent || "";
+            expect(placeholder).toBe("Not loaded");
+            expect(placeholder.length).toBeLessThanOrEqual("Select a compliance schema".length);
+        });
+
+        it("offers Retry to a reader without bind rights, and no binding control", async () => {
+            await failedRead(VIEW);
+            expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+            expect(
+                createWrapper()
+                    .findAllFormFields()
+                    .some((field) => field.findLabel()?.getElement().textContent === "Bound schema")
+            ).toBe(false);
+            expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Change" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+
+            service().getDatabaseBindings.mockResolvedValue(bindings("std"));
+            fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+            expect(await screen.findByText("Schema: std")).toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+        });
+
+        it("offers one Retry to a caller who may bind", async () => {
+            await failedRead(COMPLIANCE_ADMIN);
+            expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
         });
     });
 
