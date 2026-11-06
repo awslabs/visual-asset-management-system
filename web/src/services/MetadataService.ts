@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient } from "./apiClient";
+import { apiClient, isNetworkFailure, NETWORK_FAILURE_MESSAGE } from "./apiClient";
 import {
     EntityType,
     FileMetadataType,
@@ -22,7 +22,8 @@ export const fetchMetadata = async (
     databaseId?: string,
     filePath?: string,
     fileType?: FileMetadataType,
-    assetVersionId?: string
+    assetVersionId?: string,
+    showArchived = false
 ): Promise<MetadataAPIResponse> => {
     try {
         let endpoint = "";
@@ -57,6 +58,10 @@ export const fetchMetadata = async (
         }
         if (assetVersionId) {
             queryParams.assetVersionId = assetVersionId;
+        }
+        // An archived asset's metadata, and its links' metadata, is only found when asked for
+        if (showArchived && entityType !== "database") {
+            queryParams.showArchived = "true";
         }
 
         // Follow NextToken to aggregate every page of metadata so the full set
@@ -104,6 +109,11 @@ export const fetchMetadata = async (
         return { ...lastPayload, metadata: allMetadata, NextToken: undefined };
     } catch (error: any) {
         console.error("[apiHelpers] Error fetching metadata:", error);
+        // A request whose response never arrived says the service could not be reached, rather
+        // than the browser's "Failed to fetch".
+        if (isNetworkFailure(error)) {
+            throw new Error(NETWORK_FAILURE_MESSAGE);
+        }
         // Extract error message from API response with status code
         if (error.response) {
             const statusCode = error.response.status || "Unknown";

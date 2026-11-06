@@ -29,12 +29,12 @@ GET /database/{databaseId}/assets/{assetId}/getVersions
 
 ### Query parameters
 
-| Parameter       | Type    | Required | Default | Description                                       |
-| --------------- | ------- | -------- | ------- | ------------------------------------------------- |
-| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000` |
-| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`          |
-| `startingToken` | string  | No       | `null`  | Pagination token from a previous response         |
-| `showArchived`  | boolean | No       | `false` | Include archived versions                         |
+| Parameter       | Type    | Required | Default | Description                                                                |
+| --------------- | ------- | -------- | ------- | -------------------------------------------------------------------------- |
+| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000`                          |
+| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`                                   |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response                                  |
+| `showArchived`  | boolean | No       | `false` | Include archived versions, and also list the versions of an archived asset |
 
 A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pattern, see
 [Pagination](overview.md#pagination).
@@ -62,6 +62,15 @@ A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pa
 }
 ```
 
+### Error responses
+
+| Status | Description                                    |
+| ------ | ---------------------------------------------- |
+| `400`  | Invalid parameters                             |
+| `403`  | Not authorized to view versions for this asset |
+| `404`  | Asset not found                                |
+| `500`  | Internal server error                          |
+
 ---
 
 ## Get a specific asset version
@@ -80,9 +89,24 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 | `assetId`        | string | Yes      | Asset identifier    |
 | `assetVersionId` | string | Yes      | Version identifier  |
 
+### Query parameters
+
+| Parameter      | Type    | Required | Default | Description                              |
+| -------------- | ------- | -------- | ------- | ---------------------------------------- |
+| `showArchived` | boolean | No       | `false` | Also find a version of an archived asset |
+
 ### Response
 
 Returns a single version object with full details including file listings.
+
+### Error responses
+
+| Status | Description                              |
+| ------ | ---------------------------------------- |
+| `400`  | Invalid parameters, or version not found |
+| `403`  | Not authorized to view this version      |
+| `404`  | Asset not found                          |
+| `500`  | Internal server error                    |
 
 ---
 
@@ -135,6 +159,14 @@ Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the t
 }
 ```
 
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
 ---
 
 ## Update an asset version
@@ -181,6 +213,14 @@ PUT /database/{databaseId}/assets/{assetId}/assetversions/{assetVersionId}
     "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
+
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 
@@ -247,6 +287,14 @@ Same as [Archive an asset version](#archive-an-asset-version).
     "timestamp": "2026-03-15T10:30:00Z"
 }
 ```
+
+### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `400`  | Invalid parameters    |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 

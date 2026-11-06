@@ -11,7 +11,7 @@
 
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import { AssetDetailsPane } from "./AssetDetailsPane";
+import { AssetDetailsPane, ASSET_HEADER_GRID } from "./AssetDetailsPane";
 
 jest.mock("react-router", () => ({ useNavigate: () => jest.fn() }));
 
@@ -150,5 +150,21 @@ describe("AssetDetailsPane Delete action", () => {
         const del = screen.getByRole("button", { name: "Delete" });
         expect(del).not.toHaveAttribute("aria-disabled");
         expect(del).not.toBeDisabled();
+    });
+});
+
+describe("AssetDetailsPane header grid", () => {
+    // Fixed 4 / 3 / 5 spans left each column about 90px wide on a phone, so labels overlapped and
+    // words broke mid-word. The spans now follow the grid's container width.
+    it("gives every column the full row on a narrow container", () => {
+        expect(ASSET_HEADER_GRID).toHaveLength(3);
+        for (const column of ASSET_HEADER_GRID) {
+            expect(column.colspan).toMatchObject({ default: 12 });
+        }
+    });
+
+    it("keeps the three-column split from the xs breakpoint up", () => {
+        const xs = ASSET_HEADER_GRID.map((c) => (c.colspan as any).xs);
+        expect(xs).toEqual([4, 3, 5]);
     });
 });

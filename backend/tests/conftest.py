@@ -95,7 +95,7 @@ sys.modules['common'] = MagicMock()
 sys.modules['common.dynamodb'] = MagicMock()
 
 
-def _mock_get_asset_object_from_id(database_id=None, asset_id=None):
+def _mock_get_asset_object_from_id(database_id=None, asset_id=None, include_archived=False):
     """Stand-in for common.dynamodb.get_asset_object_from_id.
 
     Mirrors the real two-argument signature ``(database_id, asset_id)``. The stub
@@ -191,6 +191,17 @@ _bif_module = _s3mk_importlib_util.module_from_spec(_bif_spec)
 _bif_spec.loader.exec_module(_bif_module)
 sys.modules['common.batchItemFailures'] = _bif_module
 sys.modules['common'].batchItemFailures = _bif_module
+# searchAuthzFilter turns policy lines into OpenSearch clauses (pure dicts and `re`), so load the REAL
+# module for the same reason. It reads common.constants when it translates, not at import, so it sees
+# the real constants a directory conftest installs.
+_saf_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.searchAuthzFilter',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'searchAuthzFilter.py')
+)
+_saf_module = _s3mk_importlib_util.module_from_spec(_saf_spec)
+_saf_spec.loader.exec_module(_saf_module)
+sys.modules['common.searchAuthzFilter'] = _saf_module
+sys.modules['common'].searchAuthzFilter = _saf_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures
@@ -243,6 +254,15 @@ sys.modules['common.dynamodb'].BATCH_GET_CHUNK_SIZE = _real_ddb_module.BATCH_GET
 sys.modules['common.dynamodb'].BATCH_GET_MAX_RETRIES = _real_ddb_module.BATCH_GET_MAX_RETRIES
 sys.modules['common.dynamodb'].BATCH_GET_RETRY_BACKOFF_SECONDS = \
     _real_ddb_module.BATCH_GET_RETRY_BACKOFF_SECONDS
+# get_asset_record is the shared live-then-archived asset read. It takes the caller's table handle,
+# so binding the real one keeps each handler test reading through the table stub it patches; a
+# MagicMock stand-in would return a truthy mock record for every asset, archived or not.
+sys.modules['common.dynamodb'].get_asset_record = _real_ddb_module.get_asset_record
+# asset_authorization_object builds the record or stand-in Tier 2 decides; a MagicMock stand-in
+# would hand enforce() a mock instead of the identifiers a test asserts on.
+sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.asset_authorization_object
+sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
+    _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above). The route type module and
 # the add-on route list it imports are loaded first, for the same reason.

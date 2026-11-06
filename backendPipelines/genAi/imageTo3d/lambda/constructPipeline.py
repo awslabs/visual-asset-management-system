@@ -46,6 +46,18 @@ def bucket_regions(event) -> dict:
     return regions
 
 
+def input_views(event, primary_uri):
+    """``(s3 uri, version id)`` for every view of the subject, in manifest order. ``inputVersionIds``
+    runs parallel to ``inputS3AssetFilePaths``; an event without it (an older Lambda) reads every view
+    as it is now, and an event without the view list carries the primary at ``inputVersionId``."""
+    uris = event.get("inputS3AssetFilePaths") or []
+    if not uris:
+        return [(primary_uri, event.get("inputVersionId") or "")]
+    version_ids = list(event.get("inputVersionIds") or [])
+    version_ids += [""] * (len(uris) - len(version_ids))
+    return [(uri, version_id or "") for uri, version_id in zip(uris, version_ids)]
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline
@@ -95,6 +107,9 @@ def lambda_handler(event, context):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": input_extension,
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         # Every view of the subject, in manifest order, for a model that reconstructs from several.
         # ADDITIVE: inputFile above stays the primary and is what asset identity, the relative output
@@ -105,10 +120,11 @@ def lambda_handler(event, context):
                 "bucketName": bucket,
                 "objectKey": key,
                 "fileExtension": os.path.splitext(key)[1],
+                **({"versionId": version_id} if version_id else {}),
             }
-            for bucket, key in (
-                manifestHelper.parse_s3_uri(uri)
-                for uri in (event.get("inputS3AssetFilePaths") or [input_s3_asset_file_uri])
+            for (bucket, key), version_id in (
+                (manifestHelper.parse_s3_uri(uri), version_id)
+                for uri, version_id in input_views(event, input_s3_asset_file_uri)
             )
             if bucket and key
         ],

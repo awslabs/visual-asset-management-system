@@ -28,6 +28,7 @@ import {
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { useNavigate } from "react-router";
 import Synonyms from "../../../synonyms";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 
 // TypeScript interfaces
 interface FileVersion {
@@ -154,6 +155,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
     const { can: canCallRoute } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
+    // An archived asset's file versions are listed read-only: downloading, viewing and reverting
+    // all need it unarchived
+    const assetArchived = useAssetArchived();
 
     // State management
     const [versions, setVersions] = useState<FileVersion[]>([]);
@@ -175,7 +179,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         if (visible && databaseId && assetId && filePath) {
             loadFileVersions();
         }
-    }, [visible, databaseId, assetId, filePath]);
+    }, [visible, databaseId, assetId, filePath, assetArchived]);
 
     const loadFileVersions = async () => {
         setLoading(true);
@@ -186,6 +190,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 databaseId,
                 assetId,
                 filePath,
+                showArchived: assetArchived,
             });
 
             if (success && response?.versions) {
@@ -563,7 +568,11 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 ) : (
                     <>
                         <Table
-                            columnDefinitions={columnDefinitions}
+                            columnDefinitions={
+                                assetArchived
+                                    ? columnDefinitions.filter((column) => column.id !== "actions")
+                                    : columnDefinitions
+                            }
                             items={currentVersions}
                             loadingText="Loading versions"
                             sortingDisabled

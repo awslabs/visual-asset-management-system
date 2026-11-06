@@ -133,6 +133,9 @@ def lambda_handler(event, context):
     input_manifest_s3_location = event.get('inputManifestS3Location', '')
     asset_id = event.get('assetId', '')
 
+    # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
+    input_version_id = event.get('inputVersionId', '')
+
     # Orchestration event prefix for optional sub-process registration
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
 
@@ -192,6 +195,7 @@ def lambda_handler(event, context):
         "inputConfigurationS3Location": input_configuration_s3_location,
         "inputManifestS3Location": input_manifest_s3_location,
         "assetId": asset_id,
+        "inputVersionId": input_version_id,
         "externalSfnTaskToken": external_sfn_task_token,
         "outputFileType": output_file_type
     }

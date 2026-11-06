@@ -6,10 +6,12 @@
 import { test, expect } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
     expectTableRendered,
     facet,
     gotoOrchestration,
     tableRows,
+    VIEWPORTS,
     wizardRail,
 } from "./support/fixtures";
 
@@ -703,4 +705,205 @@ test.describe("Executions board — partial detail responses", () => {
             await expect(timeline.getByText("SyntheticBatchJob")).toBeVisible();
         }
     });
+
+    for (const width of [1280, 390]) {
+        test(`a stopped run with a sub-process still running offers Abort (${width}px)`, async ({
+            page,
+        }) => {
+            // The state under test (outer run stopped outside VAMS, its Batch job still going) cannot be
+            // assumed on page 1, so the first execution's live response is rewritten into it. The Abort
+            // request is answered here and never reaches the API, so the environment is not changed.
+            await page.setViewportSize({ width, height: 900 });
+            let hasSteps = false;
+            let detailsSeen = false;
+            await page.route(DETAILS_ROUTE, async (route) => {
+                const response = await route.fetch();
+                const body = await response.json();
+                const target = body && typeof body.message === "object" ? body.message : body;
+                const steps = Array.isArray(target.pipelines) ? target.pipelines : [];
+                hasSteps = steps.length > 0;
+                detailsSeen = true;
+                if (hasSteps) {
+                    target.executionStatus = "ABORTED";
+                    target.executionStopDate = target.executionStopDate || "2026-11-03T09:15:00Z";
+                    steps[0].executionStatus = "ABORTED";
+                    steps[0].subExecutions = [
+                        {
+                            ...SYNTHETIC_SUB_EXECUTION,
+                            resourceType: "batchJob",
+                            label: "Synthetic container job",
+                            resourceName: "synthetic-job",
+                            status: "RUNNING",
+                            stopDate: "",
+                            stageSource: "none",
+                            stages: [],
+                        },
+                    ];
+                }
+                await route.fulfill({ response, json: body });
+            });
+            const aborts: string[] = [];
+            await page.route(/\/workflows\/executions\/[^/?]+(\?[^/]*)?$/, async (route) => {
+                if (route.request().method() !== "DELETE") return route.fallback();
+                aborts.push(route.request().url());
+                await route.fulfill({ json: { message: "Execution aborted" } });
+            });
+
+            const errors = collectPageErrors(page);
+            const opened = await openFirstExecutionDetail(page);
+            test.skip(!opened, "No executions in this environment");
+            await expect.poll(() => detailsSeen, { timeout: 20_000 }).toBe(true);
+            test.skip(!hasSteps, "The first execution has no pipeline steps");
+
+            const hint = page.getByTestId("stopped-run-subprocesses-hint");
+            await expect(hint).toBeVisible({ timeout: 20_000 });
+            await expect(hint).toContainText(/still running/);
+            await expect(hint).toContainText(/Abort stops them/);
+            // The hint sits inside the header card without pushing the page sideways on a phone.
+            const overflow = await page.evaluate(
+                () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+            );
+            expect(overflow).toBeLessThanOrEqual(1);
+
+            const abort = hint.getByRole("button", { name: "Abort" });
+            test.skip(
+                (await abort.count()) === 0,
+                "This session is not granted the abort route; the hint shows without a button"
+            );
+            await abort.click();
+            await expect.poll(() => aborts.length, { timeout: 15_000 }).toBe(1);
+            expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+        });
+    }
+
+    test("output metadata rows sharing a key are told apart by their type", async ({ page }) => {
+        // A step that writes one key onto a file as both file metadata and a file attribute records
+        // two rows. A sandbox cannot be assumed to hold such a run, so the pair is placed in the live
+        // details response; the UI's rendering of the contract is what is under test.
+        const target = "/e2e-synthetic-type.glb";
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const detail = body && typeof body.message === "object" ? body.message : body;
+            detail.outputs = {
+                ...(detail.outputs || {}),
+                metadata: [
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "mm",
+                        metadataType: "metadata",
+                        pipelineId: "e2e-p1",
+                    },
+                    {
+                        targetFilePath: target,
+                        metadataKey: "units",
+                        metadataValue: "m",
+                        metadataType: "attribute",
+                        pipelineId: "e2e-p1",
+                    },
+                ],
+            };
+            detail.truncatedCollections = (detail.truncatedCollections || []).filter(
+                (c: string) => c !== "outputs.metadata"
+            );
+            await route.fulfill({ response, json: body });
+        });
+
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+
+        const table = page.getByRole("table", { name: "Output metadata" });
+        await expect(table).toBeVisible({ timeout: 20_000 });
+        await expect(table.getByRole("columnheader", { name: /^Type$/ })).toBeVisible();
+        const rows = table.getByRole("row").filter({ hasText: target });
+        await expect(rows).toHaveCount(2);
+        // A row's text joins its cells without separators, so match the Type and Value cells.
+        const cell = (name: string) => page.getByRole("cell", { name, exact: true });
+        await expect(
+            rows.filter({ has: cell("attribute") }).filter({ has: cell("m") })
+        ).toHaveCount(1);
+        await expect(
+            rows.filter({ has: cell("metadata") }).filter({ has: cell("mm") })
+        ).toHaveCount(1);
+    });
 });
+
+/**
+ * The execution detail page fits a phone width on every tab, the Logs tab included: its selects are
+ * as wide as their longest option and its source chips as wide as a log group name unless they may
+ * shrink, which widened the page. Reads the first execution only.
+ */
+test.describe("Execution detail — fits a phone viewport", () => {
+    test.use({ viewport: VIEWPORTS.phone });
+
+    test("no tab scrolls the page sideways", async ({ page }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().getByRole("button").last().click();
+        const items = page.getByRole("menuitem");
+        await expect(items.first()).toBeVisible({ timeout: 15_000 });
+        await items
+            .filter({ hasText: /Open full details/ })
+            .first()
+            .click();
+        await expect(page.getByRole("heading", { name: "Execution Detail", level: 1 })).toBeVisible(
+            { timeout: 30_000 }
+        );
+
+        for (const tab of ["Inputs", "Pipelines", "Outputs", "Settings", "Logs"]) {
+            const control = page.getByRole("tab", { name: tab });
+            if ((await control.count()) === 0) continue;
+            await control.click();
+            let logsDenied = false;
+            if (tab === "Logs") {
+                // The toolbar renders at once; the chips arrive with the first read. A role that
+                // may not read logs gets a notice instead of the toolbar.
+                const scope = page.getByRole("combobox", { name: "Log scope" });
+                const denied = page.getByText("You do not have permission to view execution logs.");
+                await expect(scope.or(denied)).toBeVisible({ timeout: 15_000 });
+                logsDenied = await denied.isVisible();
+                if (!logsDenied) await page.waitForLoadState("networkidle").catch(() => undefined);
+            }
+            await expectNoPageOverflowX(page, `execution detail, ${tab} tab`);
+            test.skip(
+                logsDenied,
+                "This role may not read execution logs, so the Logs toolbar is not shown (the other tabs and the notice fit)"
+            );
+        }
+    });
+});
+
+for (const width of [390, 768, 1280, 1440]) {
+    test.describe(`Executions board — list response without Items at ${width} px`, () => {
+        test.use({ viewport: { width, height: 900 } });
+
+        /** The global list route itself, not an execution's detail routes below it. */
+        const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+
+        for (const [label, body] of [
+            ["an empty object", {}],
+            ["a message only", { message: "no rows" }],
+            ["a null Items", { Items: null }],
+        ] as const) {
+            test(`shows the empty state, not an error panel, for ${label}`, async ({ page }) => {
+                const errors = collectPageErrors(page);
+                await page.route(LIST_ROUTE, (route) =>
+                    route.request().method() === "GET"
+                        ? route.fulfill({ json: body })
+                        : route.continue()
+                );
+
+                await gotoOrchestration(page, "executions", /Executions/i);
+
+                await expect(page.getByText("No executions found.")).toBeVisible({
+                    timeout: 30_000,
+                });
+                await expect(page.getByText("Something went wrong on this page")).toHaveCount(0);
+                expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+            });
+        }
+    });
+}

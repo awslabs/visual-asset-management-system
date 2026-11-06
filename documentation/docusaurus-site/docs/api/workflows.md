@@ -1283,6 +1283,8 @@ DELETE /workflows/executions/{executionId}
 
 The route is keyed on the execution identifier because an execution may span input files across multiple assets.
 
+An execution that is already stopped can be aborted too. An execution stopped outside VAMS (a direct AWS Step Functions stop) ends only the outer state machine: the first executions list or details read after the stop marks its unfinished pipeline records with the observed status (`ABORTED`, or `TIMED_OUT` for a timed-out run) but stops none of the sub-processes those pipelines registered, such as AWS Batch or AWS Deadline Cloud jobs. Aborting the execution stops them, along with those of pipelines an earlier abort marked `ABORTED`; pipelines that finished on their own (`SUCCEEDED` or `FAILED`) are left alone. The web execution detail page shows a note with an **Abort** button while a stopped run still has a sub-process running.
+
 ### Path parameters
 
 | Parameter     | Type   | Required | Description                          |
@@ -1894,6 +1896,8 @@ The detail view's `inputFiles` and `outputs.files` collections are paged by
     }
 }
 ```
+
+An `output` row carries `targetFilePath`, `metadataKey`, `metadataValue`, `metadataType`, and `pipelineId`. `metadataType` is `metadata` or `attribute`: a step that writes one key to a file as both file metadata (`<file>.metadata.json`) and a file attribute (`<file>.attribute.json`) records two rows, told apart by this field. Rows recorded by an earlier release report the type of the file they were written from.
 
 `NextToken` is absent on the last page, so its presence is the only signal that more rows remain — page until it is gone. A page carries at most the requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped by either bound: a page ends at the first row it could not carry, and the token resumes there.
 

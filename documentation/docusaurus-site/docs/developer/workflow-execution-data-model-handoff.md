@@ -57,6 +57,13 @@ the read source for the data migration. No handler reads it.
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
     is missing a GSI partition attribute, so a write path — including a migration or backfill — that
     forgets the attribute produces an execution absent from the global list with no error at write time.
+-   **An output-metadata row's sort-key value names its type.** The attribute is still called
+    `targetFilePath:metadataKey`, but its value is `{targetFilePath}:{metadataType}:{metadataKey}` with
+    `metadataType` `metadata` or `attribute`, and the row also stores `metadataType`. A step that writes one
+    key to a file as both file metadata and a file attribute therefore records two rows. Rows from earlier
+    releases keep the `{targetFilePath}:{metadataKey}` value and have no `metadataType`; readers take the
+    type from `executionRecords.output_metadata_type`, which falls back to the source file name, and never
+    parse the sort-key value.
 
 ### Sparse indexes and empty string keys
 
@@ -128,7 +135,7 @@ The per-asset executions list returns a shortened copy of `executionLog` (the ne
 `build_pipeline_input_file_record` exists and the data migration populates the table for migrated
 executions, but no VAMS run-time path writes it: an execution launched through `executeWorkflow` records
 its input files once, on `WorkflowExecutionInputsStorageTable`. The execution-details response reads that
-table, and `executionService` touches the per-pipeline table only to delete its rows on a permanent delete.
+table, and the per-pipeline table is touched only by the permanent-delete function, to delete its rows.
 A read path built against it returns zero rows for any execution launched by VAMS.
 :::
 

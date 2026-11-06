@@ -15,7 +15,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
@@ -211,6 +211,8 @@ class PipelineExecutionOutputMetadataRecord(
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
+    # 'metadata' or 'attribute'; empty on a row recorded before the type was stored.
+    metadataType: Optional[str] = ""
     sourceMetadataFileRelativePath: Optional[str] = ""
 
 

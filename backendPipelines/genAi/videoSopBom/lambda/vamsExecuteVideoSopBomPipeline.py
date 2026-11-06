@@ -82,11 +82,12 @@ def _display_name(entry):
 
 
 def head_object_kwargs(entry):
-    """HeadObject arguments for a manifest entry: VersionId only when the manifest carries a real
-    one. An unversioned bucket reports the literal "null", and an empty query value is never sent."""
+    """HeadObject arguments for a manifest entry: VersionId whenever the manifest carries one,
+    including "null" (an object written before the bucket's versioning was enabled). An empty
+    query value is never sent."""
     kwargs = {"Bucket": entry["bucket"], "Key": entry["key"]}
     version_id = entry.get("versionId") or ""
-    if version_id and version_id != "null":
+    if version_id:
         kwargs["VersionId"] = version_id
     return kwargs
 

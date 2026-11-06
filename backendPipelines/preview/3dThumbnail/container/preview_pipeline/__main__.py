@@ -8,7 +8,7 @@ import sys
 import traceback
 from .core import run, hello
 from . import resources
-from .utils.pipeline.objects import PipelineStatus
+from .utils.pipeline.objects import PipelineStatus, apply_input_versions
 from .utils.logging import set_log_level
 from botocore.config import Config
 
@@ -72,7 +72,8 @@ def main():
         response = run(json.loads(testInput))
     else:
         try:
-            response = run(json.loads(sys.argv[1]))
+            # The definition, then (when the run has one) the input's launch version (#994)
+            response = run(apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:]))
         except Exception as e:
             # Fatal error: ensure SFN callback fires before exiting
             error_msg = f"Fatal pipeline error: {str(e)}\n{traceback.format_exc()}"
