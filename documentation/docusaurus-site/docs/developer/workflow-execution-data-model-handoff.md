@@ -179,12 +179,21 @@ writer, systemExecutionContext}`. `executionStatus` includes `ABORTED` and `TIME
 -   **Abort callback after a confirmed stop.** An abort that cannot confirm the Step Functions
     execution stopped still writes `ABORTED` but holds the callback, recorded on the main row as
     `systemCallbackPending`. The held callback is sent by the next abort that confirms the stop, or when
-    the status change event reports the execution ended. Whichever removes the attribute first (a
-    conditional write) sends it, so it is still sent once.
+    the status change event reports the execution ended. If that event never arrives, the next details
+    read whose `DescribeExecution` shows the execution ended sends it (at most one describe per 30
+    seconds for such a row). Whichever removes the attribute first (a conditional write) sends it, so
+    it is still sent once.
+-   **Status change event retries.** The handler raises when it cannot read the main row, cannot
+    reach Step Functions (for example, throttling when many runs end at once), or a write fails for
+    any reason other than the terminal guard, so Lambda's asynchronous invocation retries the event
+    (twice, with backoff). A lost guard means another writer finished the run and is not an error.
+    A retry is safe: either nothing was written, or the row is terminal and the retry ends like a
+    duplicate. When every retry fails, the read paths reconcile the run when it is next read.
 -   **Delivery guarantee.** At most once per terminal transition from VAMS, then Lambda's
     asynchronous delivery to the target, which retries a failed invocation twice. A writer that stops
     between its won write and the invoke sends nothing, and the push cannot resend for a row that is
-    already terminal. A run that is permanently deleted while not terminal sends nothing. A feature that
+    already terminal. A guarded write that reports an error after it actually applied is the same
+    case: the retried event finds the row terminal and sends nothing. A run that is permanently deleted while not terminal sends nothing. A feature that
     must see every transition gives its callback function an on-failure destination and reconciles its
     own open jobs against the execution rows.
 

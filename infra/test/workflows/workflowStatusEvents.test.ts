@@ -40,6 +40,12 @@ const PARTITION_OF: Record<TemplateName, string> = {
     eusovereign: "aws-eusc",
 };
 
+const REGION_OF: Record<TemplateName, string> = {
+    commercial: "us-east-1",
+    govcloud: "us-gov-west-1",
+    eusovereign: "eusc-de-east-1",
+};
+
 const CELLS: { name: string; template: TemplateName; cmk: boolean }[] = [
     { name: "commercial", template: "commercial", cmk: false },
     { name: "commercial-cmk", template: "commercial", cmk: true },
@@ -90,9 +96,12 @@ describe.each(CELLS)("workflow status change rule ($name)", (cell) => {
         const arnMatch = pattern.detail.stateMachineArn;
         expect(arnMatch).toHaveLength(1);
         const prefix = SynthResult.flatten(arnMatch[0].prefix);
+        // The Region is pinned per template, not read back from the synth, so a GovCloud cell that
+        // silently synthesized in a commercial Region (and partition) fails here.
+        expect(synth.region).toBe(REGION_OF[cell.template]);
         expect(prefix).toBe(
-            `arn:${PARTITION_OF[cell.template]}:states:${synth.region}:123456789012:stateMachine:` +
-                WORKFLOW_STATE_MACHINE_NAME_PREFIX
+            `arn:${PARTITION_OF[cell.template]}:states:${REGION_OF[cell.template]}:123456789012:` +
+                `stateMachine:${WORKFLOW_STATE_MACHINE_NAME_PREFIX}`
         );
         expect(prefix).not.toContain("*");
     });
