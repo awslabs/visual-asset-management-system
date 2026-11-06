@@ -32,6 +32,12 @@ const LOGS_SOURCE_LABELS: Record<string, string> = {
     sfnHistory: "Execution history (Step Functions)",
 };
 
+// A toolbar field and its select may shrink below their content: a select is as wide as its longest
+// option (a long pipeline or log group name), which otherwise widens a phone-width page.
+const toolbarField = "flex min-w-0 max-w-full items-center gap-2 text-sm text-text-primary";
+const toolbarSelect =
+    "orch-outline min-w-0 max-w-full px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary";
+
 const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pipelines }) => {
     const [scope, setScope] = useState<string>(WHOLE_EXECUTION);
     const [source, setSource] = useState<LogSource>("full");
@@ -136,7 +142,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 text-sm text-text-primary">
+                <label className={toolbarField}>
                     Scope
                     <select
                         aria-label="Log scope"
@@ -146,7 +152,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                             // A source belongs to one step; a new scope starts from all sources.
                             setLogId("");
                         }}
-                        className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                        className={toolbarSelect}
                     >
                         <option value={WHOLE_EXECUTION}>Whole execution</option>
                         {scopedPipelines.map((p, idx) => (
@@ -159,7 +165,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                     </select>
                 </label>
 
-                <label className="flex items-center gap-2 text-sm text-text-primary">
+                <label className={toolbarField}>
                     Source
                     <select
                         aria-label="Log source"
@@ -168,7 +174,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                             setSource(e.target.value as LogSource);
                             setLogId("");
                         }}
-                        className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                        className={toolbarSelect}
                     >
                         <option value="full">Live (CloudWatch)</option>
                         <option value="truncated">Stored</option>
@@ -178,13 +184,13 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 {canPickLogSource && availableLogs.length > 0 && (
                     // A span, not a label: the mode select above is already named "Log source", and a
                     // wrapping label would associate this caption with the select as a second such name.
-                    <span className="flex items-center gap-2 text-sm text-text-primary">
+                    <span className={toolbarField}>
                         Log source
                         <select
                             aria-label="Available log source"
                             value={logId}
                             onChange={(e) => setLogId(e.target.value)}
-                            className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                            className={toolbarSelect}
                         >
                             <option value="">All sources</option>
                             {availableLogs.map((log) => (
@@ -218,7 +224,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                         {logSources.map((s) => (
                             <li
                                 key={s.logId}
-                                className={`orch-outline px-2 py-0.5 text-xs rounded-full border ${logSourceStatusClass(
+                                className={`orch-outline max-w-full break-all px-2 py-0.5 text-xs rounded-full border ${logSourceStatusClass(
                                     s.status
                                 )}`}
                                 title={[s.sourceType, s.stageName, s.logGroupName]

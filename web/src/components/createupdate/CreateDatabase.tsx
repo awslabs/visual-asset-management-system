@@ -17,8 +17,9 @@ import {
     SelectProps,
     Checkbox,
 } from "@cloudscape-design/components";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import Synonyms from "../../synonyms";
 
 interface CreateDatabaseProps {
@@ -148,8 +149,35 @@ export default function CreateDatabase({
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
 
-    // Fetch buckets when component loads
+    // The list page mounts this form with the list, so the bucket list is read only once the form
+    // opens, and only for a role allowed GET /buckets; any other role would get a 403 on every load.
+    // A failed permissions check is retried once each time the form opens.
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        retry: retryPermissions,
+        can,
+    } = useAllowedRoutes();
+    const canListBuckets = can("GET", "/buckets");
+    const [bucketsRequested, setBucketsRequested] = useState(false);
+    const permissionsRetried = useRef(false);
+
     useEffect(() => {
+        if (!open) permissionsRetried.current = false;
+    }, [open]);
+
+    useEffect(() => {
+        if (!open || bucketsRequested || permissionsLoading) return;
+        if (!canListBuckets) {
+            if (permissionsFailed && !permissionsRetried.current && retryPermissions) {
+                permissionsRetried.current = true;
+                retryPermissions();
+                return;
+            }
+            setLoadingBuckets(false);
+            return;
+        }
+        setBucketsRequested(true);
         const loadBuckets = async () => {
             setLoadingBuckets(true);
             try {
@@ -186,7 +214,7 @@ export default function CreateDatabase({
         };
 
         loadBuckets();
-    }, []);
+    }, [open, bucketsRequested, permissionsLoading, canListBuckets, permissionsFailed]);
 
     return (
         <Modal
@@ -348,6 +376,13 @@ export default function CreateDatabase({
                                     value: bucket.bucketId,
                                 }))}
                                 placeholder="Select a bucket"
+                                empty={
+                                    permissionsLoading || canListBuckets
+                                        ? undefined
+                                        : permissionsFailed
+                                        ? "The permissions check failed, so the bucket list could not be loaded. Close and reopen this form to try again."
+                                        : "Your role does not allow listing buckets."
+                                }
                                 loadingText="Loading buckets"
                                 statusType={loadingBuckets ? "loading" : "finished"}
                                 disabled={inProgress}
