@@ -14,17 +14,22 @@ import {
 } from "./complianceStateBadge";
 
 describe("complianceStateBadge", () => {
-    it("maps every compliance state, with exception as an info indicator", () => {
+    it("maps every compliance state the API returns, with exception as an info indicator", () => {
+        // Exactly the states the API reports (the OpenAPI complianceState enum): six stored states
+        // and `archived`, which the record read reports for an archived asset (D149).
         expect(Object.keys(COMPLIANCE_STATE_INDICATORS).sort()).toEqual([
             "archived",
             "compliant",
             "exception",
             "non_compliant",
             "pending_evaluation",
-            "pending_parent_resolution",
             "quarantined",
             "unknown",
         ]);
+        // A value no API returns renders as Unknown.
+        expect(complianceStateIndicator("pending_parent_resolution")).toEqual(
+            COMPLIANCE_STATE_INDICATORS.unknown
+        );
         expect(complianceStateIndicator("exception")).toEqual({
             type: "info",
             label: "Exception",

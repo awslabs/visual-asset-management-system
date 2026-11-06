@@ -36,11 +36,6 @@ export const COMPLIANCE_STATE_INDICATORS: Record<ComplianceStateValue, Complianc
     non_compliant: { type: "warning", label: "Non-Compliant", badgeColor: "red" },
     quarantined: { type: "error", label: "Quarantined", badgeColor: "red" },
     exception: { type: "info", label: "Exception", badgeColor: "blue" },
-    pending_parent_resolution: {
-        type: "warning",
-        label: "Pending Parent Resolution",
-        badgeColor: "grey",
-    },
     archived: { type: "stopped", label: "Archived (not evaluated)", badgeColor: "grey" },
 };
 

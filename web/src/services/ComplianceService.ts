@@ -295,7 +295,6 @@ export type ComplianceStateValue =
     | "non_compliant"
     | "quarantined"
     | "exception"
-    | "pending_parent_resolution"
     | "archived";
 
 /**
