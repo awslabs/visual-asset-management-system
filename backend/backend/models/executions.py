@@ -341,6 +341,9 @@ class WorkflowExecutionConfigurationRecord(
     # Result order). Written [] at launch and UPDATEd at completion/failure. A row written before the
     # attribute existed resolves to [] on read (no migration), which is the default here.
     outputTypes: Optional[List[str]] = []
+    # SKIPPED records only: the refused trigger launch's per-pipeline template parameters, which a
+    # re-run replays (the record has no pipeline rows). Absent on every other row.
+    pipelineExecutionParameters: Optional[Dict[str, Any]] = {}
 
 
 #######################

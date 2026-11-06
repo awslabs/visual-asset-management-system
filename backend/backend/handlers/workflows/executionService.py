@@ -6126,6 +6126,16 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
         if params:
             pipeline_execution_parameters[pipeline_id] = params
 
+    # A SKIPPED record never ran, so it has no pipeline rows to read the parameters from: its
+    # configuration row carries the template parameters the refused trigger launch named, and a re-run
+    # replays those rather than falling back to the workflow's defaults.
+    if er.is_skip_record(main_item) and not pipeline_execution_parameters:
+        stored = config_row.get("pipelineExecutionParameters") or {}
+        if isinstance(stored, dict):
+            pipeline_execution_parameters = {
+                str(pipeline_id): dict(params) for pipeline_id, params in stored.items()
+                if isinstance(params, dict)}
+
     # The metadata sources travel in their own fields, never as inputFiles: they are entities, not
     # files, so re-emitting them as inputFiles would fail an arity-'none' workflow's own no-input-files
     # rule. They are recorded on the configuration row only (there is no workflow-input row for a

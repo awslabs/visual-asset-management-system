@@ -937,7 +937,8 @@ def is_skip_record(main_item) -> bool:
 
 
 def build_skip_record_update(execution_id, workflow_database_id, workflow_id, workflow_arn,
-                             skipped_at, skip_scope, skip_reason, blocking_execution_id):
+                             skipped_at, skip_scope, skip_reason, blocking_execution_id,
+                             first_skipped_at=None):
     """The UpdateItem arguments (minus the table) that create or extend a skip record's main row.
 
     One atomic call: every attribute a launched run's main row carries is SET only if absent
@@ -945,14 +946,19 @@ def build_skip_record_update(execution_id, workflow_database_id, workflow_id, wo
     lastSkippedDate is overwritten and skippedLaunchCount is ADDed to on every skip. The row is created
     when missing, so two concurrent writers on one id both land on one record with a count of two.
     ReturnValues ALL_NEW hands back the row as it now stands (the first-skip date the input rows reuse,
-    and the count that decides whether this skip's files are still listed)."""
+    and the count that decides whether this skip's files are still listed).
+
+    first_skipped_at is the start and stop date the record keeps (the date its configuration and input
+    rows were first written with, so all of the record's rows agree); skipped_at, the time of THIS
+    refusal, is lastSkippedDate. It defaults to skipped_at."""
+    first_skipped_at = first_skipped_at or skipped_at
     base = build_workflow_execution_record(
         execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
-        workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=skipped_at,
+        workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=first_skipped_at,
         execution_status=EXECUTION_STATUS_SKIPPED, triggered_by_user_id="SYSTEM_USER",
         trigger_type="File-Upload", execution_log_group_arn="")
     # Terminal from the first write: the stop date is the first skip, like the start date.
-    base["executionStopDate"] = skipped_at
+    base["executionStopDate"] = first_skipped_at
     base["skipScope"] = skip_scope or ""
     base["skipReason"] = skip_reason or ""
     base["blockingExecutionId"] = blocking_execution_id or ""
@@ -1522,9 +1528,13 @@ def build_workflow_configuration_record(
     input_metadata_file_s3_key="",
     execution_start_date="",
     metadata_source_assets=None, metadata_source_databases=None,
-    output_types=None,
+    output_types=None, pipeline_execution_parameters=None,
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration').
+
+    pipeline_execution_parameters is set only on a SKIPPED record's row: the per-pipeline template
+    parameters the refused trigger launch named (the trigger's defaultTemplateIds), which a re-run
+    replays because the record has no pipeline rows to read them from. Absent on every other row.
 
     metadata_source_assets is the run's resolved [{databaseId, assetId}] metadata-source selection and
     input_metadata_database_id the source database the CALLER named — the selection a re-run replays.
@@ -1590,6 +1600,8 @@ def build_workflow_configuration_record(
         # attribute existed resolves to [] everywhere (no migration).
         "outputTypes": list(output_types or []),
     }
+    if pipeline_execution_parameters:
+        record["pipelineExecutionParameters"] = to_dynamodb_numerics(pipeline_execution_parameters)
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely
     # (DynamoDB indexes sparsely), so results-only executions never appear in an asset's history and

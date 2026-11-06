@@ -57,7 +57,8 @@ def workflow_configuration_record_keys():
         input_metadata_database_id="db1", input_metadata_file_s3_key="k",
         execution_start_date="2026-01-01T00:00:00Z",
         metadata_source_assets=[{"databaseId": "db1", "assetId": "asset1"}],
-        metadata_source_databases=["db1"])
+        metadata_source_databases=["db1"],
+        pipeline_execution_parameters={"pipe1": {"templateId": "t1"}})
     return set(results_only) | set(asset_targeted), asset_targeted
 
 

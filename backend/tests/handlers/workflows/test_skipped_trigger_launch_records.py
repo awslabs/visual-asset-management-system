@@ -16,6 +16,7 @@ import os
 import boto3
 import pytest
 from moto import mock_aws
+from botocore.exceptions import ClientError
 from unittest.mock import MagicMock, patch
 
 for _name, _value in [
@@ -65,15 +66,17 @@ def _cross_call_event(body=ONE_FILE):
 
 
 class _MainTable:
-    """The main execution table: records the skip writer's UpdateItem and answers ALL_NEW with a
-    running count, the way DynamoDB's ADD would."""
+    """The main execution table: answers the writer's count read and records its UpdateItem, answering
+    ALL_NEW with a running count the way DynamoDB's ADD would."""
 
-    def __init__(self, count=0, fail=False):
+    def __init__(self, count=0, fail=False, journal=None):
         self.count, self.fail, self.updates = count, fail, []
+        self.journal = journal if journal is not None else []
 
     def update_item(self, **kwargs):
         if self.fail:
             raise RuntimeError("throttled")
+        self.journal.append("main")
         self.updates.append(kwargs)
         self.count += 1
         return {"Attributes": {"skippedLaunchCount": self.count,
@@ -81,26 +84,48 @@ class _MainTable:
                                "executionStatus": "SKIPPED"}}
 
     def get_item(self, **_kwargs):
-        return {}
+        return {"Item": {"skippedLaunchCount": self.count}} if self.count else {}
 
     def put_item(self, **_kwargs):
         raise AssertionError("a refused launch writes no launched-run main row")
 
 
 class _InputsTable:
-    def __init__(self):
-        self.puts = []
+    def __init__(self, fail=False, journal=None):
+        self.puts, self.fail = [], fail
+        self.journal = journal if journal is not None else []
 
     def put_item(self, **kwargs):
+        if self.fail:
+            raise RuntimeError("throttled")
+        self.journal.append("inputs")
         self.puts.append(kwargs["Item"])
         return {}
 
 
-def _launch_refused(main, inputs, event=None, tokens=("SYSTEM_USER",), holder=HOLDER):
+class _ConfigTable:
+    """The configuration table's conditional put: `existing` stands in for a row an earlier refusal
+    wrote, returned (as DynamoDB does) with the failed condition."""
+
+    def __init__(self, existing=None, journal=None):
+        self.existing, self.puts = existing, []
+        self.journal = journal if journal is not None else []
+
+    def put_item(self, **kwargs):
+        self.journal.append("config")
+        assert kwargs["ConditionExpression"] == "attribute_not_exists(workflowExecutionId)"
+        if self.existing is not None:
+            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"},
+                               "Item": {k: {"S": v} for k, v in self.existing.items()}}, "PutItem")
+        self.puts.append(kwargs["Item"])
+        return {}
+
+
+def _launch_refused(main, inputs, event=None, tokens=("SYSTEM_USER",), holder=HOLDER, config=None):
     lock_table = _LockTable(held={ASSET_KEY: holder})
     return _run(lock_table, restriction="perAsset", tokens=tokens,
                 event=event if event is not None else _cross_call_event(), main_table=main,
-                inputs_table=inputs)
+                inputs_table=inputs, config_table=config if config is not None else _ConfigTable())
 
 
 # --------------------------------------------------------------------------- #
@@ -193,47 +218,86 @@ class TestTwoWritersAggregateOnOneRecord:
 # The execute handler's skip writer
 # --------------------------------------------------------------------------- #
 
+TRIGGER_TEMPLATES = {"pipe1": {"templateId": "trigger-template"}}
+
+
 @pytest.mark.unit
 class TestTheExecuteHandlerRecordsRefusedTriggerLaunches:
     def test_a_refused_trigger_launch_writes_one_skip_record_and_keeps_its_400(self):
-        main, inputs = _MainTable(), _InputsTable()
-        response, sfn, _log, _stop = _launch_refused(main, inputs)
+        journal = []
+        main, inputs, config = (_MainTable(journal=journal), _InputsTable(journal=journal),
+                                _ConfigTable(journal=journal))
+        body = dict(ONE_FILE, pipelineExecutionParameters=TRIGGER_TEMPLATES)
+        response, sfn, _log, _stop = _launch_refused(main, inputs, event=_cross_call_event(body),
+                                                     config=config)
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE["asset"]
         sfn.start_execution.assert_not_called()
+        skip_id = er.skip_record_execution_id(ASSET_KEY, HOLDER)
+        # The rows the read check is evaluated over exist before the main row lists the record.
+        assert journal == ["config", "inputs", "main"]
         assert len(main.updates) == 1
-        assert main.updates[0]["Key"]["workflowExecutionId"] == er.skip_record_execution_id(
-            ASSET_KEY, HOLDER)
-        assert len(inputs.puts) == 1
+        assert main.updates[0]["Key"]["workflowExecutionId"] == skip_id
+        cfg = config.puts[0]
+        assert cfg["workflowExecutionId"] == skip_id
+        assert cfg["pipelineExecutionParameters"] == TRIGGER_TEMPLATES
+        assert (cfg["outputDatabaseId"], cfg["outputAssetId"]) == ("db1", "a1")
+        # The trigger named no output extension, so a re-run inherits the workflow's default.
+        assert "outputFileBaseExecutionPathExtension" not in cfg
         row = inputs.puts[0]
         # #1009's per-version sort key, the same builder a launched run's rows use, never pinned.
         assert row["databaseId:assetId:inputAssetFileKey"] == er.workflow_input_sort_key(
             "db1", "a1", "/a1/f.glb", "v-resolved")
         assert row["versionPinned"] is False
-        assert row["executionStartDate"] == "2026-11-06T10:00:00Z"
-        assert row["workflowExecutionId"] == main.updates[0]["Key"]["workflowExecutionId"]
+        assert row["workflowExecutionId"] == skip_id
+        # Every row of the record carries the same first-skip date.
+        values = main.updates[0]["ExpressionAttributeValues"]
+        names = main.updates[0]["ExpressionAttributeNames"]
+        start = next(values[":" + k[1:]] for k, v in names.items() if v == "executionStartDate")
+        assert row["executionStartDate"] == cfg["executionStartDate"] == start
+
+    def test_a_later_refusal_keeps_the_first_skip_date(self):
+        main, inputs = _MainTable(count=3), _InputsTable()
+        config = _ConfigTable(existing={"workflowExecutionId": "x",
+                                        "executionStartDate": "2026-11-06T09:00:00Z"})
+        response, _sfn, _log, _stop = _launch_refused(main, inputs, config=config)
+        assert response["statusCode"] == 400
+        assert config.puts == []
+        assert inputs.puts[0]["executionStartDate"] == "2026-11-06T09:00:00Z"
+        names = main.updates[0]["ExpressionAttributeNames"]
+        values = main.updates[0]["ExpressionAttributeValues"]
+        start = next(values[":" + k[1:]] for k, v in names.items() if v == "executionStartDate")
+        assert start == "2026-11-06T09:00:00Z"
+        assert values[":lastSkipped"] != "2026-11-06T09:00:00Z"
+        assert main.count == 4
 
     def test_a_manual_launch_refused_writes_nothing(self):
-        main, inputs = _MainTable(), _InputsTable()
+        main, inputs, config = _MainTable(), _InputsTable(), _ConfigTable()
         body = dict(ONE_FILE, triggerType="manual")
         response, _sfn, _log, _stop = _launch_refused(main, inputs, event=_cross_call_event(body),
-                                                      tokens=("user1",))
+                                                      tokens=("user1",), config=config)
         assert response["statusCode"] == 400
-        assert main.updates == [] and inputs.puts == []
+        assert main.updates == [] and inputs.puts == [] and config.puts == []
 
     def test_a_user_naming_the_file_upload_trigger_type_writes_nothing(self):
         # Only the dispatcher's SYSTEM_USER cross-call records skips.
-        main, inputs = _MainTable(), _InputsTable()
-        response, _sfn, _log, _stop = _launch_refused(main, inputs, tokens=("user1",))
+        main, inputs, config = _MainTable(), _InputsTable(), _ConfigTable()
+        response, _sfn, _log, _stop = _launch_refused(main, inputs, tokens=("user1",), config=config)
         assert response["statusCode"] == 400
-        assert main.updates == [] and inputs.puts == []
+        assert main.updates == [] and inputs.puts == [] and config.puts == []
 
-    def test_a_failed_write_still_answers_the_same_400(self):
+    def test_a_failed_input_write_writes_no_main_row_and_keeps_the_400(self):
+        main, inputs = _MainTable(), _InputsTable(fail=True)
+        response, _sfn, _log, _stop = _launch_refused(main, inputs)
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE["asset"]
+        assert main.updates == []
+
+    def test_a_failed_main_write_still_answers_the_same_400(self):
         main, inputs = _MainTable(fail=True), _InputsTable()
         response, _sfn, _log, _stop = _launch_refused(main, inputs)
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == el.LOCK_CONFLICT_MESSAGE_BY_SCOPE["asset"]
-        assert inputs.puts == []
 
     def test_past_the_cap_a_refusal_is_only_counted(self):
         main, inputs = _MainTable(count=er.MAX_SKIP_RECORD_INPUT_ROWS), _InputsTable()
@@ -247,11 +311,58 @@ class TestTheExecuteHandlerRecordsRefusedTriggerLaunches:
         assert len(inputs.puts) == 1
 
     def test_a_conflict_with_no_known_holder_writes_nothing(self):
-        main, inputs = _MainTable(), _InputsTable()
         conflict = el.ExecutionLockConflict(ASSET_KEY, "")
         assert ewv2._record_skipped_launch({"databaseId": WF_DB, "workflowId": WF_ID}, conflict,
                                            [], {}) == ""
-        assert main.updates == []
+
+
+@pytest.mark.unit
+class TestConcurrentRefusalsAgainstRealTables:
+    """Two refusals (concurrent writers, or one SQS redelivery) against moto tables: one record, one
+    configuration row, one input row, a count of exactly two, and one first-skip date on every row."""
+
+    @mock_aws
+    def test_two_refusals_make_one_record(self):
+        resource = boto3.resource("dynamodb", region_name="us-east-1")
+
+        def _table(name, keys):
+            return resource.create_table(
+                TableName=name, BillingMode="PAY_PER_REQUEST",
+                KeySchema=[{"AttributeName": keys[0], "KeyType": "HASH"},
+                           {"AttributeName": keys[1], "KeyType": "RANGE"}],
+                AttributeDefinitions=[{"AttributeName": k, "AttributeType": "S"} for k in keys])
+
+        main = _table(ewv2.workflow_execution_database_v2,
+                      ("workflowExecutionId", "workflowDatabaseId:workflowId"))
+        inputs = _table(ewv2.workflow_execution_inputs_table,
+                        ("workflowExecutionId", "databaseId:assetId:inputAssetFileKey"))
+        config = _table(ewv2.workflow_execution_configuration_table,
+                        ("workflowExecutionId", "recordType"))
+        workflow = {"databaseId": WF_DB, "workflowId": WF_ID, "workflow_arn": "arn",
+                    "specifiedPipelines": [{"pipelineId": "p1"}]}
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
+                     "resolvedVersionId": "v1"}]
+        assets = {("db1", "a1"): {"databaseId": "db1", "assetId": "a1", "bucketId": "b",
+                                  "assetLocation": {"Key": "a1/"}}}
+        conflict = el.ExecutionLockConflict(ASSET_KEY, HOLDER)
+        times = iter(["2026-11-06T10:00:00Z", "2026-11-06T10:05:00Z"])
+        with patch.object(ewv2, "dynamodb", resource), \
+                patch.object(ewv2.er, "iso_now", side_effect=lambda: next(times)), \
+                patch(f"{EXEC_MOD}._asset_bucket_details", return_value={"bucketName": "bkt"}):
+            for _ in range(2):
+                assert ewv2._record_skipped_launch(
+                    workflow, conflict, selected, assets,
+                    pipeline_execution_parameters=TRIGGER_TEMPLATES)
+        main_rows, input_rows, config_rows = (main.scan()["Items"], inputs.scan()["Items"],
+                                              config.scan()["Items"])
+        assert len(main_rows) == len(input_rows) == len(config_rows) == 1
+        assert main_rows[0]["skippedLaunchCount"] == 2
+        assert main_rows[0]["lastSkippedDate"] == "2026-11-06T10:05:00Z"
+        first = "2026-11-06T10:00:00Z"
+        assert (main_rows[0]["executionStartDate"], main_rows[0]["executionStopDate"],
+                input_rows[0]["executionStartDate"], config_rows[0]["executionStartDate"]) == (
+            first, first, first, first)
+        assert config_rows[0]["pipelineExecutionParameters"] == TRIGGER_TEMPLATES
 
 
 # --------------------------------------------------------------------------- #
@@ -421,6 +532,31 @@ class TestActionsOnASkipRecord:
             body = es._reconstruct_execute_request(SKIP_ID, dict(SKIP_ROW), {})
         assert body["inputFiles"] == [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
         assert body["triggerType"] == "manual"
+
+    def test_rerun_of_a_skip_record_uses_the_triggers_template(self):
+        # D2: the refused trigger named a non-default template; the re-run replays it.
+        row = er.build_workflow_execution_input_record(
+            workflow_execution_id=SKIP_ID, database_id="db1", asset_id="a1",
+            input_asset_file_key="a1/f.glb", execution_start_date="2026-11-06T10:00:00Z",
+            workflow_id=WF_ID, workflow_database_id=WF_DB, asset_root_s3_key="a1/")
+        config_row = er.build_workflow_configuration_record(
+            workflow_execution_id=SKIP_ID, input_metadata="", specified_pipelines_snapshot=[],
+            output_asset_id="a1", output_database_id="db1",
+            pipeline_execution_parameters={"p1": {"templateId": "sleep280"}})
+        config_row.pop("outputFileBaseExecutionPathExtension")
+        with patch(f"{SVC}._query_all", return_value=[row]), \
+                patch(f"{SVC}.get_pipeline_execution_rows", return_value=[]):
+            body = es._reconstruct_execute_request(SKIP_ID, dict(SKIP_ROW), config_row)
+        assert body["pipelineExecutionParameters"] == {"p1": {"templateId": "sleep280"}}
+        assert (body["outputDatabaseId"], body["outputAssetId"]) == ("db1", "a1")
+        assert "outputFileBaseExecutionPathExtension" not in body
+
+    def test_a_launched_runs_rerun_ignores_a_stored_parameter_map(self):
+        with patch(f"{SVC}._query_all", return_value=[]), \
+                patch(f"{SVC}.get_pipeline_execution_rows", return_value=[]):
+            body = es._reconstruct_execute_request(
+                "a" * 32, dict(OLD_ROW), {"pipelineExecutionParameters": {"p1": {"templateId": "x"}}})
+        assert body["pipelineExecutionParameters"] == {}
 
     def test_permanent_delete_removes_the_main_and_input_rows(self):
         deleted = []
