@@ -128,7 +128,8 @@ function attachManagedPolicy(fun: lambda.Function, id: string, statements: iam.P
 
 /**
  * Grants of a STARTER (fileIngestion, the large-file queue consumer): StartExecution on the copy
- * state machine, and the job row writes start_copy_job makes (conditional PutItem, UpdateItem).
+ * state machine, the job row writes start_copy_job makes (conditional PutItem, UpdateItem), and the
+ * job row read of a redelivered message (GetItem).
  */
 export function grantLargeObjectCopyStart(
     fun: lambda.Function,
@@ -142,7 +143,8 @@ export function grantLargeObjectCopyStart(
             actions: ["states:StartExecution"],
             resources: [largeObjectCopyStateMachineArn(config)],
         }),
-        jobsTableStatement(storage, ["PutItem", "UpdateItem"], false),
+        // GetItem: a redelivered queue message finds the job it already handed off.
+        jobsTableStatement(storage, ["PutItem", "UpdateItem", "GetItem"], false),
     ]);
 }
 
@@ -237,7 +239,8 @@ export function buildLargeObjectCopyEngine(
 
     // Job and batch rows (TransactWriteItems counts a job on its batch), the execution index
     // (finalize-side reads), the asset row (asset type after a file lands), the buckets table (the
-    // Region-routing S3 client), the main execution row (display-only progress counter).
+    // Region-routing S3 client), the main execution row (display-only progress counter), the upload
+    // record (an API upload's outcome).
     fun.addToRolePolicy(jobsTableStatement(storage, ["GetItem", "UpdateItem", "Query"], true));
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -251,6 +254,14 @@ export function buildLargeObjectCopyEngine(
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:UpdateItem"],
             resources: [storage.dynamo.workflowExecutionsStorageTableV2.tableArn],
+        })
+    );
+    // An API upload's copy records its file's outcome on the upload record.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:UpdateItem"],
+            resources: [storage.dynamo.assetUploadsStorageTable.tableArn],
         })
     );
     storage.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);

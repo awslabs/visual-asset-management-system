@@ -196,6 +196,11 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
+                    "value": "/uploads"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
                     "value": "/workflows"
                 },
                 {

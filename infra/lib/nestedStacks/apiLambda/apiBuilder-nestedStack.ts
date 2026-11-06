@@ -66,6 +66,9 @@ import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 
+/** Deliveries of a large-file queue message before it is dead-lettered. */
+export const LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT = 3;
+
 export class ApiBuilderNestedStack extends NestedStack {
     // Shared references consumed by the workflow/pipeline/execution functions in ApiBuilder2 (which
     // now own that whole domain): the metadata service and the upload-file lambda. Assigned in the
@@ -623,7 +626,10 @@ export class ApiBuilderNestedStack extends NestedStack {
             // processed reaches a DLQ after the same number of attempts wherever it entered VAMS.
             // The event source mapping uses batchSize 1, so dead-lettering isolates the one failing
             // upload rather than a batch of unrelated ones.
-            deadLetterQueue: { queue: largeFileProcessingDlq, maxReceiveCount: 3 },
+            deadLetterQueue: {
+                queue: largeFileProcessingDlq,
+                maxReceiveCount: LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT,
+            },
         });
 
         const uploadFileFunction = buildUploadFileFunction(
@@ -647,6 +653,13 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, uploadFileFunction, {
             routePath: "/uploads/{uploadId}/complete",
             method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        // Status of an upload whose files over 1 GiB are ingested asynchronously.
+        attachFunctionToApi(this, uploadFileFunction, {
+            routePath: "/uploads/{uploadId}",
+            method: apigateway.HttpMethod.GET,
             registry: registry,
         });
 
@@ -683,6 +696,19 @@ export class ApiBuilderNestedStack extends NestedStack {
 
         // Grant SQS permissions to the large file processor Lambda
         largeFileProcessingQueue.grantConsumeMessages(sqsUploadFileLargeFunction);
+        // The consumer records a file's outcome on its upload record, a failure only on the last
+        // delivery before the message is dead-lettered (backend common/uploadStatus.py).
+        sqsUploadFileLargeFunction.addEnvironment(
+            "LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT",
+            String(LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT)
+        );
+        sqsUploadFileLargeFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:UpdateItem"],
+                resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
+            })
+        );
 
         // Grant SQS send message permissions to uploadFile Lambda
         largeFileProcessingQueue.grantSendMessages(uploadFileFunction);

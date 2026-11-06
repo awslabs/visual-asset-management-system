@@ -1254,6 +1254,37 @@ class APIClient(CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to list asset files: {e}")
 
+    def get_upload_status(self, database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
+        """Status of an upload and the outcome of each of its files ingested asynchronously
+        (files over 1 GiB). A 404 means no such upload is visible to the caller, or its files all
+        landed at completion (its record is removed then)."""
+        from ..constants import API_UPLOAD_STATUS
+
+        try:
+            endpoint = API_UPLOAD_STATUS.format(uploadId=upload_id)
+            response = self.get(endpoint, include_auth=True,
+                                params={"databaseId": database_id, "assetId": asset_id})
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise APIError(f"Upload '{upload_id}' not found for asset '{asset_id}' in database "
+                               f"'{database_id}' (an upload whose files all landed at completion "
+                               f"keeps no status)")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidAssetDataError(f"Invalid upload status request: {error_message}")
+            elif e.response.status_code == 401:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get upload status: {e}")
+
+        except GlobalInfrastructureError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to get upload status: {e}")
+
     def get_file_info(self, database_id: str, asset_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed information about a specific file."""
         try:

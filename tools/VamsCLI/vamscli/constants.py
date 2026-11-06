@@ -17,6 +17,7 @@ API_DATABASE_ASSETS = "/database/{databaseId}/assets"
 API_DATABASE_ASSET = "/database/{databaseId}/assets/{assetId}"
 API_UPLOADS = "/uploads"
 API_UPLOADS_COMPLETE = "/uploads/{uploadId}/complete"
+API_UPLOAD_STATUS = "/uploads/{uploadId}"
 
 # File Management API Endpoints
 API_CREATE_FOLDER = "/database/{databaseId}/assets/{assetId}/createFolder"
@@ -199,6 +200,8 @@ MAX_SEQUENCE_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
+# How long `file upload --wait-async` waits for files over 1 GiB to be ingested.
+DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS = 3600
 
 # Upload limits. MAX_PART_SIZE and MAX_UPLOADS_PER_USER_PER_MINUTE are Amazon S3 and backend
 # limits. The other three are this client's own batch sizes: each stays within the backend's

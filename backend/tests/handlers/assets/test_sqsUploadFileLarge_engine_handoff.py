@@ -38,7 +38,7 @@ class _Env(base._Env):
         env = {sq.loc.ENV_STATE_MACHINE_ARN: self.arn} if self.arn else {}
         self._extra = [
             patch.dict(os.environ, env, clear=False),
-            patch.object(sq, "copy_jobs_table", return_value=MagicMock()),
+            patch.object(sq, "copy_jobs_table", return_value=self.jobs),
             patch.object(sq.loc, "start_copy_job", self.start),
         ]
         if not self.arn:
@@ -105,3 +105,52 @@ class TestEngineHandOff:
         env = _Env(size=60 * GIB, extension_ok=False)
         _run(env, base._user_upload_file_info())
         env.start.assert_not_called()
+
+
+def _outcomes(env):
+    return [(c.args[3], c.args[4]) for c in env.outcome.call_args_list]
+
+
+@pytest.mark.unit
+class TestUploadOutcomeIsRecorded:
+    """M6: the consumer records each queued file's outcome on its upload record."""
+
+    def test_a_file_copied_here_is_recorded_succeeded(self):
+        env = _Env(size=2 * GIB)
+        _run(env, base._user_upload_file_info())
+        assert _outcomes(env) == [("/big/scan.laz", True)]
+
+    def test_a_handed_off_file_is_left_to_the_engine(self):
+        env = _Env(size=8 * GIB)
+        _run(env, base._user_upload_file_info())
+        env.outcome.assert_not_called()
+
+    def test_a_consumed_rejection_is_recorded_failed(self):
+        env = _Env(size=2 * GIB, extension_ok=False)
+        _run(env, base._user_upload_file_info())
+        assert _outcomes(env) == [("/big/scan.laz", False)]
+
+    def test_a_retryable_failure_is_recorded_only_on_the_last_delivery(self):
+        for receive, recorded in ((1, []), (2, []), (3, [("/big/scan.laz", False)])):
+            env = _Env(size=2 * GIB, copy_result=False)
+            with pytest.raises(RuntimeError):
+                _run(env, base._user_upload_file_info(), receive_count=receive)
+            assert _outcomes(env) == recorded, receive
+
+
+@pytest.mark.unit
+class TestRedeliveryAfterHandOff:
+    """Low L4: a message redelivered after its file was handed to the copy engine (whose copy may have
+    finished and deleted the staged object) is neither re-validated nor audited as rejected."""
+
+    def test_a_redelivered_hand_off_does_nothing(self):
+        env = _Env(size=8 * GIB, head_error=base._client_error("404"))
+        env.jobs.get_item.return_value = {"Item": {"jobId": "up-1#x", "status": "SUCCEEDED"}}
+        _run(env, base._user_upload_file_info(), receive_count=2)
+        env.start.assert_not_called()
+        env.audit.assert_not_called()
+        env.copy.assert_not_called()
+        env.outcome.assert_not_called()
+        assert env.deleted_keys() == []
+        key = env.jobs.get_item.call_args.kwargs["Key"]["jobId"]
+        assert key == env.sq.loc.job_id_for("up-1", "/big/scan.laz")

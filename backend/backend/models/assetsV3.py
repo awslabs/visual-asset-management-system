@@ -464,6 +464,38 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
         # complete_upload derives the final S3 key from this value.
         return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
 
+class GetUploadStatusRequestModel(BaseModel, extra='ignore'):
+    """Request model for GET /uploads/{uploadId} (path uploadId, query assetId and databaseId)"""
+    uploadId: str = Field(min_length=1, max_length=64, regex=r'^[A-Za-z0-9-]+$')
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator
+    def validate_fields(cls, values):
+        validate_asset_identifiers(values)
+        return values
+
+
+class UploadAsyncFileStatusModel(BaseModel, extra='ignore'):
+    """Outcome of one file of an upload that is ingested asynchronously"""
+    relativeKey: str
+    status: Literal["PENDING", "SUCCEEDED", "FAILED"]
+    error: Optional[str] = ""
+    updatedAt: Optional[str] = ""
+
+
+class UploadStatusResponseModel(BaseModel, extra='ignore'):
+    """Response model for GET /uploads/{uploadId}: the upload's status and, while or after files over
+    the asynchronous threshold are ingested, each such file's outcome"""
+    uploadId: str
+    databaseId: str
+    assetId: str
+    status: str
+    asyncFiles: List[UploadAsyncFileStatusModel] = []
+
+
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
     assetId: str = Field(min_length=1, max_length=256)

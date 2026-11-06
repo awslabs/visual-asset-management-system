@@ -341,6 +341,18 @@ def get_asset(database_id: str, asset_id: str, include_archived: bool = False) -
 
 @mcp.tool()
 @tool_result
+def get_upload_status(database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
+    """Status of an upload whose files over 1 GiB are ingested into the asset after it completed.
+
+    status is processing_async while any such file is pending, then completed or
+    completed_with_errors; asyncFiles lists each one as PENDING, SUCCEEDED or FAILED (with a generic
+    error). An upload whose files all landed at completion keeps no status, so it answers not
+    found, as does an upload the caller may not see."""
+    return CLIENT.api.get_upload_status(database_id, asset_id, upload_id)
+
+
+@mcp.tool()
+@tool_result
 def list_asset_files(
     database_id: str,
     asset_id: str,

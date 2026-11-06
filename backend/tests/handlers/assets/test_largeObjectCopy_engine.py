@@ -18,6 +18,7 @@ from moto import mock_aws
 
 os.environ.setdefault("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME", "t-copy-jobs")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "assetStorageTable")
+os.environ.setdefault("ASSET_UPLOAD_TABLE_NAME", "t-uploads")
 os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME", "t-executions")
 os.environ.setdefault("SEND_EMAIL_FUNCTION_NAME", "sendEmailFunction")
 os.environ.setdefault("PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME", "processOutput")
@@ -332,3 +333,43 @@ def test_a_cancel_during_prepare_aborts_the_new_upload(env):
     assert row["status"] == loc.STATUS_CANCELLED
     assert "uploadIdS3" not in row
     assert env["s3"].list_multipart_uploads(Bucket="asset-bucket").get("Uploads", []) == []
+
+
+def _uploads_table():
+    ddb = boto3.resource("dynamodb", region_name=REGION)
+    table = ddb.create_table(
+        TableName="t-uploads",
+        KeySchema=[{"AttributeName": "uploadId", "KeyType": "HASH"},
+                   {"AttributeName": "assetId", "KeyType": "RANGE"}],
+        AttributeDefinitions=[{"AttributeName": "uploadId", "AttributeType": "S"},
+                              {"AttributeName": "assetId", "AttributeType": "S"}],
+        BillingMode="PAY_PER_REQUEST")
+    table.put_item(Item={"uploadId": "y1", "assetId": "a1", "databaseId": "db", "status": "processing_async",
+                         "asyncFiles": {"big.bin": {"status": "PENDING"}}})
+    return table
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_an_api_upload_copy_records_its_outcome_on_the_upload(env, succeeded):
+    """M6: before, a failed engine copy of an API upload over 5 GiB was recorded only in the audit
+    log; the uploader now reads it from the upload record."""
+    uploads = _uploads_table()
+    with patch.object(engine, "upload_table", uploads):
+        job = _job(kind=loc.KIND_UPLOAD)
+        if succeeded:
+            _run_copy(job)
+        else:
+            engine.fail(job, {"Error": "SourceChanged", "Cause": ""})
+    record = uploads.get_item(Key={"uploadId": "y1", "assetId": "a1"})["Item"]
+    entry = record["asyncFiles"]["big.bin"]
+    assert entry["status"] == ("SUCCEEDED" if succeeded else "FAILED")
+    assert record["status"] == ("completed" if succeeded else "completed_with_errors")
+    if not succeeded:
+        assert entry["error"] == loc.REASON_SOURCE_CHANGED
+
+
+def test_a_workflow_output_copy_does_not_touch_upload_records(env):
+    uploads = _uploads_table()
+    with patch.object(engine, "upload_table", uploads):
+        _run_copy(_job())
+    assert uploads.get_item(Key={"uploadId": "y1", "assetId": "a1"})["Item"]["asyncFiles"]["big.bin"]["status"] == "PENDING"

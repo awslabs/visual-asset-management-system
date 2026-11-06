@@ -36,6 +36,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from common import largeObjectCopy as loc
+from common import uploadStatus
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -66,6 +67,8 @@ STREAMED_COPY_THREADS = 2
 try:
     jobs_table_name = get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE)
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    # Upload records, where an API upload's copy records its outcome (common.uploadStatus).
+    upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     # Output step function, invoked to finalize an execution whose state machine does not wait.
     process_output_function_name = os.environ["PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME"]
@@ -80,6 +83,7 @@ sfn_client = boto3.client("stepfunctions", config=retry_config)
 lambda_client = boto3.client("lambda", config=retry_config)
 jobs_table = dynamodb.Table(jobs_table_name)
 asset_table = dynamodb.Table(asset_table_name)
+upload_table = dynamodb.Table(upload_table_name)
 
 
 def _register_regions(job):
@@ -324,7 +328,17 @@ def complete(job):
     _after_landing(job)
     loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_SUCCEEDED,
                                                   "destVersionId": version_id})
+    _record_upload_outcome(job, True)
     return {"job": {**job, "destVersionId": version_id}}
+
+
+def _record_upload_outcome(job, succeeded, reason=""):
+    """An API upload's copy records its file's outcome on the upload record, where the uploader
+    reads it (GET /uploads/{uploadId}). A workflow output reports through its execution instead."""
+    if job.get("kind") != loc.KIND_UPLOAD:
+        return
+    uploadStatus.record_async_file_outcome(upload_table, job.get("uploadId"), job.get("assetId"),
+                                           job.get("relativeKey"), succeeded, reason)
 
 
 def _delete_source(source):
@@ -448,6 +462,7 @@ def fail(job, error):
     loc.update_job_row(jobs_table, job["jobId"], {"status": loc.STATUS_FAILED, "error": reason},
                        condition="attribute_not_exists(#s) OR #s <> :c",
                        condition_values={":c": loc.STATUS_CANCELLED})
+    _record_upload_outcome(job, False, reason)
     return {"job": {**job, "error": reason}}
 
 

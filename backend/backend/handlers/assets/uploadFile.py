@@ -36,8 +36,9 @@ from common.s3PathPatterns import (
     TEMPORARY_UPLOAD_PREFIX,
     PREVIEW_PREFIX,
 )
-from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
+from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL, API_UPLOAD_STATUS
 from common import largeObjectCopy as loc
+from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
@@ -51,7 +52,7 @@ from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel,
+    AssetUploadTableModel, GetUploadStatusRequestModel, UploadStatusResponseModel,
     MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES, UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES,
     UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES, UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES,
 )
@@ -416,6 +417,34 @@ def get_initialized_file_keys(upload_details, uploadId):
         logger.warning(f"Upload record {uploadId} carries no initialized file list; completing without the membership check")
         return None
     return set(initialized_files)
+
+def record_completion_status(uploadId, assetId, file_results, has_failures):
+    """Record the upload's status once its completion ran. An upload with files accepted for
+    asynchronous ingestion keeps its record (processing_async), so the outcome of those files can be
+    read later (GET /uploads/{uploadId}); otherwise a fully successful upload's record is deleted and
+    one with failures is marked completed_with_errors, as before. Never raises."""
+    try:
+        async_keys = uploadStatus.async_relative_keys(file_results)
+        if async_keys:
+            uploadStatus.begin_async_tracking(asset_upload_table, uploadId, assetId, async_keys,
+                                              has_failures)
+        elif has_failures:
+            # Use both uploadId and assetId as the key
+            asset_upload_table.update_item(
+                Key={
+                    'uploadId': uploadId,
+                    'assetId': assetId
+                },
+                UpdateExpression="SET #status = :status",
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={':status': 'completed_with_errors'}
+            )
+        else:
+            # Delete upload record if all successful
+            delete_upload_details(uploadId, assetId)
+    except Exception as e:
+        logger.warning(f"Failed to update upload status: {e}")
+
 
 def deny_upload_completion(event, databaseId, assetId, uploadId, uploadType, files, reason):
     """Audit-log a denied completion for every submitted file, then refuse the request.
@@ -1888,23 +1917,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
-    try:
-        if has_failures:
-            # Use both uploadId and assetId as the key
-            asset_upload_table.update_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                },
-                UpdateExpression="SET #status = :status",
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': 'completed_with_errors'}
-            )
-        else:
-            # Delete upload record if all successful
-            delete_upload_details(uploadId, assetId)
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+    record_completion_status(uploadId, assetId, file_results, has_failures)
     
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
@@ -1994,6 +2007,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if upload_details.get('isExternalUpload', False):
         deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
                                request_model.files, "Upload type mismatch.")
+
+    # A record kept to report its asynchronously ingested files has been completed already.
+    if upload_details.get('asyncFiles') is not None:
+        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                               request_model.files, "Upload has already been completed.")
     
     # Update upload status in DynamoDB
     try:
@@ -2692,23 +2710,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
-    try:
-        if has_failures:
-            # Use both uploadId and assetId as the key
-            asset_upload_table.update_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                },
-                UpdateExpression="SET #status = :status",
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': 'completed_with_errors'}
-            )
-        else:
-            # Delete upload record if all successful
-            delete_upload_details(uploadId, assetId)
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+    record_completion_status(uploadId, assetId, file_results, has_failures)
     
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
@@ -2753,6 +2755,44 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     else:
         return response
 
+UPLOAD_NOT_FOUND_MESSAGE = "Upload not found"
+
+
+def get_upload_status(event):
+    """GET /uploads/{uploadId}?assetId=&databaseId=: the upload's status and the outcome of each file
+    it accepted for asynchronous ingestion.
+
+    Tier 1 (the route) and Tier 2 (GET on the upload's asset) are decided before the record is read.
+    A missing record, a record of another database, a missing asset and a refused asset all answer
+    the same 404, so the route cannot tell an upload that does not exist from one the caller may not
+    see. One GetItem on the asset and one on the upload record."""
+    params = event.get('queryStringParameters') or {}
+    request_model = parse({
+        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
+        'assetId': params.get('assetId', ''),
+        'databaseId': params.get('databaseId', ''),
+    }, model=GetUploadStatusRequestModel)
+
+    # Fail closed: with no authenticated identity no authorization can be evaluated.
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforceAPI(event):
+        return authorization_error()
+
+    not_found = general_error(status_code=404, body={'message': UPLOAD_NOT_FOUND_MESSAGE}, event=event)
+    asset = get_asset_details(request_model.databaseId, request_model.assetId)
+    authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+    if not casbin_enforcer.enforce(authorization_object, "GET") or not asset:
+        return not_found
+
+    record = asset_upload_table.get_item(
+        Key={'uploadId': request_model.uploadId, 'assetId': request_model.assetId}).get('Item')
+    if not record or record.get('databaseId') != request_model.databaseId:
+        return not_found
+    return success(body=UploadStatusResponseModel(**uploadStatus.status_view(record)).dict())
+
+
 #######################
 # Lambda Handler
 #######################
@@ -2763,6 +2803,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
+        # The status read has no body.
+        request_http = (event.get('requestContext') or {}).get('http') or {}
+        if request_http.get('method') == 'GET' and API_UPLOAD_STATUS.matches(request_http.get('path', '')):
+            return get_upload_status(event)
+
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:

@@ -101,11 +101,18 @@ class _Env:
         self.copy = MagicMock(return_value=copy_result)
         self.audit = MagicMock()
         self.extension_ok = extension_ok
+        # Upload-record outcome writes (common.uploadStatus) and the copy jobs table (no job yet).
+        self.outcome = MagicMock(return_value=True)
+        self.jobs = MagicMock()
+        self.jobs.get_item.return_value = {}
         self._patches = []
 
     def __enter__(self):
         sq = self.sq
         self._patches = [
+            patch.object(sq.uploadStatus, "record_async_file_outcome", self.outcome),
+            patch.object(sq, "upload_table", return_value=MagicMock()),
+            patch.object(sq, "copy_jobs_table", return_value=self.jobs),
             patch.object(sq, "s3", self.s3),
             patch.object(sq, "delete_s3_object", self.delete),
             patch.object(sq, "copy_s3_object", self.copy),
