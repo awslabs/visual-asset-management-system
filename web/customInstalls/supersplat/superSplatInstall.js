@@ -67,8 +67,8 @@ const disableWebMcp = async () => {
 
 const npmInstall = () => {
     console.log("SuperSplat: Installing dependencies (this can take a few minutes)...");
-    // The root and web .npmrc files do not reach this clone, so the 7-day minimum release age is
-    // passed on the command line (#334).
+    // The clone has its own package.json, so web/.npmrc does not reach this install: pass the
+    // 7-day release-age floor explicitly (#334).
     execSync("npm install --min-release-age=7", { cwd: cloneDir, stdio: "inherit" });
     console.log("SuperSplat: NPM install complete");
 };

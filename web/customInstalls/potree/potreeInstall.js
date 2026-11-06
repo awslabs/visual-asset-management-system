@@ -49,7 +49,9 @@ const gitActions = async () => {
 // Function to run NPM install and build on Potree Source
 const npmBuild = () => {
     try {
-        execSync("npm install", { cwd: gitRepoSourceDestDir }); //Install dependencies
+        // The clone has its own package.json, so web/.npmrc does not reach this install: pass the
+        // 7-day release-age floor explicitly (#334).
+        execSync("npm install --min-release-age=7", { cwd: gitRepoSourceDestDir }); //Install dependencies
         console.log("Potree Build NPM install complete");
         execSync("npm run build", { cwd: gitRepoSourceDestDir }); //Run build script
         console.log("Potree Build NPM build complete");
