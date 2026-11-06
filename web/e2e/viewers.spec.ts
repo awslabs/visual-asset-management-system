@@ -4,7 +4,7 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import { type AssetFileRef, chooseViewer, findAssetFiles } from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -83,7 +83,7 @@ const cases = [
     // asset; the case also asserts that no request to the web app's origin failed (an unresolved
     // texture used to be requested from the site root, which answers 403) and that no Content
     // Security Policy violation was reported. USD opens in Three.js with or without
-    // ALLOWUNSAFEEVAL: the picker is clicked only when Needle is listed too.
+    // ALLOWUNSAFEEVAL: a viewer is chosen only when Needle is listed too.
     { ext: ".glb", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
     { ext: ".usdz", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
     { ext: ".usda", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
@@ -294,13 +294,29 @@ for (const c of cases) {
             timeout: 60_000,
         });
 
-        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load.
+        // A multi-viewer extension shows "No Viewer Component Selected" until a viewer is chosen; a
+        // single-viewer one loads its viewer straight away. Wait for one of the two, then choose the
+        // case's viewer with the shared keyboard helper unless the picker already shows it.
+        // chooseViewer fails when no listed viewer matches, so a required pick is never skipped.
         if (c.select) {
-            const picker = page.getByRole("button", { name: /select viewer/i });
-            if (await picker.isVisible().catch(() => false)) {
-                await picker.click();
-                // The picker is a listbox of viewer options.
-                await page.getByRole("option", { name: c.select }).first().click();
+            const surface = page.locator("canvas, iframe").first();
+            const noViewer = page.getByText(/No Viewer Component Selected/i);
+            await expect
+                .poll(
+                    async () =>
+                        (await noViewer.isVisible().catch(() => false)) ||
+                        (await surface.isVisible().catch(() => false)),
+                    { timeout: 60_000 }
+                )
+                .toBe(true);
+            const shown =
+                (await page
+                    .getByLabel(/select viewer/i)
+                    .first()
+                    .textContent()
+                    .catch(() => null)) ?? "";
+            if (!c.select.test(shown)) {
+                await chooseViewer(page, c.select);
             }
         }
 
