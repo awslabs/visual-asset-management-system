@@ -162,6 +162,24 @@ def test_a_job_whose_execution_hit_the_history_quota_is_finalized_once(env, mach
     env["sfn"].send_task_success.assert_called_once()
 
 
+def test_two_concurrent_reconciles_clean_up_and_audit_once(env, machine):
+    """Two deliveries that both read the job row while it was still RUNNING: only the one whose
+    conditional write moves the row to FAILED cleans up and audits."""
+    job = _job_with_execution(env)
+    engine.prepare(job)
+    _waiting_batch(env, job)
+    env["sfn"].describe_execution.return_value = _described(job)
+    stale = loc.get_job_row(env["jobs"], job["jobId"])  # RUNNING, as both deliveries read it
+    engine.reconcile(EXEC_ARN)
+    real_get = loc.get_job_row
+    with patch.object(loc, "get_job_row",
+                      lambda table, job_id: dict(stale) if job_id == job["jobId"] else real_get(table, job_id)):
+        engine.reconcile(EXEC_ARN)
+    assert env["audit"].call_count == 1
+    assert loc.get_job_row(env["jobs"], job["jobId"])["status"] == loc.STATUS_FAILED
+    env["sfn"].send_task_success.assert_called_once()
+
+
 @pytest.mark.parametrize("status", ["TIMED_OUT", "ABORTED"])
 def test_a_timed_out_or_console_stopped_execution_is_finalized(env, machine, status):
     job = _job_with_execution(env)

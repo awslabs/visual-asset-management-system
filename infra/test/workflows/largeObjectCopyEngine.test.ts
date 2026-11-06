@@ -189,10 +189,17 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         // exhausted its retries) is final and goes to the failure path.
         expect(chunk.Retry).toEqual([
             expect.objectContaining({
-                ErrorEquals: CHUNK_START_RETRY.errors,
+                ErrorEquals: [
+                    "StepFunctions.ExecutionLimitExceeded",
+                    "StepFunctions.ThrottlingException",
+                ],
                 MaxAttempts: CHUNK_START_RETRY.maxAttempts,
             }),
         ]);
+        // A wildcard would also match a failed child execution and re-run the chunk.
+        const retried = JSON.stringify(chunk.Retry.map((r: any) => r.ErrorEquals));
+        expect(retried).not.toContain("States.ALL");
+        expect(retried).not.toContain("States.TaskFailed");
         expect(jobStates.LargeObjectCopyChunks.Catch[0].Next).toBe("LargeObjectCopyFail");
         expect(jobStates.LargeObjectCopyPrepare.ResultSelector["chunks.$"]).toBe(
             "$.Payload.chunks"
