@@ -1147,13 +1147,47 @@ export function dataGrid(scope: Page | Locator): Locator {
     return scope.locator('.rdg[role="grid"]').first();
 }
 
-/** Chooses `name` when the page asks for a viewer; a file only one viewer handles opens directly. */
-export async function pickViewerIfAsked(page: Page, name: RegExp | undefined) {
-    if (!name) return;
+/** `text` as a RegExp source matching it literally. */
+export function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Asserts that the viewer named `expected` (its `name` in the viewer config, e.g.
+ * "Gaussian Splat Viewer (PlayCanvas)") is the one the file page selected. The viewer picker's
+ * trigger shows the selected viewer's name first, then its description; it is rendered whenever at
+ * least one viewer is offered, so this holds for a file only one viewer handles too.
+ */
+export async function expectViewerSelected(page: Page, expected: string): Promise<void> {
+    const trigger = page.getByLabel(/select viewer/i).first();
+    await expect(trigger, `no viewer picker on the page; expected ${expected}`).toBeVisible({
+        timeout: 60_000,
+    });
+    // The pattern is the escaped viewer name, so it matches the name literally.
+    const named = new RegExp(`^\\s*${escapeRegExp(expected)}`); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    await expect(trigger, `the file opened in another viewer than ${expected}`).toHaveText(named, {
+        timeout: 30_000,
+    });
+    await expect(page.getByText(/No Viewer Component Selected/i)).toHaveCount(0);
+}
+
+/**
+ * Makes `expected` the file's viewer and asserts it was: when the page asks for a choice (an
+ * extension several viewers claim), choose the option matching `select` (default: `expected`
+ * literally), then check the selection in every case. A case therefore fails, rather than passing
+ * on whichever viewer happened to open, when its viewer is not offered or another one loaded.
+ */
+export async function pickViewerIfAsked(
+    page: Page,
+    expected: string,
+    select?: RegExp
+): Promise<void> {
     const placeholder = page.getByText(/No Viewer Component Selected/i);
     const asked = await placeholder
         .waitFor({ state: "visible", timeout: 10_000 })
         .then(() => true)
         .catch(() => false);
-    if (asked) await chooseViewer(page, name);
+    const option = select ?? new RegExp(escapeRegExp(expected)); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    if (asked) await chooseViewer(page, option);
+    await expectViewerSelected(page, expected);
 }

@@ -245,9 +245,13 @@ type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
     sample: string;
+    /**
+     * The viewer's `name` in the viewer config. The case asserts this viewer is the one selected
+     * (`pickViewerIfAsked`), so it must match the config exactly; for `not-offered` it is a label.
+     */
     viewer: string;
     kind: RenderKind;
-    /** Viewer to choose when the file's extension matches more than one viewer. */
+    /** Picker option to choose when several viewers are offered (default: `viewer` literally). */
     select?: RegExp;
     requiresFeature?: string | string[];
     /** Run only when the deployment does NOT enable this feature (the gated path). */
@@ -261,7 +265,7 @@ interface RenderCase {
 const renderCases: RenderCase[] = [
     {
         sample: "cesium-tileset",
-        viewer: "Cesium 3D Tileset",
+        viewer: "Cesium 3D Tileset Viewer",
         kind: "canvas",
         select: /Cesium/i,
         fetches: "dragon_low.b3dm",
@@ -380,7 +384,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                 });
                 await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
             } else {
-                await pickViewerIfAsked(page, c.select);
+                await pickViewerIfAsked(page, c.viewer, c.select);
             }
 
             if (c.kind === "canvas") {
