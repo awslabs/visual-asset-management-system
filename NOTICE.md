@@ -123,7 +123,7 @@ This software includes third party software subject to the following copyrights:
 | lichtblick                 | [v1.29.1](https://github.com/lichtblick-suite/lichtblick)    | MPL-2.0\*\*\*         |
 | online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
 | playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
-| potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
+| potree                     | [5636cd47](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
 | three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |

@@ -274,6 +274,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 -   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 -   **Security scan suppressions re-pinned** — The ASH secret-scan suppressions for the workflow API, API overview and custom pipeline documentation examples point at the lines that hold the example values again, and an infra test fails when a line-pinned suppression no longer lands on a matching value. (issue #1014)
+-   **Potree viewer on potree/potree 1.8.2** — The Potree viewer is built from commit `5636cd47` (the 1.8.2 release plus later fixes) instead of `f6ac2d3b`, with the VAMS fork patch rebased onto it. The install now stops the web build when the clone, patch, npm install or build fails instead of shipping an unpatched viewer, and installs Potree's dependencies with the 7-day release-age floor. (issue #1174)
 
 **Known issues:**
 
