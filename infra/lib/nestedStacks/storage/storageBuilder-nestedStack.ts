@@ -59,6 +59,19 @@ export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHo
 export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex";
 
 /**
+ * Index of ZipDownloadRequestsStorageTable on userAssetKey (`userId#databaseId#assetId`): one user's
+ * Download as Zip jobs for one asset. Mirrored as USER_ASSET_INDEX in
+ * backend/backend/handlers/zipDownloads/zipDownloadService.py.
+ */
+export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
+
+/**
+ * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
+ * AUXILIARY_PREPARED_DOWNLOADS_PREFIX in backend/backend/common/s3PathPatterns.py.
+ */
+export const PREPARED_DOWNLOADS_PREFIX = "preparedDownloads/";
+
+/**
  * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
  * and entity type, which every schema read path queries. Named in
  * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
@@ -151,6 +164,7 @@ export interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSI UserAssetIndex; TTL expiresAt; Download as Zip jobs
     };
 }
 
@@ -996,6 +1010,26 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // Download as Zip archives and their manifests
+            // (preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after the
+            // configured retention. Deployed whatever app.zipDownloads.enabled says, so turning the
+            // feature off never orphans an archive. A cancelled job's incomplete upload is aborted after
+            // a day (the bucket-wide rule above waits 14). Every other auxiliary object lives under
+            // <databaseId>/, and the API refuses "preparedDownloads" as a database id.
+            {
+                id: "PreparedDownloadsExpiration",
+                enabled: true,
+                prefix: PREPARED_DOWNLOADS_PREFIX,
+                expiration: Duration.days(config.app.zipDownloads.retentionDays),
+                noncurrentVersionExpiration: Duration.days(1),
+                abortIncompleteMultipartUploadAfter: Duration.days(1),
+            },
+            {
+                id: "PreparedDownloadsDeleteMarkers",
+                enabled: true,
+                prefix: PREPARED_DOWNLOADS_PREFIX,
+                expiredObjectDeleteMarker: true,
+            },
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
@@ -1580,6 +1614,29 @@ export function storageResourcesBuilder(
     largeObjectCopyJobsStorageTable.addGlobalSecondaryIndex({
         indexName: LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
         partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Zip Download Requests — Download as Zip jobs, one row per job, owned by the user who asked for it
+    // (PK userId = the authenticated caller, SK requestId = time-sortable id, so a reverse query lists
+    // newest first). UserAssetIndex (PK userAssetKey = `userId#databaseId#assetId`) lists one user's
+    // jobs for one asset. expiresAt (epoch seconds) is the TTL: createdAt + app.zipDownloads.retentionDays,
+    // the same retention as the preparedDownloads/ lifecycle rule. Deployed whether or not the feature
+    // is enabled, so turning it off leaves existing jobs readable until they expire.
+    const zipDownloadRequestsStorageTable = new dynamodb.Table(
+        scope,
+        "ZipDownloadRequestsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+            timeToLiveAttribute: "expiresAt",
+        }
+    );
+    zipDownloadRequestsStorageTable.addGlobalSecondaryIndex({
+        indexName: ZIP_DOWNLOAD_USER_ASSET_INDEX,
+        partitionKey: { name: "userAssetKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
@@ -2429,6 +2486,7 @@ export function storageResourcesBuilder(
             workflowTriggersStorageTable: workflowTriggersStorageTable,
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
             largeObjectCopyJobsStorageTable: largeObjectCopyJobsStorageTable,
+            zipDownloadRequestsStorageTable: zipDownloadRequestsStorageTable,
         },
     };
 
@@ -3073,6 +3131,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.largeObjectCopyJobsStorage]:
             storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.zipDownloadRequestsStorage]:
+            storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,
