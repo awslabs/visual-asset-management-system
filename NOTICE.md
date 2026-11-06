@@ -118,7 +118,7 @@ This software includes third party software subject to the following copyrights:
 | @thatopen/components-front | [3.4.3](https://github.com/ThatOpen/engine_components)       | MIT                   |
 | @thatopen/fragments        | [3.4.5](https://github.com/ThatOpen/engine_fragment)         | MIT                   |
 | camera-controls            | [3.1.2](https://github.com/yomotsu/camera-controls)          | MIT                   |
-| @cesium/engine             | [26.1.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
+| @cesium/engine             | [26.4.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
 | fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
 | lichtblick                 | [v1.29.1](https://github.com/lichtblick-suite/lichtblick)    | MPL-2.0\*\*\*         |
 | online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
