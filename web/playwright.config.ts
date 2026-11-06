@@ -51,7 +51,16 @@ export default defineConfig({
         },
         {
             name: "chromium",
-            use: { ...devices["Desktop Chrome"], storageState: ADMIN_STATE },
+            use: {
+                ...devices["Desktop Chrome"],
+                storageState: ADMIN_STATE,
+                // Headless Chromium exposes no WebGPU adapter by default, and the SuperSplat Editor
+                // renders only through WebGPU. E2E_WEBGPU=1 turns on Chromium's WebGPU (a software
+                // SwiftShader adapter on a machine without a GPU) so viewers.spec.ts can check the
+                // editor's render; without it those checks skip with the reason.
+                launchOptions:
+                    process.env.E2E_WEBGPU === "1" ? { args: ["--enable-unsafe-webgpu"] } : {},
+            },
             dependencies: ["setup"],
         },
     ],

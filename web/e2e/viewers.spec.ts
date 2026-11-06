@@ -4,7 +4,15 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
+import {
+    expectSuperSplatRendered,
+    recordCspViolations,
+    recordRequestHosts,
+    SUPERSPLAT_CSP_BASELINE,
+    thirdPartyOrigins,
+    unexpectedCspViolations,
+} from "./support/viewerRender";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -46,17 +54,25 @@ const IGNORE = [
     /Error getting secure-config/i,
 ];
 
-function watchErrors(page: Page): string[] {
+/**
+ * A browser console line that reports a blocked CSP action. Cases that record CSP violations
+ * (`supersplat: true`) check every violation against an exact baseline, so the console copy of
+ * the same report is left to that check instead of failing the case twice.
+ */
+const CSP_CONSOLE_REPORT = /violates the following Content Security Policy directive/i;
+
+function watchErrors(page: Page, extraIgnore: RegExp[] = []): string[] {
     const errors: string[] = [];
+    const ignored = [...IGNORE, ...extraIgnore];
     page.on("console", (msg) => {
         if (msg.type() === "error") {
             const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
+            if (!ignored.some((re) => re.test(t))) errors.push(`console: ${t}`);
         }
     });
     page.on("pageerror", (err) => {
         const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
+        if (!ignored.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
     });
     return errors;
 }
@@ -71,7 +87,17 @@ async function openFile(page: Page, subject: AssetFileRef) {
     );
 }
 
-const cases = [
+interface ViewerCase {
+    ext: string;
+    viewer: string;
+    select?: RegExp;
+    wasm?: boolean;
+    requiresFeature?: string;
+    signedUrlChecks?: boolean;
+    supersplat?: boolean;
+}
+
+const cases: ViewerCase[] = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
     // (e.g. .glb → Three.js / Physna / VNTANA), so no single viewer auto-loads.
     // `wasm: true` = viewer needs WebAssembly + SharedArrayBuffer (COOP/COEP cross-origin
@@ -81,7 +107,18 @@ const cases = [
     { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
     { ext: ".usdz", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
     { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
-    { ext: ".spz", viewer: "Gaussian splat" },
+    // With ALLOWUNSAFEEVAL the SuperSplat Editor also opens .spz, so the picker appears.
+    { ext: ".spz", viewer: "Gaussian splat", select: /Gaussian Splat Viewer \(BabylonJS\)/i },
+    // `supersplat: true` = the SuperSplat Editor, checked inside its frame: the editor's splat count
+    // is above zero, its canvas differs from the empty editor's, no CSP violation beyond the
+    // SUPERSPLAT_CSP_BASELINE, and no request to a host other than the app, the API and AWS.
+    ...[".ply", ".splat", ".sog", ".spz", ".ksplat", ".lcc"].map((ext) => ({
+        ext,
+        viewer: "SuperSplat",
+        select: /SuperSplat Editor/i,
+        requiresFeature: "ALLOWUNSAFEEVAL",
+        supersplat: true,
+    })),
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
@@ -207,6 +244,9 @@ async function viewerSubject(page: Page, ext: string): Promise<AssetFileRef | nu
 
 for (const c of cases) {
     test(`viewer loads a ${c.ext} file (${c.viewer}) without init errors`, async ({ page }) => {
+        // Registered before the first navigation, so the init script reaches every document.
+        const cspViolations = c.supersplat ? await recordCspViolations(page.context()) : null;
+        const requestOrigins = c.supersplat ? recordRequestHosts(page.context()) : null;
         const subject = await viewerSubject(page, c.ext);
         test.skip(!subject, `No ${c.ext} file was found via the API in ${LOOKUP_SCOPE}`);
         if (c.requiresFeature) {
@@ -219,7 +259,7 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchErrors(page, c.supersplat ? [CSP_CONSOLE_REPORT] : []);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
         await openFile(page, subject!);
 
@@ -229,13 +269,19 @@ for (const c of cases) {
             timeout: 60_000,
         });
 
-        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load.
+        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load. The
+        // File Visualizer shows "No Viewer Component Selected" until a viewer is picked.
         if (c.select) {
-            const picker = page.getByRole("button", { name: /select viewer/i });
-            if (await picker.isVisible().catch(() => false)) {
-                await picker.click();
-                // The picker is a listbox of viewer options.
-                await page.getByRole("option", { name: c.select }).first().click();
+            const unpicked = page.getByText(/No Viewer Component Selected/i);
+            const surfaceShown = page.locator("canvas, iframe").first();
+            await expect(async () => {
+                const either =
+                    (await unpicked.isVisible().catch(() => false)) ||
+                    (await surfaceShown.isVisible().catch(() => false));
+                expect(either).toBe(true);
+            }).toPass({ timeout: 60_000 });
+            if (await unpicked.isVisible().catch(() => false)) {
+                await chooseViewer(page, c.select);
             }
         }
 
@@ -258,6 +304,33 @@ for (const c of cases) {
 
         // No uncaught page errors or viewer-init console errors.
         expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+
+        if (c.supersplat) {
+            await expectSuperSplatRendered(
+                page,
+                page.locator('iframe[title="SuperSplat Editor"]'),
+                fileName
+            );
+            // The editor keeps loading after the check above; its load errors count too.
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            const unexpected = unexpectedCspViolations(cspViolations!, SUPERSPLAT_CSP_BASELINE);
+            expect(
+                unexpected,
+                `CSP violations beyond the SuperSplat baseline:\n${JSON.stringify(
+                    unexpected,
+                    null,
+                    2
+                )}`
+            ).toEqual([]);
+            const api = await apiContext(page);
+            const thirdParty = thirdPartyOrigins(requestOrigins!, [
+                new URL(page.url()).origin,
+                ...(api ? [api.base] : []),
+            ]);
+            expect(thirdParty, `requests to third-party hosts: ${thirdParty.join(", ")}`).toEqual(
+                []
+            );
+        }
 
         if (signedUrls) {
             const { partialResponses, appOriginLeaks } = await signedUrls.summary();

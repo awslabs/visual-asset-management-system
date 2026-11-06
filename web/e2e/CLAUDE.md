@@ -149,6 +149,13 @@ locators — the app's markup is not always guessable, and these were establishe
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
 
+`support/viewerRender.ts` holds the viewer render and page-safety checks `viewers.spec.ts` uses:
+`recordCspViolations` / `unexpectedCspViolations` (every `securitypolicyviolation` from the page and its
+frames, against an exact baseline), `recordRequestHosts` / `thirdPartyOrigins` (any host other than the
+app, the API and AWS endpoints), `pixelStats` (decodes an element screenshot in a blank page: distinct
+colours, luminance spread, share of pixels changed against a baseline) and `expectSuperSplatRendered`
+(the editor's splat count is above zero and its canvas differs from the empty editor's).
+
 **Selector facts worth not rediscovering:**
 
 -   The orchestration search input is `getByLabel("Search")`; match it by label, not by its placeholder
@@ -222,7 +229,13 @@ npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
 E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
 E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
+
+The SuperSplat Editor renders only through WebGPU, which headless Chromium hides unless `E2E_WEBGPU=1`
+turns it on. Without an adapter the SuperSplat cases skip with the reason; `E2E_REQUIRE_WEBGPU=1` makes
+that a failure. On a machine with no GPU, Chromium's software adapter loses the device while the editor
+loads a file (v3.1.1 and v3.7.0 alike), so run the render checks where a GPU is available.
 
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
 and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:

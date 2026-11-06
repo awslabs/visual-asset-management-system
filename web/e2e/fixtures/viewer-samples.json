@@ -1,0 +1,84 @@
+{
+    "$comment": "Sample files for the viewer smoke (viewers.spec.ts). Download each at test time, check its sha256, and upload it to a distributable asset; never commit the files. A 'derived' entry is generated from its 'from' sample with the named tool and version, and the sha256 is that of the derived file. Licences were checked when each entry was added.",
+    "samples": [
+        {
+            "ext": ".ply",
+            "file": "Halo_Believe.ply",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/Halo_Believe.ply",
+            "sha256": "0fac736b4fc62b2c01b19fc71047c930af4cfb94152ee53a26b102df78f555b9",
+            "size": 19332514,
+            "licence": "CC-BY-4.0",
+            "source": "BabylonJS/Assets (repository licence CC BY 4.0; the splats folder names no other licence)",
+            "viewers": ["supersplat-viewer"]
+        },
+        {
+            "ext": ".splat",
+            "file": "Halo_Believe.splat",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/Halo_Believe.splat",
+            "sha256": "728e7796cdeb96f19d8b0e12b2d60f875efeff8ca280e06e02e54f99594cfed6",
+            "size": 11046944,
+            "licence": "CC-BY-4.0",
+            "source": "BabylonJS/Assets",
+            "viewers": ["supersplat-viewer"]
+        },
+        {
+            "ext": ".sog",
+            "file": "Halo_Believe.sog",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/Halo_Believe.sog",
+            "sha256": "017668520354edcc06d5d9ab2e26808049d40ec2413267fc03d82faa7013d5a4",
+            "size": 4244547,
+            "licence": "CC-BY-4.0",
+            "source": "BabylonJS/Assets",
+            "viewers": ["supersplat-viewer"]
+        },
+        {
+            "ext": ".spz",
+            "file": "combined_SPZv3.spz",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/combined_SPZv3.spz",
+            "sha256": "14805dea9458a8c301b24ecb817c92b459cb91319819b4f45e6683d1ca4430b6",
+            "size": 5374,
+            "licence": "CC-BY-4.0",
+            "source": "BabylonJS/Assets (SPZ version 3, gzip)",
+            "viewers": ["supersplat-viewer", "gaussian-splat-viewer-babylonjs"]
+        },
+        {
+            "ext": ".spz",
+            "file": "Halo_Believe.spz",
+            "derived": {
+                "from": "Halo_Believe.ply",
+                "tool": "@playcanvas/splat-transform",
+                "version": "3.10.2",
+                "toolLicence": "MIT",
+                "command": "splat-transform Halo_Believe.ply Halo_Believe.spz"
+            },
+            "sha256": "a70c61327dd06cabcf012bdc3248d76d06de6504ed6547cbaf1a60397e9718d9",
+            "size": 5430651,
+            "licence": "CC-BY-4.0",
+            "source": "derived from the BabylonJS/Assets Halo_Believe.ply (SPZ version 4, the tool's default)",
+            "viewers": ["supersplat-viewer", "gaussian-splat-viewer-babylonjs"]
+        },
+        {
+            "ext": ".ksplat",
+            "file": "Halo_Believe.ksplat",
+            "derived": {
+                "from": "Halo_Believe.ply",
+                "tool": "@mkkellogg/gaussian-splats-3d",
+                "version": "0.4.7",
+                "toolLicence": "MIT",
+                "command": "PlyParser.parseToUncompressedSplatArray(ply, 0), then SplatBufferGenerator.getStandardGenerator(1, 1, 0).generateFromUncompressedSplatArray (the steps of the repository's util/create-ksplat.js, compression level 1)"
+            },
+            "sha256": "31f3a23bdfba85ab7685621e4efad94318c274b9cc5ed01061ecede651a031ea",
+            "size": 8301348,
+            "licence": "CC-BY-4.0",
+            "source": "derived from the BabylonJS/Assets Halo_Believe.ply",
+            "viewers": ["supersplat-viewer"]
+        }
+    ],
+    "unavailable": [
+        {
+            "ext": ".lcc",
+            "viewers": ["supersplat-viewer"],
+            "reason": "No permissively licensed XGRIDS LCC sample was found, and no open tool writes LCC. The .lcc case runs only against an environment that already holds an .lcc file, and skips otherwise."
+        }
+    ]
+}
