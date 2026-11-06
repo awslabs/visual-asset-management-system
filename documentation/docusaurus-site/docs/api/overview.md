@@ -240,6 +240,7 @@ The VAMS API is organized into the following functional groups:
 | **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                      | [Assets](assets.md)                 |
 | **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                      | [Asset Versions](asset-versions.md) |
 | **Files**          | File listing, operations, upload, streaming, preview management                                   | [Files](files.md)                   |
+| **Zip Downloads**  | Background zip, tar, and tar.gz archives of files, folders, or a whole asset, and their URLs      | [Zip Downloads](zip-downloads.md)   |
 | **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas                | [Metadata](metadata.md)             |
 | **Search**         | Full-text and structured search across assets and files                                           | [Search](search.md)                 |
 | **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                                  | [Pipelines](pipelines.md)           |

@@ -294,6 +294,7 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | GenAI CAD STEP agent, Fargate runtime (`useGenAiCadStepAgent`, `runtime: "fargate"`)     | Yes                        | Yes            | 2                                | Batch compute, NAT egress for research                             |
 | GenAI CAD STEP agent, AgentCore runtime (`useGenAiCadStepAgent`, `runtime: "agentcore"`) | Isolated only              | No             | 2                                | Pipeline Lambdas only; the agent runs on AgentCore outside the VPC |
 | Coordinate Transform (`useConversionCoordinateTransform`)                                | Isolated only              | No             | 2                                | Batch compute                                                      |
+| Download as Zip archive pipeline (`app.zipDownloads`)                                    | Isolated only              | No             | 2                                | Batch compute                                                      |
 | Isaac Lab Training (`useIsaacLabTraining`)                                               | Yes                        | Yes            | 2                                | Batch compute + CodeBuild                                          |
 | NVIDIA Cosmos (`useNvidiaCosmos`)                                                        | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild                                    |
 | NVIDIA Gr00t (`useNvidiaGr00t`)                                                          | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild                                    |
@@ -1214,6 +1215,53 @@ Engine: `infra/lib/lambdaBuilder/largeObjectCopyEngine.ts`, `backend/backend/com
 | `app.largeFileIngestion.maxOutputIngestionWaitHours`   | number | `48`                  | 1 to 168        | How long a workflow execution waits for its large outputs before it fails.                                     |
 
 A workflow uses the new wait the next time it is launched after an upgrade: the launch redeploys its state machine first. A run already in flight during the upgrade finishes on its old definition, and the copy engine records its outcome when its copies finish.
+
+## Zip downloads (`app.zipDownloads`)
+
+Download as Zip packages files, folders, or a whole asset into one zip (ZIP64), tar, or tar.gz archive in the background, built by the `vams-archive` system pipeline on AWS Batch with AWS Fargate compute. See [Zip Downloads](../user-guide/zip-downloads.md) and the [Archive pipeline](../pipelines/archive.md).
+
+The `ZipDownloadRequestsStorageTable` table, the `preparedDownloads/` lifecycle rules on the asset auxiliary bucket, and the zip download API routes and functions are deployed whether or not the feature is enabled; with `enabled` set to `false` every zip download route answers `404`. The archive pipeline, its AWS Batch resources and container image, its pipeline and workflow registration, and the `ZIPDOWNLOADS` feature switch are created only when `enabled` is `true`. **Requires VPC** when enabled.
+
+Every key is optional, and an absent block uses the defaults. Configuration validation checks every key, also while the feature is disabled, and rejects a value that is not a whole number within its range.
+
+:::note[Implemented by]
+Archive pipeline nested stack: `infra/lib/nestedStacks/pipelines/utility/archive/`. API: `backend/backend/handlers/zipDownloads/zipDownloadService.py`. Defaults and validation: `infra/config/config.ts`.
+:::
+
+<!-- TODO-VERIFY: the exact constant and function names of the zipDownloads defaults/validation in infra/config/config.ts, and the nested stack file and class names under infra/lib/nestedStacks/pipelines/utility/archive/. -->
+
+| Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                    |
+| ------------------------------------------- | ------- | ----------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.zipDownloads.enabled`                  | boolean | `false`                 | --                         | Enables Download as Zip: the archive pipeline, the feature switch, and the web, CLI, and MCP controls. Requires `app.useGlobalVpc.enabled`.    |
+| `app.zipDownloads.retentionDays`            | number  | `7`                     | 1 to 30                    | Days a job and its archive are kept after the job was created: the table's time to live and the expiration of the `preparedDownloads/` prefix. |
+| `app.zipDownloads.maxFilesPerRequest`       | number  | `100000`                | 1 to 1,000,000             | Most files one archive holds.                                                                                                                  |
+| `app.zipDownloads.maxTotalBytesPerRequest`  | number  | `5497558138880` (5 TiB) | 1 byte to 5 TiB            | Largest total size of the files one archive holds. 5 TiB is the Amazon S3 single-object limit.                                                 |
+| `app.zipDownloads.maxActiveRequestsPerUser` | number  | `5`                     | 1 to 100                   | Most jobs one user can have queued or running at the same time.                                                                                |
+| `app.zipDownloads.computeVcpu`              | number  | `16`                    | `4`, `8`, or `16`          | vCPUs of the archive job's AWS Fargate task.                                                                                                   |
+| `app.zipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the archive job's AWS Fargate task, in GiB.                                                                                          |
+
+`computeMemoryGiB` must be a memory size AWS Fargate supports for the chosen vCPU count: 8 to 30 GiB in 1 GiB steps for 4 vCPU, 16 to 60 GiB in 4 GiB steps for 8 vCPU, and 32 to 120 GiB in 8 GiB steps for 16 vCPU.
+
+<!-- TODO-VERIFY: the Fargate memory validation rule in getConfig() (steps and bounds) matches this paragraph and the ConfigBuilder rule zip-downloads-compute-memory. -->
+
+Changing `retentionDays` applies to jobs created afterwards; the lifecycle rule applies the new expiration to every archive under `preparedDownloads/`.
+
+```json
+{
+    "app": {
+        "useGlobalVpc": { "enabled": true },
+        "zipDownloads": {
+            "enabled": true,
+            "retentionDays": 7,
+            "maxFilesPerRequest": 100000,
+            "maxTotalBytesPerRequest": 5497558138880,
+            "maxActiveRequestsPerUser": 5,
+            "computeVcpu": 16,
+            "computeMemoryGiB": 32
+        }
+    }
+}
+```
 
 ## Addons (`app.addons`)
 

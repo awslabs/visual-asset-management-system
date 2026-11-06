@@ -314,6 +314,10 @@ For distributable assets, you can generate shareable download URLs:
 
 ![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
 
+### Download as Zip
+
+When the deployment enables Download as Zip, the **Export** menu in the file details toolbar offers **Download as Zip** for any selection of files and folders, or for the asset root. VAMS builds one zip, tar, or tar.gz archive in the background from the current files or from an asset version, and lists the job in the asset's **My zip downloads** tab, where you download, cancel, or delete it. The whole archive is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type. See [Zip Downloads](zip-downloads.md).
+
 ---
 
 ## Asset Relationships

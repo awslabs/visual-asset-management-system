@@ -603,6 +603,14 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+**Download as Zip** is gated twice: the `ZIPDOWNLOADS` feature switch decides whether the controls exist at all,
+and `useAllowedRoutes().can()` on the zip routes (a server decision) decides whether the user sees them. The
+file manager's **Export** menu offers **Download as Zip** for file, folder, root and mixed selections (hidden for
+an asset that is not distributable or is archived); the asset tab `zipDownloads` (**My zip downloads**) and the
+global page `#/zipdownloads` list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+
+<!-- TODO-VERIFY: component file names and paths against web/src (web lane). -->
+
 ---
 
 ## 📐 **Gold Standard Reference Files**

@@ -188,6 +188,7 @@ interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; GSI WorkflowExecutionIdIndex (PK workflowExecutionId); large object copy job rows + workflow ingestion batch rows
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSI UserAssetIndex (PK userAssetKey, SK requestId, ALL); Download as Zip jobs, always deployed (TODO-VERIFY: property name in storageResources)
     };
 }
 ```
@@ -1235,13 +1236,24 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     registration. Only the import function's marked cross-call can set it; the API then refuses every
     change except the `enabled` switches and a template's `configBody` / `tagSchema` / `webFormJson`,
     and each registration re-asserts the shipped values, so `enabled` is a pause switch. Any principal
-    allowed to invoke the import function can register system records. No built-in bundle sets the
-    flag yet.
+    allowed to invoke the import function can register system records. The archive bundle
+    (`backendPipelines/utility/archive/`, below) is the shipped system bundle.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
 vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
+
+### **System Pipelines (`isSystem` Bundles) and the Archive Pipeline** (mirrors `backendPipelines/CLAUDE.md`)
+
+A bundle whose `pipeline.json` and `workflow.json` carry `"isSystem": true` registers a deployment-owned
+record the API holds read-only except for `enabled` and template content (`backend/backend/common/workflows/systemRecords.py`), and runs of its workflow are hidden from the execution lists by default. The first shipped one is `utility/archive/` (`vams-archive`, pipeline and workflow id fixed by the CDK's `idOverrides`, database `GLOBAL`, registered only when `app.zipDownloads.enabled`):
+
+-   **Two modes, decided from the run manifest.** `vamsExecuteArchivePipeline.py` reads the manifest's server-only `systemExecutionContext` (written only for a run VAMS launched under the `Zip-Download` system trigger; P2a). With it, the run is a **zip download**: the context names the job and its request manifest under `preparedDownloads/` in the auxiliary bucket, which is the authority for what is archived; the archive goes to the job's key and the container writes the job row's status and progress (conditional on the row being non-terminal and on this run's execution id, parsed from the orchestration event prefix). Without it, the run is an **archive run**: the inputs are archived into the run's outputs files prefix and the output step ingests the archive as a new file version (outputs over 1 GiB go through the large object copy engine, so there is no size cap). Its configBody keys are `format`, `compression`, `outputFileName`, `includePatterns`, `excludePatterns`, `assetVersionId`; any other key is refused in `constructPipeline.py`.
+-   **The job command carries locations, not lists.** AWS Batch bounds the size of a job's command override, so `constructPipeline.py` passes the request manifest's or the run manifest's location and the container reads the selection itself. The cross-pipeline input-version guard lists this pipeline under `CONTAINER_MANIFEST_PIPELINES` and checks the container source for the per-entry version read.
+-   **Refuse the whole archive.** Before writing a byte the container head-checks every member on its pinned version (`archive_pipeline/resolve.py`, `rules.py`): a delete marker, a missing version, `GLACIER` / `DEEP_ARCHIVE`, `vams-status` archived or deleted, or a blocked extension or media type refuses the archive with a user-safe reason (`ZIPDOWNLOAD:`-prefixed in the task failure cause). A zip download carries the deployment's merged blocklists in its request manifest; an archive run uses the core lists in `rules.py`, which `container/tests/test_runner.py` pins to backend `CORE_UNALLOWED_*`.
+-   **Streaming engine, never on disk.** `archive_pipeline/engine/`: `reader.py` (ordered, byte-bounded ranged GETs of pinned versions across members, retried, length-checked), `zipstream.py` (ZIP64 local headers and 8-byte data descriptors for members that can reach 4 GiB, ZIP64 central records for any overflowing size or offset, ZIP64 end records past 65,535 entries or 4 GiB of directory, UTF-8 names, directory entries for empty folders, STORE or DEFLATE), `tarstream.py` (pax tar and tar.gz in plain write mode over a forward-only sink; the `w|` stream mode is quadratic per write and is not used), `sink.py` (multipart upload, part size `max(16 MiB, ceil(estimate / 9500))` rounded to 1 MiB and capped at 5 GiB, at most four parts in flight, aborted on any error and on SIGTERM). `container/tests/test_zip64_streaming.py` streams a member over 4 GiB and 70,000 entries and validates both with Python `zipfile` and `unzip -t` (set `ARCHIVE_TEST_TMPDIR` to put the file on disk).
+-   **Container environment:** `ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME`, `ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME` (archive-run asset-version pins), `TASK_TOKEN`; the VAMS task token is heartbeated every five minutes. `taskTimeout` is 12 hours.
 
 ### **Registering Sub-Processes and Logs (Abort, Stage Status, Log Sources)**
 
