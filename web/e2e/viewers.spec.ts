@@ -3,8 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
+import { test, expect, Page, Request, Response } from "@playwright/test";
+import {
+    type AssetFileRef,
+    expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -24,52 +39,6 @@ import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./s
  * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
  * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -99,28 +68,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -219,9 +166,9 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -273,191 +220,260 @@ for (const c of cases) {
     });
 }
 
-// ---------------------------------------------------------------------------------------------
-// BabylonJS Gaussian Splat viewer: every supported format renders, with no CDN fetch
-// ---------------------------------------------------------------------------------------------
-
 /**
- * The BabylonJS splat viewer must draw real content for each format it lists, and must not reach a
- * third-party host while doing so: Babylon.js 9's splat loader defaults to fetching @adobe/spz and
- * fflate from unpkg, which the CSP blocks and an air-gapped, GovCloud or EU Sovereign deployment
- * cannot reach (web/customInstalls/babylonjs/runtimeFetches.js removes them at install time).
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
  *
- * The subjects are the files e2e/support/prepareSplatSamples.mjs derives from the sample in
- * e2e/fixtures/viewer-samples.json and uploads to a distributable asset. Each case skips, with the
- * reason, when its file is not in the scanned assets.
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
-const SPLAT_CASES: Array<{ file: string; expect: "render" | "refuse"; pick: boolean }> = [
-    // `pick` = the extension maps to more than one viewer, so the BabylonJS viewer is chosen.
-    { file: "vams-e2e-splat.ply", expect: "render", pick: true },
-    { file: "vams-e2e-splat-v3.spz", expect: "render", pick: false },
-    // SPZ version 4 needs @adobe/spz, which the CSP does not allow; the viewer names the version.
-    { file: "vams-e2e-splat-v4.spz", expect: "refuse", pick: false },
-    { file: "vams-e2e-splat.splat", expect: "render", pick: true },
-    { file: "vams-e2e-splat.sog", expect: "render", pick: true },
+
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    viewer: string;
+    kind: RenderKind;
+    /** Viewer to choose when the file's extension matches more than one viewer. */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+}
+
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    // BabylonJS 9 with no CDN fetch (#1174): every listed format draws; SPZ version 4 is refused
+    // with a message (Babylon reads it only through @adobe/spz, which the CSP blocks).
+    {
+        sample: "splat-ply",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-spz-v3",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-spz-v4",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "refused",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-splat",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "BabylonJS Gaussian Splat",
+        kind: "canvas",
+        select: /BabylonJS/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
 ];
 
-/**
- * CSP violations the app raises on its own before any viewer opens, as `<directive> <blocked URI>`.
- * Exact entries only: a violation not listed here fails the case.
- */
-const CSP_VIOLATION_BASELINE: string[] = [];
+const seeded = viewerSamples();
 
-/** Hosts besides the app origin and the API that a viewer may contact: Amazon S3 and Amazon Cognito. */
-const AWS_HOST =
-    /^(?:[a-z0-9.-]+\.)?(?:s3|s3-[a-z0-9-]+|cognito-idp|cognito-identity)[.a-z0-9-]*\.amazonaws\.com(?:\.cn)?$/;
-
-/** Minimum distinct colours and luminance standard deviation of a canvas that shows a splat. */
-const RENDERED = { colours: 200, luminanceStdDev: 4 };
-
-let splatSubjects: Map<string, AssetFileRef> | null = null;
-
-async function splatSubject(page: Page, file: string): Promise<AssetFileRef | null> {
-    if (!splatSubjects) {
-        const found = await findAssetFiles(
-            page,
-            SPLAT_CASES.map((c) => c.file),
-            { ...SCAN, asset: process.env.E2E_VIEWER_ASSET, distributableOnly: true }
-        );
-        expect(found, "no API base or ID token in localStorage (E2E_FORCE_LOGIN=1)").not.toBeNull();
-        splatSubjects = found;
-    }
-    return splatSubjects!.get(file) ?? null;
-}
-
-/**
- * Records every CSP violation in the page: from the first script of any later document load, and in
- * the current document too, because opening a file from the app root only changes the URL fragment.
- */
-async function watchCspViolations(page: Page): Promise<() => Promise<string[]>> {
-    const install = () => {
-        const w = window as any;
-        if (w.__vamsCspViolations) return;
-        w.__vamsCspViolations = [];
-        document.addEventListener("securitypolicyviolation", (e) => {
-            w.__vamsCspViolations.push(`${e.violatedDirective} ${e.blockedURI}`);
-        });
-    };
-    await page.addInitScript(install);
-    if (page.url().startsWith("http")) await page.evaluate(install);
-    return async () =>
-        ((await page.evaluate(() => (window as any).__vamsCspViolations ?? [])) as string[]).filter(
-            (v) => !CSP_VIOLATION_BASELINE.includes(v)
-        );
-}
-
-/** Records the host of every request the page, its frames and its workers make. */
-function watchHosts(page: Page): () => string[] {
-    const hosts = new Set<string>();
-    const onRequest = (request: Request) => {
-        try {
-            const url = new URL(request.url());
-            if (url.protocol === "http:" || url.protocol === "https:") hosts.add(url.host);
-        } catch {
-            // blob: and data: URLs carry no host
-        }
-    };
-    page.context().on("request", onRequest);
-    return () => {
-        page.context().off("request", onRequest);
-        return [...hosts];
-    };
-}
-
-/**
- * Distinct colours and luminance standard deviation of what the canvas shows. Everything but the
- * canvas is hidden for the screenshot, so the viewer's panels and hints overlapping it do not count,
- * and an empty scene (one clear colour) scores about zero. The PNG is decoded in the page with
- * createImageBitmap, so no image library is needed.
- */
-async function canvasStats(page: Page, canvas: Locator) {
-    const png = await canvas.screenshot({
-        style: "* { visibility: hidden !important; } canvas { visibility: visible !important; }",
-    });
-    return page.evaluate(async (base64: string) => {
-        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-        const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const context = surface.getContext("2d")!;
-        context.drawImage(bitmap, 0, 0);
-        const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-        const colours = new Set<number>();
-        let sum = 0;
-        let sumSquares = 0;
-        const pixels = data.length / 4;
-        for (let i = 0; i < data.length; i += 4) {
-            colours.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
-            const y = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
-            sum += y;
-            sumSquares += y * y;
-        }
-        const mean = sum / pixels;
-        return {
-            colours: colours.size,
-            luminanceStdDev: Math.sqrt(Math.max(0, sumSquares / pixels - mean * mean)),
-        };
-    }, png.toString("base64"));
-}
-
-for (const c of SPLAT_CASES) {
-    test(`BabylonJS splat viewer ${c.expect === "render" ? "renders" : "refuses"} ${
-        c.file
-    } with no CDN fetch`, async ({ page }) => {
-        const subject = await splatSubject(page, c.file);
-        test.skip(
-            !subject,
-            `No ${c.file} was found via the API in ${LOOKUP_SCOPE}; seed it with ` +
-                "e2e/support/prepareSplatSamples.mjs"
-        );
-        const api = await apiContext(page);
-        const allowedHosts = [new URL(page.url()).host, api ? new URL(api.base).host : ""];
-
-        const errors = watchErrors(page);
-        const cspViolations = await watchCspViolations(page);
-        const hosts = watchHosts(page);
-        await openFile(page, subject!);
-        await expect(page.getByRole("heading", { name: c.file, exact: false })).toBeVisible({
-            timeout: 60_000,
-        });
-        if (c.pick) await chooseViewer(page, /BabylonJS/i);
-
-        if (c.expect === "refuse") {
-            await expect(page.getByRole("alert")).toContainText(
-                `${c.file} uses SPZ format version 4`,
-                { timeout: 60_000 }
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
             );
-        } else {
-            const canvas = page.locator(`canvas[aria-label*="${c.file}"]`);
-            await expect(canvas).toBeVisible({ timeout: 60_000 });
-            let last = { colours: 0, luminanceStdDev: 0 };
-            await expect
-                .poll(
-                    async () => {
-                        last = await canvasStats(page, canvas);
-                        return (
-                            last.colours >= RENDERED.colours &&
-                            last.luminanceStdDev >= RENDERED.luminanceStdDev
-                        );
-                    },
-                    { timeout: 90_000, intervals: [2_000, 5_000] }
-                )
-                .toBe(true)
-                .catch(() => {
-                    throw new Error(
-                        `${c.file} did not render: ${last.colours} colours, luminance standard ` +
-                            `deviation ${last.luminanceStdDev.toFixed(1)} (need ` +
-                            `${RENDERED.colours} and ${RENDERED.luminanceStdDev})`
-                    );
-                });
-            console.log(`[viewers] ${c.file} canvas ${JSON.stringify(last)}`);
-        }
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
 
-        expect(errors, `viewer errors for ${c.file}:\n${errors.join("\n")}`).toEqual([]);
-        expect(await cspViolations(), `CSP violations while ${c.file} was open`).toEqual([]);
-        const thirdParty = hosts().filter((h) => !allowedHosts.includes(h) && !AWS_HOST.test(h));
-        expect(
-            thirdParty,
-            `${c.file}: requests left the deployment (a CDN such as unpkg.com or jsdelivr.net?)`
-        ).toEqual([]);
-    });
-}
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
+
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
+            }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.select);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                const headers = page.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await page.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "refused") {
+                // The SuperSplat Editor reads SPZ version 4 and is offered only with
+                // ALLOWUNSAFEEVAL, so the message names it there and nowhere else.
+                const alert = page.getByRole("alert");
+                await expect(alert).toContainText(
+                    `${fileName} uses SPZ format version ${sample.expect?.spzVersion ?? 4}`,
+                    { timeout: 60_000 }
+                );
+                if (features.includes("ALLOWUNSAFEEVAL")) {
+                    await expect(alert).toContainText("Open it in the SuperSplat Editor instead");
+                } else {
+                    await expect(alert).toContainText("does not support");
+                    await expect(alert).not.toContainText("SuperSplat");
+                }
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});

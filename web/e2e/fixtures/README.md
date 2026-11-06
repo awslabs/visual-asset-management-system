@@ -5,9 +5,7 @@ Generated, untracked data for the seed-dependent Playwright specs. `compare-seed
 variable (the absolute path to the JSON). Specs skip, with a reason, when the variable is unset or the
 file is missing — no seed id is ever hardcoded in a tracked spec.
 
-`viewer-samples.json` is the one tracked file here. It names the sample files the viewer render checks
-in `viewers.spec.ts` open: each entry's URL, SHA-256, size, licence and source, verified before it was
-added, and how the derived formats are made from it. The samples themselves are downloaded at test time
-and never committed. `e2e/support/prepareSplatSamples.mjs` downloads the Gaussian splat sample, derives
-the `.ply`, SPZ version 3 and 4, `.splat` and `.sog` files, and uploads them with `vamscli` when given
-`--database` and `--asset`.
+`viewer-samples.json` is tracked source, not seed output: the manifest of public sample files (URL, size,
+SHA-256, licence, source) the viewer render cases in `viewers.spec.ts` open. `tools/VamsCLI/examples/seed_viewer_samples.py`
+downloads and checks each sample, uploads them to one distributable asset and writes `viewer-samples-seed.json`,
+which the specs read through `E2E_VIEWER_SAMPLES`. No sample file is committed.
