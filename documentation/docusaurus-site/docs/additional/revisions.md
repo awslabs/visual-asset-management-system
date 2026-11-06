@@ -45,12 +45,17 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **Database recreation** — Successfully recreating a database removes its old soft-delete marker so deleted-database queries no longer report the stale record. (issue #766)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
+-   **Web ALB name ending in a hyphen** — The web Application Load Balancer name no longer ends in a hyphen when the 32-character cut lands on one, which Elastic Load Balancing rejects at deploy. (issue #883)
+-   **CloudTrail trail limit in the quota check** — `npm run check.quotas` checks that the deployment Region has room for the stack's AWS CloudTrail trail (five per Region) when `app.addStackCloudTrailLogs` is on, and reports as not verified a Region that reaches five only with multi-Region or organization trails homed elsewhere; the configuration reference and deploy guide state the limit. (issue #863)
+-   **Infra tests ignore a deployment's own `config.json`** — The `retainLegacyGroupsAttribute` default test reads the committed `config.json` instead of the working copy, so a deployment's own edits no longer fail `npm test`. (PR #1006)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Row actions button always visible** — The three-dot actions button on the Pipelines, Workflows and Executions pages is drawn as an icon, so it no longer renders blank where no installed font has the dot character, and those pages' search boxes, and the pipeline template list's, show a placeholder. (issue #1024)
 -   **General error log level** — A `general_error()` response with a 4xx status is logged at WARNING instead of ERROR, and a 5xx response stays at ERROR, so expected client outcomes such as a 404 or 409 no longer appear as ERROR lines. (issue #935)
 -   **CLI token-override login** — `auth login --token-override` and `auth set-override` fail and clear the stored token when the API refuses it, instead of reporting success. (issue #817)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
+-   **Combined search facet counts** — A search across both assets and files reports database and tag facet counts and `aggregationTotal` for assets and files together, not assets only. (issue #1027)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
+-   **NVIDIA pipelines synthesize with CDK Nag** — A deployment with the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines enabled and `useCodeBuild: false` (the default) no longer fails `cdk synth` on an unsuppressed `ecr:GetAuthorizationToken` wildcard. Permissions are unchanged. (issue #1023)
 -   **Refresh buttons and Search box keep keyboard focus** — The refresh buttons on the Pipelines, Workflows and Executions pages, an asset's Executions tab and the pipeline template list, and the Search page's query box and Clear All Filters keep keyboard focus while their request runs instead of sending it to the top of the page; they say they are working and ignore a second press. (issues #1069, #902)
 
 **Other changes:**
