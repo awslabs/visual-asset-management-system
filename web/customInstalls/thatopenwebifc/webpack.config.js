@@ -13,25 +13,31 @@ const CopyPlugin = require("copy-webpack-plugin");
 // 'credentialless' isolation boundary. This mirrors how the threejs install
 // copies occt-import-js *.wasm files.
 //
-// Note on filenames (verified against the installed packages):
+// Note on filenames (verified against web-ifc 0.0.77 and @thatopen/fragments 3.6.0):
 //  - web-ifc ships web-ifc.wasm (single-thread), web-ifc-mt.wasm (multithread,
 //    SharedArrayBuffer) and web-ifc-node.wasm (Node only). The multithread
 //    worker is embedded in the JS glue, so there is no separate web-ifc worker
 //    file to copy. We copy web-ifc.wasm and web-ifc-mt.wasm and skip the
 //    node-only build.
-//  - @thatopen/fragments ships its model worker at dist/Worker/worker.min.mjs.
+//  - @thatopen/fragments ships its model worker at dist/Worker/worker.min.mjs
+//    (its "./worker" export points at the unminified dist/Worker/worker.mjs).
+//
+// Every entry below is required at runtime, so noErrorOnMissing is false: if a
+// library upgrade renames or moves one of these files, the webpack build (and
+// therefore the install) fails loudly instead of silently shipping a viewer
+// whose WASM or worker URL 404s.
 const copyPatterns = [
     // web-ifc browser WASM binaries (single-thread + multithread). The
     // node-only build is intentionally excluded.
     {
         from: "node_modules/web-ifc/web-ifc.wasm",
         to: "web-ifc.wasm",
-        noErrorOnMissing: true,
+        noErrorOnMissing: false,
     },
     {
         from: "node_modules/web-ifc/web-ifc-mt.wasm",
         to: "web-ifc-mt.wasm",
-        noErrorOnMissing: true,
+        noErrorOnMissing: false,
     },
     // @thatopen/fragments model worker. It is fully minified and self-contained
     // (no bare import specifiers), so it can be served standalone. Copy it to a
@@ -41,7 +47,7 @@ const copyPatterns = [
     {
         from: "node_modules/@thatopen/fragments/dist/Worker/worker.min.mjs",
         to: "thatopenwebifc-fragments-worker.js",
-        noErrorOnMissing: true,
+        noErrorOnMissing: false,
     },
 ];
 
@@ -68,12 +74,39 @@ module.exports = {
     },
     resolve: {
         extensions: [".js", ".mjs", ".json"],
+        alias: {
+            // components-front 3.5+ lazily imports the OPTIONAL peer
+            // potree-core, only from its opt-in PointCloudLoader (Potree
+            // octrees), which this viewer never uses. potree-core is not
+            // installed, so resolve it to an empty module instead of failing
+            // the build. Point clouds are handled by VAMS's own Potree viewer.
+            "potree-core": false,
+        },
         fallback: {
             // Node core modules referenced by some deps but unneeded in browser.
             fs: false,
             path: false,
             crypto: false,
         },
+    },
+    module: {
+        rules: [
+            {
+                // That Open 3.5+ ships an opt-in WebGPU path that reads
+                // WebGPU-only names (WebGPURenderer, TSL, NodeMaterial, ...) off
+                // `import * as THREE from "three"`. Those names exist only when an
+                // app aliases `three` to `three/webgpu`; VAMS uses the WebGL
+                // renderer, so they are undefined here and every access is
+                // feature-detected (`typeof THREE.WebGPURenderer === "function"`,
+                // `THREE.NodeMaterial ?? class {}`) or sits in the lazily
+                // imported deferred-pipeline chunk that WebGL never loads.
+                // Webpack's strict ESM check turns each access into a build
+                // error, so downgrade it to a warning for these packages only;
+                // the matching warnings are filtered in ignoreWarnings below.
+                test: /[\\/]node_modules[\\/]@thatopen[\\/]/,
+                parser: { importExportsPresence: "warn" },
+            },
+        ],
     },
     plugins: [new CopyPlugin({ patterns: copyPatterns })],
     optimization: {
@@ -87,5 +120,11 @@ module.exports = {
     },
     // Silence "Critical dependency: the request of a dependency is an expression"
     // warnings that web-ifc/emscripten glue can emit; they are non-fatal.
-    ignoreWarnings: [/Critical dependency/],
+    // Also filter the expected "WebGPU-only export not found in 'three'"
+    // warnings described in module.rules above. The list is exact so a missing
+    // export of any other name still surfaces as a build warning.
+    ignoreWarnings: [
+        /Critical dependency/,
+        /export '(WebGPURenderer|TSL|NodeMaterial|PointsNodeMaterial|MRTNode|Node|NodeUpdateType|StorageTexture|BlendMode|RenderPipeline)' \(imported as '[\w$]+'\) was not found in 'three'/,
+    ],
 };

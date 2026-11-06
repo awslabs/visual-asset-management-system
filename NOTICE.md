@@ -114,9 +114,9 @@ This software includes third party software subject to the following copyrights:
 | @babylonjs/core            | [8.33.0](https://www.npmjs.com/package/@babylonjs/core)      | Apache-2.0            |
 | @babylonjs/loaders         | [8.33.0](https://www.npmjs.com/package/@babylonjs/loaders)   | Apache-2.0            |
 | @needle-tools/engine       | [aab170a](https://github.com/needle-tools/usd-viewer)        | Apache-2.0 (Modified) |
-| @thatopen/components       | [3.4.6](https://github.com/ThatOpen/engine_components)       | MIT                   |
-| @thatopen/components-front | [3.4.3](https://github.com/ThatOpen/engine_components)       | MIT                   |
-| @thatopen/fragments        | [3.4.5](https://github.com/ThatOpen/engine_fragment)         | MIT                   |
+| @thatopen/components       | [3.6.0](https://github.com/ThatOpen/engine_components)       | MIT                   |
+| @thatopen/components-front | [3.6.0](https://github.com/ThatOpen/engine_components)       | MIT                   |
+| @thatopen/fragments        | [3.6.0](https://github.com/ThatOpen/engine_fragment)         | MIT                   |
 | camera-controls            | [3.1.2](https://github.com/yomotsu/camera-controls)          | MIT                   |
 | @cesium/engine             | [26.1.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
 | fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
@@ -125,7 +125,7 @@ This software includes third party software subject to the following copyrights:
 | playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
-| three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
+| three                      | [0.182.0, 0.184.0](https://threejs.org/)                     | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |
 | web-ifc                    | [0.0.77, 0.0.68](https://github.com/ThatOpen/engine_web-ifc) | MPL-2.0\*\*           |
 | draco3d                    | [1.5.7](https://github.com/google/draco)                     | Apache-2.0            |
