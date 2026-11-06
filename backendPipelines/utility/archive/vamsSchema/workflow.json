@@ -1,0 +1,6 @@
+{
+    "workflowName": "Archive",
+    "category": "Utility",
+    "description": "Archive selected files, folders or the whole asset into a zip, tar or tar.gz file written back to the asset. Also runs Download as Zip jobs.",
+    "isSystem": true
+}
