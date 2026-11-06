@@ -103,6 +103,12 @@ RECONCILE_EXECUTION_STATUSES = ("FAILED", "TIMED_OUT", "ABORTED")
 STOP_ERROR_CANCELLED = "Cancelled"
 # Copy executions the execution details read checks per read for one that ended unreported.
 MAX_RECONCILE_CHECKS_PER_READ = 5
+# Least seconds between two such checks of one run, however many viewers read it: the read claims
+# the check on the run's row (lastCopyReconcileCheckDate), so a run costs at most
+# MAX_RECONCILE_CHECKS_PER_READ DescribeExecution calls per interval.
+COPY_RECONCILE_CHECK_INTERVAL_SECONDS = 60
+# Main execution row attribute the details read stamps when it checks the run's copy executions.
+COPY_RECONCILE_CHECK_ATTRIBUTE = "lastCopyReconcileCheckDate"
 
 # Environment variables (set by CDK on every function that starts, runs or waits on copy jobs).
 ENV_STATE_MACHINE_ARN = "LARGE_OBJECT_COPY_STATE_MACHINE_ARN"
@@ -391,6 +397,106 @@ def update_job_row(table, job_id, values, condition=None, condition_values=None)
         raise
 
 
+# A job row's status only moves forward: QUEUED -> RUNNING -> SUCCEEDED | FAILED | CANCELLED. Every
+# writer of a status conditions its write on the row still being open (this condition, with
+# OPEN_JOB_VALUES), so a task of a stopped execution that is still running (StopExecution does not
+# stop a Lambda invocation in flight) can never move a finalized job back to RUNNING or over to
+# another outcome. The cancel path's CANCELLED write keeps its own condition (not over SUCCEEDED or
+# FAILED).
+OPEN_JOB_CONDITION = "attribute_exists(jobId) AND (attribute_not_exists(#s) OR #s IN (:open_q, :open_r))"
+OPEN_JOB_VALUES = {":open_q": STATUS_QUEUED, ":open_r": STATUS_RUNNING}
+
+
+def is_open_job(row):
+    """True for a recorded job that is not in a terminal status."""
+    return bool(row) and row.get("status", STATUS_QUEUED) not in TERMINAL_JOB_STATUSES
+
+
+def finalize_job(table, job_id, status, values=None, from_cancelled=False):
+    """Move an open job to its terminal ``status``, exactly once, and stamp finalizedAt.
+
+    Returns the terminal status this call finalized the job with, or None when the job was already
+    finalized (another writer won; the caller then acts on the stored outcome, not its own). With
+    ``from_cancelled`` a job the cancel path marked CANCELLED (which does no cleanup or audit of its
+    own) is finalized as CANCELLED once, keeping its status and reason."""
+    now = _iso_now()
+    written = {"status": status, "finishedAt": now, "finalizedAt": now}
+    written.update(values or {})
+    if update_job_row(table, job_id, written, condition=OPEN_JOB_CONDITION,
+                      condition_values=dict(OPEN_JOB_VALUES)):
+        return status
+    if from_cancelled and update_job_row(
+            table, job_id, {"finalizedAt": now},
+            condition="#s = :c AND attribute_not_exists(finalizedAt)",
+            condition_values={":c": STATUS_CANCELLED}):
+        return STATUS_CANCELLED
+    return None
+
+
+def claim_job_flag(table, job_id, flag):
+    """Claim a once-only side effect of a finalized job (its audit entry, its post-landing work) by
+    stamping ``flag`` on the row. True for exactly one caller."""
+    try:
+        table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET #f = :n",
+            ConditionExpression="attribute_exists(jobId) AND attribute_not_exists(#f)",
+            ExpressionAttributeNames={"#f": flag},
+            ExpressionAttributeValues={":n": _iso_now()},
+        )
+        return True
+    except ClientError as e:
+        if _is_condition_failure(e):
+            return False
+        raise
+
+
+def release_job_flag(table, job_id, flag):
+    """Undo a claim whose side effect could not be done, so a later caller can do it. Best-effort."""
+    try:
+        table.update_item(Key={"jobId": job_id}, UpdateExpression="REMOVE #f",
+                          ExpressionAttributeNames={"#f": flag})
+    except Exception as e:
+        logger.warning(f"Could not release {flag} of copy job {job_id}: {e}")
+
+
+def object_identity(head):
+    """A comparable identity of the object a HEAD described (version, ETag, last modified), or
+    "absent" for no object."""
+    if not head:
+        return "absent"
+    modified = head.get("LastModified")
+    modified = modified.isoformat() if hasattr(modified, "isoformat") else str(modified or "")
+    return f"{head.get('VersionId') or ''}|{head.get('ETag') or ''}|{modified}"
+
+
+def landed_object_version(s3_client, row):
+    """(landed, version_id) for a job whose multipart upload no longer exists while the job is open.
+
+    Only the engine's Complete completes a job's multipart upload, and every other remover of the
+    upload (fail, the reconcile, the cancel path) aborts it before or after finalizing the job, so an
+    open job whose upload is gone was completed by Complete, unless something outside VAMS removed
+    it (a bucket lifecycle rule). The destination then counts as landed only when it holds an object
+    of the planned size and part count that is not the object that was there when Prepare created
+    the upload (destPriorIdentity; rows recorded before it existed check size and parts only)."""
+    try:
+        head = s3_client.head_object(Bucket=row.get("destBucket"), Key=row.get("destKey"))
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return False, ""
+        raise
+    etag = (head.get("ETag") or "").strip('"')
+    try:
+        planned = (int(head.get("ContentLength", -1)) == int(row.get("sourceSize") or -2)
+                   and etag.endswith(f"-{int(row.get('partCount') or 0)}"))
+    except (TypeError, ValueError):
+        planned = False
+    prior = row.get("destPriorIdentity")
+    if not planned or (prior and object_identity(head) == prior):
+        return False, ""
+    return True, head.get("VersionId", "") or ""
+
+
 def record_batch(table, batch_id, job_ids, context):
     """Record (or refresh) an ingestion batch: the copy jobs it waits on and the context the finalize
     step needs. Upsert: a job that finished first may already have created the row with its terminal
@@ -459,13 +565,18 @@ def get_batch(table, batch_id):
     return table.get_item(Key={"jobId": batch_key(batch_id)}, ConsistentRead=True).get("Item") or {}
 
 
-def count_job_terminal(dynamodb_client, table_name, job_id, batch_id, status, extra=None):
-    """Mark a job terminal and count it on its batch, in one transaction, exactly once.
+def count_job_terminal(dynamodb_client, table_name, job_id, batch_id, status=None, extra=None):
+    """Count a finalized job on its batch, in one transaction, exactly once.
 
     The job row's ``counted`` flag is set only if it is not set yet, and the batch's terminalCount is
     incremented in the same transaction, so a retried notify neither double counts nor loses the
-    count. Returns True when this call counted the job, False when it was counted before."""
-    values = {"status": status, "counted": True, "finishedAt": _iso_now(), "expiresAt": _expires_at()}
+    count. The job's status is not written unless ``status`` is given (finalize_job writes it, so the
+    count never changes an outcome). Returns True when this call counted the job, False when it was
+    counted before."""
+    values = {"counted": True, "expiresAt": _expires_at()}
+    if status:
+        values["status"] = status
+        values["finishedAt"] = _iso_now()
     values.update(extra or {})
     names = {f"#k{i}": k for i, k in enumerate(values)}
     attr_values = {f":v{i}": _serializer.serialize(v) for i, v in enumerate(values.values())}
@@ -625,7 +736,7 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                                     f"be stopped and may still be running.")
                     continue
         # A job with no upload id yet may be inside Prepare: Prepare records its upload only while
-        # the job is not CANCELLED and otherwise aborts the upload itself.
+        # the job is open and otherwise aborts the upload itself.
         upload_id = job.get("uploadIdS3", "")
         if upload_id:
             try:
@@ -636,11 +747,34 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     logger.exception(f"Could not abort the multipart upload of copy job {job_id}: {e}")
                     warnings.append(f"The partial copy of output '{job.get('relativeKey', '')}' "
                                     f"could not be removed.")
+                elif _cancel_found_landed(table, s3_client, job_id):
+                    # Complete had already landed the file: the landed object wins over the cancel.
+                    continue
         update_job_row(table, job_id, {"status": STATUS_CANCELLED, "error": REASON_CANCELLED,
                                        "finishedAt": _iso_now()},
                        condition="attribute_not_exists(#s) OR NOT #s IN (:a, :b)",
                        condition_values={":a": STATUS_SUCCEEDED, ":b": STATUS_FAILED})
     return warnings
+
+
+def _cancel_found_landed(table, s3_client, job_id):
+    """The cancel path found the job's multipart upload already gone: when Complete landed the file,
+    finalize the job SUCCEEDED (the landed object wins) and return True. Complete, still running or
+    retried, then sees a SUCCEEDED job and does the post-landing work once. Best-effort: on any error
+    the job is cancelled as before."""
+    try:
+        row = get_job_row(table, job_id)
+        if not is_open_job(row):
+            return False
+        landed, version_id = landed_object_version(s3_client, row)
+        if not landed:
+            return False
+        finalize_job(table, job_id, STATUS_SUCCEEDED, {"destVersionId": version_id})
+        logger.info(f"Copy job {job_id} had landed its file before the cancel; kept as succeeded")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not check whether copy job {job_id} had landed its file: {e}")
+        return False
 
 
 def _parse_iso(value):

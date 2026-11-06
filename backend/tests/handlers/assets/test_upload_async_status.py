@@ -121,6 +121,46 @@ class TestUploadStatusHelper:
         assert us.begin_async_tracking(broken, UPLOAD, ASSET, ["/a"], False) is False
         assert us.record_async_file_outcome(broken, UPLOAD, ASSET, "/a", True) is False
 
+    def test_a_writer_asked_to_raise_raises_so_its_caller_retries(self):
+        """#1123 round 3 L10: the engine and the queue consumer retry a failed outcome write."""
+        broken = MagicMock()
+        broken.update_item.side_effect = RuntimeError("ddb down")
+        with pytest.raises(RuntimeError):
+            us.record_async_file_outcome(broken, UPLOAD, ASSET, "/a", True, raise_errors=True)
+
+    def test_an_untracked_file_does_not_raise_even_when_asked(self, uploads):
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True, raise_errors=True) is False
+
+    def test_a_repeated_outcome_is_written_again_and_settles_once(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)  # a retry
+        assert _stored(uploads)["status"] == us.STATUS_COMPLETED
+
+    def test_a_recorded_outcome_is_never_replaced_by_another(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", False, "The copy did not complete.")
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True) is False
+        assert _stored(uploads)["asyncFiles"]["/a.e57"]["status"] == us.FILE_FAILED
+
+    def test_the_audit_claim_is_won_once_and_only_while_pending(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is True
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is False
+        assert us.async_file_status(uploads, UPLOAD, ASSET, "/a.e57") == us.FILE_PENDING
+        # The claim stamp is not part of the API view
+        assert set(us.status_view(_stored(uploads))["asyncFiles"][0]) == {
+            "relativeKey", "status", "error", "updatedAt"}
+
+    def test_the_audit_claim_after_the_outcome_is_lost(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is False
+
+    def test_the_audit_claim_of_an_untracked_file_is_none(self, uploads):
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is None
+        assert us.async_file_status(uploads, UPLOAD, ASSET, "/a.e57") is None
+
 
 # --------------------------------------------------------------------------------------------- #
 # Completion keeps the record
