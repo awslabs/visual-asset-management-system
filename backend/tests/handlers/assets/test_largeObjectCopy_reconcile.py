@@ -190,13 +190,18 @@ def test_a_timed_out_or_console_stopped_execution_is_finalized(env, machine, sta
     env["sfn"].send_task_success.assert_called_once()
 
 
-def test_a_stop_by_the_cancel_path_is_left_to_it(env, machine):
+def test_a_stop_by_the_cancel_path_gets_the_cancel_paths_decision(env, machine):
+    """Round 4 (D9): the reconcile of a stop the cancel path made writes the cancel path's own
+    decision for a job still open (CANCELLED: nothing landed), never FAILED, and audits nothing."""
     job = _job_with_execution(env)
     env["sfn"].describe_execution.return_value = _described(job, status="ABORTED",
                                                              error=loc.STOP_ERROR_CANCELLED)
-    assert engine.reconcile(EXEC_ARN) == {"reconciled": False}
-    assert loc.get_job_row(env["jobs"], job["jobId"])["status"] == loc.STATUS_QUEUED
+    assert engine.reconcile(EXEC_ARN) == {"reconciled": True, "status": loc.STATUS_CANCELLED}
+    row = loc.get_job_row(env["jobs"], job["jobId"])
+    assert row["status"] == loc.STATUS_CANCELLED and row["error"] == loc.REASON_CANCELLED
+    assert "counted" not in row
     env["audit"].assert_not_called()
+    env["sfn"].send_task_success.assert_not_called()
 
 
 def test_a_cancelled_job_is_not_reconciled(env, machine):

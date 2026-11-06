@@ -157,6 +157,24 @@ class TestUploadStatusHelper:
         us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
         assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is False
 
+    def test_a_released_audit_claim_can_be_claimed_again(self, uploads):
+        """#1123 round 4 (L14): a receive whose audit write failed releases its claim."""
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is True
+        us.release_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57")
+        assert "auditClaimedAt" not in _stored(uploads)["asyncFiles"]["/a.e57"]
+        assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is True
+
+    def test_releasing_never_raises_and_leaves_a_recorded_outcome_alone(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57")
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
+        us.release_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57")  # condition fails quietly
+        assert _stored(uploads)["asyncFiles"]["/a.e57"]["status"] == us.FILE_SUCCEEDED
+        broken = MagicMock()
+        broken.update_item.side_effect = RuntimeError("ddb down")
+        us.release_async_file_audit(broken, UPLOAD, ASSET, "/a.e57")
+
     def test_the_audit_claim_of_an_untracked_file_is_none(self, uploads):
         assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is None
         assert us.async_file_status(uploads, UPLOAD, ASSET, "/a.e57") is None

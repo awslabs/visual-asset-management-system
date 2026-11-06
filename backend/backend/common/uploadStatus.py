@@ -160,6 +160,24 @@ def claim_async_file_audit(table, upload_id, asset_id, relative_key):
     return False if async_file_status(table, upload_id, asset_id, relative_key) else None
 
 
+def release_async_file_audit(table, upload_id, asset_id, relative_key):
+    """Undo a claim_async_file_audit whose audit entry could not be written, so a later receive can
+    write it. Only while the file's outcome is still PENDING. Best-effort (logged, never raises)."""
+    if not (upload_id and asset_id and relative_key):
+        return
+    try:
+        table.update_item(
+            Key={"uploadId": upload_id, "assetId": asset_id},
+            UpdateExpression="REMOVE asyncFiles.#rel.#ac",
+            ConditionExpression="attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st = :p",
+            ExpressionAttributeNames={"#rel": relative_key, "#st": "status", "#ac": "auditClaimedAt"},
+            ExpressionAttributeValues={":p": FILE_PENDING},
+        )
+    except Exception as e:
+        logger.warning(f"Could not release the audit claim of {relative_key} on upload {upload_id}: "
+                       f"{e.__class__.__name__}")
+
+
 def async_file_status(table, upload_id, asset_id, relative_key):
     """The recorded status of one asynchronously ingested file (PENDING, SUCCEEDED or FAILED), or
     None when the upload record does not track it. Raises when the record cannot be read."""

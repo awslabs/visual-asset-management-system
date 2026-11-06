@@ -386,6 +386,27 @@ class TestDuplicateDeliveryOfAStoredFile:
         assert env.audit.call_args.args[4] is False  # a completion entry, not a rejection
         assert env.outcome.call_count == 1
 
+    def test_a_failed_audit_write_releases_its_claim(self):
+        """#1123 round 4 (L14): before, the claim stayed, so no later receive could write the entry."""
+        release = MagicMock()
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env, \
+                patch.object(env.sq.uploadStatus, "release_async_file_audit", release):
+            env.claim.return_value = True
+            env.audit.side_effect = RuntimeError("audit log unavailable")
+            self._redeliver_stored(env)
+        release.assert_called_once()
+        assert release.call_args.args[1:] == ("up-1", "asset-1", "/big/scan.laz")
+        assert env.outcome.call_count == 1  # the outcome is still written
+
+    def test_a_written_audit_entry_keeps_its_claim(self):
+        release = MagicMock()
+        with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env, \
+                patch.object(env.sq.uploadStatus, "release_async_file_audit", release):
+            env.claim.return_value = True
+            self._redeliver_stored(env)
+        env.audit.assert_called_once()
+        release.assert_not_called()
+
     def test_an_untracked_file_keeps_the_earlier_behaviour(self):
         with _Env(complete_error=_client_error("NoSuchUpload", status=404)) as env:
             env.claim.return_value = None

@@ -15,7 +15,8 @@ The state machines (infra: lambdaBuilder/largeObjectCopyEngine.ts) run, per job:
 - copyBatch: copy the missing parts of one batch with UploadPartCopy (ListParts first, so a retry
              copies only what is missing). An in-VPC copy between Regions streams the parts instead,
              since an S3 interface endpoint does not serve UploadPartCopy across Regions.
-- complete:  verify the parts, complete the upload, check the new version, mark the job SUCCEEDED,
+- complete:  verify the parts, complete the upload (the version it returns; for an upload already
+             gone, only an object carrying the job's upload token counts), mark the job SUCCEEDED,
              then delete the staged source (by version) and run the post-landing side effects (asset
              type, subscription email, audit, upload outcome).
 - fail:      mark the job FAILED with a generic reason, then abort the multipart upload, delete an
@@ -59,7 +60,11 @@ from common.s3 import (
     s3_client_for_region,
     validateUnallowedFileExtensionAndContentType,
 )
-from common.s3MetadataKeys import COPY_PRESERVED_HEADER_FIELDS, replace_metadata_copy_args
+from common.s3MetadataKeys import (
+    COPY_PRESERVED_HEADER_FIELDS,
+    VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY,
+    replace_metadata_copy_args,
+)
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from customLogging.auditLogging import log_file_upload
 from customLogging.logger import safeLogger
@@ -133,17 +138,6 @@ def _ensure_open(job_id):
     return row
 
 
-def _dest_identity(dest):
-    """loc.object_identity of what the destination holds before this job's upload is created."""
-    try:
-        return loc.object_identity(_client_for_bucket(dest["bucket"]).head_object(
-            Bucket=dest["bucket"], Key=dest["key"]))
-    except ClientError as e:
-        if _error_code(e) in ("404", "NoSuchKey", "NotFound"):
-            return loc.object_identity(None)
-        raise
-
-
 # --------------------------------------------------------------------------------------------- #
 # prepare
 # --------------------------------------------------------------------------------------------- #
@@ -196,14 +190,18 @@ def prepare(job):
     row = _ensure_open(job_id)
     upload_id = row.get("uploadIdS3", "")
     if not upload_id:
-        # What the destination holds now, so a reconcile can tell this job's landed object from it.
-        prior_identity = _dest_identity(dest)
+        # This upload's own token, stamped on the object it creates and recorded on the row in the
+        # same write as the upload id, so every decider (Complete without the completion response,
+        # the reconcile, the cancel path) can tell this job's landed object from an earlier object
+        # at the key (loc.landed_object_version), on versioned and unversioned buckets alike.
+        token = loc.new_upload_token()
         # Metadata, content headers and the ACL are set once, here, on the final object. The
-        # metadata is exactly what the synchronous path's REPLACE copy writes (2 KB check included).
+        # metadata is what the synchronous path's REPLACE copy writes plus the token (2 KB check
+        # included).
         copy_args = replace_metadata_copy_args(
             {**{f: head[f] for f in COPY_PRESERVED_HEADER_FIELDS if head.get(f)},
              **(job.get("contentHeaders") or {})},
-            job.get("metadata") or {})
+            {**(job.get("metadata") or {}), VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY: token})
         copy_args.pop("MetadataDirective", None)
         created = _client_for_bucket(dest["bucket"]).create_multipart_upload(
             Bucket=dest["bucket"], Key=dest["key"], ACL="bucket-owner-full-control", **copy_args)
@@ -215,7 +213,7 @@ def prepare(job):
             jobs_table, job_id,
             {"uploadIdS3": upload_id, "status": loc.STATUS_RUNNING, "partSize": part_size,
              "partCount": part_count, "sourceSize": size, "sourceVersionId": source["versionId"],
-             "destPriorIdentity": prior_identity},
+             "destUploadToken": token},
             condition="attribute_not_exists(uploadIdS3) AND " + loc.OPEN_JOB_CONDITION,
             condition_values=dict(loc.OPEN_JOB_VALUES))
         if not recorded:
@@ -373,25 +371,31 @@ def complete(job):
     expected = {n: (lambda r: r[1] - r[0] + 1)(loc.part_range(n, job["partSize"], source["size"]))
                 for n in range(1, job["partCount"] + 1)}
     try:
-        # ListParts answers NoSuchUpload when an earlier attempt of this state completed the upload.
         parts = _listed_parts(dest["bucket"], dest["key"], job["uploadIdS3"])
         if {n: size for n, (size, _etag) in parts.items()} != expected:
             raise RuntimeError(f"Copy job {job['jobId']} has {len(parts)} of {len(expected)} "
                                f"parts at their planned sizes")
-        client.complete_multipart_upload(
+        completed = client.complete_multipart_upload(
             Bucket=dest["bucket"], Key=dest["key"], UploadId=job["uploadIdS3"],
             MultipartUpload={"Parts": [{"PartNumber": n, "ETag": parts[n][1]} for n in sorted(parts)]})
+        # This call created the object: its own version id (empty on an unversioned bucket).
+        version_id = completed.get("VersionId", "") or ""
     except ClientError as e:
         if _error_code(e) != "NoSuchUpload":
             raise
-        # Completed by an earlier attempt of this state (its result was lost): the object it wrote
-        # is the current version when its size and multipart part count match the plan.
-        logger.info(f"Copy job {job['jobId']}: upload already completed, verifying the object")
-    head = client.head_object(Bucket=dest["bucket"], Key=dest["key"])
-    etag = (head.get("ETag") or "").strip('"')
-    if int(head.get("ContentLength", -1)) != int(source["size"]) or not etag.endswith(f"-{job['partCount']}"):
-        raise RuntimeError(f"Copy job {job['jobId']}: the landed object does not match the plan")
-    version_id = head.get("VersionId", "") or ""
+        # The upload is gone: either an earlier attempt of this state completed it (its result was
+        # lost), or a remover aborted it first (the reconcile of a console stop, the cancel path, a
+        # lifecycle rule). Only this job's own object counts (its upload token), never an object
+        # that merely has the planned size: an earlier object of the same size can be at the key.
+        landed, version_id = loc.landed_object_version(
+            client, {**row, "destBucket": dest["bucket"], "destKey": dest["key"]})
+        if not landed:
+            row = loc.get_job_row(jobs_table, job["jobId"])
+            reason = (_finished_reason(row) if row and not loc.is_open_job(row)
+                      else loc.REASON_COPY_FAILED)
+            logger.error(f"Copy job {job['jobId']}: the upload is gone and its object did not land")
+            raise loc.CopyRefused(reason)
+        logger.info(f"Copy job {job['jobId']}: upload already completed by an earlier attempt")
 
     loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_SUCCEEDED, {"destVersionId": version_id})
     row = loc.get_job_row(jobs_table, job["jobId"])
@@ -633,15 +637,15 @@ def reconcile(execution_arn):
     times out, or is stopped in the console or the API runs no Catch, Fail or notify state, so its
     job row would stay QUEUED or RUNNING and its run would wait out maxOutputIngestionWaitHours.
     Invoked by the copy state machine's status change rule, and by the execution details read for a
-    job it finds in that state. A job the cancel path marked CANCELLED, or a stop the cancel path
-    made, is left alone.
+    job it finds in that state. A job the cancel path marked CANCELLED is left alone; for a stop the
+    cancel path made, only a landed job is finished (_reconcile_cancelled_stop).
 
     StopExecution does not stop a Lambda invocation already running, so a Prepare or Complete of the
     stopped execution can still be in flight. One truth, whatever the order: a landed object wins.
     The reconcile first aborts the job's multipart upload, which S3 then refuses to complete, so
-    from that moment no task can land the file; if the upload was already gone, Complete completed
-    it, and the job is finalized SUCCEEDED when the destination holds the planned object. Otherwise
-    it is finalized FAILED. The status write is conditional on the job still being open (Prepare
+    from that moment no task can land the file; if the upload was already gone, the job is finalized
+    SUCCEEDED only when the key's current object is the one this job's upload created (its upload
+    token, loc.landed_object_version), never by size or presence. Otherwise it is finalized FAILED. The status write is conditional on the job still being open (Prepare
     and Complete write the same way and stop when the job is finalized), the audit entry is claimed
     on the job row, and the upload outcome is an idempotent write, so every ordering ends with one
     status, one audit entry and one upload outcome. notify counts the job on its batch once."""
@@ -649,7 +653,9 @@ def reconcile(execution_arn):
         logger.warning("Reconcile skipped: not an execution of this deployment's copy state machine")
         return {"reconciled": False}
     described = sfn_client.describe_execution(executionArn=execution_arn)
-    if not loc.is_unreported_end(described):
+    cancelled_stop = (described.get("status") == "ABORTED"
+                      and described.get("error") == loc.STOP_ERROR_CANCELLED)
+    if not cancelled_stop and not loc.is_unreported_end(described):
         return {"reconciled": False}
     try:
         job = (json.loads(described.get("input") or "{}") or {}).get("job") or {}
@@ -665,6 +671,8 @@ def reconcile(execution_arn):
         return {"reconciled": False}
 
     _register_regions(job)
+    if cancelled_stop:
+        return _reconcile_cancelled_stop(job, row)
     if loc.is_open_job(row):
         landed, version_id = _landed_after_abort(job, row)
         values = {"reconciledStatus": described.get("status", "")}
@@ -684,10 +692,41 @@ def reconcile(execution_arn):
     return {"reconciled": True, "status": result.get("status")}
 
 
+def _reconcile_cancelled_stop(job, row):
+    """The stop the cancel path made (cancel_execution_copy_jobs). The cancel path decides such a job
+    (CANCELLED, or SUCCEEDED when Complete had landed the file), but it cannot do the post-landing
+    work (staged-source delete, asset type, email, audit entry, upload outcome), and the stopped
+    execution's Complete may have ended before doing it (a timeout or crash after
+    CompleteMultipartUpload), with no Step Functions retry left. So this does it, once, for a landed
+    job, in whichever order the cancel and this event arrive:
+
+    - SUCCEEDED (the cancel path or Complete finalized the landing): finish and count it.
+    - Still open (the cancel path has not reached the job yet, or could not check the object and
+      left it to this reconcile): the cancel path's own decision, made here with the engine's read
+      access. Abort the upload; when the upload was already gone and this job's own object is at the
+      key, finalize it SUCCEEDED and finish it, otherwise write the cancel path's CANCELLED.
+    - FAILED or CANCELLED: nothing (the cancel path's CANCELLED rows are left alone, as before)."""
+    if loc.is_open_job(row):
+        landed, version_id = _landed_after_abort(job, row)
+        if not landed:
+            loc.mark_cancelled(jobs_table, job["jobId"])
+            return {"reconciled": True, "status": loc.STATUS_CANCELLED}
+        if loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_SUCCEEDED,
+                            {"destVersionId": version_id, "reconciledStatus": "ABORTED"}):
+            logger.info(f"Copy job {job['jobId']} had landed its file before the cancel; kept as "
+                        f"succeeded")
+        row = loc.get_job_row(jobs_table, job["jobId"])
+    if row.get("status") != loc.STATUS_SUCCEEDED:
+        return {"reconciled": False}
+    _finish(job, row)
+    result = notify(job, loc.STATUS_SUCCEEDED)
+    return {"reconciled": True, "status": result.get("status")}
+
+
 def _landed_after_abort(job, row):
     """(landed, version_id) for an open job of an execution that ended outside its states. Aborts
-    the job's multipart upload first, so no task still running can complete it afterwards; an
-    upload already gone was completed by Complete (loc.landed_object_version checks the object).
+    the job's multipart upload first, so no task still running can complete it afterwards; for an
+    upload already gone, loc.landed_object_version decides by the job's upload token.
     Raises when the abort fails for another reason, so the reconcile is retried rather than guess."""
     upload_id = row.get("uploadIdS3", "")
     if not upload_id:
