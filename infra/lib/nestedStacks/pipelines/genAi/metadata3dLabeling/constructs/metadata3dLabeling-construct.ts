@@ -453,7 +453,9 @@ export class Metadata3dLabelingConstruct extends NestedStack {
          */
 
         //Build Lambda Pipeline Resources to Open the Pipeline
-        const allowedInputFileExtensions = ".glb,.fbx,.obj,.stl,.ply,.usd,.dae,.abc";
+        //Only formats the container's pinned Blender imports (no USD or COLLADA build); keep in step
+        //with vamsSchema/pipeline.json, workflow.json and renderScene.py.
+        const allowedInputFileExtensions = ".glb,.fbx,.obj,.stl,.ply,.abc";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
