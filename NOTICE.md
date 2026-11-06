@@ -121,7 +121,7 @@ This software includes third party software subject to the following copyrights:
 | @cesium/engine             | [26.4.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
 | fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
 | lichtblick                 | [v1.29.1](https://github.com/lichtblick-suite/lichtblick)    | MPL-2.0\*\*\*         |
-| online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
+| online-3d-viewer           | [0.18.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
 | playcanvas                 | [2.23.3](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
