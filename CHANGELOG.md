@@ -45,6 +45,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 -   **CDK** Fixed `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` having no effect: the configured boundary is now set on every IAM role VAMS creates, and synthesis rejects a value that is not an IAM managed policy ARN in the deployment's partition. ([#431](https://github.com/awslabs/visual-asset-management-system/issues/431))
     -   Note: a deployment that already sets `PermissionBoundaryArn` gets every VAMS role bounded by that policy on this update. Check that the boundary allows what the VAMS roles need before updating; a deployment that does not set it is unchanged.
+-   **Web** Fixed the refresh buttons on the Pipelines, Workflows and Executions pages, an asset's Executions tab and the pipeline template list, and the Search page's query box and **Clear All Filters**, sending keyboard focus to the top of the page while their request runs; they now keep focus, say they are working and ignore a second press. ([#1069](https://github.com/awslabs/visual-asset-management-system/issues/1069), [#902](https://github.com/awslabs/visual-asset-management-system/issues/902))
 
 ### Chores
 
