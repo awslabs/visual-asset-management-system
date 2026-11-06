@@ -159,13 +159,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
 | `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
 | `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
-
-`support/viewerRender.ts` holds the viewer render and page-safety checks `viewers.spec.ts` uses:
-`recordCspViolations` / `unexpectedCspViolations` (every `securitypolicyviolation` from the page and its
-frames, against an exact baseline), `recordRequestHosts` / `thirdPartyOrigins` (any host other than the
-app, the API and AWS endpoints), `pixelStats` (decodes an element screenshot in a blank page: distinct
-colours, luminance spread, share of pixels changed against a baseline) and `expectSuperSplatRendered`
-(the editor's splat count is above zero and its canvas differs from the empty editor's).
+| `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's           |
+| `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                       |
 
 **Selector facts worth not rediscovering:**
 
@@ -239,11 +234,11 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                               |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                            |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                            |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                        |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                        |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), or `ksplat` (`.ply` to `.ksplat` with `@mkkellogg/gaussian-splats-3d`: `version` and `threeVersion` pinned, optional `level`) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
@@ -262,7 +257,8 @@ through `npm exec --min-release-age=7` at the pinned version.
 must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
-(`watchRequestHosts`). Run the spec on the development build first and record the pixel stats it logs;
+(`watchRequestHosts`). The `supersplat` kind checks inside the editor's iframe with
+`expectSuperSplatRendered` and passes `SUPERSPLAT_CSP_ALLOWED` as `cspAllowed`. Run the spec on the development build first and record the pixel stats it logs;
 a case that passes there and fails on a change is a regression.
 
 ---
@@ -281,9 +277,10 @@ E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts 
 E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
 
-The SuperSplat Editor renders only through WebGPU, which headless Chromium hides unless `E2E_WEBGPU=1`
-turns it on. Without an adapter the SuperSplat cases skip with the reason; `E2E_REQUIRE_WEBGPU=1` makes
-that a failure. On a machine with no GPU, Chromium's software adapter loses the device while the editor
+The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
+the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out
+of the `chromium` project, so every other case still runs in a browser without WebGPU. Without an
+adapter the SuperSplat cases skip with the reason; `E2E_REQUIRE_WEBGPU=1` makes that a failure. On a machine with no GPU, Chromium's software adapter loses the device while the editor
 loads a file (v3.1.1 and v3.7.0 alike), so run the render checks where a GPU is available.
 
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —

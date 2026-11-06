@@ -63,6 +63,56 @@
             "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)"
         },
         {
+            "id": "splat-splat",
+            "viewer": "supersplat-viewer",
+            "path": "/gs_Skull.splat",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/gs_Skull.splat",
+            "size": 5203136,
+            "sha256": "9e8454a952f09c35862b40243199d2389299790ea52fad01670b586854418e53",
+            "licence": "CC-BY-4.0",
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "splat-spz-v3",
+            "viewer": "supersplat-viewer",
+            "path": "/combined_SPZv3.spz",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/combined_SPZv3.spz",
+            "size": 5374,
+            "sha256": "14805dea9458a8c301b24ecb817c92b459cb91319819b4f45e6683d1ca4430b6",
+            "licence": "CC-BY-4.0",
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else); SPZ version 3 (gzip)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "splat-spz-v4",
+            "viewer": "supersplat-viewer",
+            "path": "/Unicorn_Stuffy-v4.spz",
+            "derivedFrom": "splat-ply",
+            "transform": "splat-transform",
+            "version": "3.10.2",
+            "args": [
+                "--spz-version",
+                "4"
+            ],
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as SPZ version 4 by @playcanvas/splat-transform (MIT)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "splat-ksplat",
+            "viewer": "supersplat-viewer",
+            "path": "/Unicorn_Stuffy.ksplat",
+            "derivedFrom": "splat-ply",
+            "transform": "ksplat",
+            "version": "0.4.7",
+            "threeVersion": "0.170.0",
+            "level": 1,
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as .ksplat (compression level 1) by @mkkellogg/gaussian-splats-3d (MIT)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
             "id": "online3d-3dm",
             "viewer": "online3d-viewer-rhino",
             "path": "/RhinoLogo.3dm",
