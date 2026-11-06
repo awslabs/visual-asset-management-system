@@ -274,6 +274,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 -   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 -   **Security scan suppressions re-pinned** — The ASH secret-scan suppressions for the workflow API, API overview and custom pipeline documentation examples point at the lines that hold the example values again, and an infra test fails when a line-pinned suppression no longer lands on a matching value. (issue #1014)
+-   **SuperSplat Editor v3.7.0** — The SuperSplat Editor is updated from v3.1.1 to v3.7.0. Its install removes the editor's new WebMCP tool registration, so the framed editor offers no editor tools to a browser agent, and installs the editor's npm dependencies with the 7-day minimum release age. (issue #1174)
 
 **Known issues:**
 
