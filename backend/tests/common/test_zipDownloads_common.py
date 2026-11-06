@@ -32,7 +32,7 @@ def test_request_ids_sort_chronologically(zd):
 
 def test_prefix_layout(zd):
     prefix = zd.request_prefix("db1", "asset1", "alice", "r1")
-    assert prefix == f"preparedDownloads/db1/asset1/{zd.user_hash('alice')}/r1/"
+    assert prefix == f"vams.preparedDownloads/db1/asset1/{zd.user_hash('alice')}/r1/"
     assert len(zd.user_hash("alice")) == 16 and zd.user_hash("alice") != zd.user_hash("bob")
 
 

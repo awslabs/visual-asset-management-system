@@ -56,7 +56,7 @@ def zip_download_context(manifest):
         return None
     if not all(isinstance(context.get(k), str) and context.get(k) for k in ZIP_CONTEXT_KEYS):
         raise ValueError("The system execution context does not describe a zip download")
-    if not context["manifestKey"].startswith("preparedDownloads/"):
+    if not context["manifestKey"].startswith("vams.preparedDownloads/"):
         raise ValueError("The zip download manifest is outside the prepared downloads prefix")
     return {k: context[k] for k in ZIP_CONTEXT_KEYS}
 

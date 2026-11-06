@@ -1284,8 +1284,10 @@ def run_workflow_executions_step(config: dict, args) -> int:
 # =============================================================================
 
 # Reserved top-level auxiliary-bucket prefixes that are NOT per-asset preview data and
-# must never be relocated (execution working folders, temp uploads, etc.).
-_AUX_RESERVED_TOP_PREFIXES = ("pipeline", "pipelines", "temp-upload", "temp-uploads")
+# must never be relocated (execution working folders, temp uploads, Download as Zip jobs from
+# v2.7.0 on, etc.).
+_AUX_RESERVED_TOP_PREFIXES = ("pipeline", "pipelines", "temp-upload", "temp-uploads",
+                              "vams.preparedDownloads")
 
 # The auxiliary preview marker segment. Old preview objects live under
 # ``{assetId}/{relativeFileKey}/preview/...``; the new layout is

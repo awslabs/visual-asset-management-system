@@ -31,7 +31,7 @@ flowchart LR
     end
 
     S3In[(Asset Bucket<br/>Pinned file versions)]
-    S3Out[(Auxiliary Bucket<br/>preparedDownloads/<br/>or run outputs)]
+    S3Out[(Auxiliary Bucket<br/>vams.preparedDownloads/<br/>or run outputs)]
 
     VE --> OP
     OP --> CP
@@ -46,7 +46,7 @@ flowchart LR
 
 The container decides its mode from the run manifest:
 
--   **Zip download** -- A run that VAMS launched for a Download as Zip job (system trigger `Zip-Download`) carries a server-only context naming the job and its request manifest under `preparedDownloads/` in the auxiliary bucket. The request manifest, written by the API when the job was created, is the authority for what is archived. The archive is written to the job's key under `preparedDownloads/`, the container records the job's progress and outcome in `ZipDownloadRequestsStorageTable`, and nothing is written to the asset.
+-   **Zip download** -- A run that VAMS launched for a Download as Zip job (system trigger `Zip-Download`) carries a server-only context naming the job and its request manifest under `vams.preparedDownloads/` in the auxiliary bucket. The request manifest, written by the API when the job was created, is the authority for what is archived. The archive is written to the job's key under `vams.preparedDownloads/`, the container records the job's progress and outcome in `ZipDownloadRequestsStorageTable`, and nothing is written to the asset.
 -   **Archive run** -- Any other run archives the run's input files and writes the archive to the run's outputs, so the output step ingests it into the asset as a new file version. Outputs over 1 GiB are copied into the asset by the large object copy engine, so the archive size is not capped below 5 TiB. This mode never reads or writes the zip download table.
 
 ### Processing Flow
@@ -135,11 +135,11 @@ The following AWS resources are created when Download as Zip is enabled:
 | Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                      |
 | Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd) |
 
-The `ZipDownloadRequestsStorageTable` table, the `preparedDownloads/` lifecycle rules on the auxiliary bucket, and the zip download API functions are deployed whether or not the feature is enabled. See [AWS Resources](../architecture/aws-resources.md).
+The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the auxiliary bucket, and the zip download API functions are deployed whether or not the feature is enabled. See [AWS Resources](../architecture/aws-resources.md).
 
 ### Container Permissions
 
-The job role reads and lists object versions in the asset buckets, writes and aborts multipart uploads under `preparedDownloads/` in the auxiliary bucket and reads the request manifest there, writes the run's outputs for an archive run, updates job rows in `ZipDownloadRequestsStorageTable`, queries the asset file versions table for asset-version pins, and reports on the Step Functions task token. With an AWS KMS customer managed key, it also decrypts and generates data keys with that key.
+The job role reads and lists object versions in the asset buckets, writes and aborts multipart uploads under `vams.preparedDownloads/` in the auxiliary bucket and reads the request manifest there, writes the run's outputs for an archive run, updates job rows in `ZipDownloadRequestsStorageTable`, queries the asset file versions table for asset-version pins, and reports on the Step Functions task token. With an AWS KMS customer managed key, it also decrypts and generates data keys with that key.
 
 ## Troubleshooting
 

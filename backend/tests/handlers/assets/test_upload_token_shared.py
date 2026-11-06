@@ -86,7 +86,7 @@ class TestOneKeyOneHelper:
 
 @pytest.mark.unit
 class TestZipLandedArchive:
-    ROW = {"archiveKey": "preparedDownloads/k/out.zip", "archiveUploadToken": "zip-tok"}
+    ROW = {"archiveKey": "vams.preparedDownloads/k/out.zip", "archiveUploadToken": "zip-tok"}
 
     def _s3(self, head=None, error=None):
         s3 = MagicMock()

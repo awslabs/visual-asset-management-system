@@ -5165,7 +5165,7 @@ export interface ConfigPublic {
             maxOutputIngestionWaitHours: number;
         };
         // Download as Zip: user archive jobs and the archive system pipeline. The job table, the
-        // preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
+        // vams.preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
         // archive pipeline and the feature switch (routes answer 404 while it is false). Every key is
         // optional (see ZIP_DOWNLOADS_DEFAULTS).
         zipDownloads: {

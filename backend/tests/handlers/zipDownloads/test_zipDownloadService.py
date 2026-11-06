@@ -147,7 +147,7 @@ class TestCreate:
         row = next(iter(env.zip.items.values()))
         assert row["userId"] == "alice" and row["workflowExecutionId"] == "exec-1"
         assert row["userAssetKey"] == "alice#db1#asset1"
-        assert row["archiveKey"].startswith("preparedDownloads/db1/asset1/")
+        assert row["archiveKey"].startswith("vams.preparedDownloads/db1/asset1/")
         manifest = json.loads(env.s3.puts[(h.AUX, row["manifestKey"])])
         assert manifest["entries"] == [{"type": "file", "key": "xasset1/a.glb", "relativePath": "/a.glb"}]
         assert ".exe" in manifest["blockedExtensions"]
@@ -456,7 +456,7 @@ class TestCancelDelete:
 
     def test_cleanup_never_leaves_the_job_prefix(self, env):
         with pytest.raises(ValueError):
-            env.zd.delete_prefix(env.s3, h.AUX, "preparedDownloads/")
+            env.zd.delete_prefix(env.s3, h.AUX, "vams.preparedDownloads/")
         with pytest.raises(ValueError):
             env.zd.abort_open_uploads(env.s3, h.AUX, "db1/")
 

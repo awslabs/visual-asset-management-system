@@ -207,7 +207,7 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         // Viewer data, other pipelines' working files and the non-versioned auxiliary objects live under
         // other prefixes and are not this pipeline's to expire — current versions, noncurrent versions
         // or delete markers alike.
-        // The Download as Zip archives' own expiry (top-level preparedDownloads/, always deployed) is
+        // The Download as Zip archives' own expiry (top-level vams.preparedDownloads/, always deployed) is
         // the one other expiring prefix, and holds no pipeline working file.
         const unscoped = auxBucketRules(synth).filter(
             (rule) =>
@@ -260,7 +260,7 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         });
 
         test("no expiration rule is added", () => {
-            // Only the always-deployed Download as Zip rules (preparedDownloads/) expire anything.
+            // Only the always-deployed Download as Zip rules (vams.preparedDownloads/) expire anything.
             const expirations = auxBucketRules(disabledSynth)
                 .filter(expiresSomething)
                 .filter((rule) => rule.Prefix !== PREPARED_DOWNLOADS_PREFIX);

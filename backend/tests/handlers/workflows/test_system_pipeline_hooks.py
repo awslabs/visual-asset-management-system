@@ -82,7 +82,7 @@ EW = "backend.backend.handlers.workflows.executeWorkflow"
 WF_DB, WF_ID = "wdb", "wf1"
 EXEC = "e1000000000000000000000000000001"
 EXEC2 = "e2000000000000000000000000000002"
-CONTEXT = {"requestId": "r-1", "manifestKey": "preparedDownloads/x/manifest.json"}
+CONTEXT = {"requestId": "r-1", "manifestKey": "vams.preparedDownloads/x/manifest.json"}
 CALLBACK_FN = "vams-zip-callback"
 REGISTRY = json.dumps({"Zip-Download": CALLBACK_FN})
 

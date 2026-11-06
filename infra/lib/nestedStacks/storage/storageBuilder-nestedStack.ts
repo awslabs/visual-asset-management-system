@@ -69,7 +69,7 @@ export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
  * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
  * AUXILIARY_PREPARED_DOWNLOADS_PREFIX in backend/backend/common/s3PathPatterns.py.
  */
-export const PREPARED_DOWNLOADS_PREFIX = "preparedDownloads/";
+export const PREPARED_DOWNLOADS_PREFIX = "vams.preparedDownloads/";
 
 /**
  * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
@@ -1011,11 +1011,11 @@ export function storageResourcesBuilder(
                   ]
                 : []),
             // Download as Zip archives and their manifests
-            // (preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after the
+            // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after the
             // configured retention. Deployed whatever app.zipDownloads.enabled says, so turning the
             // feature off never orphans an archive. A cancelled job's incomplete upload is aborted after
             // a day (the bucket-wide rule above waits 14). Every other auxiliary object lives under
-            // <databaseId>/, and the API refuses "preparedDownloads" as a database id.
+            // <databaseId>/, and a database id has no dot, so these rules never match a database's data.
             {
                 id: "PreparedDownloadsExpiration",
                 enabled: true,
@@ -1621,7 +1621,7 @@ export function storageResourcesBuilder(
     // (PK userId = the authenticated caller, SK requestId = time-sortable id, so a reverse query lists
     // newest first). UserAssetIndex (PK userAssetKey = `userId#databaseId#assetId`) lists one user's
     // jobs for one asset. expiresAt (epoch seconds) is the TTL: createdAt + app.zipDownloads.retentionDays,
-    // the same retention as the preparedDownloads/ lifecycle rule. Deployed whether or not the feature
+    // the same retention as the vams.preparedDownloads/ lifecycle rule. Deployed whether or not the feature
     // is enabled, so turning it off leaves existing jobs readable until they expire.
     const zipDownloadRequestsStorageTable = new dynamodb.Table(
         scope,

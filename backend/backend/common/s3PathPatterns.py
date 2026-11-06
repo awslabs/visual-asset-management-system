@@ -82,18 +82,19 @@ AUXILIARY_PREVIEW_PREFIX = "preview/"
 #
 # AUXILIARY_PREPARED_DOWNLOADS_PREFIX: top-level auxiliary-bucket prefix holding
 #   prepared (zip download) archives under
-#   ``preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/``. A
+#   ``vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/``. A
 #   lifecycle rule expires everything under it after the configured retention,
-#   whether or not the feature is enabled.
+#   whether or not the feature is enabled. Mirrored as PREPARED_DOWNLOADS_PREFIX in
+#   infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts and in the
+#   archive pipeline (backendPipelines/utility/archive).
 #
 # Every other auxiliary object lives under ``{databaseId}/...`` (see
-# ``executionRecords.aux_preview_file_prefix``), so a database whose id equals a
-# top-level auxiliary folder would have its derived data expired by that rule.
-# RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS lists those names (lower case; the
-# database model compares case-insensitively) and database creation refuses them.
+# ``executionRecords.aux_preview_file_prefix``). The dot in the first segment
+# keeps the two apart: a database id matches ``^[-_a-zA-Z0-9]{3,63}$``
+# (validators.id_pattern), which has no dot, so no database's auxiliary data can
+# start with this prefix, and no database id needs to be reserved for it.
 # ---------------------------------------------------------------------------
-AUXILIARY_PREPARED_DOWNLOADS_PREFIX = "preparedDownloads/"
-RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS: FrozenSet[str] = frozenset({"prepareddownloads"})
+AUXILIARY_PREPARED_DOWNLOADS_PREFIX = "vams.preparedDownloads/"
 
 # ---------------------------------------------------------------------------
 # Pipeline staging path segments.

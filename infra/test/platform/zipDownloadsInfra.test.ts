@@ -7,7 +7,7 @@
  * Download as Zip (app.zipDownloads) in the synthesized templates.
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
- * `preparedDownloads/`, the table's SSM name, the zip download service with its six routes, and the
+ * `vams.preparedDownloads/`, the table's SSM name, the zip download service with its six routes, and the
  * terminal callback function. Only with `enabled`: the archive system pipeline stack, the
  * ZIPDOWNLOADS feature switch, the callback's registration under Zip-Download, and the service's two
  * cross-call grants (launch and abort), each on an exact function ARN.
@@ -114,7 +114,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         ).toHaveLength(1);
     });
 
-    test("the auxiliary bucket expires preparedDownloads/ after the retention, and its markers", () => {
+    test("the auxiliary bucket expires vams.preparedDownloads/ after the retention, and its markers", () => {
         const buckets = synth.where("AWS::S3::Bucket", (r) =>
             JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
                 "PreparedDownloadsExpiration"
@@ -125,7 +125,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         const expiry = rules.find((r) => r.Id === "PreparedDownloadsExpiration");
         expect(expiry).toMatchObject({
             Status: "Enabled",
-            Prefix: "preparedDownloads/",
+            Prefix: "vams.preparedDownloads/",
             ExpirationInDays: 7,
             NoncurrentVersionExpiration: { NoncurrentDays: 1 },
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
@@ -133,9 +133,31 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         const markers = rules.find((r) => r.Id === "PreparedDownloadsDeleteMarkers");
         expect(markers).toMatchObject({
             Status: "Enabled",
-            Prefix: "preparedDownloads/",
+            Prefix: "vams.preparedDownloads/",
             ExpiredObjectDeleteMarker: true,
         });
+        // A database id (^[-_a-zA-Z0-9]{3,63}$) has no dot, so the {databaseId}/ data of a database
+        // named preparedDownloads is outside both rules.
+        for (const rule of [expiry, markers]) {
+            expect("preparedDownloads/xasset1/scan.e57/preview/PotreeViewer/r.json").not.toMatch(
+                new RegExp(`^${rule.Prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
+            );
+        }
+    });
+
+    test("the auxiliary bucket sends no object events (no bucket sync, indexer or trigger reads it)", () => {
+        const aux = synth.where("AWS::S3::Bucket", (r) =>
+            JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
+                "PreparedDownloadsExpiration"
+            )
+        )[0];
+        expect(aux.properties.NotificationConfiguration).toBeUndefined();
+        const notifications = synth
+            .ofType("Custom::S3BucketNotifications")
+            .filter(
+                (r) => r.stack === aux.stack && JSON.stringify(r.properties).includes(aux.logicalId)
+            );
+        expect(notifications).toEqual([]);
     });
 
     test("the service is deployed off, with no cross-call name or grant", () => {
@@ -178,14 +200,16 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         );
     });
 
-    test("the service's job-prefix grants are scoped to preparedDownloads/", () => {
+    test("the service's job-prefix grants are scoped to vams.preparedDownloads/", () => {
         const service = functionByHandler(synth, SERVICE_HANDLER);
         const statements = roleStatements(synth, service);
         const put = statements.filter((s) => actionsOf(s).includes("s3:PutObject"));
         expect(put).toHaveLength(1);
-        expect(SynthResult.flatten(put[0].Resource)).toMatch(/\/preparedDownloads\/\*$/);
+        expect(SynthResult.flatten(put[0].Resource)).toMatch(/\/vams\.preparedDownloads\/\*$/);
         const list = statements.find((s) => actionsOf(s).includes("s3:ListBucketVersions"));
-        expect(list.Condition).toEqual({ StringLike: { "s3:prefix": ["preparedDownloads/*"] } });
+        expect(list.Condition).toEqual({
+            StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
+        });
     });
 });
 
@@ -305,7 +329,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(text).toContain('\\"workflowDatabaseId\\":\\"GLOBAL\\"');
     });
 
-    test("the container job role writes only under preparedDownloads/ in the auxiliary bucket", () => {
+    test("the container job role writes only under vams.preparedDownloads/ in the auxiliary bucket", () => {
         const roles = synth
             .ofType("AWS::IAM::Role")
             .filter(
@@ -319,7 +343,9 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
         for (const statement of output.PolicyDocument.Statement as any[]) {
             if (!actionsOf(statement).some((a) => a.startsWith("s3:"))) continue;
-            expect(SynthResult.flatten(statement.Resource)).toMatch(/\/preparedDownloads\/\*$/);
+            expect(SynthResult.flatten(statement.Resource)).toMatch(
+                /\/vams\.preparedDownloads\/\*$/
+            );
         }
         // The job deletes only its own late archive (one outcome): never an asset bucket object.
         const outputActions = (output.PolicyDocument.Statement as any[]).flatMap(actionsOf);

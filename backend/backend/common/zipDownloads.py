@@ -5,7 +5,7 @@
 
 A zip download is a job owned by the user who requested it: a row in the zip download requests
 table (PK ``userId``, SK ``requestId``), a request manifest and, once the archive system pipeline
-has run, an archive under ``preparedDownloads/`` in the asset auxiliary bucket. The API
+has run, an archive under ``vams.preparedDownloads/`` in the asset auxiliary bucket. The API
 (``handlers/zipDownloads/zipDownloadService.py``), the terminal callback
 (``handlers/zipDownloads/zipDownloadCallback.py``) and the archive container all write the row, so
 the status machine is defined once here:

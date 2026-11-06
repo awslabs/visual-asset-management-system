@@ -163,8 +163,8 @@ class OneClient(runner.Clients):
 def _manifest(entries=None, pinned=None, fmt="zip", **extra):
     m = {"schemaVersion": 1, "mode": "zipDownload", "requestId": "r1", "userId": "alice", "databaseId": "db1",
          "assetId": "asset1", "assetBucket": ASSETS, "assetBaseKey": BASE, "archiveBucket": AUX,
-         "archiveKey": "preparedDownloads/db1/asset1/h/r1/out.zip",
-         "resolvedManifestKey": "preparedDownloads/db1/asset1/h/r1/resolved-manifest.jsonl",
+         "archiveKey": "vams.preparedDownloads/db1/asset1/h/r1/out.zip",
+         "resolvedManifestKey": "vams.preparedDownloads/db1/asset1/h/r1/resolved-manifest.jsonl",
          "archiveFormat": fmt, "compression": "store", "entries": entries or [], "pinnedFiles": pinned or [],
          "limits": {"maxFiles": 100, "maxTotalBytes": 10 ** 9},
          "blockedExtensions": list(CORE_BLOCKED_EXTENSIONS), "blockedContentTypes": list(CORE_BLOCKED_CONTENT_TYPES)}
@@ -173,10 +173,10 @@ def _manifest(entries=None, pinned=None, fmt="zip", **extra):
 
 
 def _zip_job(s3, manifest, row=None, execution_id="exec-1"):
-    s3.add("preparedDownloads/db1/asset1/h/r1/manifest.json", json.dumps(manifest).encode(), bucket=AUX)
+    s3.add("vams.preparedDownloads/db1/asset1/h/r1/manifest.json", json.dumps(manifest).encode(), bucket=AUX)
     table = FakeTable(row if row is not None else {"status": "QUEUED", "workflowExecutionId": "exec-1"})
     definition = {"mode": "zipDownload", "workflowExecutionId": execution_id,
-                  "zipDownload": {"manifestBucket": AUX, "manifestKey": "preparedDownloads/db1/asset1/h/r1/manifest.json",
+                  "zipDownload": {"manifestBucket": AUX, "manifestKey": "vams.preparedDownloads/db1/asset1/h/r1/manifest.json",
                                   "requestId": "r1", "userId": "alice", "databaseId": "db1", "assetId": "asset1"}}
     return runner.Job(definition, OneClient(s3), FakeDynamo(table), logger=lambda *a: None), table
 
@@ -196,13 +196,13 @@ class TestZipDownloadMode:
         job, table = _zip_job(s3, _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}]))
         result = job.run()
         assert result["status"] == "succeeded" and result["files"] == 3
-        data = s3.completed[(AUX, "preparedDownloads/db1/asset1/h/r1/out.zip")]
+        data = s3.completed[(AUX, "vams.preparedDownloads/db1/asset1/h/r1/out.zip")]
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             assert sorted(z.namelist()) == ["a.glb", "tex/empty/", "tex/t1.png", "tex/t2.png"]
             assert z.read("a.glb") == b"A" * 100
         assert table.row["status"] == "SUCCEEDED" and table.row["archiveSizeBytes"] == len(data)
         assert table.row["filesTotal"] == 3
-        resolved = s3.objects[(AUX, "preparedDownloads/db1/asset1/h/r1/resolved-manifest.jsonl")][0]["Data"]
+        resolved = s3.objects[(AUX, "vams.preparedDownloads/db1/asset1/h/r1/resolved-manifest.jsonl")][0]["Data"]
         assert [json.loads(l)["relativePath"] for l in resolved.decode().splitlines()] == [
             "/a.glb", "/tex/t1.png", "/tex/t2.png"]
 
@@ -271,7 +271,7 @@ class TestZipDownloadMode:
         with pytest.raises(runner.ArchiveFailure) as e:
             job.run()
         assert e.value.reason == runner.GENERIC_FAILURE
-        assert s3.aborted == ["preparedDownloads/db1/asset1/h/r1/out.zip"]
+        assert s3.aborted == ["vams.preparedDownloads/db1/asset1/h/r1/out.zip"]
         assert table.row["errorMessage"] == runner.GENERIC_FAILURE
 
     def test_sigterm_stop_aborts_and_records(self, s3):

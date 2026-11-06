@@ -39,7 +39,7 @@ with patch("boto3.client", return_value=MagicMock()):
 pytestmark = pytest.mark.unit
 
 CONTEXT = {"v": 1, "requestId": "r1", "userId": "alice", "databaseId": "db1", "assetId": "asset1",
-           "manifestKey": "preparedDownloads/db1/asset1/h/r1/manifest.json"}
+           "manifestKey": "vams.preparedDownloads/db1/asset1/h/r1/manifest.json"}
 PREFIX = "vams.workflow.execution.exec-123.pipeline.pex-9"
 
 

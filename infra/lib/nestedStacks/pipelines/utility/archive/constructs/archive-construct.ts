@@ -68,7 +68,7 @@ export interface ArchiveConstructProps extends cdk.StackProps {
 /**
  * The archive system pipeline (backendPipelines/utility/archive): an AWS Batch Fargate job that
  * streams a selection of asset files into one zip (ZIP64), tar or tar.gz archive. A Download as Zip
- * job (mode 1) writes it under `preparedDownloads/` in the auxiliary bucket and records progress on
+ * job (mode 1) writes it under `vams.preparedDownloads/` in the auxiliary bucket and records progress on
  * the job row; a workflow run (mode 2) writes it to the run's outputs so it becomes an asset file.
  * Mirrors the coordinate transform construct; built only when app.zipDownloads.enabled.
  */

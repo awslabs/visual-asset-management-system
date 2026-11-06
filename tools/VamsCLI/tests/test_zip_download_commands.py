@@ -15,7 +15,7 @@ from vamscli.utils.exceptions import (
     ZipDownloadStateError,
 )
 
-PRESIGNED = "https://bucket.s3.amazonaws.com/preparedDownloads/a.zip?X-Amz-Signature=abc123secret"
+PRESIGNED = "https://bucket.s3.amazonaws.com/vams.preparedDownloads/a.zip?X-Amz-Signature=abc123secret"
 JOB = {
     "requestId": "r1", "databaseId": "db", "assetId": "a", "assetName": "Asset",
     "status": "QUEUED", "archiveFormat": "zip", "compression": "store",

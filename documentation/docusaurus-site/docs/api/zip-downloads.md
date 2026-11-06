@@ -200,7 +200,7 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 ```json
 {
-    "url": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/preparedDownloads/...?X-Amz-...",
+    "url": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/vams.preparedDownloads/...?X-Amz-...",
     "expiresIn": 900,
     "archiveFileName": "building-package.zip",
     "archiveSizeBytes": 28991029248

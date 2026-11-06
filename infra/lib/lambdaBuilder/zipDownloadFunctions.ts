@@ -97,7 +97,7 @@ export function zipDownloadServiceEnvironment(config: Config.Config): Record<str
     };
 }
 
-/** `<auxiliary bucket ARN>/preparedDownloads/*`: every object a zip download job owns. */
+/** `<auxiliary bucket ARN>/vams.preparedDownloads/*`: every object a zip download job owns. */
 function preparedDownloadsObjectArn(storageResources: storageResources): string {
     return `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${PREPARED_DOWNLOADS_PREFIX}*`;
 }

@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import validate, trim_name, id_pattern, object_name_pattern, uuid_pattern
-from common.s3PathPatterns import RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS, RESERVED_S3_PREFIX_FOLDERS
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
@@ -88,12 +88,6 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
         # segment inside asset buckets and would collide with system-reserved folders.
         database_id = values.get('databaseId')
         if isinstance(database_id, str) and database_id.strip().lower() in RESERVED_S3_PREFIX_FOLDERS:
-            raise ValueError("databaseId is invalid. It matches a reserved keyword and cannot be used.")
-        # A top-level auxiliary-bucket folder (prepared downloads) cannot be a databaseId either: the
-        # database's derived data lives under {databaseId}/ in that bucket, where the folder's
-        # lifecycle rule would expire it.
-        if isinstance(database_id, str) and \
-                database_id.strip().lower() in RESERVED_AUXILIARY_TOP_LEVEL_FOLDERS:
             raise ValueError("databaseId is invalid. It matches a reserved keyword and cannot be used.")
 
         # "GLOBAL" is the reserved scope sentinel for database-specific tags/tag types

@@ -7,7 +7,7 @@ Two modes, chosen by constructPipeline from the run manifest:
 
 - ``zipDownload`` (a Download as Zip job, launched by VAMS under the system trigger): the request
   manifest in the auxiliary bucket is the authority for what is archived; the archive goes to the
-  job's ``preparedDownloads/`` key and the job row gets the status and progress.
+  job's ``vams.preparedDownloads/`` key and the job row gets the status and progress.
 - ``archiveRun`` (an ordinary workflow run of the system pipeline): the run's input files are
   archived into its standard outputs files prefix, so the output step ingests the archive into the
   asset as a new file version.

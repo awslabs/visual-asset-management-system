@@ -27,7 +27,7 @@ from vamscli.utils.exceptions import (
 from vamscli.utils import zip_downloads as zd
 
 BASE = "https://api.example.com"
-PRESIGNED = "https://bucket.s3.amazonaws.com/preparedDownloads/a.zip?X-Amz-Signature=abc123secret"
+PRESIGNED = "https://bucket.s3.amazonaws.com/vams.preparedDownloads/a.zip?X-Amz-Signature=abc123secret"
 
 
 def _response(body=None, status=200, headers=None, url=BASE):

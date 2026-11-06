@@ -610,7 +610,7 @@ by the input file that the data was derived from and one keyed by the execution 
 ```
 {databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
 pipelines/{pipelineName}/{executionId}/{working_files}
-preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
+vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
 ```
 
 Where:
@@ -624,11 +624,11 @@ Where:
     subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
 -   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
     same pipeline cannot collide
--   `preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
+-   `vams.preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
     resolved member list, under the first 16 hex characters of the SHA-256 of the requesting user's ID
     (`userHash`) and the job's `requestId`. Lifecycle rules expire the prefix after
-    `app.zipDownloads.retentionDays`; because the prefix sits beside the per-database prefixes,
-    `preparedDownloads` (in any case) is reserved and cannot be used as a database ID
+    `app.zipDownloads.retentionDays`. The prefix sits beside the per-database prefixes; a database ID
+    cannot contain a dot, so the rules never reach a database's data
 
 Common uses:
 
