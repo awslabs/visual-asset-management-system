@@ -72,6 +72,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
 -   **NVIDIA pipelines synthesize with CDK Nag** — A deployment with the NVIDIA Cosmos, Cosmos 3 or GR00T pipelines enabled and `useCodeBuild: false` (the default) no longer fails `cdk synth` on an unsuppressed `ecr:GetAuthorizationToken` wildcard. Permissions are unchanged. (issue #1023)
 -   **Files missing from search after parallel uploads** — The bucket-sync Lambda for created objects allows recursive loops in the commercial partition, so AWS Lambda recursive loop detection no longer stops it under sustained parallel uploads and moves batches of file events to its dead-letter queue. The bucket-sync created and deleted dead-letter queues and the file and asset indexer dead-letter queues have Amazon CloudWatch alarms. After updating, replay a dead-letter queue whose alarm is in `ALARM`; see the [v2.6.7 update note](../deployment/update-the-solution.md#v267-and-later-replay-the-bucket-sync-dead-letter-queue). (issue #1060)
+-   **IAM permissions boundary applied** — `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` now sets the boundary on every IAM role VAMS creates; synthesis rejects a malformed or other-partition ARN. A deployment that already sets it gets every VAMS role bounded on this update, so check that the boundary allows what the VAMS roles need first. (issue #431)
 
 **Other changes:**
 
