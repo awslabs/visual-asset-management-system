@@ -49,6 +49,11 @@ import {
 } from "../../lambdaBuilder/systemPipelineCallbacks";
 import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
 import {
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    largeObjectCopyEnvironment,
+} from "../../lambdaBuilder/largeObjectCopyEngine";
+import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
 } from "../../lambdaBuilder/pipelineFunctions";
@@ -71,6 +76,8 @@ export interface ApiBuilder2NestedStackProps {
     // process-output to write outputs back to the asset).
     metadataServiceFunction: lambda.Function;
     uploadFileFunction: lambda.Function;
+    // Invoked by the large object copy engine built here once a large file has landed.
+    sendEmailFunction: lambda.Function;
 }
 
 /**
@@ -404,6 +411,34 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // service's read-path reconcile, so its terminal callback does not wait for a read.
         buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
 
+        // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
+        // engine threshold) into their asset as resumable multipart copies. The output step waits
+        // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
+        // of the three gets its grants as one managed policy (their inline policies are near the
+        // IAM quota).
+        buildLargeObjectCopyEngine(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            props.sendEmailFunction,
+            processWorkflowExecutionOutputFunction,
+            config,
+            vpc,
+            subnets
+        );
+        grantLargeObjectCopyCoordination(
+            processWorkflowExecutionOutputFunction,
+            storageResources,
+            config,
+            { answersTaskToken: true }
+        );
+        grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
+            answersTaskToken: false,
+        });
+        grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
+            answersTaskToken: false,
+        });
+
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).
         buildRegisterPipelineExecutionFunction(
@@ -512,6 +547,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
+        );
+        // The generated definitions wait this long for a run's large outputs (AwaitOutputIngestion).
+        workflowServiceV2.addEnvironment(
+            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
+            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
         );
         // List all workflows (Casbin-filtered).
         attachFunctionToApi(this, workflowServiceV2, {

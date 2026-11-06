@@ -2104,6 +2104,62 @@ export const FIELDS: FieldMeta[] = [
         section: "metadata",
         advanced: true,
     },
+
+    // ===== Large file ingestion (large object copy engine) =====
+    {
+        path: "app.largeFileIngestion.maxOutputIngestionWaitHours",
+        label: "Maximum wait for large workflow outputs (hours)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "How long a workflow execution waits for its outputs over 1 GiB to be copied into the asset before it fails. 1 to 168, default 48.",
+    },
+    {
+        path: "app.largeFileIngestion.apiUploadEngineThresholdBytes",
+        label: "API upload size handled by the copy engine (bytes)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1073741824,
+        help: "API uploads above this size are copied into the asset by the resumable copy engine instead of a single copy. Default 5 GiB (5368709120); between 1 GiB and 5 TiB.",
+    },
+    {
+        path: "app.largeFileIngestion.minPartSizeBytes",
+        label: "Copy engine minimum part size (bytes)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 67108864,
+        help: "Smallest part the copy engine copies; larger objects use larger parts so they stay under 9,000 parts. Default 256 MiB; between 64 MiB and 5 GiB.",
+    },
+    {
+        path: "app.largeFileIngestion.partsPerBatch",
+        label: "Copy engine parts per task",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Parts one copy task copies. Default 16; between 1 and 64.",
+    },
+    {
+        path: "app.largeFileIngestion.threadsPerBatch",
+        label: "Copy engine threads per task",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Parts one copy task copies at the same time. Default 8; between 1 and 32.",
+    },
+    {
+        path: "app.largeFileIngestion.maxConcurrentBatches",
+        label: "Copy engine concurrent tasks per file",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Copy tasks one file runs at the same time. Default 40; between 1 and 40.",
+    },
 ];
 
 /** Fields belonging to a section, in declaration order. */

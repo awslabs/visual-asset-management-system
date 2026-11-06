@@ -455,6 +455,14 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         },
+        largeFileIngestion: {
+            apiUploadEngineThresholdBytes: 5368709120,
+            minPartSizeBytes: 268435456,
+            partsPerBatch: 16,
+            threadsPerBatch: 8,
+            maxConcurrentBatches: 40,
+            maxOutputIngestionWaitHours: 48,
+        },
     },
 };
 

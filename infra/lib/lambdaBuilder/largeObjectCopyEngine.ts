@@ -1,0 +1,430 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * The large object copy engine: one Standard Step Functions state machine per deployment that copies
+ * a large object into its asset as a multipart copy made of short Lambda tasks, and the grants of the
+ * functions that start, wait on or stop its jobs.
+ *
+ *   Prepare -> Map(part batches, inline) { CopyBatch } -> Complete -> NotifySucceeded
+ *   Catch (any state) -> Fail -> NotifyFailed -> CopyFailed
+ *
+ * Starters: fileIngestion (workflow outputs over 1 GiB) and the large-file queue consumer (API uploads
+ * over app.largeFileIngestion.apiUploadEngineThresholdBytes). Waiters: the workflow output step (task
+ * token). Stoppers: the abort route and the workflow error handler.
+ *
+ * The state machine has a fixed name so the starters in ApiBuilder can be given its ARN without a
+ * cross-stack reference: it is built in ApiBuilder2 (next to the output step it reports to), and
+ * ApiBuilder2 already depends on ApiBuilder. The name does not start with "vams-", the prefix of the
+ * runtime-created workflow state machines, so the workflow status change rule does not match it.
+ * Backend: backend/backend/common/largeObjectCopy.py, backend/backend/handlers/assets/largeObjectCopy.py.
+ */
+
+import * as cdk from "aws-cdk-lib";
+import { Duration } from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
+import { NagSuppressions } from "cdk-nag";
+import { Construct } from "constructs";
+import * as path from "path";
+import * as Config from "../../config/config";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import {
+    generateUniqueNameHash,
+    globalLambdaEnvironmentsAndPermissions,
+    grantReadWritePermissionsToAllAssetBuckets,
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
+    suppressCdkNagErrorsByGrantReadWrite,
+    suppressCdkNagLambda,
+} from "../helper/security";
+import * as s3AssetBuckets from "../helper/s3AssetBuckets";
+import { IAMArn } from "../helper/service-helper";
+import {
+    LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
+    storageResources,
+} from "../nestedStacks/storage/storageBuilder-nestedStack";
+
+/** Backend-generated workflow state machine names (workflowAsl._generate_state_machine_name). */
+const WORKFLOW_STATE_MACHINE_NAME_PATTERN = "vams-*";
+
+/** Fixed name of the copy state machine (<= 80 characters). */
+export function largeObjectCopyStateMachineName(config: Config.Config): string {
+    return `LargeObjectCopy-${config.env.coreStackName}`.substring(0, 80);
+}
+
+/** ARN of the copy state machine, from its fixed name (no cross-stack reference). */
+export function largeObjectCopyStateMachineArn(config: Config.Config): string {
+    return IAMArn(largeObjectCopyStateMachineName(config)).statemachine;
+}
+
+/** ARN pattern of the copy state machine's executions. */
+export function largeObjectCopyExecutionArnPattern(config: Config.Config): string {
+    return IAMArn(largeObjectCopyStateMachineName(config) + ":*").statemachineExecution;
+}
+
+/**
+ * Environment every function that starts, runs or waits on copy jobs reads (backend
+ * common/largeObjectCopy.settings). The table name resolves from SSM.
+ */
+export function largeObjectCopyEnvironment(config: Config.Config): Record<string, string> {
+    const tuning = config.app.largeFileIngestion;
+    return {
+        LARGE_OBJECT_COPY_STATE_MACHINE_ARN: largeObjectCopyStateMachineArn(config),
+        LARGE_OBJECT_COPY_API_UPLOAD_THRESHOLD_BYTES: String(tuning.apiUploadEngineThresholdBytes),
+        LARGE_OBJECT_COPY_MIN_PART_SIZE_BYTES: String(tuning.minPartSizeBytes),
+        LARGE_OBJECT_COPY_PARTS_PER_BATCH: String(tuning.partsPerBatch),
+        LARGE_OBJECT_COPY_THREADS_PER_BATCH: String(tuning.threadsPerBatch),
+        LARGE_OBJECT_COPY_MAX_WAIT_HOURS: String(tuning.maxOutputIngestionWaitHours),
+    };
+}
+
+function addEnvironment(fun: lambda.Function, environment: Record<string, string>) {
+    for (const [key, value] of Object.entries(environment)) {
+        fun.addEnvironment(key, value);
+    }
+}
+
+function jobsTableStatement(storage: storageResources, actions: string[], withIndex: boolean) {
+    const table = storage.dynamo.largeObjectCopyJobsStorageTable;
+    const resources = [table.tableArn];
+    if (withIndex) {
+        resources.push(`${table.tableArn}/index/${LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX}`);
+    }
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: actions.map((a) => `dynamodb:${a}`),
+        resources,
+    });
+}
+
+/**
+ * Attach a customer managed policy to a function's role (IAM does not count it against the role's
+ * inline policy quota, which several of these roles are close to). The role names the policy, so it
+ * is attached before the role's default policy updates, and the function waits for it.
+ */
+function attachManagedPolicy(fun: lambda.Function, id: string, statements: iam.PolicyStatement[]) {
+    const policy = new iam.ManagedPolicy(fun, id, { statements });
+    fun.role!.addManagedPolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
+    NagSuppressions.addResourceSuppressions(policy, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Scoped to the copy state machine's executions, the jobs table's one index, the " +
+                "backend-generated workflow state machines (vams-*) and AbortMultipartUpload on " +
+                "asset bucket objects.",
+        },
+    ]);
+}
+
+/**
+ * Grants of a STARTER (fileIngestion, the large-file queue consumer): StartExecution on the copy
+ * state machine, and the job row writes start_copy_job makes (conditional PutItem, UpdateItem).
+ */
+export function grantLargeObjectCopyStart(
+    fun: lambda.Function,
+    storage: storageResources,
+    config: Config.Config
+) {
+    addEnvironment(fun, largeObjectCopyEnvironment(config));
+    attachManagedPolicy(fun, "LargeObjectCopyStartPolicy", [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:StartExecution"],
+            resources: [largeObjectCopyStateMachineArn(config)],
+        }),
+        jobsTableStatement(storage, ["PutItem", "UpdateItem"], false),
+    ]);
+}
+
+/**
+ * Grants of the workflow OUTPUT STEP (ingest / await / finalize modes) and of the STOPPERS (abort
+ * route, error handler): the batch and job rows, the execution index, StopExecution on copy
+ * executions (cancel), and, for the output step, SendTaskSuccess on the workflow state machines (it
+ * answers its own task token when the copies finished before the wait registered).
+ */
+export function grantLargeObjectCopyCoordination(
+    fun: lambda.Function,
+    storage: storageResources,
+    config: Config.Config,
+    options: { answersTaskToken: boolean }
+) {
+    addEnvironment(fun, largeObjectCopyEnvironment(config));
+    const statements = [
+        jobsTableStatement(storage, ["GetItem", "UpdateItem", "Query"], true),
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:StopExecution"],
+            resources: [largeObjectCopyExecutionArnPattern(config)],
+        }),
+    ];
+    // A stopped copy execution runs no Catch state, so the stopper aborts its multipart upload in
+    // the asset bucket (cancel_execution_copy_jobs). Only that action: it reads and writes no object.
+    const assetObjectArns = s3AssetBuckets
+        .getS3AssetBucketRecords()
+        .map((record) => record.bucket.arnForObjects("*"));
+    if (assetObjectArns.length > 0) {
+        statements.push(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["s3:AbortMultipartUpload"],
+                resources: assetObjectArns,
+            })
+        );
+    }
+    if (options.answersTaskToken) {
+        statements.push(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess"],
+                resources: [IAMArn(WORKFLOW_STATE_MACHINE_NAME_PATTERN).statemachine],
+            })
+        );
+    }
+    attachManagedPolicy(fun, "LargeObjectCopyCoordinationPolicy", statements);
+}
+
+export interface LargeObjectCopyEngine {
+    stateMachine: sfn.StateMachine;
+    engineFunction: lambda.Function;
+}
+
+/** Build the copy-engine Lambda and the copy state machine (in ApiBuilder2). */
+export function buildLargeObjectCopyEngine(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storage: storageResources,
+    sendEmailFunction: lambda.IFunction,
+    processWorkflowExecutionOutputFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): LargeObjectCopyEngine {
+    const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    const fun = new lambda.Function(scope, "largeObjectCopy", {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.largeObjectCopy.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        // Each task is sized for about 5 minutes of copying; the 15-minute ceiling is headroom, and a
+        // task that hits it is retried and resumes at the next missing part.
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc ? vpc : undefined,
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
+        environment: {
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
+            PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
+                processWorkflowExecutionOutputFunction.functionName,
+            ...largeObjectCopyEnvironment(config),
+        },
+    });
+
+    // Job and batch rows (TransactWriteItems counts a job on its batch), the execution index
+    // (finalize-side reads), the asset row (asset type after a file lands), the buckets table (the
+    // Region-routing S3 client), the main execution row (display-only progress counter).
+    fun.addToRolePolicy(jobsTableStatement(storage, ["GetItem", "UpdateItem", "Query"], true));
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources: [storage.dynamo.assetStorageTable.tableArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:UpdateItem"],
+            resources: [storage.dynamo.workflowExecutionsStorageTableV2.tableArn],
+        })
+    );
+    storage.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // Report a finished batch: answer the waiting workflow's task token, or finalize a run whose
+    // definition does not wait.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:SendTaskSuccess"],
+            resources: [IAMArn(WORKFLOW_STATE_MACHINE_NAME_PATTERN).statemachine],
+        })
+    );
+    processWorkflowExecutionOutputFunction.grantInvoke(fun);
+    sendEmailFunction.grantInvoke(fun);
+
+    // Read staged sources, write the destination multipart upload, delete the staged object.
+    grantReadWritePermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storage.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storage);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    const stateMachine = buildCopyStateMachine(scope, fun, storage, config);
+    return { stateMachine, engineFunction: fun };
+}
+
+const LAMBDA_TRANSIENT_ERRORS = [
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+    "Lambda.TooManyRequestsException",
+];
+// Raised by the engine for a copy no retry can complete (backend common/largeObjectCopy.py).
+const NON_RETRYABLE_ERRORS = ["CopyRefused", "SourceChanged"];
+
+function engineTask(
+    scope: Construct,
+    id: string,
+    fun: lambda.IFunction,
+    payload: Record<string, unknown>,
+    options: { resultSelector?: Record<string, unknown>; resultPath?: string }
+): tasks.LambdaInvoke {
+    const task = new tasks.LambdaInvoke(scope, id, {
+        lambdaFunction: fun,
+        payload: sfn.TaskInput.fromObject(payload),
+        resultSelector: options.resultSelector,
+        resultPath: options.resultPath ?? sfn.JsonPath.DISCARD,
+        retryOnServiceExceptions: false,
+        taskTimeout: sfn.Timeout.duration(Duration.minutes(15)),
+    });
+    // A named refusal is final; anything else (a Lambda fault, a task timeout, a throttled or failed
+    // S3 call) is retried, and a retried copy resumes where it stopped.
+    task.addRetry({ errors: NON_RETRYABLE_ERRORS, maxAttempts: 0 });
+    task.addRetry({
+        errors: [sfn.Errors.ALL],
+        interval: Duration.seconds(5),
+        backoffRate: 2,
+        maxAttempts: 6,
+        maxDelay: Duration.minutes(2),
+    });
+    return task;
+}
+
+function buildCopyStateMachine(
+    scope: Construct,
+    fun: lambda.IFunction,
+    storage: storageResources,
+    config: Config.Config
+): sfn.StateMachine {
+    const job = sfn.JsonPath.objectAt("$.job");
+    const prepare = engineTask(
+        scope,
+        "LargeObjectCopyPrepare",
+        fun,
+        { action: "prepare", job },
+        {
+            resultSelector: {
+                job: sfn.JsonPath.objectAt("$.Payload.job"),
+                batches: sfn.JsonPath.listAt("$.Payload.batches"),
+            },
+            resultPath: "$",
+        }
+    );
+    const copyBatch = engineTask(
+        scope,
+        "LargeObjectCopyBatch",
+        fun,
+        {
+            action: "copyBatch",
+            job: sfn.JsonPath.objectAt("$.job"),
+            batch: sfn.JsonPath.objectAt("$.batch"),
+        },
+        {}
+    );
+    const copyBatches = new sfn.Map(scope, "LargeObjectCopyBatches", {
+        itemsPath: "$.batches",
+        maxConcurrency: config.app.largeFileIngestion.maxConcurrentBatches,
+        itemSelector: {
+            job: sfn.JsonPath.objectAt("$.job"),
+            batch: sfn.JsonPath.objectAt("$$.Map.Item.Value"),
+        },
+        resultPath: sfn.JsonPath.DISCARD,
+    });
+    copyBatches.itemProcessor(copyBatch);
+    const complete = engineTask(
+        scope,
+        "LargeObjectCopyComplete",
+        fun,
+        { action: "complete", job },
+        { resultSelector: { job: sfn.JsonPath.objectAt("$.Payload.job") }, resultPath: "$" }
+    );
+    const notifySucceeded = engineTask(
+        scope,
+        "LargeObjectCopyNotifySucceeded",
+        fun,
+        { action: "notify", job, status: "SUCCEEDED" },
+        {}
+    );
+    const fail = engineTask(
+        scope,
+        "LargeObjectCopyFail",
+        fun,
+        { action: "fail", job, error: sfn.JsonPath.objectAt("$.error") },
+        {}
+    );
+    const notifyFailed = engineTask(
+        scope,
+        "LargeObjectCopyNotifyFailed",
+        fun,
+        { action: "notify", job, status: "FAILED" },
+        {}
+    );
+    const failed = new sfn.Fail(scope, "LargeObjectCopyFailed", {
+        error: "LargeObjectCopyFailed",
+        cause: "The copy did not complete; the job row records the reason.",
+    });
+    // The failure path always reports, so a waiting workflow is told even when its cleanup fails.
+    fail.addCatch(notifyFailed, { errors: [sfn.Errors.ALL], resultPath: "$.cleanupError" });
+    const failurePath = fail.next(notifyFailed).next(failed);
+    for (const state of [prepare, copyBatches, complete]) {
+        state.addCatch(failurePath, { errors: [sfn.Errors.ALL], resultPath: "$.error" });
+    }
+
+    const logGroup = new logs.LogGroup(scope, "LargeObjectCopyStateMachineLogGroup", {
+        logGroupName:
+            "/aws/vendedlogs/VAMSStateMachine-LargeObjectCopy" +
+            generateUniqueNameHash(
+                config.env.coreStackName,
+                config.env.account,
+                "LargeObjectCopyStateMachineLogGroup",
+                10
+            ),
+        encryptionKey: storage.encryption.kmsKey,
+        retention: logs.RetentionDays.ONE_YEAR,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const stateMachine = new sfn.StateMachine(scope, "LargeObjectCopyStateMachine", {
+        stateMachineName: largeObjectCopyStateMachineName(config),
+        stateMachineType: sfn.StateMachineType.STANDARD,
+        definitionBody: sfn.DefinitionBody.fromChainable(
+            prepare.next(copyBatches).next(complete).next(notifySucceeded)
+        ),
+        logs: {
+            destination: logGroup,
+            // Execution data carries bucket and key names only; level ALL satisfies AwsSolutions-SF1.
+            includeExecutionData: false,
+            level: sfn.LogLevel.ALL,
+        },
+        tracingEnabled: true,
+    });
+    NagSuppressions.addResourceSuppressions(
+        stateMachine,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Invokes the copy-engine function and its versions; writes its own log group.",
+            },
+        ],
+        true
+    );
+    return stateMachine;
+}

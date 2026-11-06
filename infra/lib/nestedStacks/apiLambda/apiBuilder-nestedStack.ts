@@ -55,6 +55,7 @@ import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFu
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
+import { grantLargeObjectCopyStart } from "../../lambdaBuilder/largeObjectCopyEngine";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -72,6 +73,8 @@ export class ApiBuilderNestedStack extends NestedStack {
     // lambdas invoke the metadata service.
     public metadataServiceFunction!: lambda.Function;
     public uploadFileFunction!: lambda.Function;
+    // Invoked by the large object copy engine (ApiBuilder2) once a large file has landed.
+    public sendEmailFunction!: lambda.Function;
 
     constructor(
         parent: Construct,
@@ -684,6 +687,12 @@ export class ApiBuilderNestedStack extends NestedStack {
         // Grant SQS send message permissions to uploadFile Lambda
         largeFileProcessingQueue.grantSendMessages(uploadFileFunction);
 
+        // Both start large object copy jobs: fileIngestion for workflow outputs over 1 GiB, the queue
+        // consumer for API uploads over the engine threshold. The engine is built in ApiBuilder2; its
+        // fixed-name ARN is computed here, so this stack takes no reference to that one.
+        grantLargeObjectCopyStart(uploadFileFunction, storageResources, config);
+        grantLargeObjectCopyStart(sqsUploadFileLargeFunction, storageResources, config);
+
         const streamAuxiliaryPreviewAssetFunction = buildStreamAuxiliaryPreviewAssetFunction(
             this,
             lambdaCommonBaseLayer,
@@ -892,6 +901,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         // lambdas need (the metadata service and the upload-file lambda) via public properties.
         this.metadataServiceFunction = metadataService;
         this.uploadFileFunction = uploadFileFunction;
+        this.sendEmailFunction = sendEmailFunction;
 
         const ingestAssetFunction = buildIngestAssetFunction(
             this,
