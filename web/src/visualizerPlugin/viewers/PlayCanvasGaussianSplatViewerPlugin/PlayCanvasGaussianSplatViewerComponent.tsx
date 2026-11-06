@@ -9,6 +9,7 @@ import { PlayCanvasGaussianSplatDependencyManager } from "./dependencies";
 import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import PlayCanvasPanel from "./PlayCanvasPanel";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 // Simplified camera controls using direct mouse/touch handling
 // Accepts an optional initial distance; if not provided, defaults to 10
@@ -644,7 +645,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -664,7 +665,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

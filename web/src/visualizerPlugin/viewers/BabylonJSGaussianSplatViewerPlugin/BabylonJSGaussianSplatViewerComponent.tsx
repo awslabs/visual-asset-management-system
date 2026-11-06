@@ -9,6 +9,7 @@ import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
 import BabylonJSPanel from "./BabylonJSPanel";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
 
 // Declare BABYLON as it will be loaded dynamically
@@ -525,7 +526,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         textAlign: "center",
                         padding: "20px",
                         boxSizing: "border-box",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.cover,
                     }}
                 >
                     {unsupportedMessage}
@@ -560,7 +561,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -580,7 +581,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

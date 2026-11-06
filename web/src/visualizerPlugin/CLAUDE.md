@@ -350,10 +350,14 @@ rendered after the panel, took the clicks on the panel's tabs and Clear Selectio
 -   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material
     dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered
     within the panel and keeps its own value.
--   **Who uses it.** The Three.js and Needle USD viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts`
-    fails when one of those files writes a z-index number; `ThreeJSViewerComponent.stacking.test.tsx` and
+-   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and
+    VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes
+    a z-index number; `ThreeJSViewerComponent.stacking.test.tsx` and
     `NeedleUSDViewerComponent.stacking.test.tsx` check the rendered order. A new viewer with a side panel
-    uses the scale and joins that list.
+    uses the scale and joins that list. The Cesium viewer still writes its own values: its controls hint
+    and measurement instructions sit over the bottom of its panel at every width, and its picked-feature
+    box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision
+    rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.
 -   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
     Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
     wide one.

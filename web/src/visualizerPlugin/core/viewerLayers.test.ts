@@ -16,6 +16,14 @@ const SCALED_FILES = [
     "viewers/ThreeJSViewerPlugin/ThreeJSPanel.tsx",
     "viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent.tsx",
     "viewers/NeedleUSDViewerPlugin/NeedleUSDPanel.tsx",
+    "viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent.tsx",
+    "viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSPanel.tsx",
+    "viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent.tsx",
+    "viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasPanel.tsx",
+    "viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent.tsx",
+    "viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcPanel.tsx",
+    "viewers/VeerumViewerPlugin/VeerumViewerComponent.tsx",
+    "viewers/VeerumViewerPlugin/VeerumPanel.tsx",
 ];
 
 const pluginRoot = path.join(__dirname, "..");

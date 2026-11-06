@@ -8,6 +8,7 @@ import ModelTree from "./components/ModelTree";
 import Properties from "./components/Properties";
 import Tools from "./components/Tools";
 import { IfcViewerInstance, SelectedElement, SpatialNode } from "./types";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface ThatOpenWebIfcPanelProps {
     instance: IfcViewerInstance;
@@ -101,7 +102,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",
