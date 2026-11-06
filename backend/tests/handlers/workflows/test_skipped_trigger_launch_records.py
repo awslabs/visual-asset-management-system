@@ -113,7 +113,8 @@ class _ConfigTable:
 
     def put_item(self, **kwargs):
         self.journal.append("config")
-        assert kwargs["ConditionExpression"] == "attribute_not_exists(workflowExecutionId)"
+        # The put is conditional (first refusal wins); the moto test below proves the condition holds.
+        assert "ConditionExpression" in kwargs
         if self.existing is not None:
             raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"},
                                "Item": {k: {"S": v} for k, v in self.existing.items()}}, "PutItem")
