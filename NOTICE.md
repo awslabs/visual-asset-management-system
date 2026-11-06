@@ -68,12 +68,12 @@ This software includes third party software subject to the following copyrights:
 | buffer                              | ^6.0.3        | MIT                     |
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
-| fcs                                 | ^0.1.2        | MIT                     |
+| fcs                                 | ^0.1.3        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
-| papaparse                           | ^5.4.1        | MIT                     |
+| papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
@@ -83,7 +83,7 @@ This software includes third party software subject to the following copyrights:
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
-| react-papaparse                     | ^3.18.1       | MIT                     |
+| react-papaparse                     | ^4.4.0        | MIT                     |
 | react-pdf                           | ^10.5.0       | MIT                     |
 | react-router                        | ^7.18.2       | MIT                     |
 | react-router-dom                    | ^7.18.2       | MIT                     |
