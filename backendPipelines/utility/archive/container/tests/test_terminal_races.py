@@ -278,6 +278,16 @@ class TestContainerNeverFailsALandedArchive:
         _run(job)
         assert s3.deleted == [(ARCHIVE_KEY, "m1")]
 
+    def test_decider_holding_a_row_read_before_the_token_still_sees_the_landing(self, monkeypatch):
+        # The reconcile read the row (QUEUED, no token) before the container started; the archive
+        # then landed unrecorded. The decision re-reads the row after the abort, so it wins.
+        s3, table, job = _setup()
+        stale = dict(table.row)
+        _hook(monkeypatch, "landed_unrecorded",
+              lambda: zd.finalize_ended_run(table, s3, AUX, stale, "FAILED"))
+        assert _run(job)["status"] == "stopped"
+        _assert_one_outcome(s3, table, zd.STATUS_SUCCEEDED)
+
     def test_upload_token_key_matches_the_backend(self):
         assert runner.ARCHIVE_UPLOAD_TOKEN_METADATA == zd.ARCHIVE_UPLOAD_TOKEN_METADATA
 
