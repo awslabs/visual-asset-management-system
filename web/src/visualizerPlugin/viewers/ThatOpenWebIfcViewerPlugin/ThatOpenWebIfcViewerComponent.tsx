@@ -19,6 +19,7 @@ import {
 } from "./utils/ifcLoader";
 import { buildSpatialTree } from "./utils/spatialTree";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
 // customInstall (see customInstalls/thatopenwebifc). Served same-origin so it
@@ -39,6 +40,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [sceneReady, setSceneReady] = useState(false);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     const viewerInstanceRef = useRef<IfcViewerInstance | null>(null);
     const initializationRef = useRef(false);
@@ -444,6 +446,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <ThatOpenWebIfcPanel
+                    panelRef={panelRef}
                     instance={viewerInstanceRef.current}
                     bundle={ThatOpenWebIfcDependencyManager.getBundle()}
                     spatialTree={spatialTree}
@@ -478,6 +481,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -488,6 +492,7 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                         padding: "8px",
                         borderRadius: "4px",
                         zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

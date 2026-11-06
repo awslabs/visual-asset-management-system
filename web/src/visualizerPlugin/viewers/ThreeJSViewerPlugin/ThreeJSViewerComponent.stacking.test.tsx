@@ -8,9 +8,10 @@
  * (and the button that shows it again) above the info box with the controls hint and scene stats, a
  * notice about files that failed to load above the panel, and the loading cover above all of them.
  * On a narrow window the info box overlaps the panel, and at the same z-index the info box, later in
- * the document, took the clicks on the panel's tabs and its Clear Selection button (#1094). The
- * viewer runs over a stand-in three.js with its real panel and scene graph, as in
- * ThreeJSViewerComponent.sceneTreeHeight.test.tsx.
+ * the document, took the clicks on the panel's tabs and its Clear Selection button (#1094). While
+ * the open panel overlaps the info box, the info box is not drawn, so its text does not show
+ * through the panel. The viewer runs over a stand-in three.js with its real panel and scene graph,
+ * as in ThreeJSViewerComponent.sceneTreeHeight.test.tsx.
  */
 
 import React from "react";
@@ -173,6 +174,30 @@ const isDrawnAbove = (upper: HTMLElement, lower: HTMLElement): boolean => {
 const getPanel = () => closestPositioned(screen.getByTitle("Hide panel (Esc)"), "fixed");
 const getInfoBox = () => closestPositioned(screen.getByText(HINT), "absolute");
 
+type Box = { left: number; top: number; right: number; bottom: number };
+
+// A 414 px wide viewer: the panel down its left side, the info box at its top right
+const PANEL_BOX: Box = { left: 10, top: 20, right: 330, bottom: 876 };
+const INFO_OVER_PANEL: Box = { left: 164, top: 10, right: 404, bottom: 144 };
+const INFO_BESIDE_PANEL: Box = { left: 1350, top: 10, right: 1590, bottom: 144 };
+
+// Gives the panel and the info box the boxes in `layout` on screen; jsdom has no layout
+const layOut = (layout: { info: Box }) =>
+    jest
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+            const el = this as HTMLElement;
+            const isPanel =
+                el.style?.position === "fixed" && !!el.querySelector('[title="Hide panel (Esc)"]');
+            const isInfoBox = el.style?.position === "absolute" && !!el.textContent?.includes(HINT);
+            const { left, top, right, bottom } = isPanel
+                ? PANEL_BOX
+                : isInfoBox
+                ? layout.info
+                : { left: 0, top: 0, right: 0, bottom: 0 };
+            return { left, top, right, bottom, x: left, y: top, width: right - left } as DOMRect;
+        });
+
 describe("ThreeJSViewerComponent stacking", () => {
     const originalFetch = global.fetch;
 
@@ -292,5 +317,62 @@ describe("ThreeJSViewerComponent stacking", () => {
         await act(async () => finishLoad());
         await screen.findByTitle("Hide panel (Esc)");
         expect(coverZ).toBeGreaterThan(Number(getPanel().style.zIndex));
+    });
+
+    describe("the info box beside the open panel", () => {
+        const renderViewer = async () => {
+            render(
+                <ThreeJSViewerComponent
+                    assetId="asset-1"
+                    databaseId="db-1"
+                    assetKey="models/part.glb"
+                    viewerMode="collapse"
+                    onViewerModeChange={jest.fn()}
+                />
+            );
+            await screen.findByTitle("Hide panel (Esc)");
+        };
+
+        it("is not drawn while the open panel overlaps it, so the panel reads on its own", async () => {
+            layOut({ info: INFO_OVER_PANEL });
+            await renderViewer();
+
+            expect(getInfoBox()).not.toBeVisible();
+            expect(getPanel()).toBeVisible();
+            expect(screen.getByTitle("Controls")).toBeVisible();
+        });
+
+        it("is drawn when there is room beside the panel", async () => {
+            layOut({ info: INFO_BESIDE_PANEL });
+            await renderViewer();
+
+            expect(getInfoBox()).toBeVisible();
+            expect(getPanel()).toBeVisible();
+        });
+
+        it("is drawn while the panel is hidden, and left out again when the panel is shown", async () => {
+            layOut({ info: INFO_OVER_PANEL });
+            await renderViewer();
+            expect(getInfoBox()).not.toBeVisible();
+
+            fireEvent.click(screen.getByTitle("Hide panel (Esc)"));
+            expect(getInfoBox()).toBeVisible();
+
+            fireEvent.click(screen.getByTitle("Show controls panel"));
+            expect(getInfoBox()).not.toBeVisible();
+        });
+
+        it("is drawn again when the window widens and leaves room beside the panel", async () => {
+            const layout = { info: INFO_OVER_PANEL };
+            layOut(layout);
+            await renderViewer();
+            expect(getInfoBox()).not.toBeVisible();
+
+            layout.info = INFO_BESIDE_PANEL;
+            act(() => {
+                fireEvent(window, new Event("resize"));
+            });
+            expect(getInfoBox()).toBeVisible();
+        });
     });
 });

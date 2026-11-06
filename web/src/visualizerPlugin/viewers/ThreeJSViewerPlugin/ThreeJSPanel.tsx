@@ -48,9 +48,12 @@ interface ThreeJSPanelProps {
     animationPaused?: boolean;
     onToggleAnimation?: (paused: boolean) => void;
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
+    panelRef,
     scene,
     camera,
     renderer,
@@ -118,6 +121,7 @@ const ThreeJSPanel: React.FC<ThreeJSPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",

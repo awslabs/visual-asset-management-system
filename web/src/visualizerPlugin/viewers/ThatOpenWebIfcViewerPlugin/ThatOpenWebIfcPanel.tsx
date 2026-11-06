@@ -18,6 +18,8 @@ interface ThatOpenWebIfcPanelProps {
     selectedLocalIds: number[];
     onSelectLocalIds: (localIds: number[]) => void;
     onClose?: () => void;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 type TabKey = "modelTree" | "properties" | "tools";
@@ -30,6 +32,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
     selectedLocalIds,
     onSelectLocalIds,
     onClose,
+    panelRef,
 }) => {
     // Tools is the default tab (camera + section + measure are the most-used).
     const [activeTab, setActiveTab] = useState<TabKey>("tools");
@@ -93,6 +96,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",

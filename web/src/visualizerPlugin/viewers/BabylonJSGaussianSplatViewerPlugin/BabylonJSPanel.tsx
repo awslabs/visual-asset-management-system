@@ -26,6 +26,8 @@ interface BabylonJSPanelProps {
     onResetView?: () => void;
     /** Optional ref kept in sync with the active tab id. */
     activeTabRef?: React.MutableRefObject<"splatInfo" | "renderSettings" | "controls">;
+    /** The panel's root element, which the viewer measures against its info box. */
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 /**
@@ -51,6 +53,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
     onClose,
     onResetView,
     activeTabRef,
+    panelRef,
 }) => {
     const [activeTab, setActiveTab] = useState<"splatInfo" | "renderSettings" | "controls">(
         "controls"
@@ -70,6 +73,7 @@ const BabylonJSPanel: React.FC<BabylonJSPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "absolute",
                 top: "20px",

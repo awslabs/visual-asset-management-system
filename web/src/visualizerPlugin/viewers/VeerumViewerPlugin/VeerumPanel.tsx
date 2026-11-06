@@ -13,6 +13,8 @@ interface VeerumPanelProps {
     loadedModels: any[];
     initError: string | null;
     onClose?: () => void;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const VeerumPanel: React.FC<VeerumPanelProps> = ({
@@ -20,6 +22,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
     loadedModels,
     initError,
     onClose,
+    panelRef,
 }) => {
     const [activeTab, setActiveTab] = useState<"controls" | "sceneGraph">("controls");
 
@@ -29,6 +32,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: initError ? "50px" : "20px",

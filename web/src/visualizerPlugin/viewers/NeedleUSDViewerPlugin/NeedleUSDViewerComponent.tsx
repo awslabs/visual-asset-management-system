@@ -13,6 +13,7 @@ import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -36,6 +37,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }>({ loaded: 0, unresolved: 0 });
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
@@ -2543,6 +2545,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <NeedleUSDPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
@@ -2599,6 +2602,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: fileErrors.length > 0 ? "auto" : "10px",
@@ -2610,6 +2614,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         padding: "8px",
                         borderRadius: "4px",
                         zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Needle USD Viewer</div>

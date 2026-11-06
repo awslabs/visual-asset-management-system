@@ -12,6 +12,7 @@ import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import { isCadSupportError, loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
@@ -90,6 +91,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
@@ -1414,6 +1416,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <ThreeJSPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
@@ -1474,6 +1477,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -1484,6 +1488,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         padding: "8px",
                         borderRadius: "4px",
                         zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>ThreeJS Viewer</div>

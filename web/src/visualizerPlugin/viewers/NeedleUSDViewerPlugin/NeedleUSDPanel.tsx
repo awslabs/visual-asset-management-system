@@ -42,9 +42,12 @@ interface NeedleUSDPanelProps {
     animationPaused: boolean;
     onToggleAnimation: (paused: boolean) => void;
     activeTabRef?: React.MutableRefObject<"sceneGraph" | "materialLibrary" | "controls">;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
+    panelRef,
     scene,
     camera,
     renderer,
@@ -108,6 +111,7 @@ const NeedleUSDPanel: React.FC<NeedleUSDPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",
