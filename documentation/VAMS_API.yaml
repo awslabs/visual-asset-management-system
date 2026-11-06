@@ -4568,7 +4568,7 @@ paths:
                 schema:
                     type: string
                     example: SKIPPED
-                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list each check reads the candidate's execution record and a page makes at most 200 such checks; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
+                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list an execution is left out only after it passes the listing's read check (one the caller may not read is treated as without the parameter), and at most 200 are left out per page; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
               - in: query
                 name: triggerType
                 required: false
@@ -7932,7 +7932,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 schema:
                     type: string
                     example: SKIPPED
-                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list each check reads the candidate's execution record and a page makes at most 200 such checks; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
+                description: "Statuses to leave out: one, or a comma-separated list, of NEW, RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, SKIPPED. Applied before the page is cut, so a page stays full and NextToken resumes past the excluded rows. An unknown value, or excluding the status the status filter selects, answers 400 with a fixed message. On the asset list an execution is left out only after it passes the listing's read check (one the caller may not read is treated as without the parameter), and at most 200 are left out per page; a page that reaches that limit stops with NextToken and a warning. Omitted, the response is unchanged."
               - in: query
                 name: triggerType
                 required: false
