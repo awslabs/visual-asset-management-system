@@ -92,6 +92,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Fixed a workflow with more than 1,000 output files writing nothing back to its asset; the outputs are now written back in batches of up to 1,000 files, and a failed write-back names the files that did not land. ([#1204](https://github.com/awslabs/visual-asset-management-system/issues/1204))
 -   **Backend tests** Fixed cross-suite auth fixtures patching a different module object by unifying the auth import paths. ([#836](https://github.com/awslabs/visual-asset-management-system/issues/836))
 -   **CLI** Fixed `auth login --token-override` and `auth set-override` reporting success when the API refused the token; the command now fails and clears the token. ([#817](https://github.com/awslabs/visual-asset-management-system/issues/817))
 -   **Backend** Fixed `general_error()` logging every response at ERROR level; a 4xx response now logs at WARNING and only a 5xx response logs at ERROR, so expected client outcomes such as 404 and 409 no longer count as errors in log queries, metric filters and alarms. ([#935](https://github.com/awslabs/visual-asset-management-system/issues/935))
