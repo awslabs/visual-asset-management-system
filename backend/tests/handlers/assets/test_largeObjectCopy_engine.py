@@ -33,7 +33,8 @@ REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 MIB = 1024 * 1024
 SIZE = 11 * MIB
 SMALL_PARTS = {"apiUploadEngineThresholdBytes": 5 * loc.GIB, "minPartSizeBytes": 5 * MIB,
-               "partsPerBatch": 2, "threadsPerBatch": 4, "maxOutputIngestionWaitHours": 48}
+               "partsPerBatch": 2, "threadsPerBatch": 4, "maxOutputIngestionWaitHours": 48,
+               "batchesPerChunk": 1}
 BODY = bytes(range(256)) * (SIZE // 256) + b"x" * (SIZE % 256)
 
 

@@ -1983,6 +1983,7 @@ def _ingestion_file_progress(execution_id):
     except Exception as e:
         logger.warning(f"Could not read the output copy progress of execution {execution_id}: {e}")
         return [], False
+    _reconcile_ended_copies(rows)
     rows = sorted(rows, key=lambda row: row.get("relativeKey", ""))
     files = []
     for row in rows[:MAX_INGESTION_FILES_RETURNED]:
@@ -1997,6 +1998,22 @@ def _ingestion_file_progress(execution_id):
                                                                loc.STATUS_CANCELLED) else "",
         })
     return files, len(rows) > MAX_INGESTION_FILES_RETURNED
+
+
+def _reconcile_ended_copies(rows):
+    """Backstop for a missed status change event of the copy state machine: hand the copy engine
+    each unfinished job whose execution already ended outside its states (at most
+    MAX_RECONCILE_CHECKS_PER_READ describes per read), so its run is finalized without waiting out
+    maxOutputIngestionWaitHours. Asynchronous and idempotent; never raises."""
+    function_name = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME, "")
+    if not function_name:
+        return
+    try:
+        for execution_arn in loc.ended_copy_executions(sfn, rows):
+            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
+    except Exception as e:
+        logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
 
 
 def _cancel_output_copies(execution_id):

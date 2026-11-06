@@ -8,8 +8,13 @@
  * a large object into its asset as a multipart copy made of short Lambda tasks, and the grants of the
  * functions that start, wait on or stop its jobs.
  *
- *   Prepare -> Map(part batches, inline) { CopyBatch } -> Complete -> NotifySucceeded
- *   Catch (any state) -> Fail -> NotifyFailed -> CopyFailed
+ *   Prepare -> Map(chunks, one at a time) { child execution: Map(batches) { CopyBatch } }
+ *           -> Complete -> NotifySucceeded
+ *   Catch (any state) -> Fail -> NotifyFailed -> Refused (succeeds) | CopyFailed (fails)
+ *
+ * The batches run in child executions of a second state machine (LargeObjectCopyParts-*) so that no
+ * execution's history can reach the Step Functions quota (see "History budget" below). A copy
+ * execution that ends outside its states is finalized by a status change rule (reconcile).
  *
  * Starters: fileIngestion (workflow outputs over 1 GiB) and the large-file queue consumer (API uploads
  * over app.largeFileIngestion.apiUploadEngineThresholdBytes). Waiters: the workflow output step (task
@@ -26,10 +31,13 @@ import * as cdk from "aws-cdk-lib";
 import { Duration } from "aws-cdk-lib";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { NagSuppressions } from "cdk-nag";
@@ -84,6 +92,7 @@ export function largeObjectCopyEnvironment(config: Config.Config): Record<string
         LARGE_OBJECT_COPY_PARTS_PER_BATCH: String(tuning.partsPerBatch),
         LARGE_OBJECT_COPY_THREADS_PER_BATCH: String(tuning.threadsPerBatch),
         LARGE_OBJECT_COPY_MAX_WAIT_HOURS: String(tuning.maxOutputIngestionWaitHours),
+        LARGE_OBJECT_COPY_BATCHES_PER_CHUNK: String(BATCHES_PER_CHUNK),
     };
 }
 
@@ -158,7 +167,7 @@ export function grantLargeObjectCopyCoordination(
     fun: lambda.Function,
     storage: storageResources,
     config: Config.Config,
-    options: { answersTaskToken: boolean }
+    options: { answersTaskToken: boolean; reconcileWith?: lambda.IFunction }
 ) {
     addEnvironment(fun, largeObjectCopyEnvironment(config));
     const statements = [
@@ -192,6 +201,24 @@ export function grantLargeObjectCopyCoordination(
             })
         );
     }
+    if (options.reconcileWith) {
+        // The execution details read hands the copy engine an unfinished job whose execution ended
+        // outside its states (a missed status change event): it describes the job's execution and
+        // invokes the engine asynchronously (backend executionService._reconcile_ended_copies).
+        fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME", options.reconcileWith.functionName);
+        statements.push(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:DescribeExecution"],
+                resources: [largeObjectCopyExecutionArnPattern(config)],
+            }),
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["lambda:InvokeFunction"],
+                resources: [options.reconcileWith.functionArn],
+            })
+        );
+    }
     attachManagedPolicy(fun, "LargeObjectCopyCoordinationPolicy", statements);
 }
 
@@ -213,6 +240,26 @@ export function buildLargeObjectCopyEngine(
 ): LargeObjectCopyEngine {
     const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
     const reservedConcurrency = config.app.largeFileIngestion.engineReservedConcurrency;
+    // Reconcile requests that could not be processed: status change events the rule could not
+    // deliver, and asynchronous reconcile invocations (the rule's and the details read's) that still
+    // failed after Lambda's retries.
+    const reconcileDlq = new sqs.Queue(scope, LARGE_OBJECT_COPY_RECONCILE_DLQ_ID, {
+        encryption: storage.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storage.encryption.kmsKey,
+        enforceSSL: true,
+        retentionPeriod: Duration.days(14),
+    });
+    NagSuppressions.addResourceSuppressions(reconcileDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue is itself the dead-letter target of the copy engine's reconcile requests, " +
+                "so it takes no further dead-letter queue. A request left here is an ended copy whose " +
+                "job is still open; the execution details read retries it when the run is read.",
+        },
+    ]);
     const fun = new lambda.Function(scope, "largeObjectCopy", {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assets.largeObjectCopy.lambda_handler`,
@@ -227,6 +274,8 @@ export function buildLargeObjectCopyEngine(
         // Optional deployment-wide cap on concurrent copy tasks (unset: the unreserved pool). A task
         // over the cap is throttled, and throttling only slows a copy (see THROTTLE_RETRY).
         reservedConcurrentExecutions: reservedConcurrency > 0 ? reservedConcurrency : undefined,
+        // Only asynchronous invocations (reconcile) use it; the state machines invoke synchronously.
+        deadLetterQueue: reconcileDlq,
         vpc: inVpc ? vpc : undefined,
         vpcSubnets: inVpc ? { subnets: subnets } : undefined,
         environment: {
@@ -276,6 +325,14 @@ export function buildLargeObjectCopyEngine(
     );
     processWorkflowExecutionOutputFunction.grantInvoke(fun);
     sendEmailFunction.grantInvoke(fun);
+    // Reconcile: read an ended copy execution's status and input (its job).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:DescribeExecution"],
+            resources: [largeObjectCopyExecutionArnPattern(config)],
+        })
+    );
 
     // Read staged sources, write the destination multipart upload, delete the staged object.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -286,7 +343,47 @@ export function buildLargeObjectCopyEngine(
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     const stateMachine = buildCopyStateMachine(scope, fun, storage, config);
+    buildCopyStatusChangeRule(scope, fun, config, reconcileDlq);
     return { stateMachine, engineFunction: fun };
+}
+
+/** The copy execution statuses that mean it may have ended outside its states. */
+export const LARGE_OBJECT_COPY_RECONCILE_STATUSES = ["FAILED", "TIMED_OUT", "ABORTED"];
+
+/**
+ * Reconcile a copy execution that ended outside its states (H2): the history quota, a runtime
+ * error, a timeout, or a stop in the console or the API runs no Catch, Fail or notify state. A rule
+ * on the default event bus matches this deployment's copy state machine only (its exact ARN) and
+ * invokes the engine, which finalizes the job once (backend largeObjectCopy.reconcile) and leaves a
+ * job the cancel path stopped. The same pattern as the workflow status change rule
+ * (workflowStatusEvents.ts), which matches only vams-* workflow state machines. A missed event is
+ * picked up by the execution details read, which checks a run's unfinished copies.
+ */
+function buildCopyStatusChangeRule(
+    scope: Construct,
+    fun: lambda.Function,
+    config: Config.Config,
+    dlq: sqs.Queue
+): events.Rule {
+    const rule = new events.Rule(scope, LARGE_OBJECT_COPY_STATUS_RULE_ID, {
+        description: "Finalize VAMS large object copies whose execution ended outside its states",
+        eventPattern: {
+            source: ["aws.states"],
+            detailType: ["Step Functions Execution Status Change"],
+            detail: {
+                status: LARGE_OBJECT_COPY_RECONCILE_STATUSES,
+                stateMachineArn: [largeObjectCopyStateMachineArn(config)],
+            },
+        },
+    });
+    rule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: dlq,
+            retryAttempts: 3,
+            maxEventAge: Duration.hours(2),
+        })
+    );
+    return rule;
 }
 
 /** Engine memory when every part is copied server side (UploadPartCopy holds no object data). */
@@ -297,10 +394,11 @@ const NON_RETRYABLE_ERRORS = ["CopyRefused", "SourceChanged"];
 
 /**
  * Lambda throttling (the account or the engine's reserved concurrency is exhausted) is retried
- * separately from faults, with long jittered backoff: about 8 hours before a task gives up, so a
- * throttled copy waits for capacity instead of failing and discarding the parts it has copied.
- * Exported for the tests; the workflow definitions use the same values
- * (backend workflowAslBuilder THROTTLE_RETRIER).
+ * separately from faults, with long jittered backoff, so a throttled copy waits for capacity instead
+ * of failing and discarding the parts it has copied. The delays double from 10 s to a 300 s cap; with
+ * full jitter each delay is uniform between 0 and that value, so 99 attempts wait about 4 hours on
+ * average and at most about 7.9 hours. Exported for the tests; the workflow definitions use the same
+ * values (backend workflowAslBuilder THROTTLE_RETRIER).
  */
 export const THROTTLE_RETRY = {
     errors: ["Lambda.TooManyRequestsException"],
@@ -363,8 +461,8 @@ function engineTask(
 
 /**
  * Fault retrier of the last notify attempt: a notify that failed its normal retries (DynamoDB or
- * Step Functions unavailable) tries again for about 3 hours, so a landed file still finalizes its
- * run long before the run's maximum wait.
+ * Step Functions unavailable) tries again, about 1.4 hours on average and at most about 2.8 hours
+ * (full jitter), so a landed file still finalizes its run long before the run's maximum wait.
  */
 export const NOTIFY_LAST_ATTEMPT_RETRY = {
     intervalSeconds: 30,
@@ -373,26 +471,85 @@ export const NOTIFY_LAST_ATTEMPT_RETRY = {
     maxDelaySeconds: 600,
 };
 
-function buildCopyStateMachine(
+/*
+ * History budget (H2). A Standard execution fails, outside its own states, once its history reaches
+ * HISTORY_EVENT_QUOTA events. Throttling retries land in the history of the execution that runs the
+ * task, so the part batches run in child executions of at most BATCHES_PER_CHUNK batches each, and
+ * no execution of the copy can approach the quota however long its batches are throttled:
+ *
+ * - a Task state adds at most 5 events (entered, scheduled, started, succeeded or failed, exited)
+ *   plus 3 per retried attempt (scheduled, started, failed); a Map iteration adds 2 around it;
+ * - a CopyBatch iteration in a child execution: 2 + 5 + 3 x (0 + 99 + 6) = 322 events at most
+ *   (CopyRefused retries 0 times, throttling 99, faults 6);
+ * - a child execution: 50 x 322 = 16,100, plus its own start, Map and end events: about 16,110, 64%
+ *   of the quota;
+ * - the job's own execution: at most MAX_BATCHES / BATCHES_PER_CHUNK = 20 chunk iterations of
+ *   2 + 6 (startExecution.sync adds a submitted event) + 3 x 6 retries = 26 events (520), plus
+ *   Prepare, Complete, Fail and the four notify tasks, each run once with every retrier exhausted
+ *   (at most 5 + 3 x (99 + 20) = 362 each, about 2,550): about 3,100, 12% of the quota.
+ *
+ * infra/test/workflows/largeObjectCopyEngine.test.ts recomputes these bounds from the synthesized
+ * definitions. A copy execution that still ends outside its states (stopped in the console, a
+ * runtime error) is finalized by the status change rule below (backend largeObjectCopy.reconcile).
+ */
+
+/** Events a Standard execution's history may hold (Step Functions quota, not adjustable). */
+export const HISTORY_EVENT_QUOTA = 25000;
+/** Most batches a job is planned into (backend common/largeObjectCopy.py MAX_BATCHES). */
+export const MAX_BATCHES = 1000;
+/** Batches each child execution of a copy runs (see the history budget above). */
+export const BATCHES_PER_CHUNK = 50;
+/** Upper bound of the events one Task state adds, from its retriers' MaxAttempts. */
+export function worstCaseTaskEvents(retriers: { MaxAttempts?: number }[], submitted = false) {
+    const attempts = retriers.reduce((sum, r) => sum + (r.MaxAttempts ?? 3), 0);
+    return 5 + (submitted ? 1 : 0) + 3 * attempts;
+}
+/** Events a Map iteration adds around its item processor. */
+export const MAP_ITERATION_EVENTS = 2;
+
+/** Fixed name of the child state machine that copies one chunk of batches (<= 80 characters). */
+export function largeObjectCopyPartsStateMachineName(config: Config.Config): string {
+    return `LargeObjectCopyParts-${config.env.coreStackName}`.substring(0, 80);
+}
+
+/** Retrier of the chunk task: only a failed start; a failed child execution is final. */
+export const CHUNK_START_RETRY = {
+    errors: ["StepFunctions.ExecutionLimitExceeded", "StepFunctions.ThrottlingException"],
+    intervalSeconds: 5,
+    backoffRate: 2,
+    maxAttempts: 6,
+    maxDelaySeconds: 120,
+};
+
+/** Construct ids, for the tests and the resource list in documentation. */
+export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
+export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ID = "LargeObjectCopyReconcileDLQ";
+
+function stateMachineLogGroup(
+    scope: Construct,
+    id: string,
+    prefix: string,
+    storage: storageResources,
+    config: Config.Config
+): logs.LogGroup {
+    return new logs.LogGroup(scope, id, {
+        logGroupName:
+            prefix + generateUniqueNameHash(config.env.coreStackName, config.env.account, id, 10),
+        // The deployment key when one is configured, as every VAMS log group (CKV_AWS_158 on a
+        // deployment without a key matches the other log groups of the stack).
+        encryptionKey: storage.encryption.kmsKey,
+        retention: logs.RetentionDays.ONE_YEAR,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+}
+
+/** The child state machine: copy the batches of one chunk, at most maxConcurrentBatches at once. */
+function buildCopyPartsStateMachine(
     scope: Construct,
     fun: lambda.IFunction,
     storage: storageResources,
     config: Config.Config
 ): sfn.StateMachine {
-    const job = sfn.JsonPath.objectAt("$.job");
-    const prepare = engineTask(
-        scope,
-        "LargeObjectCopyPrepare",
-        fun,
-        { action: "prepare", job },
-        {
-            resultSelector: {
-                job: sfn.JsonPath.objectAt("$.Payload.job"),
-                batches: sfn.JsonPath.listAt("$.Payload.batches"),
-            },
-            resultPath: "$",
-        }
-    );
     const copyBatch = engineTask(
         scope,
         "LargeObjectCopyBatch",
@@ -414,6 +571,87 @@ function buildCopyStateMachine(
         resultPath: sfn.JsonPath.DISCARD,
     });
     copyBatches.itemProcessor(copyBatch);
+    const machine = new sfn.StateMachine(scope, "LargeObjectCopyPartsStateMachine", {
+        stateMachineName: largeObjectCopyPartsStateMachineName(config),
+        stateMachineType: sfn.StateMachineType.STANDARD,
+        definitionBody: sfn.DefinitionBody.fromChainable(copyBatches),
+        logs: {
+            destination: stateMachineLogGroup(
+                scope,
+                "LargeObjectCopyPartsStateMachineLogGroup",
+                "/aws/vendedlogs/VAMSStateMachine-LargeObjectCopyParts",
+                storage,
+                config
+            ),
+            includeExecutionData: false,
+            level: sfn.LogLevel.ALL,
+        },
+        tracingEnabled: true,
+    });
+    NagSuppressions.addResourceSuppressions(
+        machine,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Invokes the copy-engine function and its versions; writes its own log group.",
+            },
+        ],
+        true
+    );
+    return machine;
+}
+
+function buildCopyStateMachine(
+    scope: Construct,
+    fun: lambda.IFunction,
+    storage: storageResources,
+    config: Config.Config
+): sfn.StateMachine {
+    const job = sfn.JsonPath.objectAt("$.job");
+    const prepare = engineTask(
+        scope,
+        "LargeObjectCopyPrepare",
+        fun,
+        { action: "prepare", job },
+        {
+            resultSelector: {
+                job: sfn.JsonPath.objectAt("$.Payload.job"),
+                chunks: sfn.JsonPath.listAt("$.Payload.chunks"),
+            },
+            resultPath: "$",
+        }
+    );
+    const partsMachine = buildCopyPartsStateMachine(scope, fun, storage, config);
+    const copyChunk = new tasks.StepFunctionsStartExecution(scope, "LargeObjectCopyChunk", {
+        stateMachine: partsMachine,
+        integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+        input: sfn.TaskInput.fromObject({
+            job: sfn.JsonPath.objectAt("$.job"),
+            batches: sfn.JsonPath.listAt("$.batches"),
+        }),
+        associateWithParent: true,
+        resultPath: sfn.JsonPath.DISCARD,
+    });
+    copyChunk.addRetry({
+        errors: CHUNK_START_RETRY.errors,
+        interval: Duration.seconds(CHUNK_START_RETRY.intervalSeconds),
+        backoffRate: CHUNK_START_RETRY.backoffRate,
+        maxAttempts: CHUNK_START_RETRY.maxAttempts,
+        maxDelay: Duration.seconds(CHUNK_START_RETRY.maxDelaySeconds),
+        jitterStrategy: sfn.JitterType.FULL,
+    });
+    // One chunk at a time: the child runs maxConcurrentBatches batches at once, so the copy's
+    // concurrency stays what maxConcurrentBatches sets.
+    const copyChunks = new sfn.Map(scope, "LargeObjectCopyChunks", {
+        itemsPath: "$.chunks",
+        maxConcurrency: 1,
+        itemSelector: {
+            job: sfn.JsonPath.objectAt("$.job"),
+            batches: sfn.JsonPath.listAt("$$.Map.Item.Value.batches"),
+        },
+        resultPath: sfn.JsonPath.DISCARD,
+    });
+    copyChunks.itemProcessor(copyChunk);
     const complete = engineTask(
         scope,
         "LargeObjectCopyComplete",
@@ -433,7 +671,10 @@ function buildCopyStateMachine(
         "LargeObjectCopyFail",
         fun,
         { action: "fail", job, error: sfn.JsonPath.objectAt("$.error") },
-        {}
+        {
+            resultSelector: { refused: sfn.JsonPath.objectAt("$.Payload.refused") },
+            resultPath: "$.outcome",
+        }
     );
     const notifyFailed = engineTask(
         scope,
@@ -484,33 +725,42 @@ function buildCopyStateMachine(
         errors: [sfn.Errors.ALL],
         resultPath: "$.notifyError",
     });
-    notifyFailedLastAttempt.next(failed);
+    // A refused file (blocked type, over 5 TiB, source changed, cancelled) ends in its own state, so
+    // the failed-copy alarm counts only copies that broke. The job row and the upload status or the
+    // workflow execution still record the refusal as a failed file.
+    const refused = new sfn.Succeed(scope, "LargeObjectCopyRefused", {
+        comment: "The file was refused; the job row records the reason.",
+    });
+    const refusedOrFailed = new sfn.Choice(scope, "LargeObjectCopyRefusedOrFailed")
+        .when(
+            sfn.Condition.and(
+                sfn.Condition.isPresent("$.outcome.refused"),
+                sfn.Condition.booleanEquals("$.outcome.refused", true)
+            ),
+            refused
+        )
+        .otherwise(failed);
+    notifyFailedLastAttempt.next(refusedOrFailed);
     // The failure path always reports, so a waiting workflow is told even when its cleanup fails.
     fail.addCatch(notifyFailed, { errors: [sfn.Errors.ALL], resultPath: "$.cleanupError" });
-    const failurePath = fail.next(notifyFailed).next(failed);
-    for (const state of [prepare, copyBatches, complete]) {
+    const failurePath = fail.next(notifyFailed).next(refusedOrFailed);
+    for (const state of [prepare, copyChunks, complete]) {
         state.addCatch(failurePath, { errors: [sfn.Errors.ALL], resultPath: "$.error" });
     }
 
-    const logGroup = new logs.LogGroup(scope, "LargeObjectCopyStateMachineLogGroup", {
-        logGroupName:
-            "/aws/vendedlogs/VAMSStateMachine-LargeObjectCopy" +
-            generateUniqueNameHash(
-                config.env.coreStackName,
-                config.env.account,
-                "LargeObjectCopyStateMachineLogGroup",
-                10
-            ),
-        encryptionKey: storage.encryption.kmsKey,
-        retention: logs.RetentionDays.ONE_YEAR,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    const logGroup = stateMachineLogGroup(
+        scope,
+        "LargeObjectCopyStateMachineLogGroup",
+        "/aws/vendedlogs/VAMSStateMachine-LargeObjectCopy",
+        storage,
+        config
+    );
 
     const stateMachine = new sfn.StateMachine(scope, "LargeObjectCopyStateMachine", {
         stateMachineName: largeObjectCopyStateMachineName(config),
         stateMachineType: sfn.StateMachineType.STANDARD,
         definitionBody: sfn.DefinitionBody.fromChainable(
-            prepare.next(copyBatches).next(complete).next(notifySucceeded)
+            prepare.next(copyChunks).next(complete).next(notifySucceeded)
         ),
         logs: {
             destination: logGroup,
@@ -525,15 +775,19 @@ function buildCopyStateMachine(
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Invokes the copy-engine function and its versions; writes its own log group.",
+                reason:
+                    "Invokes the copy-engine function and its versions; writes its own log group; " +
+                    "describes and stops the executions of its child state machine; manages the " +
+                    "Step Functions-owned rule startExecution.sync uses to wait on them.",
             },
         ],
         true
     );
 
-    // A failed copy execution is a file that did not land (its job row and the upload or execution
-    // record name it) or an outcome that could not be reported. No alarm action: VAMS has no
-    // notification topic, so operators attach their own.
+    // A failed copy execution is a copy that broke (its job row and the upload or execution record
+    // name the file), an outcome that could not be reported, or an execution that ended outside its
+    // states. Refused files end in LargeObjectCopyRefused and do not count. No alarm action: VAMS has
+    // no notification topic, so operators attach their own.
     new cloudwatch.Alarm(scope, "LargeObjectCopyExecutionsFailedAlarm", {
         alarmName: `${config.name}-${config.app.baseStackName}-largeObjectCopyExecutionsFailed`,
         alarmDescription:

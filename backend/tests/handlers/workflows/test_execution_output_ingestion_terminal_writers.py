@@ -13,6 +13,7 @@
   when that redeploy fails and the pipelines are unchanged."""
 
 from datetime import datetime, timedelta, timezone
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -132,6 +133,55 @@ class TestDetailsFields:
     def test_a_progress_read_failure_returns_no_files(self):
         with patch.object(le, "get_table_name", side_effect=KeyError("x")):
             assert le._ingestion_file_progress(EXEC) == ([], False)
+
+
+@pytest.mark.unit
+class TestDetailsReadReconcilesEndedCopies:
+    """#1123 H2 backstop: a copy execution that ended outside its states (its status change event
+    was missed) is handed to the copy engine when the run's details are read, so the run is
+    finalized instead of waiting out the maximum ingestion wait."""
+
+    ROWS = [{"jobId": f"{EXEC}#a", "relativeKey": "a.bin", "status": "RUNNING", "executionArn": "x:a"},
+            {"jobId": f"{EXEC}#b", "relativeKey": "b.bin", "status": "RUNNING", "executionArn": "x:b"}]
+
+    def _read(self, statuses, function_name="copyEngine", lam=None):
+        lam = lam or MagicMock()
+        sfn = MagicMock()
+        sfn.describe_execution.side_effect = lambda executionArn: statuses[executionArn]
+        env = {loc.ENV_ENGINE_FUNCTION_NAME: function_name} if function_name else {}
+        with patch.dict(le.os.environ, env), \
+                patch.object(le, "get_table_name", return_value="t-copy-jobs"), \
+                patch.object(le.dynamodb, "Table", return_value=MagicMock()), \
+                patch.object(le.loc, "jobs_for_execution", return_value=[dict(r) for r in self.ROWS]), \
+                patch.object(le, "sfn", sfn), patch.object(le, "lambda_client", lam):
+            if not function_name:
+                le.os.environ.pop(loc.ENV_ENGINE_FUNCTION_NAME, None)
+            files, _ = le._ingestion_file_progress(EXEC)
+        return files, lam, sfn
+
+    def test_an_ended_copy_is_handed_to_the_engine_asynchronously(self):
+        files, lam, _sfn = self._read({"x:a": {"status": "FAILED"}, "x:b": {"status": "RUNNING"}})
+        assert len(files) == 2
+        lam.invoke.assert_called_once()
+        kwargs = lam.invoke.call_args.kwargs
+        assert kwargs["FunctionName"] == "copyEngine" and kwargs["InvocationType"] == "Event"
+        assert json.loads(kwargs["Payload"]) == {"action": "reconcile", "executionArn": "x:a"}
+
+    def test_running_copies_are_not_handed_over(self):
+        _files, lam, _sfn = self._read({"x:a": {"status": "RUNNING"}, "x:b": {"status": "RUNNING"}})
+        lam.invoke.assert_not_called()
+
+    def test_a_function_without_the_engine_name_checks_nothing(self):
+        _files, lam, sfn = self._read({}, function_name="")
+        sfn.describe_execution.assert_not_called()
+        lam.invoke.assert_not_called()
+
+    def test_a_failed_hand_over_still_returns_the_progress(self):
+        failing = MagicMock(**{"invoke.side_effect": RuntimeError("lambda down")})
+        files, lam, _sfn = self._read({"x:a": {"status": "FAILED"}, "x:b": {"status": "FAILED"}},
+                                      lam=failing)
+        assert len(files) == 2
+        lam.invoke.assert_called_once()  # the first failure ends the hand-over for this read
 
     def test_an_ingested_output_file_reports_its_outcome(self):
         out = le._scrub_output_file({"relativeFilePath": "a", "fileType": "file",

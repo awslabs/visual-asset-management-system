@@ -416,7 +416,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
         // of the three gets its grants as one managed policy (their inline policies are near the
         // IAM quota).
-        buildLargeObjectCopyEngine(
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -435,8 +435,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
             answersTaskToken: false,
         });
+        // The details read also hands the engine a copy whose execution ended unreported.
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
             answersTaskToken: false,
+            reconcileWith: largeObjectCopyEngine.engineFunction,
         });
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the

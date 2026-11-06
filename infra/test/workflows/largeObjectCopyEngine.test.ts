@@ -20,12 +20,21 @@
  * and pinned in backend/tests/common/workflows/test_workflowAsl_output_ingestion.py.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import * as Config from "../../config/config";
 import {
+    BATCHES_PER_CHUNK,
+    CHUNK_START_RETRY,
     FAULT_RETRY,
+    HISTORY_EVENT_QUOTA,
+    LARGE_OBJECT_COPY_RECONCILE_STATUSES,
     LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
+    MAP_ITERATION_EVENTS,
+    MAX_BATCHES,
     NOTIFY_LAST_ATTEMPT_RETRY,
     THROTTLE_RETRY,
+    worstCaseTaskEvents,
 } from "../../lib/lambdaBuilder/largeObjectCopyEngine";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
 import { nestedTemplateKeyFor } from "../support/iamPolicySize";
@@ -73,11 +82,29 @@ function byPrefix(resources: Record<string, any>, type: string, prefix: string) 
     );
 }
 
+function allStates(states: Record<string, any>): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const [id, state] of Object.entries(states)) {
+        out[id] = state;
+        const nested = state.ItemProcessor?.States ?? state.Iterator?.States;
+        if (nested) Object.assign(out, allStates(nested));
+    }
+    return out;
+}
+
+const isLambdaTask = (s: any) =>
+    s.Type === "Task" && JSON.stringify(s.Resource).includes(":lambda:invoke");
+
 describe.each(CELLS)("large object copy engine ($name)", (cell) => {
     let resources: Record<string, any>;
     let definition: any;
+    let partsDefinition: any;
     let engineFunction: any;
+    let engineFunctionId: string;
     let stateMachineId: string;
+    let jobStates: Record<string, any>;
+    let partsStates: Record<string, any>;
+    let states: Record<string, any>;
 
     beforeAll(() => {
         const synth = synthCell(cell);
@@ -90,23 +117,24 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(machines).toHaveLength(1);
         stateMachineId = machines[0][0];
         definition = JSON.parse(SynthResult.flatten(machines[0][1].Properties.DefinitionString));
+        const parts = byPrefix(
+            resources,
+            "AWS::StepFunctions::StateMachine",
+            "LargeObjectCopyPartsStateMachine"
+        );
+        expect(parts).toHaveLength(1);
+        partsDefinition = JSON.parse(SynthResult.flatten(parts[0][1].Properties.DefinitionString));
         const functions = byPrefix(resources, "AWS::Lambda::Function", "largeObjectCopy");
         expect(functions).toHaveLength(1);
+        engineFunctionId = functions[0][0];
         engineFunction = functions[0][1];
+        jobStates = allStates(definition.States);
+        partsStates = allStates(partsDefinition.States);
+        states = { ...jobStates, ...partsStates };
     });
 
-    function allStates(states: Record<string, any> = definition.States): Record<string, any> {
-        const out: Record<string, any> = {};
-        for (const [id, state] of Object.entries(states)) {
-            out[id] = state;
-            const nested = state.ItemProcessor?.States ?? state.Iterator?.States;
-            if (nested) Object.assign(out, allStates(nested));
-        }
-        return out;
-    }
-
     test("every engine task waits out throttling with its own long retrier, ahead of faults", () => {
-        const tasks = Object.entries(allStates()).filter(([, s]) => s.Type === "Task");
+        const tasks = Object.entries(states).filter(([, s]) => isLambdaTask(s));
         expect(tasks.length).toBeGreaterThanOrEqual(8);
         for (const [id, task] of tasks) {
             const retry = task.Retry as any[];
@@ -136,19 +164,126 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(waited).toBeGreaterThan(6 * 3600);
     });
 
-    test("the copy batches keep their fault retrier and the Map is bounded", () => {
-        const states = allStates();
-        const map = Object.values(states).find((s: any) => s.Type === "Map") as any;
-        expect(map.MaxConcurrency).toBe(Config.LARGE_FILE_INGESTION_DEFAULTS.maxConcurrentBatches);
+    test("the copy batches keep their fault retrier and the copy's concurrency is bounded", () => {
+        // The batches run in the child state machine, which runs maxConcurrentBatches at once; the
+        // job's execution runs one chunk (one child execution) at a time.
+        expect(partsStates.LargeObjectCopyBatches.MaxConcurrency).toBe(
+            Config.LARGE_FILE_INGESTION_DEFAULTS.maxConcurrentBatches
+        );
         expect(Config.LARGE_FILE_INGESTION_DEFAULTS.maxConcurrentBatches).toBe(10);
-        const fault = (states.LargeObjectCopyBatch.Retry as any[]).find((r) =>
+        expect(jobStates.LargeObjectCopyChunks.MaxConcurrency).toBe(1);
+        expect(jobStates.LargeObjectCopyBatch).toBeUndefined();
+        const fault = (partsStates.LargeObjectCopyBatch.Retry as any[]).find((r) =>
             r.ErrorEquals.includes("States.ALL")
         );
         expect(fault.MaxAttempts).toBe(FAULT_RETRY.maxAttempts);
     });
 
+    test("each chunk runs as a child execution that the job's execution waits on", () => {
+        const chunk = jobStates.LargeObjectCopyChunk;
+        expect(JSON.stringify(chunk.Resource)).toContain(":states:startExecution.sync:2");
+        expect(chunk.Parameters.Input["AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$"]).toBe(
+            "$$.Execution.Id"
+        );
+        // Only a failed start is retried; a failed child execution (a refusal, or a batch that
+        // exhausted its retries) is final and goes to the failure path.
+        expect(chunk.Retry).toEqual([
+            expect.objectContaining({
+                ErrorEquals: CHUNK_START_RETRY.errors,
+                MaxAttempts: CHUNK_START_RETRY.maxAttempts,
+            }),
+        ]);
+        expect(jobStates.LargeObjectCopyChunks.Catch[0].Next).toBe("LargeObjectCopyFail");
+        expect(jobStates.LargeObjectCopyPrepare.ResultSelector["chunks.$"]).toBe("$.Payload.chunks");
+        expect(engineFunction.Properties.Environment.Variables.LARGE_OBJECT_COPY_BATCHES_PER_CHUNK).toBe(
+            String(BATCHES_PER_CHUNK)
+        );
+    });
+
+    test("no execution of a copy can reach the history quota (H2)", () => {
+        // Child execution: BATCHES_PER_CHUNK iterations of CopyBatch with every retrier exhausted,
+        // plus its start, Map and end events.
+        const perBatch =
+            MAP_ITERATION_EVENTS + worstCaseTaskEvents(partsStates.LargeObjectCopyBatch.Retry);
+        expect(perBatch).toBe(322);
+        const child = BATCHES_PER_CHUNK * perBatch + 10;
+        expect(child).toBeLessThan(HISTORY_EVENT_QUOTA * 0.7);
+
+        // Job execution: every chunk of the largest plan, plus each other task once with every
+        // retrier exhausted, plus its Pass, Choice, Map and end events.
+        const chunks = Math.ceil(MAX_BATCHES / BATCHES_PER_CHUNK);
+        const perChunk =
+            MAP_ITERATION_EVENTS + worstCaseTaskEvents(jobStates.LargeObjectCopyChunk.Retry, true);
+        const others = Object.entries(jobStates)
+            .filter(([id, s]) => s.Type === "Task" && id !== "LargeObjectCopyChunk")
+            .reduce((sum, [, s]) => sum + worstCaseTaskEvents(s.Retry ?? []), 0);
+        const job = chunks * perChunk + others + 2 * Object.keys(jobStates).length;
+        expect(job).toBeLessThan(HISTORY_EVENT_QUOTA * 0.2);
+
+        // Before this change the batches ran inline: the job's own history held every batch.
+        expect(MAX_BATCHES * perBatch).toBeGreaterThan(HISTORY_EVENT_QUOTA);
+    });
+
+    test("the chunk and batch limits match the backend planner", () => {
+        const backend = fs.readFileSync(
+            path.join(__dirname, "../../../backend/backend/common/largeObjectCopy.py"),
+            "utf8"
+        );
+        expect(backend).toMatch(new RegExp(`^MAX_BATCHES = ${MAX_BATCHES}$`, "m"));
+        expect(backend).toMatch(new RegExp(`^DEFAULT_BATCHES_PER_CHUNK = ${BATCHES_PER_CHUNK}$`, "m"));
+    });
+
+    test("a refused file ends in its own state, not the failed state the alarm counts", () => {
+        expect(jobStates.LargeObjectCopyFail.ResultPath).toBe("$.outcome");
+        expect(jobStates.LargeObjectCopyNotifyFailed.Next).toBe("LargeObjectCopyRefusedOrFailed");
+        expect(jobStates.LargeObjectCopyNotifyFailedLastAttempt.Next).toBe(
+            "LargeObjectCopyRefusedOrFailed"
+        );
+        const choice = jobStates.LargeObjectCopyRefusedOrFailed;
+        expect(choice.Choices[0].Next).toBe("LargeObjectCopyRefused");
+        expect(JSON.stringify(choice.Choices[0])).toContain("$.outcome.refused");
+        expect(choice.Default).toBe("LargeObjectCopyFailed");
+        expect(jobStates.LargeObjectCopyRefused.Type).toBe("Succeed");
+        expect(jobStates.LargeObjectCopyFailed.Type).toBe("Fail");
+    });
+
+    test("a copy execution that ends outside its states is reconciled", () => {
+        const rules = byPrefix(resources, "AWS::Events::Rule", "LargeObjectCopyStatusChangeRule");
+        expect(rules).toHaveLength(1);
+        const rule = rules[0][1].Properties;
+        expect(rule.EventPattern.source).toEqual(["aws.states"]);
+        expect(rule.EventPattern.detail.status).toEqual(LARGE_OBJECT_COPY_RECONCILE_STATUSES);
+        // This deployment's copy state machine only, never its child state machine or a workflow.
+        const arns = JSON.stringify(rule.EventPattern.detail.stateMachineArn);
+        expect(arns).toContain("LargeObjectCopy-");
+        expect(arns).not.toContain("LargeObjectCopyParts-");
+        const target = rule.Targets[0];
+        expect(JSON.stringify(target.Arn)).toContain(engineFunctionId);
+        expect(target.DeadLetterConfig).toBeDefined();
+        expect(target.RetryPolicy).toEqual({ MaximumEventAgeInSeconds: 7200, MaximumRetryAttempts: 3 });
+        // Failed asynchronous reconcile invocations are kept, not dropped.
+        expect(engineFunction.Properties.DeadLetterConfig).toBeDefined();
+        const dlqs = byPrefix(resources, "AWS::SQS::Queue", "LargeObjectCopyReconcileDLQ");
+        expect(dlqs).toHaveLength(1);
+    });
+
+    test("the engine can describe its executions and the details read can hand it one", () => {
+        const policies = JSON.stringify(
+            Object.values(resources).filter(
+                (r: any) => r.Type === "AWS::IAM::Policy" || r.Type === "AWS::IAM::ManagedPolicy"
+            )
+        );
+        expect(policies).toContain("states:DescribeExecution");
+        expect(policies).toContain("LargeObjectCopy-");
+        const withName = Object.values(resources).filter(
+            (r: any) =>
+                r.Type === "AWS::Lambda::Function" &&
+                r.Properties.Environment?.Variables?.LARGE_OBJECT_COPY_FUNCTION_NAME
+        );
+        expect(withName).toHaveLength(1);
+    });
+
     test("a notify that exhausted its retries gets a longer last attempt", () => {
-        const states = allStates();
         for (const outcome of ["Succeeded", "Failed"]) {
             const notify = states[`LargeObjectCopyNotify${outcome}`];
             const last = `LargeObjectCopyNotify${outcome}LastAttempt`;
@@ -164,7 +299,6 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             expect(fault.MaxAttempts).toBe(NOTIFY_LAST_ATTEMPT_RETRY.maxAttempts);
             expect(lastState.Catch[0].Next).toBe("LargeObjectCopyNotifyLost");
         }
-        expect(states.LargeObjectCopyNotifyFailedLastAttempt.Next).toBe("LargeObjectCopyFailed");
         expect(states.LargeObjectCopyNotifyLost.Type).toBe("Fail");
     });
 

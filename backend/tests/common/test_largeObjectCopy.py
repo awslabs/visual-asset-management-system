@@ -87,7 +87,8 @@ def test_execution_name_fits_step_functions_rules():
 def test_settings_default_when_unset_or_out_of_bounds():
     assert loc.settings({}) == {
         "apiUploadEngineThresholdBytes": 5 * GIB, "minPartSizeBytes": 256 * loc.MIB,
-        "partsPerBatch": 16, "threadsPerBatch": 8, "maxOutputIngestionWaitHours": 48}
+        "partsPerBatch": 16, "threadsPerBatch": 8, "maxOutputIngestionWaitHours": 48,
+        "batchesPerChunk": loc.DEFAULT_BATCHES_PER_CHUNK}
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "500"})["maxOutputIngestionWaitHours"] == 48
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "x"})["maxOutputIngestionWaitHours"] == 48
     assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "2"})["maxOutputIngestionWaitHours"] == 2
@@ -366,3 +367,65 @@ NOW = datetime(2026, 11, 6, 12, 0, 0, tzinfo=timezone.utc)
 ])
 def test_ingestion_hold(main_item, status, expected):
     assert loc.ingestion_hold(main_item, status, max_wait_hours=48, now=NOW) == expected
+
+
+# --------------------------------------------------------------------------------------------- #
+# Round 2 (#1123 H2): chunks and the ended-execution check of the details read
+# --------------------------------------------------------------------------------------------- #
+
+def test_the_largest_plan_splits_into_chunks_of_the_configured_size():
+    batches = loc.plan_batches(loc.MAX_BATCHES * 4, 1)
+    assert len(batches) == loc.MAX_BATCHES
+    chunks = loc.plan_chunks(batches, loc.DEFAULT_BATCHES_PER_CHUNK)
+    assert len(chunks) == loc.MAX_BATCHES // loc.DEFAULT_BATCHES_PER_CHUNK
+    assert all(len(c["batches"]) <= loc.DEFAULT_BATCHES_PER_CHUNK for c in chunks)
+    assert [b for c in chunks for b in c["batches"]] == batches  # order and coverage kept
+
+
+def test_a_small_plan_is_one_chunk():
+    assert loc.plan_chunks([{"startPart": 1, "endPart": 3}]) == [{"batches": [{"startPart": 1, "endPart": 3}]}]
+    assert loc.plan_chunks([]) == []
+
+
+def _sfn(statuses):
+    client = MagicMock()
+    client.describe_execution.side_effect = lambda executionArn: statuses[executionArn]
+    return client
+
+
+def test_only_unfinished_jobs_whose_execution_ended_unreported_are_returned():
+    rows = [
+        {"jobId": "a", "status": "RUNNING", "executionArn": "x:a"},
+        {"jobId": "b", "status": "SUCCEEDED", "executionArn": "x:b"},
+        {"jobId": "c", "status": "QUEUED", "executionArn": "x:c"},
+        {"jobId": "d", "status": "RUNNING", "executionArn": "x:d"},
+        {"jobId": "e", "status": "RUNNING"},
+    ]
+    client = _sfn({"x:a": {"status": "FAILED"}, "x:c": {"status": "RUNNING"},
+                   "x:d": {"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED}})
+    assert loc.ended_copy_executions(client, rows) == ["x:a"]
+    described = [c.kwargs["executionArn"] for c in client.describe_execution.call_args_list]
+    assert described == ["x:a", "x:c", "x:d"]  # terminal rows and rows without an execution skipped
+
+
+def test_the_ended_check_is_bounded_per_read():
+    rows = [{"jobId": str(i), "status": "RUNNING", "executionArn": f"x:{i}"} for i in range(50)]
+    client = MagicMock()
+    client.describe_execution.return_value = {"status": "TIMED_OUT"}
+    assert len(loc.ended_copy_executions(client, rows)) == loc.MAX_RECONCILE_CHECKS_PER_READ
+    assert client.describe_execution.call_count == loc.MAX_RECONCILE_CHECKS_PER_READ
+
+
+def test_a_failed_describe_is_skipped():
+    client = MagicMock()
+    client.describe_execution.side_effect = RuntimeError("throttled")
+    assert loc.ended_copy_executions(client, [{"jobId": "a", "status": "RUNNING", "executionArn": "x"}]) == []
+
+
+def test_the_cancel_path_stops_with_the_error_the_reconcile_skips():
+    table, sfn, s3 = MagicMock(), MagicMock(), MagicMock()
+    table.query.return_value = {"Items": [{"jobId": "j", "status": "RUNNING", "executionArn": "arn"}]}
+    loc.cancel_execution_copy_jobs(table, sfn, s3, "e1")
+    assert sfn.stop_execution.call_args.kwargs["error"] == loc.STOP_ERROR_CANCELLED
+    assert not loc.is_unreported_end({"status": "ABORTED", "error": loc.STOP_ERROR_CANCELLED})
+    assert loc.is_unreported_end({"status": "ABORTED"})
