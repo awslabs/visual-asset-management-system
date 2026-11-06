@@ -779,7 +779,10 @@ def cleanup_failed_processing(file_info: Dict[str, Any], correlation_ids: Dict[s
                     Key=temp_s3_key,
                     UploadId=upload_id_s3
                 )
-                logger.info(f"Aborted multipart upload: {upload_id_s3} - {correlation_str}")
+                # S3 also accepts an abort for an upload that has already completed, so this
+                # does not confirm that any uploaded parts were discarded.
+                logger.info(f"Abort requested for multipart upload {upload_id_s3} (accepted by S3; "
+                            f"the upload may already have been completed) - {correlation_str}")
             except ClientError as e:
                 if e.response['Error']['Code'] == 'NoSuchUpload':
                     logger.debug(f"Multipart upload does not exist, no abort needed - {correlation_str}")
