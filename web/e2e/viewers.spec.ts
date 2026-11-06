@@ -427,12 +427,13 @@ test.describe("viewer render proof (seeded samples)", () => {
             if (c.servedBundle) {
                 // The VNTANA component shows its info panel after the element's `load` event and an
                 // error box after its `error` event (3.x reports what failed in `detail.type`).
-                await expect(page.getByText(/Error Loading Model/i)).toHaveCount(0);
-                await expect(page.getByText("VNTANA 3D Viewer", { exact: true })).toBeVisible({
-                    timeout: 90_000,
-                });
-                await expect(page.locator("vntana-zoom-in-button")).toHaveCount(1);
-                await expect(page.locator("vntana-scene-graph-button")).toHaveCount(1);
+                // Scoped to the viewer's root: the viewer picker above it shows the same name, so a
+                // page-wide match would pass before the model loaded.
+                const root = page.locator(".vntana-viewer-root");
+                await expect(root.getByText(/Mouse: Rotate/)).toBeVisible({ timeout: 90_000 });
+                await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
+                await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
+                await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
             }
 
             if (c.kind === "canvas") {
