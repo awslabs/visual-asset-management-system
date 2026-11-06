@@ -48,6 +48,7 @@ class TestKeyBasedRedaction:
             "cookie",
             "privateKey",
             "signature",
+            "connectionUrl",
         ],
     )
     def test_sensitive_keys_are_redacted(self, key):
@@ -71,6 +72,7 @@ class TestKeyBasedRedaction:
             "assetName",
             "description",
             "filePath",
+            "connectionAvailable",
             # Keys that NAME or DESCRIBE a credential without carrying one. Redacting these costs
             # diagnostic value for no security gain.
             "apiKeyId",

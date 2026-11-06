@@ -18,10 +18,11 @@ from common.apiRoutes import (
     API_AUTH_USER_API_KEYS,
     API_AUTH_USER_API_KEY_BY_ID,
 )
+from common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
-from handlers.auth import request_to_claims
+from handlers.auth import AUTH_METHOD_API_KEY, request_to_claims
 from customLogging.logger import safeLogger
 from models.common import (
     validation_error_message,
@@ -263,6 +264,37 @@ def _requesting_user_id():
     return claims_and_roles['tokens'][0] if claims_and_roles.get('tokens') else None
 
 
+def _caller_is_temporary_session_key():
+    """Whether the caller authenticated with a temporary session key: an API key named with
+    TEMPORARY_SESSION_KEY_NAME_PREFIX. Such a key may neither create nor update a key, or a session
+    credential would outlive its session through a key of its own making. An API-key caller whose key
+    record cannot be identified is treated as one; every other caller is not. A record that cannot be
+    read is no judgement on the caller: the read error propagates and the request is answered as an
+    internal error."""
+    if claims_and_roles.get('authMethod') != AUTH_METHOD_API_KEY:
+        return False
+    api_key_id = claims_and_roles.get('apiKeyId')
+    if not api_key_id or api_key_table is None:
+        return True
+    record = api_key_table.get_item(Key={'apiKeyId': api_key_id}).get('Item')
+    if not record:
+        return True
+    return str(record.get('apiKeyName', '')).startswith(TEMPORARY_SESSION_KEY_NAME_PREFIX)
+
+
+def _reserved_key_name_refusal(event, api_key_name):
+    """The 400 answer to a create that names a key under TEMPORARY_SESSION_KEY_NAME_PREFIX, which only a
+    Lambda cross-call may mint under; None for any other name or caller."""
+    if not str(api_key_name).startswith(TEMPORARY_SESSION_KEY_NAME_PREFIX) or 'lambdaCrossCall' in event:
+        return None
+    logger.info("Refused an API key name under the reserved temporary session key prefix")
+    return validation_error(
+        body={'message': "API key names starting with the temporary session key prefix are reserved. "
+                         "Please choose a different name."},
+        event=event
+    )
+
+
 def _max_user_expiration(created_at_iso):
     """Latest allowed expiration for a user key: creation + the max window."""
     return parse_iso8601_datetime(created_at_iso) + timedelta(days=USER_API_KEY_MAX_EXPIRATION_DAYS)
@@ -407,6 +439,10 @@ def create_api_key(event):
 
     request = parse(body, model=CreateApiKeyRequestModel)
 
+    reserved_name_response = _reserved_key_name_refusal(event, request.apiKeyName)
+    if reserved_name_response is not None:
+        return reserved_name_response
+
     # Check for duplicate API key name across the deployment (admin scope)
     if _api_key_name_exists(request.apiKeyName):
         logger.info(f"Rejected duplicate API key name for user {request.userId}")
@@ -489,6 +525,10 @@ def create_user_api_key(event):
         return validation_error(body={'message': 'Request body cannot be parsed'}, event=event)
 
     request = parse(body, model=CreateUserApiKeyRequestModel)
+
+    reserved_name_response = _reserved_key_name_refusal(event, request.apiKeyName)
+    if reserved_name_response is not None:
+        return reserved_name_response
 
     user_id = _requesting_user_id()
     if not user_id:
@@ -688,6 +728,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if not method_allowed_on_api:
             return authorization_error()
+
+        if method in ('POST', 'PUT') and _caller_is_temporary_session_key():
+            logger.info("Refused an API key create or update to a caller holding a temporary session key")
+            return authorization_error(
+                body={'message': 'API keys cannot be created or updated with a temporary session key'},
+                event=event)
 
         if method == 'GET':
             return handle_get(event, path)

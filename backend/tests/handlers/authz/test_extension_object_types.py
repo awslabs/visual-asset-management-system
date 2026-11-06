@@ -43,6 +43,7 @@ def _load_widget_constants():
         setattr(module, f"{prefix}_CONSTRAINT_OBJECT_TYPE_FIELDS", {})
         setattr(module, f"{prefix}_UNALLOWED_FILE_EXTENSIONS", [])
         setattr(module, f"{prefix}_UNALLOWED_MIME_TYPES", [])
+        setattr(module, f"{prefix}_LOG_SENSITIVE_KEYS", [])
     custom.CUSTOM_PERMISSION_CONSTRAINT_FIELDS = {"widgetId": ""}
     custom.CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS = {"widget": {"label": "Widget", "fields": [
         {"label": "Database ID", "value": "databaseId"},

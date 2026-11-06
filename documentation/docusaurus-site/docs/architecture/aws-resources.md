@@ -778,6 +778,10 @@ The built web application is uploaded to the web app bucket with a `Cache-Contro
 
 Amazon CloudFront compresses text responses (JavaScript, CSS, HTML, JSON, SVG and WebAssembly) with Brotli or gzip, as the browser accepts. Each web deployment uploads the new hashed assets first, then `index.html`, then invalidates `/*`, and deletes the previous release's hashed assets last, so a page served at any point during a deployment references only files that are stored. The ALB distribution serves files uncompressed, because Elastic Load Balancing does not compress responses.
 
+## Add-on Resources
+
+An enabled add-on can deploy resources beyond those listed above, such as tables, functions, security groups, parameters under the deployment's `resourceNames` prefix, and objects it creates at runtime. The add-on's page lists them, with their removal on teardown and whether they carry a custom name (see [Add-ons Overview](../developer/addons-overview.md)).
+
 ## Next Steps
 
 -   [Security Architecture](security.md) -- How these resources are secured

@@ -81,7 +81,7 @@ class TestCustomResourceKeys:
 
 @pytest.mark.unit
 class TestAddonResourceKeys:
-    """``common/addonResourceNames.py`` is the add-on lane: upstream-owned, shipped empty today."""
+    """``common/addonResourceNames.py`` is the add-on lane: upstream-owned, one section per add-on."""
 
     def test_every_addon_key_is_a_resource_param_key(self):
         for name, value in vars(AddonResourceKeys).items():

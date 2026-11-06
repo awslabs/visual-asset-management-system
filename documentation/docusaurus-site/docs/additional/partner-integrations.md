@@ -107,6 +107,18 @@ VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif
 See [Physna Integration](../developer/physna-integration.md) for configuration, architecture diagrams, metadata precedence rules, and troubleshooting guidance.
 :::
 
+### Cloud Workstations
+
+| Integration                                                   | Purpose                                                                                                                                             | License    | VAMS Component               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------- |
+| [EDH](https://github.com/awslabs/engineering-development-hub) | Launch, connect to, renew, stop and delete Amazon DCV desktops on an EDH cluster, build desktop AMIs with EC2 Image Builder, and run container jobs | Apache-2.0 | Addon (`useEdhWorkstations`) |
+
+The EDH Workstations [add-on](../developer/addons-overview.md) turns an EDH cluster in the same AWS account into a workstation provider for VAMS users, who launch Amazon DCV desktops from VAMS and open them in the browser. Administrators register desktop images and, with the add-on's optional features, build them from AMI recipes and run container jobs on the cluster.
+
+:::tip[Learn more]
+See [EDH Workstations Add-on](../developer/edh-workstations/overview.md) for how the add-on works, its architecture, permissions and limits.
+:::
+
 ---
 
 ## Licensed Commercial Integrations
@@ -173,6 +185,7 @@ VAMS Backend
   |-- Addons
         |-- Amazon SQS --> Garnet Framework (Knowledge Graph)
         |-- Amazon SQS --> Physna Sync (Geometric 3D Search)
+        |-- HTTPS --> EDH Workstations (Amazon DCV Desktops)
 ```
 
 :::info

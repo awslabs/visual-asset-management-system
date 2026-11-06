@@ -1,0 +1,251 @@
+{
+    "description": "Workstation records covering the image fields of the image-name contract (feature #536, D14): each with the name both clients show for the image (`shownName`, with no catalog name to fall back on; the CLI always shows it), the name the web shows when its live catalog lists the image as `catalogName` (`webShownName`), the web's newer-image badge and its tooltip (null when none), what `vamscli edh workstation list` prints in its Image column (`listImage`), and the `Recipe:` and `Recipe version:` values `vamscli edh workstation get` prints (null when the line is not printed). Read by web/src/addons/edh/components/WorkstationImageCell.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_workstation_image.py, so the two clients cannot drift apart.",
+    "cases": [
+        {
+            "name": "a recipe image at its latest build",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "36",
+                "imageName": "isaacsim-6-2-v14",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 14,
+                "latestRecipeVersion": 14,
+                "imageLatest": true
+            },
+            "catalogName": "isaacsim-6-2-v14",
+            "shownName": "Isaac Sim 6.2 v14",
+            "webShownName": "Isaac Sim 6.2 v14",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "Isaac Sim 6.2 v14",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "14 (latest)"
+        },
+        {
+            "name": "an active workstation on an older build the catalog no longer lists",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "31",
+                "imageName": "isaacsim-6-2-v13",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 13,
+                "latestRecipeVersion": 14,
+                "imageLatest": false
+            },
+            "catalogName": null,
+            "shownName": "Isaac Sim 6.2 v13",
+            "webShownName": "Isaac Sim 6.2 v13",
+            "badge": "Newer image: v14",
+            "tooltip": "This workstation runs v13 of Isaac Sim 6.2. v14 is the latest build. A workstation keeps the image it was launched from; launch a new workstation to use the latest build.",
+            "listImage": "Isaac Sim 6.2 v13 (v14 available)",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "13 (latest 14)"
+        },
+        {
+            "name": "a stopped workstation on an older build",
+            "record": {
+                "state": "STOPPED",
+                "imageId": "31",
+                "imageName": "isaacsim-6-2-v13",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 13,
+                "latestRecipeVersion": 14,
+                "imageLatest": false
+            },
+            "catalogName": null,
+            "shownName": "Isaac Sim 6.2 v13",
+            "webShownName": "Isaac Sim 6.2 v13",
+            "badge": "Newer image: v14",
+            "tooltip": "This workstation runs v13 of Isaac Sim 6.2. v14 is the latest build. A workstation keeps the image it was launched from; launch a new workstation to use the latest build.",
+            "listImage": "Isaac Sim 6.2 v13 (v14 available)",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "13 (latest 14)"
+        },
+        {
+            "name": "a creating workstation launched from an older build",
+            "record": {
+                "state": "CREATING",
+                "imageId": "31",
+                "imageName": "isaacsim-6-2-v13",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 13,
+                "latestRecipeVersion": 14,
+                "imageLatest": false
+            },
+            "catalogName": "isaacsim-6-2-v13",
+            "shownName": "Isaac Sim 6.2 v13",
+            "webShownName": "Isaac Sim 6.2 v13",
+            "badge": "Newer image: v14",
+            "tooltip": "This workstation runs v13 of Isaac Sim 6.2. v14 is the latest build. A workstation keeps the image it was launched from; launch a new workstation to use the latest build.",
+            "listImage": "Isaac Sim 6.2 v13 (v14 available)",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "13 (latest 14)"
+        },
+        {
+            "name": "a deleted workstation on an older build",
+            "record": {
+                "state": "DELETED",
+                "imageId": "31",
+                "imageName": "isaacsim-6-2-v13",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 13,
+                "latestRecipeVersion": 14,
+                "imageLatest": false
+            },
+            "catalogName": null,
+            "shownName": "Isaac Sim 6.2 v13",
+            "webShownName": "Isaac Sim 6.2 v13",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "Isaac Sim 6.2 v13",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "13 (latest 14)"
+        },
+        {
+            "name": "a failed launch from an older build",
+            "record": {
+                "state": "ORPHANED",
+                "imageId": "31",
+                "imageName": "isaacsim-6-2-v13",
+                "recipeId": "isaacsim",
+                "recipeDisplayName": "Isaac Sim 6.2",
+                "recipeVersion": 13,
+                "latestRecipeVersion": 14,
+                "imageLatest": false
+            },
+            "catalogName": null,
+            "shownName": "Isaac Sim 6.2 v13",
+            "webShownName": "Isaac Sim 6.2 v13",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "Isaac Sim 6.2 v13",
+            "getRecipe": "Isaac Sim 6.2 (isaacsim)",
+            "getRecipeVersion": "13 (latest 14)"
+        },
+        {
+            "name": "a workstation from before the snapshot, resolved from a retired build that recorded no stack name",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "20",
+                "imageName": null,
+                "recipeId": "al2023-desktop",
+                "recipeDisplayName": "Amazon Linux 2023 Desktop",
+                "recipeVersion": 4,
+                "latestRecipeVersion": 6,
+                "imageLatest": false
+            },
+            "catalogName": null,
+            "shownName": "Amazon Linux 2023 Desktop v4",
+            "webShownName": "Amazon Linux 2023 Desktop v4",
+            "badge": "Newer image: v6",
+            "tooltip": "This workstation runs v4 of Amazon Linux 2023 Desktop. v6 is the latest build. A workstation keeps the image it was launched from; launch a new workstation to use the latest build.",
+            "listImage": "Amazon Linux 2023 Desktop v4 (v6 available)",
+            "getRecipe": "Amazon Linux 2023 Desktop (al2023-desktop)",
+            "getRecipeVersion": "4 (latest 6)"
+        },
+        {
+            "name": "a baseline image",
+            "record": {
+                "state": "STOPPED",
+                "imageId": "12",
+                "imageName": "Ubuntu 22 DCV",
+                "recipeId": null,
+                "recipeDisplayName": null,
+                "recipeVersion": null,
+                "latestRecipeVersion": null,
+                "imageLatest": null
+            },
+            "catalogName": "Ubuntu 22 DCV",
+            "shownName": "Ubuntu 22 DCV",
+            "webShownName": "Ubuntu 22 DCV",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "Ubuntu 22 DCV",
+            "getRecipe": null,
+            "getRecipeVersion": null
+        },
+        {
+            "name": "a recipe image whose recipe has no available build left",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "25",
+                "imageName": "al2023-desktop-v3",
+                "recipeId": "al2023-desktop",
+                "recipeDisplayName": "Amazon Linux 2023 Desktop",
+                "recipeVersion": 3,
+                "latestRecipeVersion": null,
+                "imageLatest": null
+            },
+            "catalogName": null,
+            "shownName": "Amazon Linux 2023 Desktop v3",
+            "webShownName": "Amazon Linux 2023 Desktop v3",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "Amazon Linux 2023 Desktop v3",
+            "getRecipe": "Amazon Linux 2023 Desktop (al2023-desktop)",
+            "getRecipeVersion": "3"
+        },
+        {
+            "name": "a recipe image whose build version is unknown",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "26",
+                "imageName": "al2023-desktop-custom",
+                "recipeId": "al2023-desktop",
+                "recipeDisplayName": "Amazon Linux 2023 Desktop",
+                "recipeVersion": null,
+                "latestRecipeVersion": 6,
+                "imageLatest": null
+            },
+            "catalogName": "al2023-desktop-custom",
+            "shownName": "al2023-desktop-custom",
+            "webShownName": "al2023-desktop-custom",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "al2023-desktop-custom",
+            "getRecipe": "Amazon Linux 2023 Desktop (al2023-desktop)",
+            "getRecipeVersion": null
+        },
+        {
+            "name": "a workstation the service could not name, whose image the catalog still lists",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "12",
+                "imageName": null,
+                "recipeId": null,
+                "recipeDisplayName": null,
+                "recipeVersion": null,
+                "latestRecipeVersion": null,
+                "imageLatest": null
+            },
+            "catalogName": "Ubuntu 22 DCV",
+            "shownName": "12",
+            "webShownName": "Ubuntu 22 DCV",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "12",
+            "getRecipe": null,
+            "getRecipeVersion": null
+        },
+        {
+            "name": "a record from a service that predates the image fields",
+            "record": {
+                "state": "ACTIVE",
+                "imageId": "7"
+            },
+            "catalogName": null,
+            "shownName": "7",
+            "webShownName": "7",
+            "badge": null,
+            "tooltip": null,
+            "listImage": "7",
+            "getRecipe": null,
+            "getRecipeVersion": null
+        }
+    ]
+}

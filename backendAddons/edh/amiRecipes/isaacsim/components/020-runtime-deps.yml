@@ -1,0 +1,55 @@
+name: vams-isaacsim-runtime-deps
+description: OS packages NVIDIA Isaac Sim, the VAMS CLI virtual environment and the AWS CLI need on Ubuntu 24.04.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: InstallPackages
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - export DEBIAN_FRONTEND=noninteractive
+                    - apt-get update -y
+                    - |
+                        apt-get install -y --no-install-recommends \
+                            ca-certificates curl unzip jq git xvfb \
+                            python3 python3-venv python3-pip \
+                            libgl1 libglx-mesa0 libglu1-mesa libegl1 \
+                            libxrandr2 libxinerama1 libxcursor1 libxi6 libxrender1 \
+                            libsm6 libice6 libxkbcommon-x11-0 libgomp1 \
+                            libvulkan1 vulkan-tools mesa-vulkan-drivers \
+                            libnotify-bin
+                    - |
+                        # Ubuntu's 64-bit time_t transition renamed two of the libraries Kit links
+                        # against. Install whichever name this release carries so a rename is not a
+                        # build failure.
+                        for base in libxt6 libasound2; do
+                            apt-get install -y --no-install-recommends "${base}t64" \
+                                || apt-get install -y --no-install-recommends "$base"
+                        done
+          - name: InstallAwsCli
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - |
+                        if [ ! -x /usr/local/bin/aws ]; then
+                            curl -fL --retry 5 --retry-delay 5 \
+                                https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
+                                -o /tmp/awscliv2.zip
+                            unzip -q /tmp/awscliv2.zip -d /tmp
+                            /tmp/aws/install
+                            rm -rf /tmp/awscliv2.zip /tmp/aws
+                        fi
+    - name: validate
+      steps:
+          - name: ToolingPresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - /usr/local/bin/aws --version
+                    - python3 --version
+                    - python3 -c "import venv"
+                    - jq --version

@@ -24,6 +24,10 @@ raises at import, naming this file and the entry, so every Lambda and the backen
 * ``CUSTOM_UNALLOWED_FILE_EXTENSIONS`` / ``CUSTOM_UNALLOWED_MIME_TYPES`` -- entries added to the
   upload deny lists, append-only: a lower-case extension with its leading dot (``".xyz"``), a
   lower-case MIME type (``"application/x-example"``). A core entry cannot be removed or repeated.
+* ``CUSTOM_LOG_SENSITIVE_KEYS`` -- key, header or field names whose values are never logged, added
+  to both log redactors (the structured logger and the free-text redactor of returned log text),
+  append-only. A key matches ``^[A-Za-z][A-Za-z0-9_-]{1,63}$`` and does not
+  repeat a core or add-on key in any letter case.
 
 See the "Extending VAMS in a fork" developer guide.
 """
@@ -37,3 +41,5 @@ CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS: Dict[str, dict] = {}
 CUSTOM_UNALLOWED_FILE_EXTENSIONS: List[str] = []
 
 CUSTOM_UNALLOWED_MIME_TYPES: List[str] = []
+
+CUSTOM_LOG_SENSITIVE_KEYS: List[str] = []

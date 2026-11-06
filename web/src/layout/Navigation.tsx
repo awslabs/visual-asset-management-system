@@ -3,14 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
 import Button from "@cloudscape-design/components/button";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
-import { addonNavSections } from "../addons/addonNavigation";
+import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
+import { addonNavAdminSections, addonNavMainSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
@@ -38,6 +39,30 @@ function CenterSpinner() {
             <Spinner size="large" />
         </div>
     );
+}
+
+/**
+ * Recursively drops the entries (sections, links, expandable link groups) whose
+ * `featuresEnabledRestriction` names a feature switch the deployment has not enabled; an entry
+ * shows only when every switch it lists is on. The property is stripped from the entries kept,
+ * since SideNavigation does not take it.
+ */
+function restrictNavItemsByFeatures(items: any[], enabledFeatures: string[]): any[] {
+    const result: any[] = [];
+    for (const { featuresEnabledRestriction, ...item } of items) {
+        const restriction: string[] = Array.isArray(featuresEnabledRestriction)
+            ? featuresEnabledRestriction
+            : [];
+        if (!restriction.every((feature) => enabledFeatures.includes(feature))) {
+            continue;
+        }
+        result.push(
+            Array.isArray(item.items)
+                ? { ...item, items: restrictNavItemsByFeatures(item.items, enabledFeatures) }
+                : item
+        );
+    }
+    return result;
 }
 
 /**
@@ -112,18 +137,12 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
     });
 }
 
-export function Navigation({
-    activeHref,
-    header = navHeader,
-    onFollowHandler = defaultOnFollowHandler,
-    user,
-}: {
-    activeHref: any;
-    header?: any;
-    onFollowHandler?: any;
-    user: any;
-}) {
-    const filteredNavItems = [
+/**
+ * The side-navigation entries. Any entry may carry `featuresEnabledRestriction: string[]`, the
+ * feature switches that must all be enabled for it to show.
+ */
+function navItems(): any[] {
+    return [
         {
             type: "link",
             text: "Home",
@@ -147,6 +166,8 @@ export function Navigation({
                 { type: "link", text: "Executions", href: "#/executions/" },
             ],
         },
+        // The add-ons' main-menu sections (addons/addonNavigation.ts)
+        ...addonNavMainSections,
         { type: "divider" },
         {
             type: "section",
@@ -183,41 +204,71 @@ export function Navigation({
                     : []),
             ],
         },
+        // The add-ons' admin-area sections (addons/addonNavigation.ts)
+        ...addonNavAdminSections,
         {
             type: "section",
             text: "User",
             items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
         },
-        // Sections the add-ons add (addons/addonNavigation.ts), then a fork's
-        // (custom/customNavigation.ts, shipped empty)
-        ...addonNavSections,
+        // A fork's sections (custom/customNavigation.ts, shipped empty)
         ...customNavSections,
     ];
+}
+
+export function Navigation({
+    activeHref,
+    header = navHeader,
+    onFollowHandler = defaultOnFollowHandler,
+    user,
+}: {
+    activeHref: any;
+    header?: any;
+    onFollowHandler?: any;
+    user: any;
+}) {
+    // Read live: the secure config that carries featuresEnabled lands after a first login, so an
+    // entry restricted to a feature switch appears when it does rather than on the next reload.
+    const featuresKey = JSON.stringify(useFeaturesEnabled());
+    const filteredNavItems = useMemo(
+        () => restrictNavItemsByFeatures(navItems(), JSON.parse(featuresKey)),
+        [featuresKey]
+    );
 
     const [navigationItems, setNavigationItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadFailed, setLoadFailed] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
 
+    // Re-checked whenever the item list changes (a feature switch arriving after mount adds links
+    // that were never checked). A check that resolves after a newer one started is discarded.
     useEffect(() => {
+        let stale = false;
         const allRoutes = collectRoutes(filteredNavItems);
 
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
+                    if (stale) return;
                     const allowedRoutes = allowed.map((r) => r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);
+                    // A re-check after a failed one (a feature switch arriving) clears the failure.
+                    setLoadFailed(false);
                     setLoading(false);
                 })
                 .catch((error) => {
+                    if (stale) return;
                     console.error(error);
                     setLoadFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, [loadAttempt]);
+        return () => {
+            stale = true;
+        };
+    }, [filteredNavItems, loadAttempt]);
 
     const retryLoad = () => {
         setLoadFailed(false);

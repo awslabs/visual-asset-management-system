@@ -44,6 +44,8 @@ After creating the user, assign them to a role under **Admin - Auth > User Roles
 
 VAMS uses a two-tier permission system. Navigation pages are filtered based on your assigned role constraints. If a page is missing from your navigation menu, your role does not include a `web` object type constraint that grants access to that route. Contact your VAMS administrator to review your role assignments and constraints.
 
+Add-ons a deployment enables can add navigation sections of their own, which appear only to roles granted the add-on's web routes; see [Add-ons Overview](../developer/addons-overview.md).
+
 :::tip
 If no navigation items appear at all, a message will display indicating that your user does not have permissions to view any web navigation pages.
 :::

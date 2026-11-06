@@ -1,0 +1,37 @@
+{
+  "name": "ldap_user_uid_too_long",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/ldap/user",
+    "absolutePath": "/api/ldap/user",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "user": "vspikeaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "password": "<redacted>",
+      "sudoers": "0"
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": " User vspikeaaaaaaaaaaaaaaaaaaaaaaaaaaa is not valid, must match ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$ (contains -and start with- only alpha-numerical characters plus _ . - and must be 31 chars max  (Request ID: a5b8d826-fcc1-4383-a3ba-88e896f1956d)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/ldap/user.py",
+      "source/soca/cluster_manager/web_interface/config.py",
+      "source/soca/cluster_manager/utils/errors/identity_provider.py"
+    ]
+  }
+}

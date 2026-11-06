@@ -1,0 +1,81 @@
+{
+  "name": "batch_jobs_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/containers/batch/jobs",
+    "absolutePath": "/api/containers/batch/jobs",
+    "query": {
+      "time_range": "24"
+    },
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": [
+        {
+          "jobArn": "arn:aws:batch:us-east-1:123456789012:job/5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e",
+          "jobName": "vams-spike-job",
+          "jobId": "5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e",
+          "jobQueue": "arn:aws:batch:us-east-1:123456789012:job-queue/vams-spike-queue",
+          "status": "RUNNING",
+          "attempts": [],
+          "statusReason": null,
+          "createdAt": 1789041600000,
+          "startedAt": 1789041660000,
+          "dependsOn": [],
+          "jobDefinition": "arn:aws:batch:us-east-1:123456789012:job-definition/vams-spike-jobdef:1",
+          "parameters": {},
+          "container": {
+            "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/vams-spike-edh-probe:latest",
+            "command": [
+              "python",
+              "-c",
+              "print('vams-spike')"
+            ],
+            "jobRoleArn": "arn:aws:iam::123456789012:role/vams-spike-batch-job",
+            "resourceRequirements": [
+              {
+                "type": "VCPU",
+                "value": "1"
+              },
+              {
+                "type": "MEMORY",
+                "value": "2048"
+              }
+            ]
+          },
+          "tags": {
+            "edh:JobOwner": "vspikeaaaaaaaaaa",
+            "edh:ClusterId": "vams-edh-dev"
+          },
+          "propagateTags": false,
+          "platformCapabilities": [
+            "EC2"
+          ],
+          "jobQueueName": "vams-spike-queue"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "count": 1,
+    "jobId": "5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/batch/jobs.py"
+    ]
+  }
+}

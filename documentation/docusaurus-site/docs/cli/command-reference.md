@@ -34,6 +34,7 @@ The following options appear on nearly every command and are not repeated in ind
 | `role`, `role constraint`, `role user`                                       | Role management, permission constraints, user-role assignments, and template import              | [Permissions](commands/permissions.md)                               |
 | `user cognito`, `api-key`                                                    | Amazon Cognito user management and API key management                                            | [Users and API Keys](commands/users-and-keys.md)                     |
 | `industry engineering bom`, `industry engineering plm`, `industry spatial`   | BOM assembly, PLM XML import, and spatial GLB combination                                        | [Industry](commands/industry.md)                                     |
+| `edh workstation`, `edh catalog`, `edh admin`, `edh container`               | EDH Workstations add-on: workstations, images, administration, AMI recipes, and container jobs   | [EDH Workstations](../developer/edh-workstations/cli-commands.md)    |
 
 ---
 

@@ -6,28 +6,28 @@
 /**
  * Derived-state engine.
  *
- * `getConfig()` does not rewrite the operator's configuration to satisfy a
- * constraint. Where a feature combination is invalid it rejects the configuration
- * and names the offending fields, so a change in deployment topology is never made
- * on the operator's behalf without their seeing it. The builder mirrors that
- * posture: it derives nothing, and every such constraint surfaces as a validation
- * error instead (see `validation.ts`).
+ * `getConfig()` rejects an invalid feature combination and names the offending fields rather than
+ * rewriting the operator's configuration, so a change in deployment topology is never made on the
+ * operator's behalf without their seeing it. Those rejections surface here as validation errors (see
+ * `validation.ts`), and the VPC requirement is the worked example.
  *
- * `applyDerived()` is therefore a pass-through. It is kept because
- * `ConfigBuilder.commitConfig()` funnels every field edit through it, which is the
- * single place a `getConfig()` auto-mutation would be mirrored if one existed.
- * Anything added here must correspond to an assignment `getConfig()` actually
- * performs on the operator's config — see the sync steps in the component README.
+ * `applyDerived()` carries the assignments `getConfig()` does make. Each one corresponds to a
+ * normalization `getConfig()` performs, quoted by its warning text; an add-on's normalizations live
+ * in its module under `addon/`, which `applyAddonDerived()` runs. Anything added must correspond to an
+ * assignment `getConfig()` actually performs on the operator's config, and a normalization
+ * `getConfig()` stops performing has to be deleted here — see the sync steps in the component README.
+ * `ConfigBuilder.commitConfig()` funnels every field edit through it and shows the forced fields to
+ * the user.
  *
- * The GovCloud CloudFront/Location constraints are not applied here either: they
- * are hard errors in `getConfig()`, and flipping the operator's front-end choice
- * would be fighting them. They surface as validation errors, alongside the
- * user-initiated "Apply GovCloud-safe defaults" action in the UI, which is
- * `applyGovCloudSafeDefaults()` below.
+ * The GovCloud CloudFront/Location constraints are not applied here: they are hard errors in
+ * `getConfig()`, and flipping the operator's front-end choice would be fighting them. They surface as
+ * validation errors, alongside the user-initiated "Apply GovCloud-safe defaults" action in the UI,
+ * which is `applyGovCloudSafeDefaults()` below.
  */
 
 import type { ConfigShape, DerivedChange } from "./types";
 import { setByPath } from "./pathUtils";
+import { applyAddonDerived } from "./addon";
 
 export interface DerivedResult {
     config: ConfigShape;
@@ -35,12 +35,13 @@ export interface DerivedResult {
 }
 
 /**
- * Apply implied state. Returns the config plus the list of fields that were forced,
- * for visible "auto-adjusted" feedback in the UI. Idempotent, and currently forces
- * nothing, so `changes` is always empty.
+ * Apply implied state. Returns the config plus the list of fields that were forced, for visible
+ * "auto-adjusted" feedback in the UI. Idempotent; the input is not mutated.
  */
 export function applyDerived(input: ConfigShape): DerivedResult {
-    return { config: input, changes: [] };
+    const changes: DerivedChange[] = [];
+    const config = applyAddonDerived(input, changes);
+    return { config, changes };
 }
 
 /**

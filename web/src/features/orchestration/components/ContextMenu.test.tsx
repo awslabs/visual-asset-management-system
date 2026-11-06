@@ -6,7 +6,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ContextMenu from "./ContextMenu";
+import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import RowActionsButton from "./RowActionsButton";
 
 // The kebab menu is a Radix dropdown — it opens on keyboard activation in jsdom.
@@ -16,7 +16,67 @@ const openMenu = async () => {
     await screen.findByRole("menu");
 };
 
+const renderAndOpen = async (
+    user: ReturnType<typeof userEvent.setup>,
+    items: ContextMenuItem[]
+) => {
+    render(<ContextMenu items={items} trigger={<button aria-label="Actions">⋮</button>} />);
+    screen.getByLabelText("Actions").focus();
+    await user.keyboard("{Enter}");
+    return screen.findAllByRole("menuitem");
+};
+
 const REASON = "Disabled workflows cannot be executed";
+
+describe("ContextMenu", () => {
+    it("renders the visible items by label, with no description when none carries a hint", async () => {
+        const user = userEvent.setup();
+        const onSelect = jest.fn();
+        const items = await renderAndOpen(user, [
+            { label: "Edit", onSelect },
+            { label: "Archive", onSelect: jest.fn(), danger: true },
+            { label: "Hidden", onSelect: jest.fn(), hidden: true },
+        ]);
+        expect(items.map((item) => item.textContent)).toEqual(["Edit", "Archive"]);
+        const edit = screen.getByRole("menuitem", { name: "Edit" });
+        expect(edit).not.toHaveAttribute("aria-describedby");
+        expect(edit).not.toHaveAttribute("aria-label");
+        await user.click(edit);
+        expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a hint as secondary text and as the item's description, keeping the label as its name", async () => {
+        const user = userEvent.setup();
+        await renderAndOpen(user, [
+            {
+                label: "Delete",
+                onSelect: jest.fn(),
+                danger: true,
+                disabled: true,
+                hint: "Available once the launch has finished.",
+            },
+            { label: "Stop", onSelect: jest.fn() },
+        ]);
+        const remove = screen.getByRole("menuitem", { name: "Delete" });
+        expect(remove).toHaveAttribute("aria-disabled", "true");
+        expect(remove).toHaveAccessibleDescription("Available once the launch has finished.");
+        expect(screen.getByText("Available once the launch has finished.")).toBeVisible();
+        expect(screen.getByRole("menuitem", { name: "Stop" })).not.toHaveAttribute(
+            "aria-describedby"
+        );
+    });
+
+    it("colours a hint like the item it explains: muted on a disabled item, secondary on an enabled one", async () => {
+        const user = userEvent.setup();
+        await renderAndOpen(user, [
+            { label: "Delete", onSelect: jest.fn(), disabled: true, hint: "Not yet." },
+            { label: "Stop", onSelect: jest.fn(), hint: "Stops it." },
+        ]);
+        expect(screen.getByText("Not yet.")).toHaveClass("text-text-disabled");
+        expect(screen.getByText("Not yet.")).not.toHaveClass("text-text-secondary");
+        expect(screen.getByText("Stops it.")).toHaveClass("text-text-secondary");
+    });
+});
 
 describe("ContextMenu disabledReason", () => {
     it("explains a disabled item through its aria-description", async () => {

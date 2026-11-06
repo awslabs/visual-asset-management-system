@@ -28,12 +28,13 @@ import omni
 import pytest
 
 from vams.connector.isaacsim.connector import IsaacVAMSConnector, MalformedXmlError, _Download
-from vams.connector.isaacsim.extension import VamsConnectorExtension
+from vams.connector.isaacsim.extension import _SIGN_IN_PENDING, VamsConnectorExtension
 from vams.connector.isaacsim.vams_cli_service import (
     Asset,
     AssetFile,
     Database,
     DownloadResult,
+    VamsAccessDeniedError,
     VamsCliError,
     VamsTransferError,
 )
@@ -150,6 +151,13 @@ class TestFailuresAreReported:
         assert _connector(cli).download_and_import_asset("db", "a1", "/model.glb",
                                                          str(tmp_path)) is False
         assert cli.calls == []
+
+    def test_a_refused_single_file_download_reaches_the_caller(self, tmp_path):
+        """Download Only says how to recover from a refusal only if it sees the refusal."""
+        refusal = VamsAccessDeniedError("Permission Denied: Access forbidden.")
+        with pytest.raises(VamsAccessDeniedError):
+            _connector(_FakeCli(single_error=refusal)).download_file("db", "a1", "/m/a.glb",
+                                                                     str(tmp_path))
 
 
 class TestDownloadRootsAreRecorded:
@@ -977,6 +985,13 @@ class TestTheExportAction:
         assert export(exporter) == (
             "Uploaded export.usd to Asset One (2 file path(s) point outside this asset and will "
             "not resolve elsewhere), but the file list did not refresh: API Error: 500 Server Error")
+
+    def test_a_refused_refresh_on_the_desktop_session_says_how_to_recover(self, export, extension):
+        extension._session_adopted = True
+        refusal = VamsAccessDeniedError("Permission Denied: Access forbidden.")
+        assert export(_Exporter(list_error=refusal)) == (
+            "Uploaded export.usd to Asset One, but the file list did not refresh: "
+            f"{_SIGN_IN_PENDING} (Permission Denied: Access forbidden.)")
 
 
 # The fields of Isaac Sim 6.2's importer configs, from the API reference of

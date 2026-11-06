@@ -60,6 +60,36 @@ export async function gotoOrchestration(
 }
 
 /**
+ * The deployment's feature list, read from the app's own cached config (localStorage
+ * `vams_cache_config`) — what the running application itself reads. Not `/api/secure-config` through
+ * `page.request`: that carries no bearer token, answers 401, and every feature then reads as disabled.
+ * The entry is written after the app boots, later than `page.goto` resolving, so it is polled to a
+ * short deadline; an empty list after the deadline is returned as such.
+ */
+export async function cachedFeaturesEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const config = parsed?.value ?? parsed ?? {};
+                return (config.featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/**
  * The id of the first card in a card list (pipelines / workflows), or null when the environment has
  * none. Cards expose an "Actions for {id}" button, which is the stable way to read their identity.
  */
@@ -117,14 +147,17 @@ export function collectPageErrors(page: Page): string[] {
 
 /**
  * Assert a table either has rows or shows its empty state — never that specific data exists. Use
- * this to prove a page renders in ANY environment.
+ * this to prove a page renders in ANY environment. `emptyState` is the page's own empty-state copy
+ * when it does not read "No … found".
  */
-export async function expectTableRendered(page: Page): Promise<number> {
+export async function expectTableRendered(
+    page: Page,
+    emptyState: RegExp = /no .*found/i
+): Promise<number> {
     const rows = tableRows(page);
     await expect
         .poll(
-            async () =>
-                (await rows.count()) > 0 || (await page.getByText(/no .*found/i).count()) > 0,
+            async () => (await rows.count()) > 0 || (await page.getByText(emptyState).count()) > 0,
             {
                 timeout: 60_000,
             }

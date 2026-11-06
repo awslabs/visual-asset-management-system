@@ -138,5 +138,5 @@ class TestNormalizerAndProbeAgree:
         "https://abc123.execute-api.us-west-2.amazonaws.com/api",
     ])
     def test_a_url_that_already_resolves_is_left_alone(self, supplied):
-        """Paired arm: a fronted domain absorbs the stage, and must not gain a second one."""
+        """Paired arm: a fronted or an already-staged URL must not gain a second stage."""
         assert normalize_base_url_for_stage(supplied) == supplied

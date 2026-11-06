@@ -11,6 +11,7 @@ import * as cdk from "aws-cdk-lib";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { GarnetFrameworkBuilderNestedStack } from "./garnetFramework/garnetFrameworkBuilder-nestedStack";
 import { PhysnaSyncBuilderNestedStack } from "./physna/physnaSyncBuilder-nestedStack";
+import { EdhWorkstationsBuilderNestedStack } from "./edhWorkstations/edhWorkstationsBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
@@ -31,6 +32,7 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
     registry: RouteRegistry;
+    apiKeyServiceFunction: lambda.IFunction;
 }
 
 /**
@@ -84,6 +86,35 @@ export class AddonBuilderNestedStack extends NestedStack {
             // are gated by a single feature flag so the web UI only surfaces
             // them when the add-on is deployed.
             this.enabledFeatures.push(ADDON_APP_FEATURES.PHYSNA_ADDON);
+        }
+
+        //EDH Workstations
+        if (props.config.app.addons.useEdhWorkstations.enabled) {
+            const edhWorkstationsBuilderNestedStack = new EdhWorkstationsBuilderNestedStack(
+                this,
+                "EdhWorkstationsBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    privateSubnets: props.privateSubnets,
+                    isolatedSubnets: props.isolatedSubnets,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    registry: props.registry,
+                    apiKeyServiceFunction: props.apiKeyServiceFunction,
+                }
+            );
+
+            // The EDH Workstations add-on gates its web pages, CLI group and MCP tools on one flag,
+            // with a further flag for each of the optional container-job and AMI recipe surfaces.
+            this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_WORKSTATIONS);
+            if (props.config.app.addons.useEdhWorkstations.containers.enabled) {
+                this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_CONTAINERS);
+            }
+            if (props.config.app.addons.useEdhWorkstations.amiBuilds.enabled) {
+                this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_AMI_RECIPES);
+            }
         }
 
         // Add-on switches are declared in ADDON_APP_FEATURES (common/addonAppFeatures.ts). A core

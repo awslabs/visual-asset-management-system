@@ -1,0 +1,38 @@
+{
+  "name": "virtual_desktops_schedule_not_found",
+  "capturedAt": "2026-09-28T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "PUT",
+    "path": "/api/dcv/virtual_desktops/schedule",
+    "absolutePath": "/api/dcv/virtual_desktops/schedule",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_uuid": "3c2b1a09-8f7e-4d6c-b5a4-93827160fedc",
+      "schedule": "{\"monday\": {\"start\": 0, \"stop\": 0}, \"tuesday\": {\"start\": 0, \"stop\": 0}, \"wednesday\": {\"start\": 0, \"stop\": 0}, \"thursday\": {\"start\": 0, \"stop\": 0}, \"friday\": {\"start\": 0, \"stop\": 0}, \"saturday\": {\"start\": 0, \"stop\": 0}, \"sunday\": {\"start\": 0, \"stop\": 0}}"
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": "Unable to Restart Desktop 3c2b1a09-8f7e-4d6c-b5a4-93827160fedc (owner: vspikeaaaaaaaaaa):  Unable to find this session. Please refresh your browser and try again.  (Request ID: a93d6e1f-2c57-4b08-9e4a-7f1c2d8b6053)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/update_virtual_desktop_schedule.py",
+      "source/soca/cluster_manager/utils/errors/virtual_desktops.py",
+      "source/soca/cluster_manager/utils/error.py"
+    ]
+  }
+}

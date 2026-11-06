@@ -1,0 +1,100 @@
+name: vams-isaacsim-install
+description: NVIDIA Isaac Sim unpacked under /opt with post_install.sh run and its first-run prompts pre-answered.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: Download
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - curl -fL -C - --retry 5 --retry-delay 15 --retry-connrefused "${PARAM_isaacSimDownloadUrl}" -o /var/tmp/isaacsim.zip
+                    - test -s /var/tmp/isaacsim.zip
+          - name: VerifyChecksum
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # NVIDIA publishes no SHA-256 for the standalone archive, so the checksum is an
+                        # opt-in an operator or an air-gapped mirror sets on the recipe.
+                        if [ -n "${PARAM_isaacSimSha256}" ]; then
+                            echo "${PARAM_isaacSimSha256}  /var/tmp/isaacsim.zip" | sha256sum -c -
+                        else
+                            echo "isaacSimSha256 is empty; the download is trusted to its HTTPS origin"
+                            sha256sum /var/tmp/isaacsim.zip
+                        fi
+          - name: Unpack
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - rm -rf "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - mkdir -p "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - unzip -q /var/tmp/isaacsim.zip -d "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - rm -f /var/tmp/isaacsim.zip
+                    - |
+                        # NVIDIA ships the archive without a top-level folder. If a later archive adds
+                        # one, flatten it so /opt/isaacsim always names the package root.
+                        root="/opt/isaacsim-${PARAM_isaacSimVersion}"
+                        if [ ! -f "$root/post_install.sh" ]; then
+                            inner="$(find "$root" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+                            if [ -n "$inner" ] && [ -f "$inner/post_install.sh" ]; then
+                                mv "$inner"/* "$root"/
+                                mv "$inner"/.[!.]* "$root"/ 2>/dev/null || true
+                                rmdir "$inner"
+                            fi
+                        fi
+                        test -f "$root/post_install.sh"
+                    - ln -sfn "/opt/isaacsim-${PARAM_isaacSimVersion}" /opt/isaacsim
+          - name: AnswerFirstRunPrompts
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /etc/profile.d/vams-isaacsim.sh <<'PROFILE'
+                        # Isaac Sim otherwise prompts for the NVIDIA licence and for telemetry consent on
+                        # its first run, which an auto-launched desktop session cannot answer.
+                        export OMNI_KIT_ACCEPT_EULA=Y
+                        export PRIVACY_CONSENT=Y
+                        export ACCEPT_EULA=Y
+                        export ISAACSIM_PATH=/opt/isaacsim
+                        PROFILE
+                    - chmod 0644 /etc/profile.d/vams-isaacsim.sh
+          - name: PostInstall
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - . /etc/profile.d/vams-isaacsim.sh
+                    - cd /opt/isaacsim
+                    - |
+                        # post_install.sh starts Kit to resolve the extension registry; a virtual display
+                        # keeps it off a build host that has no X server.
+                        if command -v xvfb-run > /dev/null 2>&1; then
+                            xvfb-run -a ./post_install.sh
+                        else
+                            ./post_install.sh
+                        fi
+          - name: OpenPermissionsToEveryDesktopUser
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - chmod -R a+rX "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - find "/opt/isaacsim-${PARAM_isaacSimVersion}" -maxdepth 1 -name '*.sh' -exec chmod a+rx {} +
+                    - printf 'recipe=isaacsim\nisaacSimVersion=%s\nbuiltOn=%s\n' "${PARAM_isaacSimVersion}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/vams-image-release
+                    - chmod 0644 /etc/vams-image-release
+    - name: validate
+      steps:
+          - name: PackagePresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - test -L /opt/isaacsim
+                    - test -f /opt/isaacsim/post_install.sh
+                    - test -x "/opt/isaacsim/${PARAM_isaacSimLauncher}"
+                    - grep -q '^recipe=isaacsim$' /etc/vams-image-release

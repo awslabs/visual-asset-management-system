@@ -3,7 +3,7 @@
 A broad ``except Exception`` that wraps errors into a business error would otherwise turn a request
 the deployment's web ACL blocked, or a permission denial, into a generic API error, losing its heading
 and its request ID. The source checks read every class ``APIClient`` inherits methods from: the core
-client and the custom mixin, each in its own file.
+client and the add-on and custom mixins, each in its own file.
 """
 import ast
 import inspect

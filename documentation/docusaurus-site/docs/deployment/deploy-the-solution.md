@@ -344,7 +344,7 @@ Both buckets hold only the built frontend files and its access logs, so deleting
 
 ## Uninstalling
 
-To remove VAMS and all associated resources:
+Before destroying the stack, complete the pre-uninstall steps in [Uninstall the solution](uninstall.md), including the [pre-uninstall steps of each enabled add-on](uninstall.md#pre-uninstall-add-ons). To remove VAMS and all associated resources:
 
 ```bash
 cd infra

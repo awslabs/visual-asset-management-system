@@ -198,6 +198,8 @@ CLASSIFIED = [
     pytest.param(None, MISSING_TOKEN_TYPE, FORBIDDEN_NO_ROUTE, id="missing-token-type-no-body"),
     pytest.param(AUTHORIZATION_HEADER_COMPLAINT, None, FORBIDDEN_NO_ROUTE, id="authorization-header"),
     pytest.param(HANDLER_DENY, None, FORBIDDEN_HANDLER, id="handler-not-authorized"),
+    pytest.param({"message": "API keys cannot be created or updated with a temporary session key"}, None,
+                 FORBIDDEN_HANDLER, id="handler-temporary-session-key"),
     pytest.param({"message": "Forbidden: role lacks"}, None, FORBIDDEN_HANDLER, id="handler-forbidden-prefix"),
     pytest.param({"message": "Forbidden", "extra": 1}, None, FORBIDDEN_HANDLER, id="handler-forbidden-extra"),
     pytest.param(CLOUDFRONT_BLOCK_PAGE, None, FORBIDDEN_WAF, id="cloudfront-block-page"),

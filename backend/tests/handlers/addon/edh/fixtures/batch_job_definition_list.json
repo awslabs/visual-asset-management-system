@@ -1,0 +1,65 @@
+{
+  "name": "batch_job_definition_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/containers/batch/job_definition",
+    "absolutePath": "/api/containers/batch/job_definition",
+    "query": {
+      "status": "ACTIVE"
+    },
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": [
+        {
+          "jobDefinitionName": "vams-spike-jobdef",
+          "jobDefinitionArn": "arn:aws:batch:us-east-1:123456789012:job-definition/vams-spike-jobdef:1",
+          "revision": 1,
+          "status": "ACTIVE",
+          "type": "container",
+          "parameters": {},
+          "containerProperties": {
+            "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/vams-spike-edh-probe:latest",
+            "resourceRequirements": [
+              {
+                "type": "VCPU",
+                "value": "1"
+              },
+              {
+                "type": "MEMORY",
+                "value": "2048"
+              }
+            ],
+            "jobRoleArn": "arn:aws:iam::123456789012:role/vams-spike-batch-job",
+            "executionRoleArn": "arn:aws:iam::123456789012:role/vams-spike-batch-execution"
+          },
+          "platformCapabilities": [
+            "EC2"
+          ],
+          "tags": {
+            "edh:visibility:vams-edh-dev": "true"
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "count": 1
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/batch/job_definition.py"
+    ]
+  }
+}

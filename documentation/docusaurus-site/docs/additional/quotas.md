@@ -1,6 +1,6 @@
 # Service Quotas and Limits
 
-This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration.
+This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration. An enabled add-on has limits of its own, listed on the add-on's page (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ---
 

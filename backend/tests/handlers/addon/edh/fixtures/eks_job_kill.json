@@ -1,0 +1,41 @@
+{
+  "name": "eks_job_kill",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/containers/eks/job",
+    "absolutePath": "/api/containers/eks/job",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "eks_cluster": "vams-spike-eks",
+      "job_name": "vams-spike-eks-job",
+      "namespace": "default"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Job vams-spike-eks-job deleted successfully."
+    }
+  },
+  "expect": {
+    "jobName": "vams-spike-eks-job",
+    "eksCluster": "vams-spike-eks",
+    "namespace": "default"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/eks/job.py"
+    ]
+  }
+}

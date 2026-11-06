@@ -5,16 +5,14 @@
 
 import * as Config from "../../../config/config";
 import { WafScopedRuleExclusion } from "../../constructs/wafv2-basic-construct";
+import { buildEdhWafRuleExclusions } from "./edhWorkstations/edhWafExclusions";
 
 /**
- * Web ACL rule exclusions the enabled add-ons apply to the regional ACL (`buildWafStacks()` in
- * `lib/cf-waf-stack.ts`): managed rules relaxed under an add-on's own API route prefixes and
- * re-blocked on every other path. Empty while no add-on needs one.
+ * Web ACL rule exclusions the enabled add-ons apply to both web ACLs, the regional one and, with
+ * CloudFront, the CloudFront one (`buildWafStacks()` in `lib/cf-waf-stack.ts`): managed rules
+ * relaxed under an add-on's own API route prefixes and re-blocked on every other path. Empty while
+ * no enabled add-on needs one.
  */
-export function addonWafRuleExclusions(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    config: Config.Config
-): WafScopedRuleExclusion[] {
-    // Each enabled add-on that needs an exclusion appends the ones it builds from `config` here.
-    return [];
+export function addonWafRuleExclusions(config: Config.Config): WafScopedRuleExclusion[] {
+    return [...buildEdhWafRuleExclusions(config)];
 }

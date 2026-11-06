@@ -1,0 +1,163 @@
+{
+    "metadata": {
+        "name": "EDH User",
+        "description": "Self-service EDH GPU workstations: launch, list, connect to, stop, start, renew the lease on and delete your own workstations, browse the image catalog and instance types and read the lease policy, call the login-profile and secure-config routes the web app and CLI use at sign-in, and read the route listing the web app uses to decide which actions to offer. Ownership of a workstation is enforced by the service from the session record, not by these constraints. No capacity reservation is granted: add an edhCapacityReservation constraint per reservation a role may use. Templates create constraints only: create the role first (POST /roles or `vamscli role create`; mfaRequired is a role attribute chosen there), import this template with variableValues.ROLE_NAME, then assign users. When narrowing edhImageId, edhOsFamily or edhInstanceType, use equals or starts_with; is_one_of is a substring test on these string fields.",
+        "version": "1.0"
+    },
+    "variables": [
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The existing role to attach these constraints to"
+        }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-web-routes",
+            "description": "Allow navigation to the EDH workstations page for {{ROLE_NAME}}",
+            "objectType": "web",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/edh/workstations"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-get",
+            "description": "Allow GET on the workstation and catalog routes, the sign-in probes (login profile, secure config) and the route listing for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/secure-config"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/routes"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/catalog"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-post",
+            "description": "Allow POST for workstation launch, stop, start and lease renewal, and the login-profile write at sign-in, for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-delete",
+            "description": "Allow DELETE of workstations for {{ROLE_NAME}} (own sessions only; ownership is enforced by the service)",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workstations",
+            "description": "Allow launch, view, stop, start, renew, connect and delete of workstations on any image, OS family and instance type for {{ROLE_NAME}}; ownership is enforced by the service",
+            "objectType": "edhWorkstation",
+            "criteriaAnd": [
+                {
+                    "field": "edhImageId",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-catalog-images",
+            "description": "Allow viewing every catalog image for {{ROLE_NAME}}",
+            "objectType": "edhImage",
+            "criteriaAnd": [
+                {
+                    "field": "edhImageId",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        }
+    ]
+}

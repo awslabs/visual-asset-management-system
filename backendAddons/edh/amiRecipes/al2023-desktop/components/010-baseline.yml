@@ -1,0 +1,35 @@
+name: vams-al2023-baseline
+description: Baseline tooling for VAMS EDH desktops built from Amazon Linux 2023.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: InstallBaselineTools
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - dnf -y install git htop jq python3-pip python3.12
+          - name: WriteImageRelease
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - printf 'recipe=al2023-desktop\nbuiltOn=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/vams-image-release
+                    - chmod 0644 /etc/vams-image-release
+    - name: validate
+      steps:
+          - name: ReleaseFilePresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - test -f /etc/vams-image-release
+          - name: RuntimeToolsPresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - aws --version 2>&1 | grep 'aws-cli/2'
+                    - /usr/bin/python3.12 -c 'import venv, ensurepip'
+                    - command -v curl
+                    - command -v jq
+                    - command -v flock
+                    - if rpm -q gnome-terminal; then exit 1; fi
