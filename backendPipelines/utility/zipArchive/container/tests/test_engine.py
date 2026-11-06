@@ -260,3 +260,58 @@ class TestReader:
                                 backoff_seconds=0)
         with pytest.raises(RangeReadError):
             b"".join(reader.chunks(0))
+
+
+SEVEN_ZIP = shutil.which("7z") or shutil.which("7za") or shutil.which("7zz")
+BSDTAR = shutil.which("bsdtar")
+
+
+def _tar_bytes(members, gzip=False, dirs=()):
+    sink = BytesSink()
+    writer = TarStreamWriter(sink, gzip=gzip)
+    for d in dirs:
+        writer.add_directory(d)
+    for name, data in members:
+        writer.add_file(name, [data], len(data), mtime=10)
+    writer.close()
+    return sink.buffer.getvalue()
+
+
+_READER_MEMBERS = [("é.txt", b"1"), ("deep/" + "n" * 150 + "/ü.bin", b"\x00" * 600), ("b/c.txt", b"22")]
+
+
+class TestOtherReaders:
+    """#1125 L2: the archives open in 7-Zip and libarchive (bsdtar, which macOS ships), not only in
+    Python and Info-ZIP. Each check skips when its tool is not installed on the machine running it."""
+
+    @pytest.mark.parametrize("compression", ["store", "deflate"])
+    def test_7zip_tests_a_zip(self, tmp_path, compression):
+        if not SEVEN_ZIP:
+            pytest.skip("7-Zip is not installed")
+        path = tmp_path / "s.zip"
+        path.write_bytes(_zip(_READER_MEMBERS, compression=compression, dirs=["d/"]))
+        result = subprocess.run([SEVEN_ZIP, "t", str(path)], capture_output=True, text=True)
+        assert result.returncode == 0 and "Everything is Ok" in result.stdout, result.stdout
+
+    @pytest.mark.parametrize("fmt", ["zip-store", "zip-deflate", "tar", "tar.gz"])
+    def test_bsdtar_lists_every_member(self, tmp_path, fmt):
+        if not BSDTAR:
+            pytest.skip("bsdtar is not installed")
+        if fmt.startswith("zip"):
+            data = _zip(_READER_MEMBERS, compression=fmt.split("-")[1], dirs=["d/"])
+        else:
+            data = _tar_bytes(_READER_MEMBERS, gzip=fmt == "tar.gz", dirs=["d/"])
+        path = tmp_path / "s.bin"
+        path.write_bytes(data)
+        result = subprocess.run([BSDTAR, "-tf", str(path)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        listed = {line.rstrip("/") for line in result.stdout.splitlines()}
+        assert {name for name, _ in _READER_MEMBERS} <= listed
+        # And it extracts every byte back.
+        out = tmp_path / "x"
+        out.mkdir()
+        result = subprocess.run([BSDTAR, "-xf", str(path), "-C", str(out)], capture_output=True,
+                                text=True)
+        assert result.returncode == 0, result.stderr
+        for name, payload in _READER_MEMBERS:
+            assert (out / name).read_bytes() == payload

@@ -243,6 +243,30 @@ class TestZipDownloadMode:
             job.run()
         assert "more than 2 files" in table.row["errorMessage"]
 
+    def test_an_archive_s3_could_not_store_is_refused_before_streaming(self, s3, monkeypatch):
+        # #1125 L1: refused at resolution, not at CompleteMultipartUpload after hours of streaming.
+        manifest = _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}])
+        job, table = _zip_job(s3, manifest)
+        # Data (104 bytes) fits any byte limit; the headers and end records do not fit this "S3".
+        monkeypatch.setattr(runner, "S3_MAX_OBJECT_BYTES", 1024 * 1024 + 104)
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal and "larger than 5 TiB" in e.value.reason
+        assert table.row["status"] == "FAILED" and "larger than 5 TiB" in table.row["errorMessage"]
+        assert s3.completed == {} and s3.uploads == {}
+
+    @pytest.mark.parametrize("fmt,compression", [
+        ("zip", "store"), ("zip", "deflate"), ("tar", "store"), ("tar.gz", "store")])
+    def test_the_upper_bound_holds_for_a_real_archive(self, s3, fmt, compression):
+        s3.add(BASE + "deep/" + "n" * 180 + "/" + "é" * 60 + ".bin", os.urandom(70000))
+        manifest = _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}], fmt=fmt,
+                             compression=compression)
+        job, _ = _zip_job(s3, manifest)
+        job.run()
+        data = next(iter(s3.completed.values()))
+        members, dirs = expand_selection(s3, ASSETS, BASE, [{"type": "asset", "key": BASE}])
+        assert len(data) <= runner.archive_upper_bound(members, dirs, fmt, compression)
+
     def test_manifest_identity_must_match_definition(self, s3):
         job, table = _zip_job(s3, _manifest(userId="mallory", entries=[{"type": "asset", "key": BASE, "relativePath": "/"}]))
         with pytest.raises(runner.ArchiveFailure):
@@ -330,6 +354,17 @@ class TestZipArchiveRunMode:
         job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}])
         with pytest.raises(runner.ArchiveFailure):
             job.run()
+
+
+@pytest.mark.parametrize("fmt,compression", [("zip", "store"), ("zip", "deflate"), ("tar", "store"),
+                                             ("tar.gz", "store")])
+def test_a_selection_at_the_5_tib_limit_is_refused_and_one_with_headroom_fits(fmt, compression):
+    # #1125 L1: maxTotalBytesPerRequest allows exactly 5 TiB of data, whose archive S3 cannot store.
+    at_limit = [{"relativePath": "/big.bin", "size": runner.S3_MAX_OBJECT_BYTES}]
+    with pytest.raises(runner.Refusal):
+        runner.check_archive_fits(at_limit, [], fmt, compression)
+    headroom = [{"relativePath": "/big.bin", "size": runner.S3_MAX_OBJECT_BYTES - 6 * 1024 ** 3}]
+    runner.check_archive_fits(headroom, [], fmt, compression)
 
 
 def test_expand_dedupes_and_finds_empty_dirs(s3):

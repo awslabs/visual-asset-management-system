@@ -50,6 +50,10 @@ PROGRESS_EVERY_BYTES = 64 * 1024 * 1024
 PROGRESS_EVERY_FILES = 100
 HEARTBEAT_SECONDS = 300
 _NAME_ALLOWED = re.compile(r"[^A-Za-z0-9 ._()\-]")
+# The largest object Amazon S3 stores (CompleteMultipartUpload refuses a larger one).
+S3_MAX_OBJECT_BYTES = 5 * 1024 ** 4
+TOO_LARGE_REFUSAL = ("The archive would be larger than 5 TiB, the largest file Amazon S3 can store. "
+                     "Select fewer or smaller files")
 
 
 class ArchiveFailure(Exception):
@@ -83,6 +87,29 @@ def estimate_archive_bytes(members, empty_dirs):
     data = sum(int(m["size"]) for m in members)
     names = sum(len(m["relativePath"].encode("utf-8")) for m in members)
     return int(data * 1.01) + names * 3 + (len(members) + len(empty_dirs)) * 1024 + 1024 * 1024
+
+
+def archive_upper_bound(members, empty_dirs, archive_format, compression):
+    """Upper bound of the finished archive's size, to refuse a selection whose archive S3 could not
+    store BEFORE any byte is streamed, rather than at CompleteMultipartUpload hours later.
+
+    Data plus, per entry, at most 2 KiB of headers, ZIP64 extra fields, data descriptors, central
+    directory records, tar headers, PAX long-name records and tar block padding, plus three copies of
+    the name; deflate (zip deflate, tar.gz) adds at most 0.1% of the data and 64 bytes per entry (zlib's
+    worst case is 5 bytes per 16 KiB stored block); and 1 MiB of end records."""
+    data = sum(int(m["size"]) for m in members)
+    names = sum(len(m["relativePath"].encode("utf-8")) for m in members)
+    names += sum(len(d.encode("utf-8")) for d in empty_dirs)
+    entries = len(members) + len(empty_dirs)
+    compressed = archive_format == "tar.gz" or (archive_format == "zip" and compression == "deflate")
+    growth = (data // 1000 + entries * 64) if compressed else 0
+    return data + growth + names * 3 + entries * 2048 + 1024 * 1024
+
+
+def check_archive_fits(members, empty_dirs, archive_format, compression):
+    """Refuse (Refusal) a selection whose archive could exceed S3_MAX_OBJECT_BYTES."""
+    if archive_upper_bound(members, empty_dirs, archive_format, compression) > S3_MAX_OBJECT_BYTES:
+        raise Refusal(TOO_LARGE_REFUSAL)
 
 
 def safe_output_name(name, archive_format):
@@ -269,6 +296,8 @@ class Job:
                           tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES))
             limits = manifest.get("limits") or {}
             total = enforce_limits(members, limits.get("maxFiles"), limits.get("maxTotalBytes"))
+            check_archive_fits(members, empty_dirs, manifest["archiveFormat"],
+                               manifest.get("compression", "store"))
         except Refusal as r:
             raise ArchiveFailure(str(r), refusal=True)
         resolved = "\n".join(json.dumps({"relativePath": m["relativePath"], "versionId": m["versionId"],
@@ -390,7 +419,8 @@ class Job:
             members = filter_patterns(members, config.get("includePatterns"), config.get("excludePatterns"))
             check_members(self.clients.for_bucket, members, CORE_BLOCKED_EXTENSIONS,
                           CORE_BLOCKED_CONTENT_TYPES)
-            enforce_limits(members, None, 5 * 1024 ** 4)
+            enforce_limits(members, None, S3_MAX_OBJECT_BYTES)
+            check_archive_fits(members, empty_dirs, archive_format, compression)
         except Refusal as r:
             raise ArchiveFailure(str(r), refusal=True)
         out_bucket, out_dir = run["outputBucket"], run["outputDir"].rstrip("/") + "/"

@@ -14,6 +14,10 @@ The pipeline and its workflow are **system** records: VAMS registers them in the
 
 Empty folders in the selection are written as directory entries.
 
+The zip archive is written in one pass, so each member's sizes and CRC follow its data in a data descriptor and are recorded in the central directory at the end. Readers that use the central directory, such as Info-ZIP `unzip`, 7-Zip, libarchive (`bsdtar`) and Python's `zipfile`, read it normally. A reader that only streams from the start without the central directory, such as Java's `ZipInputStream`, cannot read members stored without compression (`store`); use `deflate`, or a tar format, for such a consumer.
+
+The finished archive must fit in one Amazon S3 object (5 TiB). The headers, padding and directory records add to the size of the selected files, so a selection whose archive could exceed 5 TiB is refused before the archive is written, even when the selected files total less than `maxTotalBytesPerRequest`.
+
 ## Architecture
 
 ```mermaid
@@ -91,7 +95,7 @@ The pipeline has no configuration block of its own. It is deployed, and its pipe
 
 ## Running the Zip Archive Workflow
 
-Run the `utility-zip-archive` workflow on an asset's files, folders, or the whole asset like any workflow, from the asset's **File Manager** (**Automation** > **Execute Workflow**) or with `vamscli workflow execute`. The run archives one asset's files and adds the archive to that asset as a new file. The pipeline accepts multiple input files, folders, and the whole asset, and needs no template; the shipped template `archive-zip-store` writes a zip archive without compression.
+Run the `utility-zip-archive` workflow on an asset's files, folders, or the whole asset like any workflow, from the asset's **File Manager** (**Automation** > **Execute Workflow**) or with `vamscli workflow execute`. The run archives one asset's files and adds the archive to that asset as a new file. The pipeline accepts multiple input files, folders, and the whole asset, and needs no template; the shipped template `zip-archive-store` writes a zip archive without compression.
 
 ### Template Configuration Body
 
