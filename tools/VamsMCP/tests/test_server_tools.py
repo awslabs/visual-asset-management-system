@@ -712,6 +712,27 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     assert result["truncated"] is True
 
 
+def test_list_executions_returns_skipped_rows_with_their_fields(real_paginate_client):
+    # #998: a SKIPPED record arrives under the same Items key as a run, with its optional fields kept,
+    # and the status filter is passed through for equality.
+    skipped = {"workflowExecutionId": "s1", "executionStatus": "SKIPPED", "skippedLaunchCount": 49,
+               "skipScope": "asset", "skipReason": "busy"}
+    real_paginate_client.api.list_executions.side_effect = [{"message": {"Items": [skipped]}}]
+
+    result = server.list_executions(status="SKIPPED")
+
+    assert result["Items"] == [skipped]
+    params = real_paginate_client.api.list_executions.call_args.kwargs.get("params") or \
+        real_paginate_client.api.list_executions.call_args.args[-1]
+    assert params["status"] == "SKIPPED"
+
+
+def test_the_execution_tools_describe_skipped_records():
+    for tool in (server.list_executions, server.list_workflow_executions,
+                 server.get_execution_details):
+        assert "SKIPPED" in (tool.__doc__ or "")
+
+
 _WORK_BUDGET_WARNING = (
     "This page stopped at its per-request work budget after reading 20 pages of the execution "
     "index, so executions that match may not be listed."

@@ -27,6 +27,7 @@ import StoppedRunSubProcessesHint, {
     stillRunningSubProcessCount,
 } from "./StoppedRunSubProcessesHint";
 import ResultText from "./ResultText";
+import SkippedLaunchPanel from "./SkippedLaunchPanel";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -1058,6 +1059,9 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             {execution.executionError}
                         </pre>
                     </div>
+                )}
+                {execution.executionStatus === "SKIPPED" && execution.skip && (
+                    <SkippedLaunchPanel skip={execution.skip} />
                 )}
                 {stillRunningSubs > 0 && (
                     <StoppedRunSubProcessesHint

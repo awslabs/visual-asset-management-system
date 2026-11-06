@@ -47,6 +47,37 @@ const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
 const SEARCH_LABEL = "Search";
 
 /**
+ * Status-filter choice that keeps every status but SKIPPED. The list API's status filter matches one
+ * value, so this one is applied to the loaded rows rather than sent to the server.
+ */
+export const EXCLUDE_SKIPPED_FILTER = "__ALL_EXCEPT_SKIPPED__";
+
+/**
+ * The Status cell. A SKIPPED record also shows how many trigger launches it counts and, on hover and
+ * for screen readers, the reason the API gave.
+ */
+export const ExecutionStatusCell: React.FC<{ execution: Execution }> = ({ execution }) => {
+    if (execution.executionStatus !== "SKIPPED") {
+        return <StatusBadge status={execution.executionStatus} />;
+    }
+    const count = execution.skippedLaunchCount ?? 0;
+    const launches = count === 1 ? "1 launch" : `${count} launches`;
+    return (
+        <span
+            className="inline-flex flex-col gap-0.5"
+            title={execution.skipReason || undefined}
+            data-testid="skipped-status"
+        >
+            <StatusBadge status="SKIPPED" />
+            <span className="text-xs text-text-secondary">
+                {launches} skipped
+                {execution.skipReason && <span className="sr-only">: {execution.skipReason}</span>}
+            </span>
+        </span>
+    );
+};
+
+/**
  * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
  * type: "2 sub-processes were left running because VAMS cannot stop their type: Mock Slurm job
  * (slurmJob, in MockTrain); ...". A group abort's entries carry the member `executionId`, which
@@ -128,7 +159,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     // The backend already defaults to 90 days, so the "90" preset sends no explicit start date.
     const filters = useMemo(() => {
         const f: Record<string, string> = {};
-        if (statusFilter) f.status = statusFilter;
+        // "All except skipped" is applied to the loaded rows below, so it sends no status filter.
+        if (statusFilter && statusFilter !== EXCLUDE_SKIPPED_FILTER) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
         if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
         if (workflowFilter) f.workflowId = workflowFilter;
@@ -328,13 +360,18 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     // loaded.
     const visibleExecutions = useMemo(() => {
         const q = searchText.trim().toLowerCase();
-        if (!q) return sortedExecutions;
-        return sortedExecutions.filter((e) =>
+        // Skipped trigger launches are listed by default; this choice hides them from what is loaded.
+        const statusRows =
+            statusFilter === EXCLUDE_SKIPPED_FILTER
+                ? sortedExecutions.filter((e) => e.executionStatus !== "SKIPPED")
+                : sortedExecutions;
+        if (!q) return statusRows;
+        return statusRows.filter((e) =>
             [e.workflowExecutionId, e.workflowId, e.workflowDatabaseId, e.executionGroupId].some(
                 (v) => (v || "").toLowerCase().includes(q)
             )
         );
-    }, [sortedExecutions, searchText]);
+    }, [sortedExecutions, searchText, statusFilter]);
 
     // Abort and permanent-delete are raised from a confirm dialog, so their failure also stays inline
     // in that dialog (the message sits next to the action that caused it). The toast is what carries
@@ -483,7 +520,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
             {
                 accessorKey: "executionStatus",
                 header: "Status",
-                cell: ({ row }) => <StatusBadge status={row.original.executionStatus} />,
+                cell: ({ row }) => <ExecutionStatusCell execution={row.original} />,
             },
             {
                 accessorKey: "workflowExecutionId",
@@ -712,11 +749,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         className={control}
                     >
                         <option value="">All statuses</option>
+                        <option value={EXCLUDE_SKIPPED_FILTER}>All except skipped</option>
                         <option value="RUNNING">Running</option>
                         <option value="SUCCEEDED">Succeeded</option>
                         <option value="FAILED">Failed</option>
                         <option value="ABORTED">Aborted</option>
                         <option value="TIMED_OUT">Timed out</option>
+                        <option value="SKIPPED">Skipped</option>
                     </select>
                     <select
                         aria-label="Filter by trigger"

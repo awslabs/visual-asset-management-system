@@ -1031,6 +1031,11 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('startDate', 'N/A')}")
+            # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
+            if ex.get('executionStatus') == 'SKIPPED':
+                out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
+                if ex.get('skipReason'):
+                    out.append(f"  Skip reason: {ex['skipReason']}")
             if ex.get('inputAssetFileKey'):
                 out.append(f"  Input File: {ex['inputAssetFileKey']}")
             out.append("-" * 80)
