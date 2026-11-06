@@ -268,15 +268,19 @@ const renderCases: RenderCase[] = [
     },
     {
         sample: "splat-ply",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     {
         sample: "splat-sog",
-        viewer: "PlayCanvas Gaussian Splat",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
         kind: "canvas",
-        select: /PlayCanvas Gaussian/i,
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
     },
     { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
     { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
