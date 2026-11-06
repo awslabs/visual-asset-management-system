@@ -345,7 +345,9 @@ const seeded = viewerSamples();
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
         const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
-        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+        test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
+            page,
+        }) => {
             test.skip(
                 !seeded,
                 "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
