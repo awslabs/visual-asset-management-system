@@ -594,3 +594,102 @@ class TestCancelLandedArchive:
         assert env.zip.items == {}
         # Only the create's launch: no abort of a run whose archive already landed.
         assert [c[0] for c in env.lam.calls] == ["executeFn"]
+
+
+IDLE_STAMP = "2020-01-01T00:00:00Z"
+MAIN_KEY = ("exec-1", "GLOBAL:vams-archive")
+
+
+class TestLostStatusEventBackstop:
+    """A run that ended outside VAMS whose Step Functions status change event was lost: the main row
+    still reads RUNNING, so the zip read drives the execution service's details read (which checks
+    Step Functions and records the end) instead of leaving the job active until it expires."""
+
+    def _idle_running(self, env, request_index=0):
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = env.zip.items[("alice", request_id)]
+        row.update(status="RUNNING", workflowExecutionId="exec-1", updatedAt=IDLE_STAMP)
+        env.executions.items[MAIN_KEY] = {
+            "workflowExecutionId": "exec-1", "workflowDatabaseId:workflowId": "GLOBAL:vams-archive",
+            "executionStatus": "RUNNING", "executionError": ""}
+        return request_id, row
+
+    def _details_reads(self, env):
+        return [c for c in env.lam.calls if c[0] == "executionServiceFn"
+                and c[2]["requestContext"]["http"]["method"] == "GET"]
+
+    def _stopped_outside_vams(self, env):
+        # What the execution service's details read writes once Step Functions reports the stop.
+        def effect(_event):
+            env.executions.items[MAIN_KEY]["executionStatus"] = "ABORTED"
+        env.lam.effects["executionServiceFn"] = effect
+
+    def test_idle_job_is_finalized_from_the_details_read(self, env):
+        request_id, _ = self._idle_running(env)
+        self._stopped_outside_vams(env)
+        item = h.body_of(_job_route(env, "GET", request_id))
+        assert item["status"] == "FAILED"
+        assert item["errorMessage"] == env.zd.MSG_CANCELLED_FROM_EXECUTIONS
+        reads = self._details_reads(env)
+        assert len(reads) == 1
+        event = reads[0][2]
+        assert event["requestContext"]["http"]["path"] == "/workflows/executions/exec-1/details"
+        assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER"}
+
+    def test_released_cap_slot(self, env):
+        request_id, _ = self._idle_running(env)
+        self._stopped_outside_vams(env)
+        _list(env)
+        assert env.zip.items[("alice", request_id)]["status"] == "FAILED"
+
+    def test_active_job_is_not_checked(self, env):
+        # The container wrote progress recently: its run is working, no check.
+        request_id, row = self._idle_running(env)
+        row["updatedAt"] = env.zd.iso(env.zd.utc_now())
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "RUNNING"
+        assert self._details_reads(env) == []
+
+    def test_still_running_run_stays_running_and_is_checked_once_per_interval(self, env):
+        request_id, _ = self._idle_running(env)
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "RUNNING"
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "RUNNING"
+        assert len(self._details_reads(env)) == 1, "the claim limits the check to one per interval"
+        assert "runCheckedAt" in env.zip.items[("alice", request_id)]
+
+    def test_check_is_due_again_after_the_interval(self, env):
+        request_id, row = self._idle_running(env)
+        row["runCheckedAt"] = IDLE_STAMP
+        _job_route(env, "GET", request_id)
+        assert len(self._details_reads(env)) == 1
+
+    def test_failed_details_read_leaves_the_job_for_the_next_read(self, env):
+        request_id, _ = self._idle_running(env)
+        env.lam.responses["executionServiceFn"] = (403, {"message": "Not Authorized"})
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "RUNNING"
+
+    def test_terminal_main_row_needs_no_check(self, env):
+        request_id, _ = self._idle_running(env)
+        env.executions.items[MAIN_KEY]["executionStatus"] = "FAILED"
+        assert h.body_of(_job_route(env, "GET", request_id))["status"] == "FAILED"
+        assert self._details_reads(env) == []
+
+    def test_list_bounds_the_checks_per_call(self, env):
+        env.svc.MAX_ACTIVE_PER_USER = 100
+        for _ in range(env.svc.RUN_CHECKS_PER_CALL + 3):
+            self._idle_running(env)
+        _list(env, asset=False)
+        assert len(self._details_reads(env)) == env.svc.RUN_CHECKS_PER_CALL
+
+    def test_landed_archive_still_wins(self, env):
+        request_id, row = self._idle_running(env)
+        h.land_archive(env, row, size=7)
+        self._stopped_outside_vams(env)
+        item = h.body_of(_job_route(env, "GET", request_id))
+        assert item["status"] == "SUCCEEDED" and item["archiveSizeBytes"] == 7
+
+    def test_user_cancel_decides_without_waiting_for_an_event(self, env):
+        # The cancel never defers to the run's status event: it records CANCELLED itself, then aborts.
+        request_id, _ = self._idle_running(env)
+        assert h.body_of(_job_route(env, "DELETE", request_id))["action"] == "cancelled"
+        assert env.zip.items[("alice", request_id)]["status"] == "CANCELLED"
+        assert self._details_reads(env) == []

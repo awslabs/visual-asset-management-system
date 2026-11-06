@@ -29,7 +29,7 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -114,6 +114,12 @@ PRESCAN_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_PRESCAN_MAX_SECONDS", "
 HEAD_CHECK_MAX_FILES = _env_int("ZIP_DOWNLOAD_HEAD_CHECK_MAX_FILES", 2000)
 HEAD_CHECK_WORKERS = _env_int("ZIP_DOWNLOAD_HEAD_CHECK_WORKERS", 25)
 RECONCILE_MAX_PER_CALL = 25
+# Backstop for a lost Step Functions status change event (_check_run_ended): a job whose row has been
+# idle this long while its run's main row is not terminal has its run checked, at most once per
+# interval per job and at most RUN_CHECKS_PER_CALL jobs per list call.
+RUN_CHECK_IDLE_SECONDS = 300
+RUN_CHECK_INTERVAL_SECONDS = 300
+RUN_CHECKS_PER_CALL = 5
 
 try:
     zip_table_name = get_table_name(ResourceKeys.ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE)
@@ -469,28 +475,121 @@ def _job_prefix(row):
     return zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
 
 
-def _reconcile(row):
+def _seconds_since(stamp):
+    """Seconds since an ISO ``%Y-%m-%dT%H:%M:%SZ`` stamp, or None when it does not parse."""
+    try:
+        parsed = datetime.strptime(stamp or "", "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return None
+    return (zd.utc_now() - parsed.replace(tzinfo=timezone.utc)).total_seconds()
+
+
+def _main_row(execution_id):
+    """The archive run's main row in the executions table ({} when missing)."""
+    response = executions_table.get_item(Key={
+        "workflowExecutionId": execution_id,
+        # The main row's sort key (common.workflows.executionRecords.workflow_composite_key).
+        "workflowDatabaseId:workflowId": f"{ARCHIVE_WORKFLOW_DATABASE_ID}:{ARCHIVE_WORKFLOW_ID}"})
+    return response.get("Item") or {}
+
+
+def _claim_run_check(row):
+    """Claim this interval's run check for a job (conditional write of ``runCheckedAt``), so readers
+    of the same job check its run at most once per RUN_CHECK_INTERVAL_SECONDS. True when claimed.
+    Best-effort: a failed write is logged and the check skipped."""
+    now = zd.utc_now()
+    try:
+        zip_table.update_item(
+            Key=zd.row_key(row["userId"], row["requestId"]),
+            UpdateExpression="SET runCheckedAt = :now",
+            ConditionExpression=("attribute_exists(requestId) AND #status IN (:queued, :running) "
+                                 "AND workflowExecutionId = :eid AND "
+                                 "(attribute_not_exists(runCheckedAt) OR runCheckedAt < :cutoff)"),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":now": zd.iso(now), ":queued": zd.STATUS_QUEUED, ":running": zd.STATUS_RUNNING,
+                ":eid": row.get("workflowExecutionId") or "",
+                ":cutoff": zd.iso(now - timedelta(seconds=RUN_CHECK_INTERVAL_SECONDS))})
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.warning(f"Could not claim the run check of zip download {row.get('requestId')}: {e}")
+        return False
+
+
+def _run_check_due(row, budget):
+    """Whether this read checks the job's run: the row has been idle RUN_CHECK_IDLE_SECONDS (the
+    container writes progress every few seconds while it works), the call's budget allows another
+    check, and this reader claimed the job's check for the interval."""
+    idle = _seconds_since(row.get("updatedAt") or row.get("startedAt") or row.get("createdAt"))
+    if idle is None or idle < RUN_CHECK_IDLE_SECONDS:
+        return False
+    if budget is not None and budget[0] <= 0:
+        return False
+    if not _claim_run_check(row):
+        return False
+    if budget is not None:
+        budget[0] -= 1
+    return True
+
+
+def _check_run_ended(execution_id):
+    """Backstop for a lost Step Functions status change event of the job's run.
+
+    The run's main row records an end outside VAMS (a stop in the Step Functions console, a timeout,
+    the history quota) only from that event or from the execution service's details read, which
+    checks Step Functions (_reconcile_main_status). The zip routes read the main row directly and the
+    executions views hide system runs, so without this a lost event leaves the job active, holding a
+    slot of the per-user cap, until it expires. The details read, made as SYSTEM_USER through the
+    same cross-call as the abort, writes the end under the shared terminal guard, settles the run's
+    locks and pipeline rows and sends the terminal callback, exactly as when someone opens the run;
+    the caller then re-reads the main row and decides with the same rule. Best-effort: False when the
+    read did not answer 200."""
+    if not execution_id or not EXECUTION_SERVICE_FUNCTION:
+        return False
+    invoke_event = {
+        "requestContext": {"http": {"method": "GET",
+                                    "path": f"/workflows/executions/{execution_id}/details"}},
+        "pathParameters": {"executionId": execution_id},
+        "queryStringParameters": {},
+        "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME},
+    }
+    try:
+        response = lambda_client.invoke(FunctionName=EXECUTION_SERVICE_FUNCTION,
+                                        InvocationType="RequestResponse",
+                                        Payload=json.dumps(invoke_event).encode("utf-8"))
+        payload = response.get("Payload")
+        inner = json.loads(payload.read().decode("utf-8")) if payload else {}
+        if inner.get("statusCode") != 200:
+            logger.warning(f"Run check of zip download run {execution_id} answered "
+                           f"{inner.get('statusCode')}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Run check of zip download run {execution_id} failed (non-critical): {e}")
+        return False
+
+
+def _reconcile(row, run_check_budget=None):
     """Finalize a non-terminal row whose run already ended (or never started). Returns the row as it
-    reads after any write."""
+    reads after any write.
+
+    ``run_check_budget`` is a one-element list counting the run checks (_check_run_ended) this call
+    may still make; None allows the one check a single-job route needs."""
     if row.get("status") not in zd.ACTIVE_STATUSES:
         return row
     execution_id = row.get("workflowExecutionId")
     if not execution_id:
-        try:
-            created = datetime.strptime(row.get("createdAt") or "", "%Y-%m-%dT%H:%M:%SZ")
-            age = (zd.utc_now() - created.replace(tzinfo=timezone.utc)).total_seconds()
-        except (TypeError, ValueError):
-            age = 0
+        age = _seconds_since(row.get("createdAt")) or 0
         if age > zd.LAUNCH_GRACE_SECONDS:
             if zd.finalize_row(zip_table, row["userId"], row["requestId"], zd.STATUS_FAILED,
                                error_message=zd.MSG_LAUNCH_FAILED):
                 row = dict(row, status=zd.STATUS_FAILED, errorMessage=zd.MSG_LAUNCH_FAILED)
         return row
-    response = executions_table.get_item(Key={
-        "workflowExecutionId": execution_id,
-        # The main row's sort key (common.workflows.executionRecords.workflow_composite_key).
-        "workflowDatabaseId:workflowId": f"{ARCHIVE_WORKFLOW_DATABASE_ID}:{ARCHIVE_WORKFLOW_ID}"})
-    main = response.get("Item") or {}
+    main = _main_row(execution_id)
+    if main.get("executionStatus", "") not in zd.RUN_TERMINAL_STATUSES \
+            and _run_check_due(row, run_check_budget) and _check_run_ended(execution_id):
+        main = _main_row(execution_id)
     # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
     status, _ = zd.finalize_ended_run(zip_table, s3, aux_bucket_name, row,
                                       main.get("executionStatus", ""),
@@ -664,6 +763,7 @@ def list_jobs(event, database_id=None, asset_id=None):
         kwargs["ExclusiveStartKey"] = _decode_token(query.startingToken, expected, token_keys)
     response = zip_table.query(**kwargs)
     asset_decisions, items, reconciled = {}, [], 0
+    run_check_budget = [RUN_CHECKS_PER_CALL]
     for row in response.get("Items", []) or []:
         if zd.is_expired(row):
             continue
@@ -674,7 +774,7 @@ def list_jobs(event, database_id=None, asset_id=None):
             continue
         if row.get("status") in zd.ACTIVE_STATUSES and reconciled < RECONCILE_MAX_PER_CALL:
             reconciled += 1
-            row = _reconcile(row)
+            row = _reconcile(row, run_check_budget)
         items.append(zd.to_job_item(row))
     result = {"Items": items}
     if "LastEvaluatedKey" in response:

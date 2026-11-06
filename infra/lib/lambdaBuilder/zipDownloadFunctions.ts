@@ -268,6 +268,8 @@ export function buildZipDownloadCallbackFunction(
 /**
  * With app.zipDownloads on: the service launches the archive workflow through the execute function
  * and aborts a cancelled job's run through the execution service, both as SYSTEM_USER cross-calls.
+ * The same execution service grant serves the run check of an idle job (a details read that records
+ * a run ended outside VAMS whose status change event was lost; zipDownloadService._check_run_ended).
  * Each grant names the exact unqualified function ARN (no `:*`), like the re-run grant on the
  * execution service. Not called with the feature off, so neither name nor grant is deployed then.
  */

@@ -107,6 +107,9 @@ class FakeTable:
             m = re.search(r"workflowExecutionId = (:\w+)", cond)
             if ok and m and "attribute_not_exists(workflowExecutionId)" not in cond:
                 ok = row.get("workflowExecutionId") == values[m.group(1)]
+            m = re.search(r"runCheckedAt < (:\w+)", cond)
+            if ok and m and row.get("runCheckedAt") is not None:
+                ok = row["runCheckedAt"] < values[m.group(1)]
         if row is None and cond:
             ok = False
         if not ok:
@@ -224,10 +227,14 @@ class FakeLambda:
     def __init__(self):
         self.calls = []
         self.responses = {}
+        # FunctionName -> callable(event) run before answering (a side effect of the invoked function).
+        self.effects = {}
 
     def invoke(self, FunctionName, InvocationType, Payload):
         event = json.loads(Payload.decode("utf-8"))
         self.calls.append((FunctionName, InvocationType, event))
+        if FunctionName in self.effects:
+            self.effects[FunctionName](event)
         status, body = self.responses.get(FunctionName, (200, {"executionId": "exec-1"}))
         return {"Payload": io.BytesIO(json.dumps({"statusCode": status,
                                                   "body": json.dumps(body)}).encode("utf-8"))}
