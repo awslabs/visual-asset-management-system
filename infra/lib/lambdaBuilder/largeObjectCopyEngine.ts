@@ -262,6 +262,10 @@ export function grantLargeObjectCopyHandOffByParameter(
     engine: lambda.IFunction,
     config: Config.Config
 ) {
+    const role = fun.role;
+    if (!role) {
+        throw new Error("The workflow output step needs an execution role for the copy hand-over");
+    }
     const parameterName = largeObjectCopyEngineFunctionNameParameterName(config);
     const parameter = new ssm.StringParameter(scope, "LargeObjectCopyEngineFunctionNameParameter", {
         parameterName,
@@ -271,7 +275,7 @@ export function grantLargeObjectCopyHandOffByParameter(
     });
     fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER", parameterName);
     new iam.ManagedPolicy(fun, "LargeObjectCopyHandOffPolicy", {
-        roles: [fun.role!],
+        roles: [role],
         statements: [
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
