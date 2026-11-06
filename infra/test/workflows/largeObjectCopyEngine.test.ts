@@ -32,6 +32,8 @@ import {
     LARGE_OBJECT_COPY_RECONCILE_DLQ_ID,
     LARGE_OBJECT_COPY_RECONCILE_STATUSES,
     LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
+    LARGE_OBJECT_COPY_STATUS_PERMISSION_ID,
+    LARGE_OBJECT_COPY_STATUS_RULE_ID,
     MAP_ITERATION_EVENTS,
     MAX_BATCHES,
     NOTIFY_LAST_ATTEMPT_RETRY,
@@ -42,6 +44,18 @@ import { SynthResult, TemplateName, synthTemplate } from "../support/templateSyn
 import { nestedTemplateKeyFor } from "../support/iamPolicySize";
 
 jest.setTimeout(900_000);
+
+const PARTITION_OF: Record<TemplateName, string> = {
+    commercial: "aws",
+    govcloud: "aws-us-gov",
+    eusovereign: "aws-eusc",
+};
+
+const REGION_OF: Record<TemplateName, string> = {
+    commercial: "us-east-1",
+    govcloud: "us-gov-west-1",
+    eusovereign: "eusc-de-east-1",
+};
 
 interface Cell {
     name: string;
@@ -283,6 +297,54 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(dlqs).toHaveLength(1);
     });
 
+    // Same ordering as the workflow status change rule (#1122 D2): the rule never goes live before
+    // the engine's resource policy and the dead-letter queue's policy exist.
+    test("the copy status rule has a fixed name and is created after both of its policies", () => {
+        const rules = byPrefix(resources, "AWS::Events::Rule", LARGE_OBJECT_COPY_STATUS_RULE_ID);
+        expect(rules).toHaveLength(1);
+        const [ruleId, rule]: [string, any] = rules[0] as any;
+        const name = rule.Properties.Name;
+        expect(typeof name).toBe("string");
+        expect(name.length).toBeLessThanOrEqual(64);
+        expect(name).toMatch(/^[A-Za-z0-9-]+$/);
+        expect(name.startsWith(`vams-t1-${cell.template}`)).toBe(true);
+        const ruleArn =
+            `arn:${PARTITION_OF[cell.template]}:events:${REGION_OF[cell.template]}:123456789012:` +
+            `rule/${name}`;
+
+        const permissionId = LARGE_OBJECT_COPY_STATUS_PERMISSION_ID;
+        const permission = resources[permissionId];
+        expect(permission?.Type).toBe("AWS::Lambda::Permission");
+        expect(permission.Properties.Principal).toBe("events.amazonaws.com");
+        expect(permission.Properties.FunctionName).toEqual({
+            "Fn::GetAtt": [engineFunctionId, "Arn"],
+        });
+        expect(SynthResult.flatten(permission.Properties.SourceArn)).toBe(ruleArn);
+
+        const policies = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::SQS::QueuePolicy" &&
+                r.Properties.Queues.some(
+                    (q: any) =>
+                        q.Ref &&
+                        new RegExp(`^${LARGE_OBJECT_COPY_RECONCILE_DLQ_ID}[0-9A-F]{8}$`).test(q.Ref)
+                )
+        );
+        expect(policies).toHaveLength(1);
+        const [queuePolicyId, queuePolicy]: [string, any] = policies[0] as any;
+        expect(rule.DependsOn).toEqual(expect.arrayContaining([permissionId, queuePolicyId]));
+
+        // Neither policy references the rule, which would make the dependency a cycle.
+        expect(JSON.stringify(permission)).not.toContain(ruleId);
+        expect(JSON.stringify(queuePolicy)).not.toContain(ruleId);
+        const sends = queuePolicy.Properties.PolicyDocument.Statement.filter(
+            (s: any) => s.Action === "sqs:SendMessage" && s.Principal?.Service
+        );
+        expect(sends).toHaveLength(1);
+        expect(sends[0].Principal).toEqual({ Service: "events.amazonaws.com" });
+        expect(SynthResult.flatten(sends[0].Condition.ArnEquals["aws:SourceArn"])).toBe(ruleArn);
+    });
+
     test("the engine can describe its executions and the details read can hand it one", () => {
         const policies = JSON.stringify(
             Object.values(resources).filter(
@@ -291,12 +353,104 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         );
         expect(policies).toContain("states:DescribeExecution");
         expect(policies).toContain("LargeObjectCopy-");
-        const withName = Object.values(resources).filter(
-            (r: any) =>
+    });
+
+    // #1123 M11 round 6: every function that stops copies hands them to the engine's reconcile.
+    const handlerOf = (r: any) => String(r.Properties?.Handler ?? "");
+    // The function built under that handler's own construct id (the execution service's
+    // permanent-delete route set shares its handler under another id).
+    const functionByHandler = (suffix: string) => {
+        const name = suffix
+            .replace(/\.lambda_handler$/, "")
+            .split(".")
+            .pop();
+        const found = Object.entries(resources).filter(
+            ([id, r]: [string, any]) =>
                 r.Type === "AWS::Lambda::Function" &&
-                r.Properties.Environment?.Variables?.LARGE_OBJECT_COPY_FUNCTION_NAME
+                handlerOf(r).endsWith(suffix) &&
+                new RegExp(`^${name}[0-9A-F]{8}$`).test(id)
         );
-        expect(withName).toHaveLength(1);
+        expect(found).toHaveLength(1);
+        return found[0] as [string, any];
+    };
+    const roleIdOf = (fn: any) => fn.Properties.Role["Fn::GetAtt"][0];
+    const engineArn = () => ({ "Fn::GetAtt": [engineFunctionId, "Arn"] });
+    const invokesEngine = (doc: any) =>
+        (doc.Statement as any[]).some(
+            (s) =>
+                s.Action === "lambda:InvokeFunction" &&
+                JSON.stringify(s.Resource) === JSON.stringify(engineArn())
+        );
+    const managedPoliciesOf = (roleId: string) =>
+        Object.entries(resources).filter(([id, r]: [string, any]) => {
+            if (r.Type !== "AWS::IAM::ManagedPolicy") return false;
+            const viaPolicy = JSON.stringify(r.Properties.Roles ?? []).includes(`"${roleId}"`);
+            const viaRole = JSON.stringify(
+                resources[roleId].Properties.ManagedPolicyArns ?? []
+            ).includes(`"${id}"`);
+            return viaPolicy || viaRole;
+        });
+
+    test.each([
+        ["executionService.lambda_handler", "the abort route and the status change handler"],
+        ["sfn.handleExecutionError.lambda_handler", "the error handler"],
+    ])("%s (%s) takes the engine name and may invoke it", (handler) => {
+        const [, fn] = functionByHandler(handler);
+        expect(fn.Properties.Environment.Variables.LARGE_OBJECT_COPY_FUNCTION_NAME).toEqual({
+            Ref: engineFunctionId,
+        });
+        const docs = managedPoliciesOf(roleIdOf(fn)).map(
+            ([, r]: [string, any]) => r.Properties.PolicyDocument
+        );
+        expect(docs.some(invokesEngine)).toBe(true);
+    });
+
+    test("the output step reads the engine name from SSM and may invoke it, with no cycle", () => {
+        const [fnId, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
+        const vars = fn.Properties.Environment.Variables;
+        // A plain string, not a reference: the engine already references the output step.
+        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME).toBeUndefined();
+        expect(typeof vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toBe("string");
+        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toMatch(
+            /^\/[^/]+\/largeObjectCopy\/engineFunctionName$/
+        );
+        const params = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::SSM::Parameter" &&
+                r.Properties.Name === vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER
+        );
+        expect(params).toHaveLength(1);
+        const [paramId, param] = params[0] as [string, any];
+        expect(param.Properties.Type).toBe("String");
+        expect(param.Properties.Value).toEqual({ Ref: engineFunctionId });
+        const roleId = roleIdOf(fn);
+        const handOff = Object.entries(resources).filter(
+            ([, r]: [string, any]) =>
+                r.Type === "AWS::IAM::ManagedPolicy" &&
+                JSON.stringify(r.Properties.Roles ?? []) === JSON.stringify([{ Ref: roleId }]) &&
+                invokesEngine(r.Properties.PolicyDocument)
+        );
+        expect(handOff).toHaveLength(1);
+        const [handOffId, policy] = handOff[0] as [string, any];
+        const statements = policy.Properties.PolicyDocument.Statement as any[];
+        expect(statements).toHaveLength(2);
+        expect(statements).toContainEqual(
+            expect.objectContaining({
+                Action: "ssm:GetParameter",
+                Effect: "Allow",
+                Resource: expect.anything(),
+            })
+        );
+        expect(
+            JSON.stringify(statements.find((s) => s.Action === "ssm:GetParameter").Resource)
+        ).toContain(paramId);
+        // Not attached through the role and not awaited by the function: either would close a
+        // dependency cycle with the engine (which references the output step).
+        expect(JSON.stringify(resources[roleId].Properties.ManagedPolicyArns ?? [])).not.toContain(
+            handOffId
+        );
+        expect(JSON.stringify(fn.DependsOn ?? [])).not.toContain(handOffId);
+        expect(JSON.stringify(engineFunction)).toContain(fnId);
     });
 
     test("a notify that exhausted its retries gets a longer last attempt", () => {
@@ -368,6 +522,10 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(JSON.stringify(alarm.Dimensions)).toContain(queueId);
         expect(JSON.stringify(alarm.AlarmName)).toContain("-largeObjectCopyReconcileDLQ");
         expect(alarm.AlarmActions).toBeUndefined();
+        // The remedy it names works (L15): re-invoke the reconcile. The queue has no source queue
+        // to redrive to, and the details read does not check an ended run's copies.
+        expect(alarm.AlarmDescription).toContain('{"action": "reconcile", "executionArn":');
+        expect(alarm.AlarmDescription).not.toMatch(/redrive the queue|open the workflow execution/);
     });
 });
 
@@ -396,5 +554,75 @@ describe("app.largeFileIngestion.engineReservedConcurrency validation", () => {
         const config = { app: {} } as unknown as Config.ConfigPublic;
         Config.applyLargeFileIngestionDefaults(config);
         expect(config.app.largeFileIngestion.engineReservedConcurrency).toBe(0);
+    });
+});
+
+// Every EventBridge rule with a fixed name (the workflow status change rule, #1122 D2, and the copy
+// status rule) must differ between two VAMS deployments in one account and Region, or the second
+// deployment's create fails (or, worse, takes over the first's rule). The names derive from the
+// top-level stack name, which CloudFormation keeps unique per account and Region. The second
+// deployment uses a long stack name so the 64-character truncation is exercised too.
+describe("fixed EventBridge rule names are unique per deployment", () => {
+    const OTHER_STACK = "vams-core-t1-a-much-longer-second-deployment-name-us-east-1";
+
+    const fixedRuleNames = (synth: SynthResult): Record<string, string> => {
+        const out: Record<string, string> = {};
+        for (const template of Object.values(synth.templates) as any[]) {
+            for (const [id, r] of Object.entries(template.Resources ?? {}) as [string, any][]) {
+                if (r.Type === "AWS::Events::Rule" && typeof r.Properties?.Name === "string") {
+                    // Keyed by the logical id without its hash suffix (the same construct in both).
+                    out[id.replace(/[0-9A-F]{8}$/, "")] = r.Properties.Name;
+                }
+            }
+        }
+        return out;
+    };
+
+    let first: Record<string, string>;
+    let second: Record<string, string>;
+
+    beforeAll(() => {
+        first = fixedRuleNames(synthTemplate("commercial"));
+        second = fixedRuleNames(
+            synthTemplate("commercial", {
+                mutate: (c) => {
+                    c.env.coreStackName = OTHER_STACK;
+                    c.app.baseStackName = "t1-a-much-longer-second-deployment-name";
+                },
+                mutateKey: "second-deployment-stack-name",
+            })
+        );
+    });
+
+    test("both fixed-name rules are present in each deployment", () => {
+        for (const names of [first, second]) {
+            expect(Object.keys(names)).toEqual(
+                expect.arrayContaining([
+                    "WorkflowExecutionStatusChangeRule",
+                    LARGE_OBJECT_COPY_STATUS_RULE_ID,
+                ])
+            );
+        }
+    });
+
+    test("each name carries its deployment's stack name and stays within 64 characters", () => {
+        for (const name of Object.values(first)) {
+            expect(name.startsWith("vams-t1-commercial-")).toBe(true);
+            expect(name.length).toBeLessThanOrEqual(64);
+        }
+        for (const name of Object.values(second)) {
+            // A long path is cut in the middle; the start of the stack name and the hash remain.
+            expect(name.startsWith(OTHER_STACK.slice(0, 20))).toBe(true);
+            expect(name.length).toBeLessThanOrEqual(64);
+            expect(name).toMatch(/[0-9A-F]{8}$/);
+        }
+    });
+
+    test("no fixed name repeats within or across the two deployments", () => {
+        const all = [...Object.values(first), ...Object.values(second)];
+        expect(new Set(all).size).toBe(all.length);
+        for (const key of Object.keys(first)) {
+            expect(second[key]).not.toBe(first[key]);
+        }
     });
 });

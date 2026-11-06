@@ -2092,7 +2092,8 @@ def _cancel_output_copies(execution_id):
     per copy that could not be stopped or cleaned up. Never raises."""
     try:
         table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
-        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id)
+        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id,
+                                              lambda_client, loc.engine_function_name())
     except Exception as e:
         logger.exception(f"Could not cancel the output copies of execution {execution_id}: {e}")
         return []

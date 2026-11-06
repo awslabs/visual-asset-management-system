@@ -28,16 +28,16 @@
  */
 
 import * as cdk from "aws-cdk-lib";
-import { Duration } from "aws-cdk-lib";
+import { Duration, Names } from "aws-cdk-lib";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as events from "aws-cdk-lib/aws-events";
-import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { NagSuppressions } from "cdk-nag";
@@ -55,7 +55,7 @@ import {
     suppressCdkNagLambda,
 } from "../helper/security";
 import * as s3AssetBuckets from "../helper/s3AssetBuckets";
-import { IAMArn } from "../helper/service-helper";
+import { IAMArn, Service } from "../helper/service-helper";
 import {
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
     storageResources,
@@ -167,7 +167,11 @@ export function grantLargeObjectCopyCoordination(
     fun: lambda.Function,
     storage: storageResources,
     config: Config.Config,
-    options: { answersTaskToken: boolean; reconcileWith?: lambda.IFunction }
+    options: {
+        answersTaskToken: boolean;
+        reconcileWith?: lambda.IFunction;
+        handsOffTo?: lambda.IFunction;
+    }
 ) {
     addEnvironment(fun, largeObjectCopyEnvironment(config));
     const statements = [
@@ -203,23 +207,87 @@ export function grantLargeObjectCopyCoordination(
     }
     if (options.reconcileWith) {
         // The execution details read hands the copy engine an unfinished job whose execution ended
-        // outside its states (a missed status change event): it describes the job's execution and
-        // invokes the engine asynchronously (backend executionService._reconcile_ended_copies).
-        fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME", options.reconcileWith.functionName);
+        // outside its states (a missed status change event): it describes the job's execution
+        // (backend executionService._reconcile_ended_copies).
         statements.push(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["states:DescribeExecution"],
                 resources: [largeObjectCopyExecutionArnPattern(config)],
-            }),
+            })
+        );
+    }
+    const engine = options.reconcileWith ?? options.handsOffTo;
+    if (engine) {
+        // The cancel path hands each copy it stopped and finalized as landed, or left to the engine
+        // to decide, to the engine's reconcile with an asynchronous invoke (backend
+        // largeObjectCopy.request_reconcile), next to the stop's status change event.
+        fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME", engine.functionName);
+        statements.push(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: [options.reconcileWith.functionArn],
+                resources: [engine.functionArn],
             })
         );
     }
     attachManagedPolicy(fun, "LargeObjectCopyCoordinationPolicy", statements);
+}
+
+/** Fixed name of the SSM parameter holding the copy engine function name. */
+export function largeObjectCopyEngineFunctionNameParameterName(config: Config.Config): string {
+    return (
+        "/" +
+        [
+            `${config.name}-${config.app.baseStackName}`,
+            "largeObjectCopy",
+            "engineFunctionName",
+        ].join("/")
+    );
+}
+
+/**
+ * The cancel path hand-over (see grantLargeObjectCopyCoordination) for the workflow OUTPUT STEP. The
+ * engine already references the output step (it finalizes a run whose definition does not wait), so
+ * the output step cannot take the engine's name as an environment variable or wait for a policy
+ * naming it: either would be a CloudFormation dependency cycle. Instead the engine's name is in an
+ * SSM parameter of fixed name (the environment names it as a plain string), and one managed policy
+ * that names the output step's role (not attached through the role, so the role and the function do
+ * not depend on it) grants reading that parameter and invoking the engine.
+ */
+export function grantLargeObjectCopyHandOffByParameter(
+    scope: Construct,
+    fun: lambda.Function,
+    engine: lambda.IFunction,
+    config: Config.Config
+) {
+    const role = fun.role;
+    if (!role) {
+        throw new Error("The workflow output step needs an execution role for the copy hand-over");
+    }
+    const parameterName = largeObjectCopyEngineFunctionNameParameterName(config);
+    const parameter = new ssm.StringParameter(scope, "LargeObjectCopyEngineFunctionNameParameter", {
+        parameterName,
+        stringValue: engine.functionName,
+        description:
+            "Name of the VAMS large object copy engine function (read by the workflow output step).",
+    });
+    fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER", parameterName);
+    new iam.ManagedPolicy(fun, "LargeObjectCopyHandOffPolicy", {
+        roles: [role],
+        statements: [
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["ssm:GetParameter"],
+                resources: [parameter.parameterArn],
+            }),
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["lambda:InvokeFunction"],
+                resources: [engine.functionArn],
+            }),
+        ],
+    });
 }
 
 export interface LargeObjectCopyEngine {
@@ -241,8 +309,8 @@ export function buildLargeObjectCopyEngine(
     const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
     const reservedConcurrency = config.app.largeFileIngestion.engineReservedConcurrency;
     // Reconcile requests that could not be processed: status change events the rule could not
-    // deliver, and asynchronous reconcile invocations (the rule's and the details read's) that still
-    // failed after Lambda's retries.
+    // deliver, and asynchronous reconcile invocations (the rule's, the details read's and the cancel
+    // path's) that still failed after Lambda's retries.
     const reconcileDlq = new sqs.Queue(scope, LARGE_OBJECT_COPY_RECONCILE_DLQ_ID, {
         encryption: storage.encryption.kmsKey
             ? sqs.QueueEncryption.KMS
@@ -256,20 +324,26 @@ export function buildLargeObjectCopyEngine(
             id: "AwsSolutions-SQS3",
             reason:
                 "This queue is itself the dead-letter target of the copy engine's reconcile requests, " +
-                "so it takes no further dead-letter queue. A request left here is an ended copy whose " +
-                "job is still open; the execution details read retries it when the run is read.",
+                "so it takes no further dead-letter queue. A request left here names an ended copy " +
+                "execution; an alarm on the queue signals it, and the operator re-invokes the engine's " +
+                "reconcile with that execution ARN.",
         },
     ]);
-    // A request in the reconcile DLQ is an ended copy whose job may still be open: a cancelled stop
-    // the cancel path left to the engine, or an execution that ended outside its states. The details
-    // read retries it only while someone reads the run, so the alarm is the signal to look. No alarm
-    // action: VAMS has no notification topic, like the other dead-letter queue alarms.
+    // A request in the reconcile DLQ is an ended copy whose job, or whose post-landing work, may be
+    // unfinished: a cancelled stop, or an execution that ended outside its states. Both the status
+    // change event and the cancel path's direct hand-over dead-letter here, and nothing retries a
+    // request once it is here, so the alarm is the signal to act. The queue is a dead-letter target
+    // with no source queue, so an SQS redrive cannot replay it; the remedy is to invoke the engine's
+    // reconcile again (safe to repeat). No alarm action: VAMS has no notification topic, like the
+    // other dead-letter queue alarms.
     new cloudwatch.Alarm(scope, LARGE_OBJECT_COPY_RECONCILE_DLQ_ALARM_ID, {
         alarmName: `${config.name}-${config.app.baseStackName}-largeObjectCopyReconcileDLQ`,
         alarmDescription:
             "Large object copy reconcile requests the copy engine could not process are in this " +
-            "dead-letter queue. Each names an ended copy execution; after fixing the cause, open the " +
-            "workflow execution (its details read reconciles the copy) or redrive the queue.",
+            "dead-letter queue. Each message names an ended copy execution (executionArn, or " +
+            "detail.executionArn for a status change event). After fixing the cause, invoke the copy " +
+            'engine function with {"action": "reconcile", "executionArn": "<that ARN>"} (safe to ' +
+            "repeat), then delete the message.",
         metric: reconcileDlq.metricApproximateNumberOfMessagesVisible({
             period: Duration.minutes(5),
             statistic: cloudwatch.Stats.MAXIMUM,
@@ -380,6 +454,11 @@ export const LARGE_OBJECT_COPY_RECONCILE_STATUSES = ["FAILED", "TIMED_OUT", "ABO
  * job the cancel path stopped. The same pattern as the workflow status change rule
  * (workflowStatusEvents.ts), which matches only vams-* workflow state machines. A missed event is
  * picked up by the execution details read, which checks a run's unfinished copies.
+ *
+ * As with the workflow status change rule (#1122 D2), the rule is created only after the engine's
+ * resource policy and the dead-letter queue's policy, so it never goes live unable to deliver. Both
+ * policies name the rule by an ARN built from its fixed name rather than by a reference to the rule
+ * (a reference would make that dependency a cycle).
  */
 function buildCopyStatusChangeRule(
     scope: Construct,
@@ -398,14 +477,57 @@ function buildCopyStatusChangeRule(
             },
         },
     });
-    rule.addTarget(
-        new eventsTargets.LambdaFunction(fun, {
-            deadLetterQueue: dlq,
-            retryAttempts: 3,
-            maxEventAge: Duration.hours(2),
+    const cfnRule = rule.node.defaultChild as events.CfnRule;
+    cfnRule.name = largeObjectCopyStatusRuleName(rule);
+    const ruleArn = IAMArn(cfnRule.name).eventRule;
+
+    // What the aws-events-targets LambdaFunction target adds (the engine's resource policy for this
+    // rule, the queue policy statement, the target), with the rule named by its built ARN.
+    const permission = new lambda.CfnPermission(scope, LARGE_OBJECT_COPY_STATUS_PERMISSION_ID, {
+        action: "lambda:InvokeFunction",
+        functionName: fun.functionArn,
+        principal: Service("EVENTS").PrincipalString,
+        sourceArn: ruleArn,
+    });
+    dlq.addToResourcePolicy(
+        new iam.PolicyStatement({
+            sid: "AllowLargeObjectCopyStatusChangeRule",
+            principals: [Service("EVENTS").Principal],
+            effect: iam.Effect.ALLOW,
+            actions: ["sqs:SendMessage"],
+            resources: [dlq.queueArn],
+            conditions: { ArnEquals: { "aws:SourceArn": ruleArn } },
         })
     );
+    // The queue's policy construct (created with the queue for enforceSSL, holding the statement above).
+    const queuePolicy = dlq.node.findChild("Policy") as sqs.QueuePolicy;
+
+    rule.addTarget({
+        bind: (): events.RuleTargetConfig => ({
+            arn: fun.functionArn,
+            deadLetterConfig: { arn: dlq.queueArn },
+            retryPolicy: {
+                maximumRetryAttempts: 3,
+                maximumEventAgeInSeconds: Duration.hours(2).toSeconds(),
+            },
+        }),
+    });
+    cfnRule.addDependency(permission);
+    cfnRule.node.addDependency(queuePolicy);
     return rule;
+}
+
+/**
+ * The copy status rule's name: unique per deployment (the top-level stack name and the construct
+ * path, with a hash suffix) and within EventBridge's 64-character limit. Fixed rather than generated
+ * by CloudFormation so its ARN is known without a reference to the rule.
+ */
+export function largeObjectCopyStatusRuleName(rule: Construct): string {
+    return Names.uniqueResourceName(rule, {
+        maxLength: 64,
+        separator: "-",
+        allowedSpecialCharacters: "-",
+    });
 }
 
 /** Engine memory when every part is copied server side (UploadPartCopy holds no object data). */
@@ -545,6 +667,7 @@ export const CHUNK_START_RETRY = {
 
 /** Construct ids, for the tests and the resource list in documentation. */
 export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
+export const LARGE_OBJECT_COPY_STATUS_PERMISSION_ID = "LargeObjectCopyStatusChangeInvokePermission";
 export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ID = "LargeObjectCopyReconcileDLQ";
 export const LARGE_OBJECT_COPY_RECONCILE_DLQ_ALARM_ID = "LargeObjectCopyReconcileDLQAlarm";
 

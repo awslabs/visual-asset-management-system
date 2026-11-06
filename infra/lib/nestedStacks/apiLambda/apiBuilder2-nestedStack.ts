@@ -58,6 +58,7 @@ import {
 import {
     buildLargeObjectCopyEngine,
     grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyHandOffByParameter,
     largeObjectCopyEnvironment,
 } from "../../lambdaBuilder/largeObjectCopyEngine";
 import {
@@ -472,8 +473,17 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             { answersTaskToken: true }
         );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes; the output step through an SSM parameter (the engine references it already).
+        grantLargeObjectCopyHandOffByParameter(
+            this,
+            processWorkflowExecutionOutputFunction,
+            largeObjectCopyEngine.engineFunction,
+            config
+        );
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
             answersTaskToken: false,
+            handsOffTo: largeObjectCopyEngine.engineFunction,
         });
         // The details read also hands the engine a copy whose execution ended unreported.
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {

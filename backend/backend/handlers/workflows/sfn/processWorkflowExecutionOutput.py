@@ -164,6 +164,16 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
 
 _copy_jobs_table = None
+_ssm = None
+
+
+def _ssm_client():
+    """SSM client for the copy engine function name parameter, built on first use (only a run that
+    ended while this step started its copies reads it)."""
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client('ssm', config=retry_config)
+    return _ssm
 
 
 def copy_jobs_table():
@@ -1559,7 +1569,8 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
     if not _mark_ingesting(event, len(pending_jobs), pending_bytes, files_done, bytes_done):
         # Ended while this step ran (an abort or the error path): stop the copies it just started.
         logger.warning(f"Execution {execution_id} is already terminal; cancelling its output copies")
-        loc.cancel_execution_copy_jobs(copy_jobs_table(), sfn_client, s3c, execution_id)
+        loc.cancel_execution_copy_jobs(copy_jobs_table(), sfn_client, s3c, execution_id,
+                                       client, loc.engine_function_name(ssm_client=_ssm_client()))
         return _ingest_response(pending=False)
 
     context = {
