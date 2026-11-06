@@ -22,12 +22,14 @@ import hashlib
 import json
 import math
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
+from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 from customLogging.logger import safeLogger
 
 # Logs under the calling handler's service name.
@@ -460,39 +462,39 @@ def release_job_flag(table, job_id, flag):
         logger.warning(f"Could not release {flag} of copy job {job_id}: {e}")
 
 
-def object_identity(head):
-    """A comparable identity of the object a HEAD described (version, ETag, last modified), or
-    "absent" for no object."""
-    if not head:
-        return "absent"
-    modified = head.get("LastModified")
-    modified = modified.isoformat() if hasattr(modified, "isoformat") else str(modified or "")
-    return f"{head.get('VersionId') or ''}|{head.get('ETag') or ''}|{modified}"
+def new_upload_token():
+    """A fresh per-job upload token (recorded as destUploadToken on the job row and stamped on the
+    multipart upload as VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY)."""
+    return uuid.uuid4().hex
+
+
+def is_own_upload_object(head, token):
+    """Whether a HEAD describes the object a job's own multipart upload created: the object carries
+    the job's upload token. Never decided by presence or size, since an earlier object of the same
+    size and part count can sit at the key (a re-run of the same output)."""
+    return bool(head) and bool(token) and \
+        (head.get("Metadata") or {}).get(VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY) == token
 
 
 def landed_object_version(s3_client, row):
     """(landed, version_id) for a job whose multipart upload no longer exists while the job is open.
 
-    Only the engine's Complete completes a job's multipart upload, and every other remover of the
-    upload (fail, the reconcile, the cancel path) aborts it before or after finalizing the job, so an
-    open job whose upload is gone was completed by Complete, unless something outside VAMS removed
-    it (a bucket lifecycle rule). The destination then counts as landed only when it holds an object
-    of the planned size and part count that is not the object that was there when Prepare created
-    the upload (destPriorIdentity; rows recorded before it existed check size and parts only)."""
+    The upload is gone either because Complete completed it or because a remover aborted it (fail,
+    the reconcile, the cancel path, or something outside VAMS such as a bucket lifecycle rule). It
+    counts as landed only when the key's current object is the one THIS job's upload created: Prepare
+    records a fresh destUploadToken on the job row in the same conditional write as the upload id and
+    stamps it as object metadata on CreateMultipartUpload, so only that upload's completed object
+    carries it. Works the same on unversioned buckets. A row without a token has no landed object."""
+    token = row.get("destUploadToken")
+    if not token:
+        return False, ""
     try:
         head = s3_client.head_object(Bucket=row.get("destBucket"), Key=row.get("destKey"))
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
             return False, ""
         raise
-    etag = (head.get("ETag") or "").strip('"')
-    try:
-        planned = (int(head.get("ContentLength", -1)) == int(row.get("sourceSize") or -2)
-                   and etag.endswith(f"-{int(row.get('partCount') or 0)}"))
-    except (TypeError, ValueError):
-        planned = False
-    prior = row.get("destPriorIdentity")
-    if not planned or (prior and object_identity(head) == prior):
+    if not is_own_upload_object(head, token):
         return False, ""
     return True, head.get("VersionId", "") or ""
 
@@ -747,21 +749,38 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     logger.exception(f"Could not abort the multipart upload of copy job {job_id}: {e}")
                     warnings.append(f"The partial copy of output '{job.get('relativeKey', '')}' "
                                     f"could not be removed.")
-                elif _cancel_found_landed(table, s3_client, job_id):
-                    # Complete had already landed the file: the landed object wins over the cancel.
-                    continue
-        update_job_row(table, job_id, {"status": STATUS_CANCELLED, "error": REASON_CANCELLED,
-                                       "finishedAt": _iso_now()},
-                       condition="attribute_not_exists(#s) OR NOT #s IN (:a, :b)",
-                       condition_values={":a": STATUS_SUCCEEDED, ":b": STATUS_FAILED})
+                else:
+                    found = _cancel_found_landed(table, s3_client, job_id)
+                    if found is True:
+                        # This job's own object had landed: the landed object wins over the cancel.
+                        continue
+                    if found is None and execution_arn:
+                        # Could not tell (the abort route and the error handler cannot read the
+                        # asset object): the copy engine's reconcile of the stop just made decides
+                        # the job with the same rule (_reconcile_cancelled_stop).
+                        continue
+        mark_cancelled(table, job_id)
     return warnings
 
 
+def mark_cancelled(table, job_id):
+    """The cancel path's CANCELLED write: never over SUCCEEDED or FAILED. Also written by the copy
+    engine's reconcile of a stop the cancel path made, so both write the same thing."""
+    return update_job_row(table, job_id, {"status": STATUS_CANCELLED, "error": REASON_CANCELLED,
+                                          "finishedAt": _iso_now()},
+                          condition="attribute_not_exists(#s) OR NOT #s IN (:a, :b)",
+                          condition_values={":a": STATUS_SUCCEEDED, ":b": STATUS_FAILED})
+
+
 def _cancel_found_landed(table, s3_client, job_id):
-    """The cancel path found the job's multipart upload already gone: when Complete landed the file,
-    finalize the job SUCCEEDED (the landed object wins) and return True. Complete, still running or
-    retried, then sees a SUCCEEDED job and does the post-landing work once. Best-effort: on any error
-    the job is cancelled as before."""
+    """The cancel path found the job's multipart upload already gone. True when the key's current
+    object is the one this job's upload created (its upload token, landed_object_version; never size
+    or presence): the job is finalized SUCCEEDED here (the landed object wins). False when it is not
+    (or the job is no longer open). None when it could not be checked (HeadObject denied: the abort
+    route and the error handler hold only AbortMultipartUpload on the asset buckets; or any other
+    error). The row is read again here, after the abort. The post-landing work is done by the copy
+    engine's reconcile of this stop (_reconcile_cancelled_stop in the engine), and also by Complete
+    when it is still running."""
     try:
         row = get_job_row(table, job_id)
         if not is_open_job(row):
@@ -774,7 +793,7 @@ def _cancel_found_landed(table, s3_client, job_id):
         return True
     except Exception as e:
         logger.warning(f"Could not check whether copy job {job_id} had landed its file: {e}")
-        return False
+        return None
 
 
 def _parse_iso(value):
