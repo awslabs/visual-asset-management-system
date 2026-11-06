@@ -23,7 +23,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo, isRequestBlocked } from "../../services/APIService";
+import { fetchAsset, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
@@ -91,6 +91,48 @@ interface Asset {
 }
 
 // File format detection now handled by plugin system - no longer needed
+
+/** Why the file opened by its direct path could not be shown, as the page words it. */
+interface FileLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the file: it is not known to be missing, refused or archived. */
+    retryable: boolean;
+}
+
+const FILE_NOT_FOUND: FileLoadError = {
+    header: "File Not Found",
+    message: "The file you're looking for doesn't exist or has been moved.",
+    retryable: false,
+};
+
+/**
+ * Words a failed file lookup from the `[false, message, status?]` that fetchFileInfo returns. A
+ * missing asset is a 404 and a missing file a 400 that says it was not found; a 403 is a permission
+ * denial. A request the AWS WAF web ACL blocked, or whose response never arrived, carries no
+ * status and its own message (the request ID, or that the service could not be reached), and may
+ * load when tried again, as may any other failure.
+ */
+function fileLoadFailure(message?: unknown, status?: number): FileLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404 || (status === 400 && /not found/i.test(text))) {
+        return FILE_NOT_FOUND;
+    }
+    if (status === 403) {
+        return {
+            header: "Access Denied",
+            message: "Your role does not allow you to view this file.",
+            retryable: false,
+        };
+    }
+    return {
+        header: "File Unavailable",
+        message: text
+            ? `Failed to load the file. ${text}`
+            : "An error occurred while loading the file.",
+        retryable: true,
+    };
+}
 
 // React Router keeps this route's element mounted when only :databaseId or :assetId change, so a link
 // to another asset's file would re-render the previous asset's page with its loaded file still in
@@ -164,7 +206,9 @@ function ViewFileForAsset() {
 
     // State for direct path loading
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
-    const [directPathError, setDirectPathError] = useState<string | null>(null);
+    const [directPathError, setDirectPathError] = useState<FileLoadError | null>(null);
+    // Counts Retry presses, so the direct-path load runs again for the same URL.
+    const [directPathAttempt, setDirectPathAttempt] = useState(0);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
     // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
     // named no version, the same path with the version that was picked, until the URL names that
@@ -410,7 +454,7 @@ function ViewFileForAsset() {
                 console.log("Requested version:", urlVersion || "latest");
 
                 // Fetch file info
-                const [success, fileInfoResponse] = await fetchFileInfo({
+                const [success, fileInfoResponse, status] = await fetchFileInfo({
                     databaseId,
                     assetId,
                     fileKey: urlFilePath,
@@ -421,11 +465,7 @@ function ViewFileForAsset() {
                 }
 
                 if (!success) {
-                    setDirectPathError(
-                        typeof fileInfoResponse === "string"
-                            ? fileInfoResponse
-                            : "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(fileLoadFailure(fileInfoResponse, status));
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -444,18 +484,18 @@ function ViewFileForAsset() {
 
                 // Check if file exists
                 if (!fileInfo || !fileInfo.key) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(FILE_NOT_FOUND);
                     setIsLoadingDirectPath(false);
                     return;
                 }
 
                 // Check if file is archived
                 if (fileInfo.isArchived) {
-                    setDirectPathError(
-                        `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`
-                    );
+                    setDirectPathError({
+                        header: "File Unavailable",
+                        message: `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`,
+                        retryable: false,
+                    });
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -504,21 +544,9 @@ function ViewFileForAsset() {
                     return;
                 }
                 console.error("Error loading file from direct path:", error);
-
-                // Check for specific error types. The apiClient throws an ApiError
-                // carrying the HTTP status in `.status` and the backend message in `.message`;
-                // a request the AWS WAF web ACL blocked keeps its message.
-                if (error?.status === 403 && !isRequestBlocked(error)) {
-                    setDirectPathError("You don't have permission to access this file.");
-                } else if (error?.status === 404) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
-                } else {
-                    setDirectPathError(
-                        error?.message || "An error occurred while loading the file."
-                    );
-                }
+                // fetchFileInfo answers a rejected request with its status rather than throwing, so
+                // this is a fault in reading its answer, which a second attempt may get past.
+                setDirectPathError(fileLoadFailure());
                 setIsLoadingDirectPath(false);
             }
         };
@@ -536,6 +564,7 @@ function ViewFileForAsset() {
         directPathRequest,
         loadedFileInfo,
         loadedFileRequests,
+        directPathAttempt,
     ]);
 
     // Fetch version info when state is passed but versionId is missing
@@ -799,13 +828,31 @@ function ViewFileForAsset() {
                         </Box>
                     )}
 
-                    {/* Show error state for direct path access */}
+                    {/* Show error state for direct path access. The header names the cause, and a
+                        failure that may pass (no response, a blocked or failed request) offers Retry. */}
                     {!isLoadingDirectPath && directPathError && (
                         <Box padding={{ top: "s", horizontal: "l" }}>
                             <Container>
                                 <Box padding="m">
-                                    <Alert type="error" header="File Not Found">
-                                        {directPathError}
+                                    <Alert
+                                        type="error"
+                                        statusIconAriaLabel="Error"
+                                        header={directPathError.header}
+                                        action={
+                                            directPathError.retryable ? (
+                                                <Button
+                                                    onClick={() =>
+                                                        setDirectPathAttempt(
+                                                            (attempt) => attempt + 1
+                                                        )
+                                                    }
+                                                >
+                                                    Retry
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {directPathError.message}
                                         <br />
                                         <br />
                                         <Link href={`#/databases/${databaseId}/assets/${assetId}`}>
