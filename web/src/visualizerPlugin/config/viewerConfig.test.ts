@@ -57,6 +57,23 @@ describe("viewerConfig vs the loaders", () => {
         expect(columnar.supportedExtensions.sort()).toEqual([".csv", ".fcs"]);
         expect(columnar.supportedExtensions).not.toContain(".rds");
     });
+
+    it("offers the SuperSplat Editor for the single-file formats its import handler opens", () => {
+        // SuperSplat's file-handler.ts (v3.7.0) also imports .lcc2 scenes, unbundled SOG
+        // (meta.json with .webp siblings) and .ssproj editor projects. VAMS hands the editor one
+        // presigned URL per view; those inputs stay unlisted until they are proven through that
+        // hand-off (an .ssproj is an editor save, not an asset format).
+        const supersplat = byId("supersplat-viewer");
+        expect([...supersplat.supportedExtensions].sort()).toEqual([
+            ".ksplat",
+            ".lcc",
+            ".ply",
+            ".sog",
+            ".splat",
+            ".spz",
+        ]);
+        expect(supersplat.supportsMultiFile).toBe(false);
+    });
 });
 
 describe("viewerConfig vs the default Content Security Policy", () => {

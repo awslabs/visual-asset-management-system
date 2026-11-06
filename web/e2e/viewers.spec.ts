@@ -6,8 +6,12 @@
 import { test, expect, Page, Request, Response } from "@playwright/test";
 import {
     type AssetFileRef,
+    chooseViewer,
+    CONSOLE_ERROR_IGNORE,
+    CSP_CONSOLE_REPORT,
     dataGrid,
     expectCanvasRendered,
+    expectSuperSplatRendered,
     expectNoNewCspViolations,
     featuresEnabled,
     findAssetFiles,
@@ -20,6 +24,7 @@ import {
     watchConsoleErrors,
     watchCspViolations,
     watchRequestHosts,
+    SUPERSPLAT_CSP_ALLOWED,
 } from "./support/fixtures";
 
 /**
@@ -51,7 +56,8 @@ const cases = [
     { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
     { ext: ".usdz", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
     { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
-    { ext: ".spz", viewer: "Gaussian splat" },
+    // With ALLOWUNSAFEEVAL the SuperSplat Editor also opens .spz, so the picker appears there.
+    { ext: ".spz", viewer: "Gaussian splat", select: /Gaussian Splat Viewer \(BabylonJS\)/i },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
@@ -177,14 +183,16 @@ for (const c of cases) {
             timeout: 60_000,
         });
 
-        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load.
+        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load. These
+        // mount-only cases name viewers loosely (not the config name), so they choose by `select`
+        // and do not use pickViewerIfAsked's exact-name check.
         if (c.select) {
-            const picker = page.getByRole("button", { name: /select viewer/i });
-            if (await picker.isVisible().catch(() => false)) {
-                await picker.click();
-                // The picker is a listbox of viewer options.
-                await page.getByRole("option", { name: c.select }).first().click();
-            }
+            const asked = await page
+                .getByText(/No Viewer Component Selected/i)
+                .waitFor({ state: "visible", timeout: 10_000 })
+                .then(() => true)
+                .catch(() => false);
+            if (asked) await chooseViewer(page, c.select);
         }
 
         // The viewer mounts a rendering surface: a WebGL/2D <canvas> for the 3D viewers, or
@@ -240,7 +248,7 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
-type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused";
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused" | "supersplat";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -363,6 +371,26 @@ const renderCases: RenderCase[] = [
     { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
     { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
     { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // SuperSplat Editor (iframe, WebGPU): splat count > 0 and a canvas that differs from the empty
+    // editor's, inside the frame (expectSuperSplatRendered). One case per single-file format it is
+    // offered for, SPZ v3 and v4 separately: PR-3 sends users with SPZ v4 here on ALLOWUNSAFEEVAL
+    // deployments. No permissively licensed .lcc sample exists, so .lcc has no case.
+    ...[
+        "splat-ply",
+        "splat-splat",
+        "splat-sog",
+        "splat-spz-v3",
+        "splat-spz-v4",
+        "splat-ksplat",
+    ].map(
+        (sample): RenderCase => ({
+            sample,
+            viewer: "SuperSplat Editor (PlayCanvas)",
+            kind: "supersplat",
+            requiresFeature: "ALLOWUNSAFEEVAL",
+            cspAllowed: SUPERSPLAT_CSP_ALLOWED,
+        })
+    ),
 ];
 
 const seeded = viewerSamples();
@@ -387,7 +415,10 @@ test.describe("viewer render proof (seeded samples)", () => {
             // Watchers go in before the first navigation so they see the app's first document.
             const csp = await watchCspViolations(page);
             const hosts = watchRequestHosts(page);
-            const errors = watchConsoleErrors(page);
+            const errors = watchConsoleErrors(
+                page,
+                c.cspAllowed ? [...CONSOLE_ERROR_IGNORE, CSP_CONSOLE_REPORT] : CONSOLE_ERROR_IGNORE
+            );
             const fetched = c.fetches
                 ? page.waitForResponse(
                       (response) => response.url().includes(c.fetches!) && response.status() < 400,
@@ -474,6 +505,29 @@ test.describe("viewer render proof (seeded samples)", () => {
                 ).toEqual([]);
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "supersplat") {
+                // The editor mounts as one iframe on the self-hosted build, handed this file.
+                const editor = page.locator('iframe[title="SuperSplat Editor"]');
+                await expect(editor).toHaveCount(1, { timeout: 60_000 });
+                await expect(editor).toHaveAttribute(
+                    "src",
+                    /^\/viewers\/supersplat\/index\.html\?load=[^&]+&filename=/
+                );
+                // The value is double-encoded (SuperSplatViewerComponent.tsx); searchParams undoes one.
+                const handedName = new URL(
+                    (await editor.getAttribute("src"))!,
+                    page.url()
+                ).searchParams.get("filename");
+                expect(
+                    decodeURIComponent(handedName ?? ""),
+                    "the SuperSplat iframe was handed another file"
+                ).toBe(fileName);
+                const result = await expectSuperSplatRendered(
+                    page,
+                    editor,
+                    `${c.viewer} (${fileName})`
+                );
+                console.log(`[viewers] ${c.sample} supersplat ${JSON.stringify(result)}`);
             } else if (c.kind === "refused") {
                 // The SuperSplat Editor reads SPZ version 4 and is offered only with
                 // ALLOWUNSAFEEVAL, so the message names it there and nowhere else.

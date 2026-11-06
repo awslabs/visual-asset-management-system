@@ -273,9 +273,9 @@
         {
             "id": "supersplat-viewer",
             "name": "SuperSplat Editor (PlayCanvas)",
-            "description": "View and edit 3D Gaussian Splats (.lcc, .ply, .sog, .splat) with the full PlayCanvas SuperSplat editor UI.",
+            "description": "View and edit 3D Gaussian Splats (.ksplat, .lcc, .ply, .sog, .splat, .spz) with the full PlayCanvas SuperSplat editor UI.",
             "componentPath": "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent",
-            "supportedExtensions": [".lcc", ".ply", ".sog", ".splat"],
+            "supportedExtensions": [".ksplat", ".lcc", ".ply", ".sog", ".splat", ".spz"],
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 1,

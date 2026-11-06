@@ -287,7 +287,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 18. SuperSplatViewerPlugin
 
 -   **ID**: `supersplat-viewer`
--   **Extensions**: `.lcc`, `.ply`, `.sog`, `.splat`
+-   **Extensions**: `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, `.spz`
 -   **Features**: The PlayCanvas SuperSplat Gaussian splat editor, embedded in an iframe: scene panel, transform and selection tools, camera animation, and export menus. Edits and exports stay in the browser and are not saved back to VAMS.
 -   **Multi-file**: No
 -   **Dependencies**: A from-source SuperSplat build that `customInstalls/supersplat` places under `public/viewers/supersplat/`
