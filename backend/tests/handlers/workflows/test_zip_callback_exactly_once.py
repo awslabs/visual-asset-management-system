@@ -234,7 +234,8 @@ class TestUnconfirmedAbortHandsTheJobOverDirectly:
         lam.deliver()
         assert [p["writer"] for p in zipenv.deliveries] == ["abortUnconfirmed"]
         self._assert_cancelled_once(zipenv)
-        # Aborted before the decision, so the container's CompleteMultipartUpload is refused.
+        # Aborted before the decision, so a CompleteMultipartUpload the container sends after it is
+        # refused (one already in flight can still land: test_zip_abort_204.py).
         assert [a for a in zipenv.s3.aborted if "u1" in str(a)]
 
 

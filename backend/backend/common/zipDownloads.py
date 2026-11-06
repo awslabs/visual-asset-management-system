@@ -18,8 +18,13 @@ the status machine is defined once here:
   container's own failure and stop paths) first makes sure no archive landed: the API side aborts the
   job's open uploads and then checks that the key's object is the one THIS job's upload created
   (landed_archive: the row's archiveUploadToken, never presence or size) (finalize_ended_run, cancel_job); the
-  container skips its FAILED write once its upload completed. An archive that lands after the job
-  was finalized otherwise is deleted by the container that wrote it.
+  container skips its FAILED write once its upload completed. The decision after an abort never
+  depends on what the abort answered: S3 answers 204 to an abort sent during or after a
+  CompleteMultipartUpload that succeeds, and the completed object stays (#1123 D1). A Complete still
+  in flight when a writer decided "not landed" can therefore still land; the container that wrote it
+  then finds the job finalized and deletes it (its own version only). If that container was killed
+  during the Complete, the archive stays unserved (only a SUCCEEDED job gets a download URL) until the
+  job is deleted or the prepared-downloads retention rule expires it.
 - The container is the primary status source (live progress, its own refusal reason). The terminal
   callback of the workflow run, and the read-time reconcile in the API, finalize a row the container
   could not (a job that never started, a timeout, an abort from the workflow executions views).
@@ -279,9 +284,11 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - A landed archive wins (``archive_exists() -> (landed, size)``, landed_archive): whatever the
       run's status, the job is SUCCEEDED when the key's current object is the one this job's upload
       created (its upload token), never because some object of some size is there.
-      CompleteMultipartUpload is atomic, so that object is the whole archive. Callers abort the open uploads first
-      (finalize_ended_run), so no archive can land after this check except from an upload created
-      since, which the container deletes when it finds the job finalized.
+      CompleteMultipartUpload is atomic, so that object is the whole archive. Callers abort the open
+      uploads first (finalize_ended_run) and decide here whatever the abort answered. An archive can
+      still land after this check from a Complete that was already in flight (S3 answers 204 to the
+      abort and lets it finish) or from an upload created since; the container deletes it when it
+      finds the job finalized.
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
@@ -323,10 +330,13 @@ def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_statu
     read-time reconcile both come here. Returns ``(status, changed)``; ``(None, False)`` when there
     is nothing to write.
 
-    The job's open multipart uploads are aborted BEFORE the decision, so S3 refuses any
-    CompleteMultipartUpload the container still has in flight: the archive either landed before the
-    check (and the job is SUCCEEDED) or never lands. StopExecution and a Batch terminate do not stop a
-    container that is still writing, which is why the order matters."""
+    The job's open multipart uploads are aborted BEFORE the decision, so S3 refuses a
+    CompleteMultipartUpload the container sends after it. StopExecution and a Batch terminate do not
+    stop a container that is still writing, which is why the order matters. The decision is the job's
+    own landed object (landed_archive, its upload token) whatever the abort answered: S3 answers 204,
+    not NoSuchUpload, to an abort sent during or after a Complete that succeeds, and the object stays
+    (#1123 D1). A Complete already in flight can land after a "not landed" decision; the container then
+    loses its SUCCEEDED write and deletes that archive (module docstring)."""
     if not row or row.get("status") not in ACTIVE_STATUSES \
             or execution_status not in RUN_TERMINAL_STATUSES:
         return None, False
@@ -349,7 +359,7 @@ CANCEL_ENDED = "ended"
 
 def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logger=None) -> str:
     """The user's cancel of a non-terminal job. Same rule as finalize_ended_run: abort the open
-    uploads, then a landed archive wins.
+    uploads, then a landed archive wins, decided by the job's upload token whatever the abort answered.
 
     Returns CANCEL_CANCELLED when this call cancelled the job, CANCEL_LANDED when the archive had
     landed (the job is SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when another
@@ -444,7 +454,9 @@ def abort_open_uploads(s3_client, bucket: str, prefix: str, logger=None) -> int:
     """Abort every incomplete multipart upload under one job's prefix. Returns the count aborted.
 
     Best-effort: a failure is logged and the bucket's abort-incomplete-multipart lifecycle rule is
-    the backstop."""
+    the backstop. The answer never decides anything: a 204 does not mean nothing landed (S3 answers
+    204 to an abort during or after a Complete that succeeds), and NoSuchUpload does not mean
+    something did. Callers decide by landed_archive afterwards."""
     _require_job_prefix(prefix)
     aborted = 0
     kwargs = {"Bucket": bucket, "Prefix": prefix}

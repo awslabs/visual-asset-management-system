@@ -156,7 +156,9 @@ class Job:
     Mode 1 follows the job row's monotonic rule (backend common/zipDownloads.py): a landed archive
     wins with one outcome. Once the upload completed, no path writes FAILED (the terminal callback
     finds the archive and records SUCCEEDED if this job could not); a failure or stop that cannot
-    tell whether the upload completed checks the archive object first; and an archive that landed
+    tell whether the upload completed checks the archive object first, whatever the abort answered;
+    a stop that arrives while the Complete is in flight lets it finish (S3 does not refuse an abort
+    sent then); and an archive that landed
     after another writer finalized the job without it is deleted, so the row's outcome is the only
     one."""
 
@@ -172,12 +174,24 @@ class Job:
         self._upload_token = None   # recorded on the row and stamped on the upload (mode 1)
 
     def stop(self):
+        """Record the stop. Returns True when the caller (the SIGTERM handler) should exit now.
+
+        While the archive's CompleteMultipartUpload is in flight it neither aborts nor writes, and
+        returns False: S3 answers 204 to an abort sent then and the Complete can still land (#1123
+        D1), so a FAILED written here could sit over this job's landed archive. The Complete returns
+        instead, and its own path decides: the SUCCEEDED write while the job is open, else the
+        late-archive delete. If the container is killed first, the terminal callback decides by the
+        archive's upload token."""
         self._stopped = True
         if self._landed is not None:
-            return
+            return True
+        if self.sink is not None and getattr(self.sink, "completing", False):
+            self.log("Stop received while the archive upload completes; letting it finish")
+            return False
         if self.sink is not None:
             self.sink.abort()
         self._record_failure(STOPPED)
+        return True
 
     def _is_own_archive(self, head):
         """Whether a HEAD describes the object THIS upload created: its version id when S3 returned
@@ -190,8 +204,11 @@ class Job:
         return (head.get("Metadata") or {}).get(ARCHIVE_UPLOAD_TOKEN_METADATA) == self._upload_token
 
     def _archive_landed(self):
-        """Whether this job's own archive is the key's current object. Asked only after the upload was
-        aborted (or failed), so the answer cannot change afterwards. An error answers True: skipping
+        """Whether this job's own archive is the key's current object, decided by its identity whatever
+        the abort answered (S3 answers 204 to an abort during or after a Complete that succeeds).
+        Asked only after the upload was aborted with no Complete in flight (stop() waits for one) or
+        after the Complete call returned with an error, so the answer cannot change afterwards. An
+        error answers True: skipping
         the FAILED write is always safe, because the terminal callback finalizes the job from the
         object's identity."""
         if self.sink is None:
@@ -411,12 +428,19 @@ class Job:
             raise ArchiveFailure(GENERIC_FAILURE) from e
 
 
+def sigterm_handler(job):
+    """The SIGTERM handler for ``job``. job.stop() answers False while the archive's Complete is in
+    flight: the handler then returns, the interrupted call resumes, and the Complete's own path
+    decides the outcome. Otherwise it exits 143."""
+    def handler(signum, frame):
+        if job.stop():
+            raise SystemExit(143)
+    return handler
+
+
 def install_sigterm(job):
     """AWS Batch sends SIGTERM before SIGKILL on terminate (cancel, abort, timeout)."""
-    def handler(signum, frame):
-        job.stop()
-        raise SystemExit(143)
-    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGTERM, sigterm_handler(job))
 
 
 def main(argv, environ=os.environ):

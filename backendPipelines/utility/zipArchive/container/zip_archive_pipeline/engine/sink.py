@@ -54,6 +54,10 @@ class MultipartSink:
         self._done = False
         self.bytes_written = 0
         self.version_id = None
+        # True while CompleteMultipartUpload is in flight. S3 does not refuse an abort sent then: it
+        # answers 204 and the Complete can still succeed (#1123 D1), so a stop must not treat its
+        # own abort as "nothing will land" (runner.Job.stop).
+        self.completing = False
 
     def _upload(self, number, data):
         try:
@@ -101,9 +105,13 @@ class MultipartSink:
             future.result()
         self._raise_if_failed()
         parts = [{"PartNumber": n, "ETag": self._parts[n]} for n in sorted(self._parts)]
-        response = self._s3.complete_multipart_upload(Bucket=self.bucket, Key=self.key,
-                                                      UploadId=self.upload_id,
-                                                      MultipartUpload={"Parts": parts})
+        self.completing = True
+        try:
+            response = self._s3.complete_multipart_upload(Bucket=self.bucket, Key=self.key,
+                                                          UploadId=self.upload_id,
+                                                          MultipartUpload={"Parts": parts})
+        finally:
+            self.completing = False
         # The object version this upload created (None on an unversioned bucket), so the job can
         # delete exactly its own archive if it finds the job finalized without it.
         self.version_id = (response or {}).get("VersionId")
