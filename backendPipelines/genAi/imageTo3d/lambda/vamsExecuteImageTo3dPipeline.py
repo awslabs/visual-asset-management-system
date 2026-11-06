@@ -12,6 +12,7 @@ import boto3
 import json
 from botocore.config import Config
 from customLogging.logger import safeLogger
+import inputViews
 import manifestHelper
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -159,6 +160,13 @@ def lambda_handler(event, context):
                 f"Model '{model}' accepts at most {view_limit} views of one subject, but the workflow "
                 f"manifest supplied {len(input_files)} input files.")
 
+        # Every input file as a view {bucket, key, versionId}, in manifest order, built in one pass so a
+        # view's object and the version it is read at come from the same manifest entry. The FIRST stays
+        # the primary: it is what asset identity, the relative output subdirectory and every single-view
+        # model read, so an existing single-image run is unchanged. An entry naming no object fails the
+        # run here rather than being dropped from the view list.
+        views = inputViews.views_from_manifest(input_files)
+
         # A mesh among the inputs is a starting point for a model that refines one, and nothing for a
         # model that does not; refused here, before a GPU instance is provisioned to discover it.
         mesh_inputs = [entry.get('key', '') for entry in input_files
@@ -197,24 +205,21 @@ def lambda_handler(event, context):
                     f"manifest supplied {' and '.join(missing)}. Select another model's output alongside the "
                     f"photograph it was made from.")
 
-        # Every input file as an s3:// URI, in manifest order. The FIRST stays the primary: it is what
-        # asset identity, the relative output subdirectory and every single-view model read, so this list
-        # is additive and an existing single-image run is unchanged by it.
-        input_paths = [f"s3://{entry.get('bucket', '')}/{entry.get('key', '')}"
-                       for entry in input_files
-                       if entry.get('bucket') and entry.get('key')]
-        # The S3 version each view is read at, parallel to input_paths.
-        input_version_ids = [manifestHelper.input_version_id(entry)
-                             for entry in input_files
-                             if entry.get('bucket') and entry.get('key')]
-        if len(input_paths) > 1:
-            logger.info(f"Multi-view run: {len(input_paths)} views for model '{model}'")
+        if len(views) > 1:
+            logger.info(f"Multi-view run: {len(views)} views for model '{model}'")
 
         payload = {
             "inputS3AssetFilePath": resolved['inputS3AssetFilePath'],
-            # Additive: the full view list for a multi-view model. Empty or single-entry for every
-            # other run, whose behaviour is driven by inputS3AssetFilePath exactly as before.
-            "inputS3AssetFilePaths": input_paths,
+            # Every view with the S3 version it is read at. Empty or single-entry for every other run,
+            # whose behaviour is driven by inputS3AssetFilePath exactly as before. The only view list
+            # openPipeline and constructPipeline read when it is present.
+            "inputViews": views,
+            # The same views as s3:// paths, derived from inputViews, for the openPipeline and
+            # constructPipeline of a development build before inputViews, which read only this list:
+            # while CloudFormation replaces the three functions in an update or a rollback, a run can pass
+            # from this function to one of those, and without it a multi-view run would reconstruct from
+            # the primary alone.
+            "inputS3AssetFilePaths": [inputViews.view_uri(view) for view in views],
             "outputS3AssetFilesPath": resolved['outputS3AssetFilesPath'],
             "outputS3AssetPreviewPath": resolved['outputS3AssetPreviewPath'],
             "outputS3AssetMetadataPath": resolved['outputS3AssetMetadataPath'],
@@ -231,9 +236,8 @@ def lambda_handler(event, context):
             # The Regions of the input files' bucket and of the output bucket ("" is the deployment
             # Region). The container signs each bucket's requests for its own Region.
             "inputBucketRegion": resolved['inputBucketRegion'],
-            # The S3 version of the primary input and of each view ("" reads the current object).
+            # The S3 version of the primary input ("" reads the current object); each view carries its own.
             "inputVersionId": resolved['inputVersionId'],
-            "inputVersionIds": input_version_ids,
             "outputBucketRegion": resolved['outputBucketRegion'],
             "model": model,
             "sfnExternalTaskToken": external_task_token,
