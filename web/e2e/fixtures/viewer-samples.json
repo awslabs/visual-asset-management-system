@@ -1,0 +1,39 @@
+{
+    "description": "Viewer smoke samples for web/e2e/viewers.spec.ts (#1174). Downloaded at test time and checked against sha256 and size; never commit the files. Derived entries are produced from the named source sample, so they carry its licence.",
+    "samples": [
+        {
+            "name": "autzen_trim.las",
+            "viewers": ["potree-viewer"],
+            "url": "https://raw.githubusercontent.com/PDAL/PDAL/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/las/autzen_trim.las",
+            "sha256": "3d351885f3aa03d5ac92358037ba0b850ea4f56f644ffcc56d57cd5d830aaf75",
+            "size": 3742038,
+            "licence": "BSD-3-Clause (PDAL LICENSE.txt: all files in the PDAL distribution unless otherwise indicated)",
+            "source": "PDAL test data, https://github.com/PDAL/PDAL/tree/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/las"
+        },
+        {
+            "name": "autzen_trim.laz",
+            "viewers": ["potree-viewer"],
+            "url": "https://raw.githubusercontent.com/PDAL/PDAL/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/laz/autzen_trim.laz",
+            "sha256": "75867b3e75cfc3c2e96da9f753c04c9fbaa6a59468dea13e2859f3109b38bd66",
+            "size": 603353,
+            "licence": "BSD-3-Clause (PDAL LICENSE.txt: all files in the PDAL distribution unless otherwise indicated)",
+            "source": "PDAL test data, https://github.com/PDAL/PDAL/tree/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/laz"
+        },
+        {
+            "name": "autzen_trim.ply",
+            "viewers": ["potree-viewer"],
+            "derive": "las-to-ply",
+            "derivedFrom": "autzen_trim.las",
+            "licence": "inherits autzen_trim.las (BSD-3-Clause)",
+            "source": "binary little-endian PLY vertices (x, y, z as double; red, green, blue as uchar) written from autzen_trim.las"
+        },
+        {
+            "name": "autzen_trim.e57",
+            "viewers": ["potree-viewer"],
+            "derive": "las-to-e57",
+            "derivedFrom": "autzen_trim.las",
+            "licence": "inherits autzen_trim.las (BSD-3-Clause)",
+            "source": "one E57 scan (cartesianX/Y/Z, colorRed/Green/Blue) written from autzen_trim.las with pye57"
+        }
+    ]
+}

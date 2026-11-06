@@ -4,7 +4,7 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import { type AssetFileRef, apiContext, chooseViewer, findAssetFiles } from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -270,5 +270,169 @@ for (const c of cases) {
                 `requests to the app origin carried a signed URL:\n${appOriginLeaks.join("\n")}`
             ).toEqual([]);
         }
+    });
+}
+
+/*
+ * Potree render proof (#1174). The Potree viewer draws the octree the Point Cloud Potree Viewer
+ * pipeline (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so each case needs a file
+ * of its extension that has been through that pipeline; the case skips, naming the missing preview,
+ * when the file has none. Samples and their licences: web/e2e/fixtures/viewer-samples.json.
+ *
+ * Each case proves the point cloud was drawn, not only that a canvas mounted:
+ * - Potree reports points resident on the GPU (`Potree.lru.numPoints`), and
+ * - the canvas holds point pixels. Potree's default background is a dark blue gradient whose red
+ *   channel stays below ~35 (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)),
+ *   so a pixel whose red channel is above POTREE_POINT_RED counts as a drawn point. Potree renders
+ *   with preserveDrawingBuffer, so the canvas can be read back in the page.
+ * It also fails on any Content Security Policy violation and on any request to a host other than
+ * the app, its API and AWS service endpoints — a third-party fetch breaks in an isolated network or
+ * another partition.
+ */
+const potreeCases = [
+    { ext: ".las" },
+    { ext: ".laz" },
+    { ext: ".e57" },
+    // .ply also matches the Gaussian splat and Three.js viewers, so Potree is chosen explicitly.
+    { ext: ".ply", select: /Potree/i },
+];
+
+/** Red-channel floor above Potree's background gradient; see the block comment above. */
+const POTREE_POINT_RED = 48;
+/** Share of the canvas that must hold point pixels after fitToScreen. */
+const POTREE_MIN_POINT_SHARE = 0.01;
+
+/** Hosts a viewer may contact besides the app and its API: AWS service endpoints in any partition. */
+const AWS_HOST = /\.(amazonaws\.com|amazonaws\.com\.cn|amazonaws\.eu|amazoncognito\.com|aws)$/i;
+
+let potreeSubjects: Map<string, AssetFileRef> | null = null;
+
+for (const c of potreeCases) {
+    test(`Potree draws the pipeline octree of a ${c.ext} file`, async ({ page }) => {
+        if (!potreeSubjects) {
+            potreeSubjects = await findAssetFiles(
+                page,
+                potreeCases.map((p) => p.ext),
+                { ...SCAN, asset: process.env.E2E_VIEWER_ASSET, distributableOnly: true }
+            );
+            expect(
+                potreeSubjects,
+                "no API context; the saved session may have expired"
+            ).not.toBeNull();
+        }
+        const subject = potreeSubjects!.get(c.ext) ?? null;
+        test.skip(!subject, `No ${c.ext} file was found via the API in ${LOOKUP_SCOPE}`);
+
+        // The preview the viewer will stream, at the path PotreeViewerComponent builds.
+        const ctx = await apiContext(page);
+        expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
+        const relative = subject!.key.replace(/^\/+/, "");
+        const metadataUrl =
+            `${ctx!.base}/database/${subject!.databaseId}/assets/${subject!.assetId}` +
+            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`;
+        const preview = await page.request.get(metadataUrl, {
+            headers: { Authorization: `Bearer ${ctx!.token}` },
+        });
+        test.skip(
+            preview.status() === 404,
+            `${
+                subject!.key
+            } has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
+        );
+        expect(preview.ok(), `the Potree preview answered ${preview.status()}`).toBe(true);
+
+        const fileName = relative.split("/").pop() ?? relative;
+        console.log(`[viewers] potree ${c.ext} subject=${JSON.stringify(subject)}`);
+
+        const errors = watchErrors(page);
+        const cspViolations: string[] = [];
+        await page.exposeFunction("__vamsE2ePotreeCsp", (v: string) => cspViolations.push(v));
+        await page.addInitScript(() => {
+            document.addEventListener("securitypolicyviolation", (e) => {
+                (window as any).__vamsE2ePotreeCsp?.(
+                    `${e.effectiveDirective || e.violatedDirective} blocked ${
+                        e.blockedURI || "inline"
+                    }`
+                );
+            });
+        });
+        const allowedOrigins = new Set([new URL(page.url()).origin, new URL(ctx!.base).origin]);
+        const thirdParty = new Set<string>();
+        page.context().on("request", (request) => {
+            try {
+                const url = new URL(request.url());
+                if (!/^https?:$/.test(url.protocol)) return;
+                if (!allowedOrigins.has(url.origin) && !AWS_HOST.test(url.hostname)) {
+                    thirdParty.add(url.origin);
+                }
+            } catch {
+                // data:, blob: and similar carry no host
+            }
+        });
+        const loaded = page.waitForEvent("console", {
+            predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
+            timeout: 120_000,
+        });
+
+        // The app is already open from the API lookup, and a hash-only navigation keeps the same
+        // document, so leave it first: the CSP listener is installed only in a new document.
+        await page.goto("about:blank");
+        await openFile(page, subject!);
+        await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+            timeout: 60_000,
+        });
+        if (
+            c.select &&
+            (await page
+                .getByLabel(/select viewer/i)
+                .isVisible()
+                .catch(() => false))
+        ) {
+            await chooseViewer(page, c.select);
+        }
+
+        await loaded;
+        await expect
+            .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+                timeout: 60_000,
+                message: "Potree reported no points resident on the GPU",
+            })
+            .toBeGreaterThan(0);
+
+        const canvas = page.locator("#potree_render_area > canvas").first();
+        await expect(canvas).toBeVisible();
+        let stats = { width: 0, height: 0, pointShare: 0, colours: 0 };
+        await expect(async () => {
+            stats = await canvas.evaluate((el, red) => {
+                const source = el as HTMLCanvasElement;
+                const copy = document.createElement("canvas");
+                copy.width = source.width;
+                copy.height = source.height;
+                const g = copy.getContext("2d")!;
+                g.drawImage(source, 0, 0);
+                const { data } = g.getImageData(0, 0, copy.width, copy.height);
+                let points = 0;
+                const colours = new Set<number>();
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] > red) {
+                        points += 1;
+                        colours.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+                    }
+                }
+                return {
+                    width: copy.width,
+                    height: copy.height,
+                    pointShare: points / (copy.width * copy.height),
+                    colours: colours.size,
+                };
+            }, POTREE_POINT_RED);
+            expect(stats.pointShare).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
+        }).toPass({ timeout: 30_000 });
+        console.log(`[viewers] potree ${c.ext} canvas ${JSON.stringify(stats)}`);
+        expect(stats.colours, "the point pixels carry a single colour").toBeGreaterThan(16);
+
+        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+        expect(cspViolations, `CSP violations:\n${cspViolations.join("\n")}`).toEqual([]);
+        expect([...thirdParty], "requests to third-party hosts").toEqual([]);
     });
 }
