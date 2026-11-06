@@ -224,6 +224,12 @@ E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev serv
 E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
 ```
 
+Viewer render checks open sample files named in `e2e/fixtures/viewer-samples.json` (URL, SHA-256,
+licence; downloaded at test time, never committed). Seed the Gaussian splat set with
+`node e2e/support/prepareSplatSamples.mjs --out <dir> --database <id> --asset <id>`. A render check
+asserts canvas pixels, not just that a canvas exists, and fails on a CSP violation or a request to a
+host other than the app, the API, Amazon S3 and Amazon Cognito.
+
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
 and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:
 wrapping the run in a shell pipeline makes the exit code the _pipeline's_, which is how a run with

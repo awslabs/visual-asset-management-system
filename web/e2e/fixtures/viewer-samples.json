@@ -1,0 +1,39 @@
+{
+    "description": "Viewer sample files for the viewer render checks in web/e2e/viewers.spec.ts. Samples are downloaded at test time and never committed; each entry records where it comes from, its SHA-256 and its licence, which were verified before it was added.",
+    "samples": [
+        {
+            "id": "gaussian-splat-apartment",
+            "file": "apartment.sog",
+            "url": "https://raw.githubusercontent.com/playcanvas/engine/e2d82c0751909b9375cda7313711958cadd1a854/examples/assets/splats/apartment.sog",
+            "sha256": "961aad67c47e6ee236bd3789978745da6b2ae6afe7f1a0863e05617ef03881d5",
+            "size": 8379050,
+            "licence": "CC-BY-4.0",
+            "attribution": "SA3D_R&D_XP47 by Stephane Agullo (https://sa3d.fr), https://superspl.at/view?id=cdcec084",
+            "licenceSource": "https://github.com/playcanvas/engine/blob/e2d82c0751909b9375cda7313711958cadd1a854/examples/assets/splats/apartment.txt",
+            "source": "playcanvas/engine examples/assets/splats",
+            "viewers": ["gaussian-splat-viewer-babylonjs"],
+            "derived": [
+                {
+                    "file": "vams-e2e-splat.ply",
+                    "how": "@playcanvas/splat-transform 3.10.3: -g cpu apartment.sog -d 150000 vams-e2e-splat.ply"
+                },
+                {
+                    "file": "vams-e2e-splat-v3.spz",
+                    "how": "@playcanvas/splat-transform 3.10.3: vams-e2e-splat.ply --spz-version 3 vams-e2e-splat-v3.spz"
+                },
+                {
+                    "file": "vams-e2e-splat-v4.spz",
+                    "how": "@playcanvas/splat-transform 3.10.3: vams-e2e-splat.ply --spz-version 4 vams-e2e-splat-v4.spz"
+                },
+                {
+                    "file": "vams-e2e-splat.splat",
+                    "how": "web/e2e/support/prepareSplatSamples.mjs: vams-e2e-splat.ply written as 32-byte .splat rows"
+                },
+                {
+                    "file": "vams-e2e-splat.sog",
+                    "how": "apartment.sog unchanged"
+                }
+            ]
+        }
+    ]
+}
