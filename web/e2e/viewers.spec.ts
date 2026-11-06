@@ -4,7 +4,24 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, apiContext, findAssetFiles } from "./support/fixtures";
+import {
+    type AssetFileRef,
+    canvasStats,
+    type CanvasStats,
+    expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -24,52 +41,6 @@ import { type AssetFileRef, apiContext, findAssetFiles } from "./support/fixture
  * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
  * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -100,28 +71,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -220,9 +169,9 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -274,234 +223,361 @@ for (const c of cases) {
     });
 }
 
-// ---------------------------------------------------------------------------------------------
-// IFC BIM viewer: render proof and every panel action.
-//
-// A canvas being visible does not prove a model rendered, so these cases decode the viewer canvas
-// in the page and compare it with the empty scene (grid only) before the model arrives. Each panel
-// action then has to change the picture the way it should: hiding everything returns to the empty
-// scene, Show All brings the model back, isolating a category draws less than the whole model.
-// Every action is local to the browser (visibility, camera, section planes, measurements), so the
-// environment is not changed (e2e/CLAUDE.md Rule 2).
-//
-// The cases also watch the page for Content-Security-Policy violations and for requests to any
-// host other than the app, its API and AWS endpoints, which is how a viewer library that starts
-// fetching from a public CDN (an air-gapped and GovCloud break) shows up.
-// ---------------------------------------------------------------------------------------------
+/**
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
+ *
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
+ */
 
-/** Colour count, luminance spread and share of non-background pixels in the IFC viewer canvas. */
-interface CanvasStats {
-    colours: number;
-    lumSd: number;
-    nonBgPct: number;
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    viewer: string;
+    kind: RenderKind;
+    /** Viewer to choose when the file's extension matches more than one viewer. */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
 }
 
-/** The IFC viewer's scene background colour (ThatOpenWebIfcViewerComponent.tsx, 0x333333). */
-const IFC_BACKGROUND = [0x33, 0x33, 0x33];
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "PlayCanvas Gaussian Splat",
+        kind: "canvas",
+        select: /PlayCanvas Gaussian/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // The IFC viewer draws a grid under the model, so these cases only prove the canvas is not
+    // blank; "IFC BIM viewer panel actions" below compares the model against the bare grid.
+    { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-haus-zip", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-school-structural", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+];
 
-async function ifcCanvasStats(page: Page): Promise<CanvasStats> {
-    // An element screenshot rather than canvas.toDataURL: the renderer does not preserve its
-    // drawing buffer, so reading the canvas back can return a blank frame.
-    const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
-    const png = await canvas.screenshot();
-    return page.evaluate(
-        async ({ b64, bg }) => {
-            const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
-            const bitmap = await createImageBitmap(blob);
-            const off = new OffscreenCanvas(bitmap.width, bitmap.height);
-            const ctx = off.getContext("2d")!;
-            ctx.drawImage(bitmap, 0, 0);
-            const d = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
-            const colours = new Set<number>();
-            let sum = 0;
-            let sum2 = 0;
-            let n = 0;
-            let nonBg = 0;
-            for (let i = 0; i < d.length; i += 16) {
-                const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
-                colours.add((r >> 3) * 1024 + (g >> 3) * 32 + (b >> 3));
-                const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                sum += l;
-                sum2 += l * l;
-                n += 1;
-                if (Math.abs(r - bg[0]) > 6 || Math.abs(g - bg[1]) > 6 || Math.abs(b - bg[2]) > 6) {
-                    nonBg += 1;
-                }
-            }
-            const mean = sum / n;
-            return {
-                colours: colours.size,
-                lumSd: Math.round(Math.sqrt(Math.max(0, sum2 / n - mean * mean)) * 10) / 10,
-                nonBgPct: Math.round((nonBg / n) * 1000) / 10,
-            };
-        },
-        { b64: png.toString("base64"), bg: IFC_BACKGROUND }
-    );
-}
+const seeded = viewerSamples();
 
-/** Polls until the canvas stats satisfy `ok` (the renderer draws on its own animation frame). */
-async function expectCanvas(
-    page: Page,
-    what: string,
-    ok: (s: CanvasStats) => boolean
-): Promise<CanvasStats> {
-    let last: CanvasStats | null = null;
-    await expect(async () => {
-        last = await ifcCanvasStats(page);
-        expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
-    }).toPass({ timeout: 20_000 });
-    return last!;
-}
-
-/** Hosts the IFC viewer may contact: the app, its API, and AWS endpoints (S3, Cognito). */
-function isAllowedHost(host: string, appHost: string, apiHost: string | null): boolean {
-    return (
-        host === appHost ||
-        host === apiHost ||
-        /\.amazonaws\.com$/i.test(host) ||
-        /\.amazonaws\.com\.cn$/i.test(host) ||
-        /\.amazoncognito\.com$/i.test(host) ||
-        /\.api\.aws$/i.test(host)
-    );
-}
-
-for (const ext of [".ifc", ".ifczip"]) {
-    test(`IFC BIM viewer renders a ${ext} model and runs each panel action`, async ({ page }) => {
-        test.setTimeout(240_000);
-        const subject = await viewerSubject(page, ext);
-        test.skip(!subject, `No ${ext} file was found via the API in ${LOOKUP_SCOPE}`);
-        const features = await featuresEnabled(page);
-        test.skip(
-            !features.includes("ALLOWUNSAFEEVAL"),
-            "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
-        );
-        const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
-        const ctx = await apiContext(page);
-        const appHost = new URL(page.url()).host;
-        const apiHost = ctx?.base ? new URL(ctx.base).host : null;
-
-        // CSP violations, recorded from the first script on every page and frame.
-        await page.addInitScript(() => {
-            (window as any).__vamsCsp = [];
-            document.addEventListener("securitypolicyviolation", (e) =>
-                (window as any).__vamsCsp.push(
-                    `${e.violatedDirective} ${e.blockedURI} (${e.sourceFile}:${e.lineNumber})`
-                )
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
             );
-        });
-        const foreignHosts = new Set<string>();
-        page.context().on("request", (request) => {
-            try {
-                const host = new URL(request.url()).host;
-                if (host && !isAllowedHost(host, appHost, apiHost)) foreignHosts.add(host);
-            } catch {
-                /* data: and blob: URLs have no host */
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
+
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
+
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
             }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.select);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                const headers = page.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await page.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
         });
-        const errors = watchErrors(page);
+    }
+});
 
-        await openFile(page, subject!);
-        await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
-            timeout: 60_000,
+/**
+ * IFC BIM viewer panel actions (#1174), on the seeded IFC samples. The viewer draws a grid under the
+ * model, so "the canvas is not blank" cannot tell a model from an empty scene. Hide All is that empty
+ * scene: each case measures it and requires the model, Show All, Isolate and every camera move to draw
+ * more than it. Every action is local to the browser (visibility, camera, section planes,
+ * measurements), so the environment is not changed (e2e/CLAUDE.md Rule 2).
+ */
+test.describe("IFC BIM viewer panel actions (seeded samples)", () => {
+    for (const sampleId of ["ifc-haus", "ifc-haus-zip"]) {
+        test(`IFC BIM viewer runs each panel action on ${sampleId}`, async ({ page }) => {
+            test.setTimeout(240_000);
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[sampleId];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${sampleId} sample; re-run the seed script`
+            );
+
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const missing = missingFeatures(await featuresEnabled(page), "ALLOWUNSAFEEVAL");
+            test.skip(
+                missing.length > 0,
+                "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
+            );
+
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            });
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            // The panel mounts only once the model is parsed and the scene is ready.
+            const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
+            await expect(tablist).toBeVisible({ timeout: 120_000 });
+            const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+
+            /** Polls the canvas until `ok` holds (the renderer draws on its own frame loop). */
+            const expectCanvas = async (
+                what: string,
+                ok: (s: CanvasStats) => boolean
+            ): Promise<CanvasStats> => {
+                let last: CanvasStats | null = null;
+                await expect(async () => {
+                    last = await canvasStats(page, canvas);
+                    expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
+                }).toPass({ timeout: 20_000 });
+                return last!;
+            };
+            const model = await canvasStats(page, canvas);
+
+            // Model tree: Hide All gives the empty scene (grid only); Show All brings the model back.
+            await tablist.getByRole("tab", { name: /Model/ }).click();
+            const tree = page.getByRole("tree", { name: "Model tree" });
+            await expect(tree).toBeVisible();
+            const isolate = page.getByRole("button", { name: /^Isolate .* \(show only this\)$/ });
+            await expect(isolate.first()).toBeVisible();
+            await page.getByRole("button", { name: /Hide All/ }).click();
+            const empty = await expectCanvas(
+                "Hide All",
+                (s) => s.distinctColours < model.distinctColours
+            );
+            const drawsModel = (s: CanvasStats) =>
+                s.distinctColours > empty.distinctColours &&
+                Math.abs(s.foregroundFraction - empty.foregroundFraction) > 0.005;
+            await page.getByRole("button", { name: /Show All/ }).click();
+            await expectCanvas("Show All", drawsModel);
+
+            // Isolate the first category: some of the model, never more colours than all of it.
+            await isolate.first().click();
+            await expectCanvas(
+                "Isolate",
+                (s) =>
+                    s.distinctColours > empty.distinctColours &&
+                    s.distinctColours <= model.distinctColours + 8
+            );
+            await page.getByRole("button", { name: /Show All/ }).click();
+
+            // Select a category from the tree; Properties then shows the element.
+            await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
+            await tablist.getByRole("tab", { name: /Properties/ }).click();
+            await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
+
+            // Tools: camera presets, zoom and fit keep the model on screen.
+            await tablist.getByRole("tab", { name: /Tools/ }).click();
+            for (const view of ["Top", "Front", "Left", "Iso"]) {
+                await page.getByRole("button", { name: view, exact: true }).click();
+                await expectCanvas(`${view} view`, drawsModel);
+            }
+            await page.getByRole("button", { name: /Zoom In/ }).click();
+            await page.getByRole("button", { name: /Zoom Out/ }).click();
+            await page.getByRole("button", { name: /Fit to View/ }).click();
+            await expectCanvas("Fit to View", drawsModel);
+
+            // Section plane: enable, double-click the model, delete every plane, switch off.
+            const box = (await canvas.boundingBox())!;
+            const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.getByRole("button", { name: "Enable Section Plane" }).click();
+            await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
+            await page.mouse.move(centre.x, centre.y);
+            await page.mouse.dblclick(centre.x, centre.y);
+            await page.getByRole("button", { name: "Delete All Planes" }).click();
+            await page.getByRole("button", { name: "Section: ON" }).click();
+
+            // Length: two points on the model; Area: three points, then Finish; then clear both.
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            for (const dx of [-60, 60]) {
+                await page.mouse.move(centre.x + dx, centre.y);
+                await page.mouse.dblclick(centre.x + dx, centre.y);
+            }
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            await page.getByRole("button", { name: "Area", exact: true }).click();
+            for (const [dx, dy] of [
+                [-50, -30],
+                [50, -30],
+                [50, 40],
+            ]) {
+                await page.mouse.move(centre.x + dx, centre.y + dy);
+                await page.mouse.dblclick(centre.x + dx, centre.y + dy);
+            }
+            await page.getByRole("button", { name: /Finish Area/ }).click();
+            await page.getByRole("button", { name: "Clear Measurements" }).click();
+            await expectCanvas("after the tools", drawsModel);
+
+            await page.waitForTimeout(2000);
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, [], fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
         });
-
-        // The panel mounts only once the model is parsed and the scene is ready.
-        const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
-        await expect(tablist).toBeVisible({ timeout: 120_000 });
-        const rendered = await expectCanvas(
-            page,
-            "model rendered",
-            (s) => s.colours >= 30 && s.lumSd >= 15
-        );
-
-        // Model tree: the categories the model holds.
-        await tablist.getByRole("tab", { name: /Model/ }).click();
-        const tree = page.getByRole("tree", { name: "Model tree" });
-        await expect(tree).toBeVisible();
-        const isolateButtons = page.getByRole("button", {
-            name: /^Isolate .* \(show only this\)$/,
-        });
-        await expect(isolateButtons.first()).toBeVisible();
-        expect(await isolateButtons.count(), "categories in the model tree").toBeGreaterThan(0);
-
-        // Hide All -> the empty scene; Show All -> the model again.
-        await page.getByRole("button", { name: /Hide All/ }).click();
-        const hidden = await expectCanvas(
-            page,
-            "Hide All",
-            (s) => s.nonBgPct < rendered.nonBgPct && s.colours < rendered.colours
-        );
-        await page.getByRole("button", { name: /Show All/ }).click();
-        await expectCanvas(
-            page,
-            "Show All",
-            (s) => s.colours > hidden.colours && s.nonBgPct > hidden.nonBgPct
-        );
-
-        // Isolate the first category: something is drawn, but not more than the whole model.
-        await isolateButtons.first().click();
-        await expectCanvas(
-            page,
-            "Isolate",
-            (s) => s.nonBgPct > hidden.nonBgPct && s.nonBgPct <= rendered.nonBgPct
-        );
-        await page.getByRole("button", { name: /Show All/ }).click();
-
-        // Select a category from the tree -> Properties lists the element.
-        await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
-        await tablist.getByRole("tab", { name: /Properties/ }).click();
-        await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
-
-        // Tools: camera presets, zoom and fit each keep the model on screen.
-        await tablist.getByRole("tab", { name: /Tools/ }).click();
-        for (const view of ["Top", "Front", "Left", "Iso"]) {
-            await page.getByRole("button", { name: view, exact: true }).click();
-            await expectCanvas(page, `${view} view`, (s) => s.nonBgPct > hidden.nonBgPct);
-        }
-        await page.getByRole("button", { name: /Zoom In/ }).click();
-        await page.getByRole("button", { name: /Zoom Out/ }).click();
-        await page.getByRole("button", { name: /Fit to View/ }).click();
-        await expectCanvas(page, "Fit to View", (s) => s.nonBgPct > hidden.nonBgPct);
-
-        // Section plane: enable, double-click the model, then delete every plane.
-        const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
-        const box = (await canvas.boundingBox())!;
-        const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-        await page.getByRole("button", { name: "Enable Section Plane" }).click();
-        await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
-        await page.mouse.move(centre.x, centre.y);
-        await page.mouse.dblclick(centre.x, centre.y);
-        await page.getByRole("button", { name: "Delete All Planes" }).click();
-        await page.getByRole("button", { name: "Section: ON" }).click();
-
-        // Length: two double-clicks on the model draw a measurement label; Clear removes it.
-        await page.getByRole("button", { name: "Length", exact: true }).click();
-        for (const dx of [-60, 60]) {
-            await page.mouse.move(centre.x + dx, centre.y);
-            await page.mouse.dblclick(centre.x + dx, centre.y);
-        }
-        await page.getByRole("button", { name: "Length", exact: true }).click();
-
-        // Area: three points, then Finish.
-        await page.getByRole("button", { name: "Area", exact: true }).click();
-        for (const [dx, dy] of [
-            [-50, -30],
-            [50, -30],
-            [50, 40],
-        ]) {
-            await page.mouse.move(centre.x + dx, centre.y + dy);
-            await page.mouse.dblclick(centre.x + dx, centre.y + dy);
-        }
-        await page.getByRole("button", { name: /Finish Area/ }).click();
-        await page.getByRole("button", { name: "Clear Measurements" }).click();
-        await expectCanvas(page, "after the tools", (s) => s.nonBgPct > hidden.nonBgPct);
-
-        const csp = await page.evaluate(() => (window as any).__vamsCsp as string[]);
-        expect(csp, `CSP violations while viewing ${fileName}`).toEqual([]);
-        expect(
-            [...foreignHosts],
-            `requests left the app, its API and AWS while viewing ${fileName}`
-        ).toEqual([]);
-        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
-    });
-}
+    }
+});
