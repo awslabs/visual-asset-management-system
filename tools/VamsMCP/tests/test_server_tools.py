@@ -1216,6 +1216,7 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
+    "list_zip_downloads",
 )
 
 

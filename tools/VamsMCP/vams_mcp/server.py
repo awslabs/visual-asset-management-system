@@ -42,6 +42,12 @@ from .client import (  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
+# The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
+from vamscli.utils.zip_downloads import (  # noqa: E402
+    build_create_request as build_zip_create_request,
+    build_selection as build_zip_selection,
+)
+
 _force_logging_to_stderr()
 
 try:  # mcp >= 2.0 renamed FastMCP to MCPServer and dropped the fastmcp module
@@ -1757,6 +1763,52 @@ def list_user_api_keys(
     )
 
 
+@mcp.tool()
+@tool_result
+def list_zip_downloads(
+    database_id: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List the AUTHENTICATED user's zip download jobs, newest first (auto-paginated).
+
+    Give `database_id` and `asset_id` together for one asset's jobs, or neither for every asset.
+    Each row carries requestId, status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED),
+    archiveFileName, archiveFormat, progress, errorMessage and expiresAt. Jobs are private to their
+    creator, expire after the deployment's retention period, and rows on assets the caller can no
+    longer read are left out — so an empty list says nothing about other users' jobs.
+
+    The walk is BOUNDED: `truncated` means jobs were not seen and `NextToken` continues it via
+    `starting_token`. Never conclude a job does not exist from a truncated result; use
+    get_zip_download() for one job. A deployment without zip downloads answers with
+    `error_type` ZipDownloadDisabledError.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_zip_downloads(
+            database_id=database_id,
+            asset_id=asset_id,
+            max_items=params["pageSize"],
+            page_size=params["pageSize"],
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
+def get_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+    """Read one of the caller's zip download jobs: status, progress and, on failure, the reason.
+
+    Poll this (every few seconds) after create_zip_download() until `status` is SUCCEEDED, FAILED or
+    CANCELLED; then get_zip_download_url() issues the download link for a SUCCEEDED job. A job of
+    another user, of another asset, or past its expiry reads as ZipDownloadNotFoundError.
+    """
+    return CLIENT.api.get_zip_download(database_id, asset_id, request_id)
+
+
 # =========================================================================
 # WRITE TOOLS (require VAMS_ENABLE_WRITES=true)
 # =========================================================================
@@ -2334,6 +2386,65 @@ if CONFIG.enable_writes:
             payload["isActive"] = "true" if is_active else "false"
         return CLIENT.api.update_user_api_key(api_key_id, payload)
 
+    @mcp.tool()
+    @tool_result
+    def create_zip_download(
+        database_id: str,
+        asset_id: str,
+        files: Optional[List[str]] = None,
+        folders: Optional[List[str]] = None,
+        whole_asset: bool = False,
+        asset_version_id: Optional[str] = None,
+        asset_version_alias: Optional[str] = None,
+        archive_format: str = "zip",
+        compression: Optional[str] = None,
+        archive_file_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Start a server-side job that archives part or all of one asset into a zip, tar or tar.gz.
+
+        Select with `files` (asset-relative paths; `PATH@VERSIONID` pins one file's version, and a
+        path containing '@' with no version ends in a bare '@'), `folders` (everything under each),
+        or `whole_asset=True` alone. At most 1000 entries. `asset_version_id` or
+        `asset_version_alias` instead archives the selection as recorded in that asset version, and
+        cannot be combined with per-file versions. `compression` is `store` (default) or `deflate`,
+        zip only.
+
+        The WHOLE job is refused when any selected file is archived, deleted, in an archive storage
+        tier or of a blocked type, or the selection exceeds the deployment's file/size limits; the
+        error names the rule. A caller with the maximum number of active jobs gets
+        ZipDownloadLimitError — wait for one to finish rather than retrying.
+
+        Starts real AWS compute (a Batch job) that runs for minutes to hours on large assets, so keep
+        this tool out of `autoApprove`. Returns the job (status QUEUED); poll get_zip_download().
+        """
+        selection = build_zip_selection(files or [], folders or [], whole_asset)
+        body = build_zip_create_request(
+            selection,
+            asset_version_id=asset_version_id,
+            asset_version_alias=asset_version_alias,
+            archive_format=archive_format,
+            compression=compression,
+            archive_file_name=archive_file_name,
+        )
+        return CLIENT.api.create_zip_download(database_id, asset_id, body)
+
+    @mcp.tool()
+    @tool_result
+    def get_zip_download_url(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """Issue a short-lived presigned download URL for a SUCCEEDED zip download.
+
+        Returns `url`, `expiresIn` (seconds), `archiveFileName` and `archiveSizeBytes`. A job that
+        has not succeeded is ZipDownloadNotReadyError; an archive past retention is
+        ZipDownloadExpiredError.
+
+        The URL is a bearer credential: anyone holding it can download the archive — possibly the
+        whole asset — until it expires, with no further authentication. Returning it puts it in the
+        agent transcript and whatever logs the host keeps. Issue one only when a download was
+        actually asked for, keep this tool out of `autoApprove`, and treat any URL issued as
+        disclosed. `vamscli zip-download download` streams the archive without exposing the URL.
+        """
+        return CLIENT.api.get_zip_download_url(database_id, asset_id, request_id)
+
 
 # =========================================================================
 # DESTRUCTIVE TOOLS (require VAMS_ENABLE_DESTRUCTIVE=true AND writes enabled)
@@ -2582,6 +2693,28 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+    @mcp.tool()
+    @tool_result
+    def cancel_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """Cancel one of the caller's QUEUED or RUNNING zip downloads. Not reversible.
+
+        The archive run is stopped and its partial archive discarded; the job stays listed as
+        CANCELLED. A job that has already finished is refused with ZipDownloadStateError (use
+        delete_zip_download). Should the job finish between the state check and the call, the
+        server deletes it instead: the result's `action` then reads "deleted" — report that.
+        """
+        return CLIENT.api.cancel_zip_download(database_id, asset_id, request_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """PERMANENTLY delete one of the caller's finished zip downloads and its stored archive.
+
+        Only a SUCCEEDED, FAILED or CANCELLED job is deleted; a QUEUED or RUNNING one is refused with
+        ZipDownloadStateError (cancel it first). Any download URL already issued stops working.
+        """
+        return CLIENT.api.delete_zip_download(database_id, asset_id, request_id)
 
 
 # =========================================================================

@@ -60,6 +60,8 @@ WRITE_TOOLS = (
     "create_user_api_key",
     "update_api_key",
     "update_user_api_key",
+    "create_zip_download",
+    "get_zip_download_url",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -80,6 +82,8 @@ DESTRUCTIVE_TOOLS = (
     "delete_metadata_schema",
     "delete_api_key",
     "delete_user_api_key",
+    "cancel_zip_download",
+    "delete_zip_download",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")
