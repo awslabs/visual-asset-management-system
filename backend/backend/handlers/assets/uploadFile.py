@@ -37,6 +37,7 @@ from common.s3PathPatterns import (
     PREVIEW_PREFIX,
 )
 from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
+from common import largeObjectCopy as loc
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
@@ -83,6 +84,7 @@ lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
 sqs = boto3.client('sqs', config=s3_config)
+sfn_client = boto3.client('stepfunctions', config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'}))
 logger = safeLogger(service_name="UploadFile")
 
 # Constants
@@ -90,7 +92,8 @@ UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
-LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
+# 1 GiB threshold for asynchronous processing, shared with the copy engine and the output step.
+LARGE_FILE_THRESHOLD_BYTES = loc.LARGE_FILE_THRESHOLD_BYTES
 MAX_PARTS_PER_FILE = 10000  # S3 hard limit on parts per multipart upload object
 # Sample size for asset-type detection. This is a best-effort visibility
 # classification (empty vs. single-file vs. folder), not a correctness-critical
@@ -1034,6 +1037,77 @@ def queue_large_file_for_processing(file_info: dict, sqs_queue_url: str) -> bool
         logger.exception(f"Error in queue_large_file_for_processing for file {file_info.get('relativeKey', 'unknown')}: {e}")
         return False
 
+
+def accepted_asynchronously(file_results) -> bool:
+    """True when any file was accepted for asynchronous ingestion (queued for the large-file consumer
+    or handed to a copy job). Such a file is not in successful_files, which holds only the files this
+    function copies itself, so a completion must not be failed for lacking those."""
+    return any(result.success and result.largeFileAsynchronousHandling for result in file_results)
+
+
+def landed_synchronously(file_results) -> bool:
+    """True when any file was copied into the asset by this function. Asynchronously ingested files
+    update the asset type and notify subscribers once they land."""
+    return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
+
+
+_copy_jobs_table = None
+
+
+def copy_jobs_table():
+    """The large object copy jobs table, resolved on first use (only workflow output ingestion
+    needs it)."""
+    global _copy_jobs_table
+    if _copy_jobs_table is None:
+        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+    return _copy_jobs_table
+
+
+def start_output_copy_job(file_info: dict, head_response: dict, change_metadata: dict, batch_id: str,
+                          workflow_database_id: str) -> str:
+    """Start the large object copy job that ingests one workflow output file and return its job id.
+
+    The job carries the final object's complete user metadata (asset identity plus the workflow
+    change provenance the synchronous path stamps) and the staged object's pinned version and ETag,
+    so the engine sets everything once, on the final object, and a source that changes during the
+    copy fails it instead of producing a mixed object. Raises when the job cannot be started."""
+    job = loc.build_job(
+        kind=loc.KIND_WORKFLOW_OUTPUT,
+        source={
+            "bucket": file_info["sourceBucketName"],
+            "key": file_info["tempS3Key"],
+            "region": file_info.get("sourceBucketRegion") or "",
+            "versionId": head_response.get("VersionId") or "",
+            "etag": head_response.get("ETag") or "",
+            "size": int(head_response.get("ContentLength", 0) or 0),
+        },
+        dest={
+            "bucket": file_info["bucketName"],
+            "key": file_info["finalS3Key"],
+            "region": file_info.get("bucketRegion") or "",
+        },
+        metadata={
+            DATABASE_ID_METADATA_KEY: file_info["databaseId"],
+            ASSET_ID_METADATA_KEY: file_info["assetId"],
+            **(change_metadata or {}),
+        },
+        content_headers={},
+        database_id=file_info["databaseId"],
+        asset_id=file_info["assetId"],
+        upload_id=file_info["uploadId"],
+        upload_type=file_info["uploadType"],
+        relative_key=file_info["relativeKey"],
+        change_user_id=file_info.get("changeUserId"),
+        scope_id=batch_id,
+        workflow_id=file_info.get("workflowId") or "",
+        workflow_execution_id=file_info.get("workflowExecutionId") or "",
+        workflow_database_id=workflow_database_id or "",
+        batch_id=batch_id,
+        delete_source_on_success=True,
+    )
+    loc.start_copy_job(copy_jobs_table(), sfn_client, loc.state_machine_arn(), job)
+    return job["jobId"]
+
 def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
@@ -1512,7 +1586,35 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "workflowId": workflow_id,
                         "workflowExecutionId": workflow_execution_id
                     }
-                    
+
+                    # A workflow output whose caller waits on an ingestion batch is copied by the
+                    # large object copy engine, which has no time limit and resumes after a
+                    # failure. There is no synchronous fallback: a file this size does not fit a
+                    # copy inside this function, so a job that cannot be started fails the file.
+                    if request_model.ingestionBatchId:
+                        try:
+                            job_id = start_output_copy_job(
+                                file_info, head_response, change_metadata,
+                                request_model.ingestionBatchId, request_model.workflowDatabaseId)
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=True,
+                                largeFileAsynchronousHandling=True,
+                                ingestionJobId=job_id,
+                            ))
+                            logger.info(f"Large external file {file.relativeKey} handed to copy job {job_id}")
+                        except Exception as e:
+                            logger.exception(f"Could not start the copy job for {file.relativeKey}: {e}")
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=False,
+                                error=loc.REASON_START_FAILED,
+                            ))
+                            has_failures = True
+                        continue
+
                     # Try to queue the file for asynchronous processing with comprehensive error handling
                     try:
                         if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
@@ -1630,8 +1732,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             ))
             has_failures = True
     
+    # Files accepted for asynchronous ingestion (queued, or handed to a copy job) count as accepted
+    # here, so a completion whose every file is over the async threshold is not reported as failed
+    # while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1645,7 +1752,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         )
     
     # Only for assetFile uploads, validate that .previewFile. files have corresponding base files
-    if uploadType == "assetFile":
+    if uploadType == "assetFile" and successful_files:
         asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
         
         # Check if there are any .previewFile. files in the successful files
@@ -1680,7 +1787,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -1747,8 +1854,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     result.error = "Failed to copy file to final location"
                     has_failures = True
     
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. Only files that landed here count: a file ingested
+    # asynchronously updates the asset type and notifies subscribers once it lands.
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
@@ -2440,8 +2548,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             ))
             has_failures = True
     
+    # Files queued for asynchronous processing count as accepted: a completion whose every file is
+    # over the async threshold is not reported as failed while its files land.
+    has_async_accepted = accepted_asynchronously(file_results)
+
     # If no files were successfully uploaded, return error
-    if not successful_files:
+    if not successful_files and not has_async_accepted:
         delete_upload_details(uploadId, assetId)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2491,7 +2603,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         successful_files.remove(file_detail)
                 
                 # If no files remain successful, return error
-                if not successful_files:
+                if not successful_files and not has_async_accepted:
                     delete_upload_details(uploadId, assetId)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
@@ -2546,8 +2658,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     result.error = "Failed to copy file to final location"
                     has_failures = True
 
-    # Update asset record based on upload type
-    if uploadType == "assetFile" and any(f.success for f in file_results):
+    # Update asset record based on upload type. A queued file updates the asset type and notifies
+    # subscribers once it lands (the large-file consumer does both).
+    if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")

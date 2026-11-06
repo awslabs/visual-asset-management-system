@@ -33,6 +33,8 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
 )
 from models.common import VAMSGeneralErrorResponse
+from common import largeObjectCopy as loc
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -46,6 +48,7 @@ s3 = region_routing_s3_client()
 s3_resource = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
+sfn_client = boto3.client('stepfunctions', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
@@ -826,6 +829,12 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
 
+        # A file over the engine threshold is handed to the large object copy engine, which has no
+        # time limit and resumes after a failure; the engine finishes the file (temp delete, asset
+        # update, audit). A failed start raises, so the message is retried and dead-lettered.
+        if hand_off_to_copy_engine(file_info, source_bucket, temp_s3_key, final_s3_key, change_metadata):
+            return True
+
         # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
 
@@ -858,6 +867,60 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
     except Exception as e:
         logger.exception(f"Error validating and moving large file: {e}")
         raise
+
+
+_copy_jobs_table = None
+
+
+def copy_jobs_table():
+    """The large object copy jobs table, resolved on first use."""
+    global _copy_jobs_table
+    if _copy_jobs_table is None:
+        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+    return _copy_jobs_table
+
+
+def hand_off_to_copy_engine(file_info: Dict[str, Any], source_bucket: str, temp_s3_key: str,
+                            final_s3_key: str, change_metadata: Dict[str, str]) -> bool:
+    """Start a large object copy job for a file over the engine threshold and return True; return
+    False to copy the file here as before (at or below the threshold, or no engine configured).
+
+    At or below the threshold (default 5 GiB) a managed copy is a single CopyObject that finishes
+    well inside this function's time limit, so those files keep today's path unchanged. Raises when
+    the job cannot be started, which the caller treats as retryable."""
+    machine_arn = loc.state_machine_arn()
+    if not machine_arn:
+        return False
+    head = s3.head_object(Bucket=source_bucket, Key=temp_s3_key)
+    size = int(head.get('ContentLength', 0) or 0)
+    if size <= loc.settings()['apiUploadEngineThresholdBytes']:
+        return False
+    job = loc.build_job(
+        kind=loc.KIND_UPLOAD,
+        source={"bucket": source_bucket, "key": temp_s3_key,
+                "region": file_info.get('sourceBucketRegion') or file_info.get('bucketRegion') or "",
+                "versionId": head.get('VersionId') or "", "etag": head.get('ETag') or "", "size": size},
+        dest={"bucket": file_info['bucketName'], "key": final_s3_key,
+              "region": file_info.get('bucketRegion') or ""},
+        metadata={DATABASE_ID_METADATA_KEY: file_info['databaseId'],
+                  ASSET_ID_METADATA_KEY: file_info['assetId'],
+                  **(change_metadata or build_upload_change_metadata(None))},
+        content_headers={},
+        database_id=file_info['databaseId'],
+        asset_id=file_info['assetId'],
+        upload_id=file_info['uploadId'],
+        upload_type=file_info['uploadType'],
+        relative_key=file_info['relativeKey'],
+        change_user_id=file_info.get('changeUserId'),
+        scope_id=file_info['uploadId'],
+        workflow_id=file_info.get('workflowId') or "",
+        workflow_execution_id=file_info.get('workflowExecutionId') or "",
+        delete_source_on_success=True,
+    )
+    loc.start_copy_job(copy_jobs_table(), sfn_client, machine_arn, job)
+    file_info['copyJobId'] = job['jobId']
+    logger.info(f"File {file_info['relativeKey']} ({size} bytes) handed to copy job {job['jobId']}")
+    return True
 
 
 def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str]) -> bool:
@@ -1196,7 +1259,12 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 processed_count += 1
                 continue
             
-            if success:
+            if success and file_info.get('copyJobId'):
+                # Handed to the copy engine, which writes the completion (or rejection) audit
+                # entry once the file has landed.
+                logger.info(f"Large file handed to copy job {file_info['copyJobId']} - {format_correlation_ids(correlation_ids)}")
+                success_count += 1
+            elif success:
                 logger.info(f"Successfully processed large file - {format_correlation_ids(correlation_ids)}")
                 success_count += 1
                 

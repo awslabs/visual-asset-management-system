@@ -520,6 +520,9 @@ class FileCompletionResult(BaseModel, extra='ignore'):
     success: bool
     error: Optional[str] = None
     largeFileAsynchronousHandling: bool = False
+    # Copy job ingesting this file asynchronously (workflow outputs over the async threshold, when the
+    # caller named an ingestion batch). Absent for every other file.
+    ingestionJobId: Optional[str] = None
 
 class ExternalFileModel(BaseModel, extra='ignore'):
     """Model for an external file in a completion request"""
@@ -549,6 +552,11 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
     # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
     sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH)
+    # Workflow output ingestion batch the caller waits on. When set, each file over the async
+    # threshold is ingested by a large object copy job in this batch (no queue, no synchronous
+    # fallback). Omitted: the large-file queue path as before.
+    ingestionBatchId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
+    workflowDatabaseId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
 
     _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
 
@@ -587,6 +595,18 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
             # Functions assigns. The same validator the execution routes use keeps the provenance
             # field from accepting arbitrary text.
             (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'GUID'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('ingestionBatchId') is not None:
+            # A workflow output's ingestion batch is its execution: one batch per run, so a caller
+            # cannot place copy jobs in another execution's batch.
+            if values.get('ingestionBatchId') != values.get('workflowExecutionId'):
+                message = "ingestionBatchId must be the workflowExecutionId of the run"
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('workflowDatabaseId') is not None:
+            (valid, message) = validate({'workflowDatabaseId': {'value': values.get('workflowDatabaseId'), 'validator': 'ID'}})
             if not valid:
                 logger.error(message)
                 raise ValueError(message)
