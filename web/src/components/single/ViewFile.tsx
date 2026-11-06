@@ -470,6 +470,15 @@ function ViewFileForAsset() {
         setViewType(event.detail.selectedId);
     };
 
+    // The file alert's Retry. The press itself shows the loading state, as the asset warning's Retry
+    // does, so the alert and its button are gone before the second click of a double-click arrives.
+    // The effect below sets it too, but React applies an effect's update in a later task, which can
+    // run after the second click, and each press would then start its own lookup.
+    const retryDirectPathLoad = () => {
+        setIsLoadingDirectPath(true);
+        setDirectPathAttempt((attempt) => attempt + 1);
+    };
+
     // Handle direct path access - fetch file info from URL
     useEffect(() => {
         // A response for a URL the page has since left is dropped, so it cannot replace the file
@@ -903,15 +912,7 @@ function ViewFileForAsset() {
                                         header={directPathError.header}
                                         action={
                                             directPathError.retryable ? (
-                                                <Button
-                                                    onClick={() =>
-                                                        setDirectPathAttempt(
-                                                            (attempt) => attempt + 1
-                                                        )
-                                                    }
-                                                >
-                                                    Retry
-                                                </Button>
+                                                <Button onClick={retryDirectPathLoad}>Retry</Button>
                                             ) : undefined
                                         }
                                     >

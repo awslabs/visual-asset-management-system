@@ -6,14 +6,16 @@
 /**
  * A file opened by its direct path reads the file's details first. When that read fails, the page
  * names the cause: a file that does not exist, a refusal, or a request that got no answer, which it
- * offers to try again. For an archived file it says so and where the file can be unarchived. The page also reads the asset's details; when only that read fails it keeps
- * the file, says why the details are missing and holds the visualizer back, since it cannot tell
- * whether the asset is distributable. The requests run through the real service layer, so these
- * cases exercise how the page reads an API rejection rather than a stubbed helper's answer.
+ * offers to try again, with one lookup per Retry however fast it is pressed. For an archived file
+ * it says so and where the file can be unarchived. The page also reads the asset's details; when
+ * only that read fails it keeps the file, says why the details are missing and holds the
+ * visualizer back, since it cannot tell whether the asset is distributable. The requests run
+ * through the real service layer, so these cases exercise how the page reads an API rejection
+ * rather than a stubbed helper's answer.
  */
 
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import ViewFile from "./ViewFile";
 import { apiClient, ApiError } from "../../services/apiClient";
@@ -96,6 +98,39 @@ beforeEach(() => {
 
 const fileInfoRequests = () =>
     mockGet.mock.calls.filter(([path]: [string]) => path === FILE_INFO_PATH).length;
+
+/** An answer the test settles when it chooses. */
+function pending() {
+    let resolve!: (value: unknown) => void;
+    const promise = new Promise((settle) => {
+        resolve = settle;
+    });
+    return { answer: () => promise, resolve };
+}
+
+/**
+ * Presses a control twice as a double-click does. Each click is its own browser event, and React
+ * renders what the first press's handler set before the second one arrives; a state update that an
+ * effect makes in that render waits for a later task. act() would apply every update between the
+ * two presses and hide that gap, so the clicks are dispatched outside it. The pointer has not
+ * moved, so the second click goes to the same control; once that control is gone, nothing gets it.
+ */
+async function doubleClick(control: HTMLElement) {
+    const scope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnvironment = scope.IS_REACT_ACT_ENVIRONMENT;
+    scope.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+        for (const detail of [1, 2]) {
+            control.dispatchEvent(
+                new MouseEvent("click", { bubbles: true, cancelable: true, detail })
+            );
+            // React renders a click's updates in a microtask, before the next event.
+            await Promise.resolve();
+        }
+    } finally {
+        scope.IS_REACT_ACT_ENVIRONMENT = actEnvironment;
+    }
+}
 
 /** Opens a file by its direct path, which reads the file's details before anything else. */
 const openByPath = () =>
@@ -206,6 +241,26 @@ describe("file page when the file cannot be loaded", () => {
         openByPath();
 
         fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+        expect(
+            await screen.findByRole("heading", { level: 1, name: /model\.glb/ })
+        ).toBeInTheDocument();
+        expect(screen.queryByText("File Unavailable")).toBeNull();
+        expect(fileInfoRequests()).toBe(2);
+    });
+
+    it("starts one lookup when Retry is double-clicked", async () => {
+        const retried = pending();
+        answerFileInfo(noResponse, retried.answer);
+        openByPath();
+
+        await doubleClick(await screen.findByRole("button", { name: "Retry" }));
+
+        // The first press shows the loading state, so the second press starts no other lookup.
+        expect(fileInfoRequests()).toBe(2);
+        expect(screen.getByText("Loading file...")).toBeInTheDocument();
+
+        await act(async () => retried.resolve(FILE_INFO));
 
         expect(
             await screen.findByRole("heading", { level: 1, name: /model\.glb/ })
