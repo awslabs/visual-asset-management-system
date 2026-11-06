@@ -843,7 +843,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 
 | ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
 | ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
+| `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)  | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
 | `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
 | `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
@@ -1223,7 +1224,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
