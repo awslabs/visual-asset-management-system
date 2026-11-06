@@ -116,33 +116,33 @@ global_settings:
           reason: pagination token (base64 of an example JSON key) in a response example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1042
-          line_end: 1042
+          line_start: 1054
+          line_end: 1054
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1337
-          line_end: 1337
+          line_start: 1351
+          line_end: 1351
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1534
-          line_end: 1534
+          line_start: 1548
+          line_end: 1548
           reason: example pipeline execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1560
-          line_end: 1560
+          line_start: 1574
+          line_end: 1574
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1570
-          line_end: 1570
+          line_start: 1584
+          line_end: 1584
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 2181
-          line_end: 2181
+          line_start: 2195
+          line_end: 2195
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
           path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
