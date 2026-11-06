@@ -500,6 +500,36 @@ def finalize_job(table, job_id, status, values=None, from_cancelled=False):
     return None
 
 
+def supersede_with_landed(table, job_id, version_id):
+    """Move a job a remover finalized FAILED or CANCELLED to SUCCEEDED, because a Complete of this
+    job's own upload then landed its object (the one exception to the forward-only status).
+
+    S3 does not refuse an abort sent while a CompleteMultipartUpload is in flight: it answers 204
+    and the Complete can still succeed, so the cancel path or the reconcile can decide "not landed"
+    before the object is at the key. Only the Complete that created the object (its own response,
+    or its own upload token on the key) calls this. The rejection's error and audit claim are
+    removed so the post-landing work (_finish) writes the completion audit entry once;
+    supersededStatus keeps the overridden outcome. Returns True for exactly one caller."""
+    now = _iso_now()
+    try:
+        table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression=("SET #s = :ok, supersededStatus = #s, destVersionId = :v, "
+                              "finishedAt = :n, finalizedAt = :n, expiresAt = :e "
+                              "REMOVE #err, auditedAt"),
+            ConditionExpression="attribute_exists(jobId) AND #s IN (:f, :c)",
+            ExpressionAttributeNames={"#s": "status", "#err": "error"},
+            ExpressionAttributeValues={":ok": STATUS_SUCCEEDED, ":v": version_id or "", ":n": now,
+                                       ":e": _expires_at(), ":f": STATUS_FAILED,
+                                       ":c": STATUS_CANCELLED},
+        )
+        return True
+    except ClientError as e:
+        if _is_condition_failure(e):
+            return False
+        raise
+
+
 def claim_job_flag(table, job_id, flag):
     """Claim a once-only side effect of a finalized job (its audit entry, its post-landing work) by
     stamping ``flag`` on the row. True for exactly one caller."""
@@ -774,7 +804,8 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     cleaned up. Returns [] when the jobs table cannot be read (logged), as a run with no large
     outputs has no jobs.
 
-    A job whose upload was already gone is decided by its landed object. When this call finalized it
+    After its abort every job is decided by its landed object, whatever the abort answered (S3
+    answers 204 to an abort sent during or after a successful Complete). When this call finalized it
     SUCCEEDED, or could not tell and left it open, the copy engine's reconcile of the stop made here
     does the rest (the decision, or the post-landing work: staged-source delete, asset type, email,
     audit entry, upload outcome). Each such execution is handed to the engine directly
@@ -819,6 +850,7 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
         # the job is open and otherwise aborts the upload itself.
         upload_id = job.get("uploadIdS3", "")
         if upload_id:
+            aborted = True
             try:
                 s3_client.abort_multipart_upload(
                     Bucket=job.get("destBucket"), Key=job.get("destKey"), UploadId=upload_id)
@@ -827,24 +859,30 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     logger.exception(f"Could not abort the multipart upload of copy job {job_id}: {e}")
                     warnings.append(f"The partial copy of output '{job.get('relativeKey', '')}' "
                                     f"could not be removed.")
-                else:
-                    found = _cancel_found_landed(table, s3_client, job_id)
-                    if found is True:
-                        # This job's own object had landed: the landed object wins over the cancel.
-                        # Its post-landing work is the engine's reconcile of the stop made here.
-                        # (With no stop made here the execution no longer exists; nothing can
-                        # reconcile it.)
-                        if stopped:
-                            handoff.append(execution_arn)
-                        continue
-                    if found is None and stopped:
-                        # Could not tell (the abort route and the error handler cannot read the
-                        # asset object): the copy engine's reconcile of the stop just made decides
-                        # the job with the same rule (_reconcile_cancelled_stop). With no stop made
-                        # here there is nothing to reconcile, so the job is cancelled below rather
-                        # than left open.
+                    aborted = False
+            if aborted:
+                # Decided by the landed object, whatever the abort answered: S3 answers 204 (not
+                # NoSuchUpload) to an abort sent during or after a Complete that succeeds, and the
+                # completed object stays at the key (#1123 D1).
+                found = _cancel_found_landed(table, s3_client, job_id)
+                if found is True:
+                    # This job's own object had landed: the landed object wins over the cancel.
+                    # Its post-landing work is the engine's reconcile of the stop made here.
+                    # (With no stop made here the execution no longer exists; nothing can
+                    # reconcile it.)
+                    if stopped:
                         handoff.append(execution_arn)
-                        continue
+                    continue
+                if found is None and stopped:
+                    # Could not tell (the abort route and the error handler cannot read the
+                    # asset object): the copy engine's reconcile of the stop just made decides
+                    # the job with the same rule (_reconcile_cancelled_stop). With no stop made
+                    # here there is nothing to reconcile, so the job is cancelled below rather
+                    # than left open.
+                    handoff.append(execution_arn)
+                    continue
+                # Not landed (yet): a Complete still in flight can land it after this; that Complete
+                # then supersedes the CANCELLED below with its own object (supersede_with_landed).
         mark_cancelled(table, job_id)
     if handoff:
         request_reconcile(lambda_client, engine_function, handoff)
@@ -861,7 +899,8 @@ def mark_cancelled(table, job_id):
 
 
 def _cancel_found_landed(table, s3_client, job_id):
-    """The cancel path found the job's multipart upload already gone. True when the key's current
+    """The cancel path aborted the job's multipart upload (204) or found it already gone
+    (NoSuchUpload); neither says whether a Complete landed the file. True when the key's current
     object is the one this job's upload created (its upload token, landed_object_version; never size
     or presence): the job is finalized SUCCEEDED here (the landed object wins). False when it is not
     (or the job is no longer open). None when it could not be checked (HeadObject denied: the abort

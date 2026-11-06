@@ -164,10 +164,12 @@ def test_complete_finishing_after_the_reconcile_cannot_land_the_file(env, machin
     assert _entry(uploads)["status"] == "FAILED"
 
 
-def test_a_complete_that_loses_the_finalize_keeps_the_stored_outcome(env, machine):
-    """The guard behind the abort-first rule: should a job be finalized FAILED after Complete
-    completed its upload (only possible if the upload was removed outside VAMS), Complete writes
-    nothing more and raises, so the stored outcome stands with one audit entry."""
+def test_a_complete_that_loses_the_finalize_supersedes_it_with_its_landed_object(env, machine):
+    """A remover finalized the job FAILED while this Complete's CompleteMultipartUpload was in
+    flight. Before #1123 D1 this was taken to need an upload removed outside VAMS and the stored
+    FAILED stood (the object was the asset's current version with no version id, audit or staged
+    delete). S3 answers 204 to an abort sent during a Complete that then succeeds, so it happens
+    inside VAMS: the landed object wins, the job is superseded SUCCEEDED once and finished."""
     job, pj = _copied(env)
     real_complete = env["s3"].complete_multipart_upload
 
@@ -177,11 +179,14 @@ def test_a_complete_that_loses_the_finalize_keeps_the_stored_outcome(env, machin
         return done
 
     with patch.object(env["s3"], "complete_multipart_upload", side_effect=complete_then_finalized_elsewhere):
-        with pytest.raises(loc.CopyRefused):
-            engine.complete(pj)
-    assert loc.get_job_row(env["jobs"], job["jobId"])["status"] == loc.STATUS_FAILED
-    env["audit"].assert_not_called()
-    env["lambda"].invoke.assert_not_called()
+        result = engine.complete(pj)
+    row = loc.get_job_row(env["jobs"], job["jobId"])
+    assert row["status"] == loc.STATUS_SUCCEEDED
+    assert row["supersededStatus"] == loc.STATUS_FAILED and "error" not in row
+    assert result["job"]["destVersionId"] == row["destVersionId"]
+    assert _landed(env)
+    assert _audits(env) == [False]
+    env["lambda"].invoke.assert_called_once()
 
 
 def test_a_complete_that_starts_after_the_reconcile_aborts_and_stops(env, machine):

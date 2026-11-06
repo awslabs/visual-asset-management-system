@@ -400,12 +400,21 @@ def complete(job):
     loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_SUCCEEDED, {"destVersionId": version_id})
     row = loc.get_job_row(jobs_table, job["jobId"])
     if row.get("status") != loc.STATUS_SUCCEEDED:
-        # Finalized as failed after this attempt completed the upload. The reconcile and the cancel
-        # path abort the upload before they decide, and S3 completes or aborts an upload, never both,
-        # so this needs an upload removed outside VAMS; the stored outcome stands.
-        logger.error(f"Copy job {job['jobId']} completed its upload after the job was finalized "
-                     f"{row.get('status')}; keeping the stored outcome")
-        raise loc.CopyRefused(_finished_reason(row))
+        # Finalized FAILED or CANCELLED by a remover (the cancel path, the reconcile of a stop) while
+        # this Complete was in flight. S3 does not refuse an abort sent during a Complete: it answers
+        # 204 and the Complete can still succeed, so the remover's landed check can run before this
+        # object is at the key (#1123 D1). This call's object is the asset's current version, so the
+        # landed object wins: the job is superseded SUCCEEDED once and finished as landed (version
+        # id, staged delete, asset type, email, completion audit, upload outcome).
+        if loc.supersede_with_landed(jobs_table, job["jobId"], version_id):
+            logger.warning(f"Copy job {job['jobId']} landed its file after a remover finalized it "
+                           f"{row.get('status')}; superseded as succeeded")
+        row = loc.get_job_row(jobs_table, job["jobId"])
+        if row.get("status") != loc.STATUS_SUCCEEDED:
+            # Not a job row any more (or not one this engine wrote): nothing to supersede.
+            logger.error(f"Copy job {job['jobId']} completed its upload but is "
+                         f"{row.get('status') or 'unrecorded'}; keeping the stored outcome")
+            raise loc.CopyRefused(_finished_reason(row))
     _finish(job, row)
     return {"job": {**job, "destVersionId": row.get("destVersionId", version_id)}}
 
@@ -433,7 +442,9 @@ def _finish(job, row):
         if loc.claim_job_flag(jobs_table, job["jobId"], "landedEffectsAt"):
             _after_landing(job)
         _audit_once(job, False, None, "completed_async")
-        _record_upload_outcome(job, True)
+        # A job superseded SUCCEEDED (its file landed after a remover failed it) overwrites the
+        # failed outcome the remover recorded.
+        _record_upload_outcome(job, True, over_failed=bool(row.get("supersededStatus")))
         return
     reason = row.get("error") or loc.REASON_COPY_FAILED
     upload_id = row.get("uploadIdS3") or job.get("uploadIdS3", "")
@@ -448,7 +459,7 @@ def _finish(job, row):
     _record_upload_outcome(job, False, reason)
 
 
-def _record_upload_outcome(job, succeeded, reason=""):
+def _record_upload_outcome(job, succeeded, reason="", over_failed=False):
     """An API upload's copy records its file's outcome on the upload record, where the uploader
     reads it (GET /uploads/{uploadId}). A workflow output reports through its execution instead.
     Idempotent; raises when the record cannot be written, so the task or reconcile is retried."""
@@ -456,7 +467,7 @@ def _record_upload_outcome(job, succeeded, reason=""):
         return
     uploadStatus.record_async_file_outcome(upload_table, job.get("uploadId"), job.get("assetId"),
                                            job.get("relativeKey"), succeeded, reason,
-                                           raise_errors=True)
+                                           raise_errors=True, over_failed=over_failed)
 
 
 def _delete_source(source):
@@ -642,10 +653,13 @@ def reconcile(execution_arn):
 
     StopExecution does not stop a Lambda invocation already running, so a Prepare or Complete of the
     stopped execution can still be in flight. One truth, whatever the order: a landed object wins.
-    The reconcile first aborts the job's multipart upload, which S3 then refuses to complete, so
-    from that moment no task can land the file; if the upload was already gone, the job is finalized
-    SUCCEEDED only when the key's current object is the one this job's upload created (its upload
-    token, loc.landed_object_version), never by size or presence. Otherwise it is finalized FAILED. The status write is conditional on the job still being open (Prepare
+    The reconcile first aborts the job's multipart upload, so no Complete that starts afterwards
+    can land the file. S3 answers that abort with 204 even when a Complete already succeeded or is
+    succeeding, so whatever the abort answered the job is finalized SUCCEEDED only when the key's
+    current object is the one this job's upload created (its upload token,
+    loc.landed_object_version), never by size or presence. Otherwise it is finalized FAILED, and a
+    Complete still in flight that then lands supersedes that (loc.supersede_with_landed). The status
+    write is conditional on the job still being open (Prepare
     and Complete write the same way and stop when the job is finalized), the audit entry is claimed
     on the job row, and the upload outcome is an idempotent write, so every ordering ends with one
     status, one audit entry and one upload outcome. notify counts the job on its batch once."""
@@ -724,8 +738,11 @@ def _reconcile_cancelled_stop(job, row):
 
 def _landed_after_abort(job, row):
     """(landed, version_id) for an open job of an execution that ended outside its states. Aborts
-    the job's multipart upload first, so no task still running can complete it afterwards; for an
-    upload already gone, loc.landed_object_version decides by the job's upload token.
+    the job's multipart upload first, so no Complete that starts afterwards can complete it; then
+    loc.landed_object_version decides by the job's upload token, whatever the abort answered: S3
+    answers 204 (not NoSuchUpload) to an abort sent during or after a Complete that succeeds, and
+    the object stays at the key (#1123 D1). A Complete still in flight that lands after this check
+    supersedes the outcome itself (loc.supersede_with_landed).
     Raises when the abort fails for another reason, so the reconcile is retried rather than guess."""
     upload_id = row.get("uploadIdS3", "")
     if not upload_id:
@@ -735,7 +752,6 @@ def _landed_after_abort(job, row):
     try:
         client.abort_multipart_upload(Bucket=job["dest"]["bucket"], Key=job["dest"]["key"],
                                       UploadId=upload_id)
-        return False, ""
     except ClientError as e:
         if _error_code(e) != "NoSuchUpload":
             raise

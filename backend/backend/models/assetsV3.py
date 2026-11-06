@@ -638,7 +638,12 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
         if values.get('workflowDatabaseId') is not None:
-            (valid, message) = validate({'workflowDatabaseId': {'value': values.get('workflowDatabaseId'), 'validator': 'ID'}})
+            # The database the running workflow is registered in. Every shipped pipeline registers
+            # a GLOBAL workflow, so the keyword is a valid value here, as it is on the execute
+            # route's workflowDatabaseId path parameter (executeWorkflow.py) and the execution
+            # models' databaseId fields (models/executions.py, allow_global=True).
+            (valid, message) = validate({'workflowDatabaseId': {'value': values.get('workflowDatabaseId'), 'validator': 'ID',
+                                                                'allowGlobalKeyword': True}})
             if not valid:
                 logger.error(message)
                 raise ValueError(message)
