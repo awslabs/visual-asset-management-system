@@ -140,6 +140,8 @@ The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are bu
 
 \*\*\* **Lichtblick License Note**: Lichtblick is distributed under the MPL-2.0, which carries a file-level copyleft obligation on modified MPL-2.0 source files. VAMS compiles the upstream files unmodified; the overlay files compiled with them (`web/customInstalls/robotics/overlay/`) are separate VAMS files under Apache-2.0, so the obligation extends to Lichtblick's own files and not to VAMS source. The Source Code Form of those files is the upstream repository at the commit `SOURCE.txt` names.
 
+**Needle USD Viewer License Note**: VAMS pins `needle-tools/usd-viewer` (the `@needle-tools/engine` row) at commit `aab170a`, whose `LICENSE.txt` is the Modified Apache 2.0 License shown. Later upstream commits relicense the repository under the PolyForm Noncommercial License 1.0.0, which does not permit commercial use, so VAMS does not move this pin past `aab170a`.
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - WEB VIEWERS
