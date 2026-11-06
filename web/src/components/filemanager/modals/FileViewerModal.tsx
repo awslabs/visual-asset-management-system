@@ -11,10 +11,12 @@ import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import { seedCompareFromSingleFile } from "../../../visualizerPlugin/core/compareShape";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
+import { availableModesForFiles } from "../../../visualizerPlugin/core/viewableExtensions";
 import {
-    availableModesForFiles,
-    extensionOfFilename,
-} from "../../../visualizerPlugin/core/viewableExtensions";
+    describeExtensionToken,
+    extensionToken,
+    NO_EXTENSION,
+} from "../../../visualizerPlugin/core/extensionMatching";
 
 interface FileViewerModalProps {
     visible: boolean;
@@ -75,7 +77,11 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     const showModeToggle =
         allowModeToggle && !!availability && availability.visualize && availability.compare;
     const selectionExtensions = Array.from(
-        new Set(files.map((file) => extensionOfFilename(file.filename || file.key) || "(none)"))
+        new Set(
+            files.map((file) =>
+                describeExtensionToken(extensionToken(file.filename || file.key) || NO_EXTENSION)
+            )
+        )
     );
 
     // A LONE file enters Compare as itself against another version of itself: the viewed entry (its

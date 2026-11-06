@@ -51,10 +51,9 @@ import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
 import { EYE_ICON_SVG } from "../../../visualizerPlugin/components/EyeIconSvg";
 import {
-    isViewableExtension,
+    isViewableFilename,
     areFilenamesViewableTogether,
     areFilesComparableTogether,
-    extensionOfFilename,
 } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 import AutomationActions from "./AutomationActions";
@@ -1401,7 +1400,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     !selectedItem.isPermanentlyDeleted &&
                                     !transfersUnavailable &&
                                     viewerRegistryReady &&
-                                    isViewableExtension(extensionOfFilename(selectedItem.name)) && (
+                                    isViewableFilename(selectedItem.name) && (
                                         <span
                                             style={{ marginLeft: "8px" }}
                                             title={`Visualize File ${selectedItem.name}`}

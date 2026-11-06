@@ -4,8 +4,19 @@
  */
 
 import { FileInfo } from "../../../visualizerPlugin/core/types";
-import { isViewableExtension } from "../../../visualizerPlugin/core/viewableExtensions";
+import { isViewableFilename } from "../../../visualizerPlugin/core/viewableExtensions";
 import { fileIdentity } from "../../../visualizerPlugin/core/fileIdentity";
+
+/**
+ * True when some visualize viewer can render this file-mode search row. Judged by the row's key
+ * (`str_key`), not the indexed `str_fileext`: the indexer has no value for a file without an extension
+ * and stores `gitignore` for `.gitignore`, while the viewers apply the web dotfile rule (a leading dot
+ * does not start an extension). Reading the key keeps the search table and the file manager on the
+ * same answer for the same file.
+ */
+export function isViewableSearchRow(row: Record<string, any> | undefined): boolean {
+    return isViewableFilename(row?.str_key);
+}
 
 /**
  * Maps a flattened file-mode search row to a FileInfo.
@@ -52,7 +63,7 @@ export function reconcileViewerSelection(
     checkedRows: Record<string, any>[]
 ): FileInfo[] {
     const viewable = (rows: Record<string, any>[]) =>
-        rows.filter((r) => isViewableExtension(r?.str_fileext)).map((r) => searchRowToFileInfo(r));
+        rows.filter((r) => isViewableSearchRow(r)).map((r) => searchRowToFileInfo(r));
 
     // Identity is database + asset + key, never the key alone: the same path exists in many assets,
     // and treating those as one file made a second selection appear to do nothing.

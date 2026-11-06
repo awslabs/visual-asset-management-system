@@ -18,11 +18,19 @@
 import { PluginRegistry } from "./PluginRegistry";
 import { CompareContext, CompareEntry, deriveCompareContext } from "./compareShape";
 import { LONE_FILE_COMPARE_CONTEXT, ViewerModeAvailability } from "./viewerSelection";
+import { extensionToken, filenameExtension, NO_EXTENSION } from "./extensionMatching";
 
-/** Search rows carry "ply"; the registry stores ".ply". */
+/** Search rows carry "ply"; the registry stores ".ply". The no-extension token passes unchanged. */
 function normalizeExtension(ext: string): string {
+    if (ext === NO_EXTENSION) return ext;
     const lower = ext.toLowerCase();
     return lower.startsWith(".") ? lower : `.${lower}`;
+}
+
+/** Matching tokens for a list of names, or undefined when any entry names no file at all. */
+function tokensOfFilenames(filenames: Array<string | undefined>): string[] | undefined {
+    const tokens = filenames.map((name) => extensionToken(name));
+    return tokens.some((matchToken) => !matchToken) ? undefined : (tokens as string[]);
 }
 
 /**
@@ -62,21 +70,37 @@ export function isViewableExtension(ext?: string): boolean {
     return hasViewerForExtensions([ext], false);
 }
 
-/** True if one viewer can render EVERY supplied filename together (multi-file selection). */
-export function areFilenamesViewableTogether(filenames: string[]): boolean {
-    const exts = filenames
-        .map((n) => (n || "").slice((n || "").lastIndexOf(".")))
-        .filter((e) => e && e !== "." && e.includes("."));
-    if (exts.length !== filenames.length) return false; // an extension-less file has no viewer
-    return hasViewerForExtensions(exts, filenames.length > 1);
+/**
+ * True if ANY enabled visualize viewer can render this one file, judged by its name: a file with no
+ * extension (README, `.gitignore`) is matched through the no-extension token, so it is viewable when
+ * a viewer lists that token. A key ending in "/" (a folder) is never viewable.
+ */
+export function isViewableFilename(filename?: string): boolean {
+    const matchToken = extensionToken(filename);
+    if (!matchToken) return false;
+    return hasViewerForExtensions([matchToken], false);
 }
 
-/** Extension of a filename, or undefined when it has none. */
+/**
+ * True if one viewer can render EVERY supplied filename together (multi-file selection). An
+ * extensionless file contributes the no-extension token, so a mixed selection is admitted only by a
+ * viewer that lists both that token and the other extensions.
+ */
+export function areFilenamesViewableTogether(filenames: string[]): boolean {
+    if (!filenames.length) return false;
+    const tokens = tokensOfFilenames(filenames);
+    if (!tokens) return false;
+    return hasViewerForExtensions(tokens, filenames.length > 1);
+}
+
+/**
+ * Extension of a filename in its original case, or undefined when it has none. For DISPLAY and
+ * format dispatch only: a viewer gate asks the filename-based lookups (`isViewableFilename`,
+ * `isFilenameComparableAsVersions`, `areFilenamesViewableTogether`), which also match a file with no
+ * extension. Same dotfile rule as the registry (`filenameExtension`).
+ */
 export function extensionOfFilename(filename?: string): string | undefined {
-    if (!filename) return undefined;
-    const dot = filename.lastIndexOf(".");
-    if (dot <= 0 || dot === filename.length - 1) return undefined;
-    return filename.slice(dot);
+    return filenameExtension(filename) || undefined;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -133,9 +157,9 @@ export function hasCompareViewerForExtensions(
  */
 export function areFilesComparableTogether(files: CompareCandidate[]): boolean {
     if (files.length === 0) return false;
-    const exts = files.map((f) => extensionOfFilename(candidateName(f)));
-    if (exts.some((e) => !e)) return false; // an extension-less file has no viewer
-    return hasCompareViewerForExtensions(exts as string[], deriveCompareContext(files));
+    const tokens = tokensOfFilenames(files.map(candidateName));
+    if (!tokens) return false;
+    return hasCompareViewerForExtensions(tokens, deriveCompareContext(files));
 }
 
 /**
@@ -151,6 +175,17 @@ export function isExtensionComparableAsVersions(ext?: string): boolean {
 }
 
 /**
+ * {@link isExtensionComparableAsVersions} judged by the file's name, so a version row for a file with
+ * no extension (README) gets Compare when a differ lists the no-extension token. The gate every
+ * version list uses.
+ */
+export function isFilenameComparableAsVersions(filename?: string): boolean {
+    const matchToken = extensionToken(filename);
+    if (!matchToken) return false;
+    return isExtensionComparableAsVersions(matchToken);
+}
+
+/**
  * Which modes the file viewer modal may offer for a selection. Not memoized: it is asked once per
  * modal open, not per table cell. Both modes read false until the registry has initialized.
  *
@@ -159,11 +194,11 @@ export function isExtensionComparableAsVersions(ext?: string): boolean {
  * A lone `.png`/`.glb` gets Visualize only — this is compare-viewer admission, not an extension list.
  */
 export function availableModesForFiles(files: CompareCandidate[]): ViewerModeAvailability {
-    const exts = files.map((f) => extensionOfFilename(candidateName(f)));
-    if (files.length === 0 || exts.some((e) => !e)) {
+    const tokens = files.length ? tokensOfFilenames(files.map(candidateName)) : undefined;
+    if (!tokens) {
         return { visualize: false, compare: false };
     }
-    const normalized = [...new Set((exts as string[]).map(normalizeExtension))];
+    const normalized = [...new Set(tokens.map(normalizeExtension))];
     return PluginRegistry.getInstance().getAvailableModes(
         normalized,
         files.length > 1,
