@@ -123,6 +123,13 @@ class TestFeatureSwitchMirror:
             f"add-on CLI feature constants naming no published switch: {sorted(mirrored - declared)}"
         )
 
+    def test_zip_downloads_switch_is_published_and_mirrored(self):
+        """FEATURE_ZIPDOWNLOADS gates the zip-download commands and MCP tools; the deployment
+        publishes it only while app.zipDownloads is enabled."""
+        declared = _enum_members(VAMS_APP_FEATURES_TS.read_text(encoding="utf-8"))
+        assert constants.FEATURE_ZIPDOWNLOADS == "ZIPDOWNLOADS"
+        assert "ZIPDOWNLOADS" in declared, "VAMS_APP_FEATURES does not publish ZIPDOWNLOADS"
+
     def test_constants_py_re_exports_the_addon_names(self):
         """Existing `from vamscli.constants import FEATURE_PHYSNA_ADDON` imports keep working."""
         for name, value in vars(addon_constants).items():
