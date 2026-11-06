@@ -14,7 +14,8 @@
  *
  *   * A10: the document, the sync function, its role and the triggers exist when the
  *     field is unset and when it is true; with it false none of them exists and every other resource of the
- *     deployment is the same as with it on, but for the trigger's environment value and invoke grant;
+ *     deployment is the same as with it on, but for the trigger's environment value and invoke grant, a
+ *     comparison that holds whatever synths ran before it in the process;
  *   * A11: the document's one parameter is the base64 public key, held to base64 characters, and its one
  *     aws:runShellScript step is the repository script with the configured cluster's key file;
  *   * A12: the sync role's grants, action by action, are exactly the scoped ones, with no `*` resource
@@ -176,6 +177,68 @@ const pythonConstant = (file: string, name: string): string => {
     return (match as RegExpExecArray)[1];
 };
 
+/**
+ * A resource's properties as A10 compares them across two synths, with the sync trigger's two traces taken
+ * out: the environment value naming the sync function and the statement allowing its invoke.
+ *
+ * What differs between any two synths is set aside too. A nested stack's template URL is a hash of its
+ * template. Several custom resources stamp the synth time, as an ISO string or epoch milliseconds.
+ *
+ * A nested stack's `Parameters` are compared by name and value, not by key order. CDK adds a cross-stack
+ * reference parameter when its reference walk first meets the reference. In a policy that
+ * `@aws-cdk/aws-iam:minimizePolicies` merged, the walk meets them in the merged statement's resource
+ * order, which CDK sorts as unresolved token strings, so `${Token[TOKEN.10002]}` comes before
+ * `${Token[TOKEN.9998]}`. The token numbers come from one counter for the whole process, so the order
+ * moves with how many synths ran before in that process. The REST API nested stack's four
+ * authorization-table parameters change places in the second full synth of a process, whose tokens run
+ * past 10000. CloudFormation reads the map by name, so a deployment gets the same parameters either way.
+ */
+function comparable(r: Resource, syncLogicalId: string): string {
+    const props = JSON.parse(JSON.stringify(r.properties));
+    delete props.TemplateURL;
+    if (r.type === "AWS::CloudFormation::Stack" && props.Parameters) {
+        props.Parameters = Object.fromEntries(
+            Object.keys(props.Parameters)
+                .sort()
+                .map((name) => [name, props.Parameters[name]])
+        );
+    }
+    if (props.Environment?.Variables) delete props.Environment.Variables[SYNC_ENV];
+    if (props.PolicyDocument?.Statement) {
+        const mentionsSync = (value: unknown) => JSON.stringify(value).includes(syncLogicalId);
+        props.PolicyDocument.Statement = props.PolicyDocument.Statement.map((st: any) =>
+            Array.isArray(st.Resource)
+                ? { ...st, Resource: st.Resource.filter((x: unknown) => !mentionsSync(x)) }
+                : st
+        ).filter(
+            (st: any) =>
+                !(Array.isArray(st.Resource) ? st.Resource.length === 0 : mentionsSync(st.Resource))
+        );
+        // A statement left with one resource is written as a string, as CDK writes it.
+        for (const st of props.PolicyDocument.Statement) {
+            if (Array.isArray(st.Resource) && st.Resource.length === 1)
+                st.Resource = st.Resource[0];
+        }
+    }
+    return JSON.stringify(props)
+        .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, "<time>")
+        .replace(/"\d{13}"/g, '"<ms>"');
+}
+
+/** `stack/logicalId` of every resource both synths carry that does not compare the same. */
+function changedBetween(a: SynthResult, b: SynthResult, syncLogicalId: string): string[] {
+    const key = (r: Resource) => `${r.stack}/${r.logicalId}`;
+    const bByKey = new Map(b.resources.map((r) => [key(r), r]));
+    return a.resources
+        .filter((r) => bByKey.has(key(r)))
+        .filter(
+            (r) =>
+                comparable(r, syncLogicalId) !==
+                comparable(bByKey.get(key(r)) as Resource, syncLogicalId)
+        )
+        .map(key);
+}
+
 describe("A10: the sync is deployed by default", () => {
     test.each([
         ["unset", unsetSynth],
@@ -245,43 +308,56 @@ describe("A10: the sync is deployed by default", () => {
         const onKeys = new Set(on.resources.map(key));
         expect(off.resources.filter((r) => !onKeys.has(key(r))).map(key)).toEqual([]);
 
-        // A resource both carry is identical once the trigger's two traces are taken out: the environment
-        // value naming the sync function and the statement allowing its invoke. A nested stack's template URL
-        // and the catalog registration's per-synth timestamp differ between any two synths.
-        // Several custom resources stamp the synth time, as an ISO string or epoch milliseconds.
-        const normalize = (r: Resource): string => {
-            const props = JSON.parse(JSON.stringify(r.properties));
-            delete props.TemplateURL;
-            if (props.Environment?.Variables) delete props.Environment.Variables[SYNC_ENV];
-            if (props.PolicyDocument?.Statement) {
-                const mentionsSync = (value: unknown) =>
-                    JSON.stringify(value).includes(sync.logicalId);
-                props.PolicyDocument.Statement = props.PolicyDocument.Statement.map((st: any) =>
-                    Array.isArray(st.Resource)
-                        ? { ...st, Resource: st.Resource.filter((x: unknown) => !mentionsSync(x)) }
-                        : st
-                ).filter(
-                    (st: any) =>
-                        !(Array.isArray(st.Resource)
-                            ? st.Resource.length === 0
-                            : mentionsSync(st.Resource))
-                );
-                // A statement left with one resource is written as a string, as CDK writes it.
-                for (const st of props.PolicyDocument.Statement) {
-                    if (Array.isArray(st.Resource) && st.Resource.length === 1)
-                        st.Resource = st.Resource[0];
-                }
-            }
-            return JSON.stringify(props)
-                .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, "<time>")
-                .replace(/"\d{13}"/g, '"<ms>"');
-        };
-        const offByKey = new Map(off.resources.map((r) => [key(r), r]));
-        const changed = on.resources
-            .filter((r) => offByKey.has(key(r)))
-            .filter((r) => normalize(r) !== normalize(offByKey.get(key(r)) as Resource))
-            .map(key);
-        expect(changed).toEqual([]);
+        // A resource both carry is identical once the trigger's two traces are taken out (`comparable`).
+        expect(changedBetween(on, off, sync.logicalId)).toEqual([]);
+    });
+
+    test("a nested stack's Parameters compare by name and value, whatever their key order", () => {
+        const on = onSynth();
+        const sync = theSync(on).logicalId;
+        const stack = on
+            .ofType("AWS::CloudFormation::Stack")
+            .find(
+                (r) =>
+                    r.logicalId.startsWith("RestApiNestedStack") && r.stack === "vams-t1-commercial"
+            ) as Resource;
+        expect(stack).toBeDefined();
+        const parameters: Record<string, unknown> = stack.properties.Parameters;
+        const names = Object.keys(parameters);
+        expect(names.length).toBeGreaterThan(1);
+        const withParameters = (p: Record<string, unknown>): Resource => ({
+            ...stack,
+            properties: { ...stack.properties, Parameters: p },
+        });
+        const pick = (keys: string[]) => Object.fromEntries(keys.map((k) => [k, parameters[k]]));
+        const reference = comparable(stack, sync);
+        expect(comparable(withParameters(pick([...names].reverse())), sync)).toBe(reference);
+        // A changed value, a missing name and an extra name still differ.
+        for (const p of [
+            { ...parameters, [names[0]]: "changed" },
+            pick(names.slice(1)),
+            { ...parameters, extraParameter: parameters[names[0]] },
+        ]) {
+            expect(comparable(withParameters(p), sync)).not.toBe(reference);
+        }
+    });
+
+    test("the comparison holds for the same configuration synthesized again later in the process", () => {
+        // The sync-on configuration once more, never from the per-run cache, so it is synthesized here,
+        // after this file's earlier synths: its CDK token numbers sit where the earlier synths left the
+        // counter, as a later file in a CI shard sees them.
+        const on = onSynth();
+        const again = synthTemplate("commercial", {
+            mutate: (c: any) => {
+                enableEdh(c);
+                c.app.addons.useEdhWorkstations.edhRootKeyAutoSync = true;
+            },
+            mutateKey: "edhRootKeySyncOnAgain",
+            sharedCache: false,
+        });
+        const key = (r: Resource) => `${r.stack}/${r.logicalId}`;
+        expect(again.resources.map(key)).toEqual(on.resources.map(key));
+        expect(changedBetween(on, again, theSync(on).logicalId)).toEqual([]);
     });
 });
 

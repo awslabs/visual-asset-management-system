@@ -397,7 +397,10 @@ never shares (detected automatically); a file that mocks or spies on anything el
 fresh synth in its own process, passes `sharedCache: false`.
 `VAMS_SYNTH_CACHE=off` disables it; `VAMS_SYNTH_CACHE=verify` re-synthesizes on every hit and fails on a
 difference. A once-per-stack guard in `lib/` keys on the `Stack` object (a `WeakSet<Stack>`), never on
-`node.addr` or the stack name, which a second app in the same process repeats.
+`node.addr` or the stack name, which a second app in the same process repeats. A test that compares two
+synths resource by resource compares a nested stack resource's `Parameters` by name and value, not by key
+order: that order follows the process's CDK token counter, so it moves with the synths that ran before
+(`comparable()` in `infra/test/addon/edh/edhRootKeySync.test.ts`).
 
 **Jest compiles transpile-only** (`isolatedModules` in `infra/tsconfig.json`), so a type error does not fail
 `npm test`. Run `npm run typecheck` in `infra/` before pushing; the CI `infra-typecheck` job runs it.
