@@ -178,6 +178,22 @@ After modifying the build:
 2. Verify files in `web/public/viewers/vntana/`
 3. Test in the application
 
+## Current Version and License
+
+-   `@vntana/viewer` is pinned to **3.0.0** (exact), the newest release at least 7 days old when the
+    lockfile was regenerated (`npm install --min-release-age=7`). The wrapper build tools stay on
+    their current majors (webpack 5, webpack-cli 5, css-loader 6).
+-   The package is licensed under the **VNTANA Viewer Commercial License** (`LICENSE.md` in the
+    package; the terms are summarised in the VAMS `NOTICE.md` PAID table). Use needs a commercial
+    license from VNTANA; without one it may be used only for internal evaluation for 30 days. This is
+    why the viewer ships disabled.
+-   3.0.0 keeps the 2.x element and UI tags, the `dist/index.js` entry and `styles/viewer.css`, so
+    the webpack configuration and the plugin are unchanged apart from the error event: 3.x reports
+    what failed in `event.detail.type` (for example `model load failed`), which the plugin shows.
+-   The scene graph panel loads one lazy chunk (`<n>.vntana-viewer.bundle.js`) next to the main
+    bundle, from the same origin; the install script copies the whole `dist/` folder, chunks
+    included.
+
 ## Version Updates
 
 To update the Vntana viewer version:
@@ -187,7 +203,7 @@ To update the Vntana viewer version:
     ```json
     {
         "dependencies": {
-            "@vntana/viewer": "^2.3.0"
+            "@vntana/viewer": "3.0.0"
         }
     }
     ```
