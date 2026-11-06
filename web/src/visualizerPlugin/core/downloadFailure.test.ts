@@ -13,6 +13,7 @@ import {
     DOWNLOAD_ARCHIVED_MESSAGE,
     DOWNLOAD_FORBIDDEN_MESSAGE,
     DOWNLOAD_NOT_FOUND_MESSAGE,
+    DOWNLOAD_UNAUTHENTICATED_MESSAGE,
     downloadFailureMessage,
     downloadResponseStatus,
     downloadStatusMessage,
@@ -21,14 +22,23 @@ import {
 const GENERIC = "Failed to download PDF file";
 
 describe("downloadFailureMessage", () => {
-    it("names the missing permission for a 403 (and a 401) refusal", () => {
+    it("names the missing permission for a 403 refusal", () => {
         expect(DOWNLOAD_FORBIDDEN_MESSAGE).toBe(
             "You do not have permission to view or download this file."
         );
         expect(downloadFailureMessage([false, "Not Authorized", 403], GENERIC)).toBe(
             DOWNLOAD_FORBIDDEN_MESSAGE
         );
+    });
+
+    it("tells a signed-out user to sign in again for a 401, not that permission is missing", () => {
+        expect(DOWNLOAD_UNAUTHENTICATED_MESSAGE).toBe(
+            "Your session has expired. Sign in again to view this file."
+        );
         expect(downloadFailureMessage([false, "Unauthorized", 401], GENERIC)).toBe(
+            DOWNLOAD_UNAUTHENTICATED_MESSAGE
+        );
+        expect(downloadFailureMessage([false, "Unauthorized", 401], GENERIC)).not.toBe(
             DOWNLOAD_FORBIDDEN_MESSAGE
         );
     });
@@ -74,6 +84,7 @@ describe("downloadStatusMessage", () => {
         expect(downloadStatusMessage(403, "Failed to load: a.ifc (403)")).toBe(
             DOWNLOAD_FORBIDDEN_MESSAGE
         );
+        expect(downloadStatusMessage(401, "x")).toBe(DOWNLOAD_UNAUTHENTICATED_MESSAGE);
         expect(downloadStatusMessage(404, "x")).toBe(DOWNLOAD_NOT_FOUND_MESSAGE);
         expect(downloadStatusMessage(500, "Failed to load: a.ifc (500)")).toBe(
             "Failed to load: a.ifc (500)"

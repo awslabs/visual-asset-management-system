@@ -222,6 +222,22 @@ describe("TextDiffViewerComponent", () => {
         expect(screen.getByTestId("text-diff-side-label-left")).not.toHaveTextContent("latest");
     });
 
+    it("tells a signed-out user to sign in again on 401, per side", async () => {
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B"
+                ? [false, "Unauthorized", 401]
+                : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Signed out")).toBeInTheDocument());
+        expect(
+            screen.getByText("Your session has expired. Sign in again to view this file.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Not authorized")).toBeNull();
+    });
+
     it("labels an archived version (410) per side", async () => {
         mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
             assetId === "asset-A"

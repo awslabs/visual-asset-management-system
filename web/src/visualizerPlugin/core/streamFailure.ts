@@ -28,7 +28,8 @@ export function downloadResponseStatus(response: unknown): number | undefined {
 
 /**
  * The user-facing message for a failed `downloadAsset`, decided ONLY by the status the API returned
- * (never by the caller's role or any client-side rule): 403 (or 401) is a permission denial, 410 an
+ * (never by the caller's role or any client-side rule): 401 is a missing or expired session, 403 a
+ * permission denial, 410 an
  * archived version, 404 a missing file, and anything else returns `subject`, the viewer's own
  * generic wording (e.g. "Failed to download PDF file").
  *
@@ -40,9 +41,12 @@ export function downloadFailureMessage(response: unknown, subject: string): stri
     return downloadStatusMessage(downloadResponseStatus(response), subject);
 }
 
-/** What a viewer shows when the API refuses a file's download (401/403). */
+/** What a viewer shows when the API refuses a file's download (403). */
 export const DOWNLOAD_FORBIDDEN_MESSAGE =
     "You do not have permission to view or download this file.";
+/** What a viewer shows when the API answers 401: the session is missing or has expired. */
+export const DOWNLOAD_UNAUTHENTICATED_MESSAGE =
+    "Your session has expired. Sign in again to view this file.";
 /** What a viewer shows when the API answers 410 for a file version. */
 export const DOWNLOAD_ARCHIVED_MESSAGE =
     "This file version has been archived and is not available.";
@@ -55,7 +59,8 @@ export const DOWNLOAD_NOT_FOUND_MESSAGE = "This file or version could not be fou
  * e.g. a WAF block or a network error) and any status not listed return `subject`.
  */
 export function downloadStatusMessage(status: number | undefined, subject: string): string {
-    if (status === 401 || status === 403) return DOWNLOAD_FORBIDDEN_MESSAGE;
+    if (status === 401) return DOWNLOAD_UNAUTHENTICATED_MESSAGE;
+    if (status === 403) return DOWNLOAD_FORBIDDEN_MESSAGE;
     if (status === 410) return DOWNLOAD_ARCHIVED_MESSAGE;
     if (status === 404) return DOWNLOAD_NOT_FOUND_MESSAGE;
     return subject;

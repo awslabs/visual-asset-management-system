@@ -29,6 +29,7 @@ import {
     DOWNLOAD_ARCHIVED_MESSAGE,
     DOWNLOAD_FORBIDDEN_MESSAGE,
     DOWNLOAD_NOT_FOUND_MESSAGE,
+    DOWNLOAD_UNAUTHENTICATED_MESSAGE,
 } from "../../core/streamFailure";
 
 // Register languages with the light build (mirrors TextViewerPlugin).
@@ -106,7 +107,7 @@ const HOST_TEXT_RESET: React.CSSProperties = { textAlign: "left", lineHeight: "n
  * Why one side could not be loaded. Each compare entry is fetched under its OWN asset and authorized
  * independently (Casbin, per asset), so a failure is a property of that side, not of the comparison.
  */
-type SideErrorKind = "forbidden" | "archived" | "unavailable" | "failed";
+type SideErrorKind = "unauthenticated" | "forbidden" | "archived" | "unavailable" | "failed";
 
 interface SideError {
     kind: SideErrorKind;
@@ -149,7 +150,10 @@ class DownloadFailure extends Error {
  *  echoed. */
 const classifyFailure = (error: unknown): SideError => {
     const status = error instanceof DownloadFailure ? error.status : undefined;
-    if (status === 401 || status === 403) {
+    if (status === 401) {
+        return { kind: "unauthenticated", message: DOWNLOAD_UNAUTHENTICATED_MESSAGE };
+    }
+    if (status === 403) {
         return { kind: "forbidden", message: DOWNLOAD_FORBIDDEN_MESSAGE };
     }
     if (status === 410) {
@@ -575,7 +579,9 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
         }
         if (state.status === "error" && state.error) {
             const header =
-                state.error.kind === "forbidden"
+                state.error.kind === "unauthenticated"
+                    ? "Signed out"
+                    : state.error.kind === "forbidden"
                     ? "Not authorized"
                     : state.error.kind === "archived"
                     ? "Version archived"
@@ -589,11 +595,13 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         header={header}
                     >
                         {state.error.message}
-                        {state.error.kind !== "forbidden" && state.versions.length > 0 && (
-                            <Box variant="small" padding={{ top: "xs" }}>
-                                Pick another version above to compare it instead.
-                            </Box>
-                        )}
+                        {state.error.kind !== "forbidden" &&
+                            state.error.kind !== "unauthenticated" &&
+                            state.versions.length > 0 && (
+                                <Box variant="small" padding={{ top: "xs" }}>
+                                    Pick another version above to compare it instead.
+                                </Box>
+                            )}
                     </Alert>
                 </Box>
             );
