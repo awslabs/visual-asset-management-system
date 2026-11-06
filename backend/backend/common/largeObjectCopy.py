@@ -402,8 +402,8 @@ def record_batch(table, batch_id, job_ids, context):
     listing alone would let the batch be claimed while a copy is still running. Returns the row as
     stored.
 
-    Size limit: each job id is about 55 bytes, so a single output step with roughly 7,000 files over
-    1 GiB would pass DynamoDB's 400 KB item limit and fail the step (documented on the quotas page).
+    Size limit: each job id is about 55 bytes, so an execution with roughly 7,000 outputs over 1 GiB
+    would pass DynamoDB's 400 KB item limit and fail its output step (documented on the quotas page).
     Typical runs carry a handful of large outputs."""
     job_ids = sorted({j for j in (job_ids or []) if j})
     values = {":c": context, ":e": _expires_at(), ":z": 0}

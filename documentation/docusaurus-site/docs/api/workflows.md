@@ -1471,7 +1471,20 @@ GET /workflows/executions/{executionId}/details
 
 The route is keyed on the execution identifier because an execution may span input files across multiple assets.
 
-While output files over 1 GiB are still being copied into the asset, the execution stays `RUNNING` and the response adds `executionPhase: "INGESTING_OUTPUTS"` and `outputIngestion` (`filesTotal`, `filesDone`, `bytesTotal`, `bytesDone`). Both fields are absent for every other execution. Once such a file has landed, its `outputs.files` row carries `ingestionStatus: "SUCCEEDED"`. A file whose copy failed is left out of `outputs.files`, and `executionError` names it.
+While output files over 1 GiB are still being copied into the asset, the execution stays `RUNNING` and the response adds `executionPhase: "INGESTING_OUTPUTS"` and `outputIngestion`. Both fields are absent for every other execution.
+
+| `outputIngestion` field | Type    | Description                                                          |
+| ----------------------- | ------- | -------------------------------------------------------------------- |
+| `filesTotal`            | number  | Output files over 1 GiB the execution is copying.                    |
+| `filesDone`             | number  | Of those, the files whose copy has ended (landed or failed).         |
+| `bytesTotal`            | number  | Total size of those files.                                           |
+| `bytesDone`             | number  | Size of the files that have landed.                                  |
+| `files`                 | array   | One entry per copy, sorted by `relativeKey`, at most 100. See below. |
+| `filesTruncated`        | boolean | `true` when the execution has more copies than `files` lists.        |
+
+Each `files` entry has `relativeKey`, `status` (`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` or `CANCELLED`), `bytesTotal`, `partsTotal`, `partsDone` and `error`. `error` is a generic reason, set only for a `FAILED` or `CANCELLED` copy, and empty otherwise. The entries are display progress read from an eventually consistent index, so a copy can show its previous status for a moment.
+
+Once such a file has landed, its `outputs.files` row carries `ingestionStatus: "SUCCEEDED"`. A file whose copy failed is left out of `outputs.files`, and `executionError` names it.
 
 ### Path parameters
 

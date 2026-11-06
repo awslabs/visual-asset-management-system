@@ -2167,7 +2167,7 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         min: 0,
-        help: "Reserved concurrency of the copy-engine function: a cap on copy tasks running at once across the deployment, which keeps large copies from using the concurrency the API functions need. 0 (default) leaves it unreserved; your account must keep at least 100 unreserved concurrent executions. Between 0 and 1000.",
+        help: "Reserved concurrency of the copy-engine function: a cap on copy tasks running at once across the deployment, which keeps large copies from using the concurrency the API functions need. 0 (default) leaves it unreserved. Lambda keeps at least 100 unreserved concurrent executions per account, so a value the account cannot reserve fails the deploy. Copies over the cap are throttled, which slows them but does not fail them. Between 0 and 1000.",
     },
 ];
 
