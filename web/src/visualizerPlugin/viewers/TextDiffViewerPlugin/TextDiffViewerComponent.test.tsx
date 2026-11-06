@@ -192,6 +192,34 @@ describe("TextDiffViewerComponent", () => {
         expect(screen.queryByText("Error loading diff")).toBeNull();
     });
 
+    it("labels a side pinned to the current version as latest (#1202)", async () => {
+        // The File Manager hands a lone file over with the versionId it listed (the current one),
+        // so the seeded pair is [file @ current id, file unpinned]. Both sides are the latest version.
+        const current = { ...RIGHT, versionId: "v-latest" };
+        const unpinned = { ...RIGHT };
+        renderDiff([current, unpinned]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-latest (latest)"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-right")).toHaveTextContent(
+            "config.json (latest)"
+        );
+    });
+
+    it("[control] labels a side pinned to an older version without (latest)", async () => {
+        renderDiff([{ ...RIGHT, versionId: "v-old" }, { ...RIGHT }]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-old"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-left")).not.toHaveTextContent("latest");
+    });
+
     it("labels an archived version (410) per side", async () => {
         mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
             assetId === "asset-A"

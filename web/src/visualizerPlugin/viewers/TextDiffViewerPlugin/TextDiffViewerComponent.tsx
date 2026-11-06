@@ -198,11 +198,28 @@ const fetchSideText = async (file: FileInfo, signal: AbortSignal): Promise<strin
 /** Short display form of an S3 versionId. */
 const shortVersion = (versionId: string): string => versionId.substring(0, 8);
 
+/**
+ * True when a side shows the file's current version: nothing is pinned, or the pinned versionId is
+ * the one the API's version list marks `isLatest`. Hosts hand a lone file over with the versionId
+ * they listed it with (the File Manager's tree carries each file's current version), so a pinned id
+ * alone does not mean an older version (#1202).
+ */
+const isLatestVersion = (file: FileInfo, versions: FileVersionOption[]): boolean =>
+    !file.versionId ||
+    versions.some((version) => version.isLatest === true && version.versionId === file.versionId);
+
 /** Build a short human label for a compare side. Names the owning asset when the two sides live
- *  in different assets, so identical filenames are still distinguishable. */
-const sideLabel = (file: FileInfo, crossAsset: boolean): string => {
+ *  in different assets, so identical filenames are still distinguishable. A side pinned to the
+ *  current version reads "@ <id> (latest)": the id is what is pinned, "(latest)" what it is. */
+const sideLabel = (
+    file: FileInfo,
+    crossAsset: boolean,
+    versions: FileVersionOption[] = []
+): string => {
     const name = file.filename || file.key.split("/").pop() || file.key;
-    const version = file.versionId ? `@ ${shortVersion(file.versionId)}` : "(latest)";
+    const pinned = file.versionId ? `@ ${shortVersion(file.versionId)}` : "";
+    const latest = isLatestVersion(file, versions) ? "(latest)" : "";
+    const version = [pinned, latest].filter(Boolean).join(" ");
     const asset = crossAsset && file.assetId ? ` · ${file.assetId}` : "";
     return `${name} ${version}${asset}`;
 };
@@ -517,7 +534,7 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         }}
                         title={state.file.key}
                     >
-                        {sideLabel(state.file, crossAsset)}
+                        {sideLabel(state.file, crossAsset, state.versions)}
                     </span>
                 </Box>
             </div>
@@ -683,8 +700,8 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
             : granularity === "words"
             ? DiffMethod.WORDS
             : DiffMethod.LINES;
-    const leftLabel = sideLabel(sides.left.file, crossAsset);
-    const rightLabel = sideLabel(sides.right.file, crossAsset);
+    const leftLabel = sideLabel(sides.left.file, crossAsset, sides.left.versions);
+    const rightLabel = sideLabel(sides.right.file, crossAsset, sides.right.versions);
 
     return (
         <div
