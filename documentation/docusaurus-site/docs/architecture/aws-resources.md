@@ -686,24 +686,24 @@ layer.
 
 ## Amazon Elastic Container Registry
 
-Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
+Deployed for each pipeline configured with `useCodeBuild: true` (for the Zip Archive pipeline, `app.zipDownloads.useCodeBuild`). AWS CodeBuild builds the pipeline's
 container image from the source in the repository and pushes it to a private Amazon ECR repository, which
 the pipeline's AWS Batch job definition then references (for the GenAI CAD STEP agent on its `agentcore`
 runtime, the Amazon Bedrock AgentCore Runtime instead). Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                                                                                                                                                                                                     |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                                                                                 |
-| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform, Video SOP/BOM Extraction and the GenAI CAD STEP agent and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                                                                                     |
-| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                                                                             |
-| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                                                                             |
+| Resource              | Configuration                                                                                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                                                                                              |
+| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform, Video SOP/BOM Extraction, the GenAI CAD STEP agent and Zip Archive and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                                                                                                  |
+| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                                                                                          |
+| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                                                                                          |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
-Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Three
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Four
 carry an explicit name and are redeploy-collision relevant. Each name is lower-cased and carries `-kms` when
 `useKmsCmkEncryption.enabled` is `true`:
 
@@ -712,6 +712,7 @@ carry an explicit name and are redeploy-collision relevant. Each name is lower-c
 | Coordinate Transform     | `{config.name}-{app.baseStackName}-{region}-coordtransform` | `{config.name}-{app.baseStackName}-{region}-coordtransform-kms` |
 | Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-{region}-videosopbom`    | `{config.name}-{app.baseStackName}-{region}-videosopbom-kms`    |
 | GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-{region}-cadstepagent`   | `{config.name}-{app.baseStackName}-{region}-cadstepagent-kms`   |
+| Zip Archive              | `{config.name}-{app.baseStackName}-{region}-ziparchive`     | `{config.name}-{app.baseStackName}-{region}-ziparchive-kms`     |
 
 Delete any orphaned repository of these names left by a failed teardown before redeploying with the same
 configuration name and account.
@@ -719,7 +720,7 @@ configuration name and account.
 :::note[Why these repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
-name is derived from the nested-stack path, and these three pipelines' paths are deep enough that the
+name is derived from the nested-stack path, and these pipelines' paths are deep enough that the
 resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
@@ -729,7 +730,7 @@ content-addressed tag.
 :::note[The repositories follow their encryption]
 Amazon ECR cannot change a repository's encryption after the repository is created, so turning
 `useKmsCmkEncryption.enabled` on or off replaces every CodeBuild repository. An auto-named repository gets
-a new generated name, and the three explicitly named repositories change between their two names, because AWS
+a new generated name, and the four explicitly named repositories change between their two names, because AWS
 CloudFormation cannot replace an explicitly named resource under the same name. The deployment creates each
 new repository, points the AWS Batch job definitions (and the GenAI CAD STEP agent's Amazon Bedrock
 AgentCore Runtime) at it, starts a build of the image into it, and deletes the old repository with its
@@ -738,10 +739,10 @@ finishes fails to pull the image. The GenAI CAD STEP agent is the exception: its
 build, and its runtime or job definition moves to the new repository only once the image is there.
 
 Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a
-deployment that uses the VAMS-generated key) also replaces the repositories, but the three explicitly named
+deployment that uses the VAMS-generated key) also replaces the repositories, but the four explicitly named
 repositories keep their names, so that update fails. Deploy once with
 `useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for
-that deployment and removes the repository, then set it back to `true` and deploy again. Do the same with `useGenAiVideoSopBom.useCodeBuild` for Video SOP/BOM Extraction. For the GenAI CAD
+that deployment and removes the repository, then set it back to `true` and deploy again. Do the same with `useGenAiVideoSopBom.useCodeBuild` for Video SOP/BOM Extraction, and with `app.zipDownloads.useCodeBuild` for Zip Archive. For the GenAI CAD
 STEP agent, do the same with `useGenAiCadStepAgent.useCodeBuild` on its `fargate` runtime; its `agentcore`
 runtime requires CodeBuild, so deploy once with `useGenAiCadStepAgent.enabled` set to `false` instead.
 

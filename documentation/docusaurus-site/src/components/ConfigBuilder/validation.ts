@@ -3465,6 +3465,16 @@ export const RULES: Rule[] = [
         },
         message: "app.zipDownloads.enabled must be true or false.",
     },
+    {
+        id: "zip-downloads-use-codebuild-boolean",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.useCodeBuild"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.zipDownloads.useCodeBuild");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.zipDownloads.useCodeBuild must be true or false.",
+    },
     ...(
         [
             ["retentionDays", 1, 30, "days"],

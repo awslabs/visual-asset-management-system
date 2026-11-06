@@ -382,9 +382,9 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 ## Step 5: Delete orphaned Amazon ECR repositories
 
-A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
+A pipeline configured with `useCodeBuild: true` (for Zip Archive, `app.zipDownloads.useCodeBuild`) creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Three carry an explicit, lower-cased name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`, where `<CONFIG_NAME>` and `<BASE_STACK_NAME>` are the `name` and `app.baseStackName` values of `config.json` and `<REGION>` is the VAMS Region — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Four carry an explicit, lower-cased name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform`, the Video SOP/BOM Extraction repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom`, the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent`, and the Zip Archive repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-ziparchive`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`, where `<CONFIG_NAME>` and `<BASE_STACK_NAME>` are the `name` and `app.baseStackName` values of `config.json` and `<REGION>` is the VAMS Region — so if a teardown fails and leaves any of them behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
 # Check for the explicitly named repositories, one name per call
@@ -396,6 +396,9 @@ aws ecr describe-repositories \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 aws ecr describe-repositories \
     --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-cadstepagent" \
+    --query 'repositories[].repositoryName' --output text 2>/dev/null
+aws ecr describe-repositories \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-ziparchive" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 
 # Delete each one that exists, including any images it still holds

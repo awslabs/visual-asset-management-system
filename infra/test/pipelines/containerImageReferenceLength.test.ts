@@ -106,6 +106,12 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         !pipelines.useGenAiVideoSopBom.bedrockModelId
                     )
                         pipelines.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
+                    // The Download as Zip zipArchive pipeline has its key outside app.pipelines.
+                    c.app.zipDownloads = {
+                        ...(c.app.zipDownloads ?? {}),
+                        enabled: true,
+                        useCodeBuild: true,
+                    };
                 },
             });
         });

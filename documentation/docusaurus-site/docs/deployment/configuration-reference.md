@@ -1238,15 +1238,16 @@ Every key is optional, and an absent block uses the defaults. Configuration vali
 Nested stack: `infra/lib/nestedStacks/pipelines/utility/zipArchive/zipArchiveBuilder-nestedStack.ts` (`ZipArchiveBuilderNestedStack`) — AWS Batch on Fargate. API: `backend/backend/handlers/zipDownloads/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
 :::
 
-| Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                         |
-| ------------------------------------------- | ------- | ----------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.zipDownloads.enabled`                  | boolean | `false`                 | --                         | Enables Download as Zip: the Zip Archive pipeline, the feature switch, and the web, CLI, and MCP controls. Requires `app.useGlobalVpc.enabled`.     |
-| `app.zipDownloads.retentionDays`            | number  | `7`                     | 1 to 30                    | Days a job and its archive are kept after the job was created: the table's time to live and the expiration of the `vams.preparedDownloads/` prefix. |
-| `app.zipDownloads.maxFilesPerRequest`       | number  | `100000`                | 1 to 1,000,000             | Most files one archive holds.                                                                                                                       |
-| `app.zipDownloads.maxTotalBytesPerRequest`  | number  | `5497558138880` (5 TiB) | 1 byte to 5 TiB            | Largest total size of the files one archive holds. 5 TiB is the Amazon S3 single-object limit.                                                      |
-| `app.zipDownloads.maxActiveRequestsPerUser` | number  | `5`                     | 1 to 100                   | Most jobs one user can have queued or running at the same time.                                                                                     |
-| `app.zipDownloads.computeVcpu`              | number  | `16`                    | `4`, `8`, or `16`          | vCPUs of the Zip Archive job's AWS Fargate task.                                                                                                    |
-| `app.zipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the Zip Archive job's AWS Fargate task, in GiB.                                                                                           |
+| Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                                        |
+| ------------------------------------------- | ------- | ----------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app.zipDownloads.enabled`                  | boolean | `false`                 | --                         | Enables Download as Zip: the Zip Archive pipeline, the feature switch, and the web, CLI, and MCP controls. Requires `app.useGlobalVpc.enabled`.                    |
+| `app.zipDownloads.retentionDays`            | number  | `7`                     | 1 to 30                    | Days a job and its archive are kept after the job was created: the table's time to live and the expiration of the `vams.preparedDownloads/` prefix.                |
+| `app.zipDownloads.maxFilesPerRequest`       | number  | `100000`                | 1 to 1,000,000             | Most files one archive holds.                                                                                                                                      |
+| `app.zipDownloads.maxTotalBytesPerRequest`  | number  | `5497558138880` (5 TiB) | 1 byte to 5 TiB            | Largest total size of the files one archive holds. 5 TiB is the Amazon S3 single-object limit.                                                                     |
+| `app.zipDownloads.maxActiveRequestsPerUser` | number  | `5`                     | 1 to 100                   | Most jobs one user can have queued or running at the same time.                                                                                                    |
+| `app.zipDownloads.computeVcpu`              | number  | `16`                    | `4`, `8`, or `16`          | vCPUs of the Zip Archive job's AWS Fargate task.                                                                                                                   |
+| `app.zipDownloads.computeMemoryGiB`         | number  | `32`                    | Valid for the vCPU (below) | Memory of the Zip Archive job's AWS Fargate task, in GiB.                                                                                                          |
+| `app.zipDownloads.useCodeBuild`             | boolean | `false`                 | --                         | Builds the Zip Archive container image with AWS CodeBuild during deployment instead of local Docker. Supported in the commercial and AWS GovCloud (US) partitions. |
 
 `computeMemoryGiB` must be a memory size AWS Fargate supports for the chosen vCPU count: 8 to 30 GiB in 1 GiB steps for 4 vCPU, 16 to 60 GiB in 4 GiB steps for 8 vCPU, and 32 to 120 GiB in 8 GiB steps for 16 vCPU.
 
@@ -1263,7 +1264,8 @@ Changing `retentionDays` applies to jobs created afterwards; the lifecycle rule 
             "maxTotalBytesPerRequest": 5497558138880,
             "maxActiveRequestsPerUser": 5,
             "computeVcpu": 16,
-            "computeMemoryGiB": 32
+            "computeMemoryGiB": 32,
+            "useCodeBuild": false
         }
     }
 }

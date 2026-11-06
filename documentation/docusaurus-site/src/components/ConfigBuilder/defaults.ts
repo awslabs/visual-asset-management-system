@@ -472,6 +472,7 @@ const COMMERCIAL: ConfigShape = {
             maxActiveRequestsPerUser: 5,
             computeVcpu: 16,
             computeMemoryGiB: 32,
+            useCodeBuild: false,
         },
     },
 };

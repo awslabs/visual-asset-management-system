@@ -2233,6 +2233,15 @@ export const FIELDS: FieldMeta[] = [
         min: 8,
         help: "AWS Fargate memory for the vCPU size: 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps. Default 32.",
     },
+    {
+        path: "app.zipDownloads.useCodeBuild",
+        label: "Download as Zip — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.zipDownloads.enabled"),
+        help: "Builds the zipArchive container image with AWS CodeBuild during deployment instead of local Docker. Default false.",
+    },
 ];
 
 /** Fields belonging to a section, in declaration order. */

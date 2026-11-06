@@ -109,6 +109,23 @@ describe("app.zipDownloads validation (feature off: values are still checked)", 
         expect(builderViolations(config)).toContain("zip-downloads-enabled-boolean");
     });
 
+    test("useCodeBuild defaults to false and a non-boolean is refused", () => {
+        expect(Config.ZIP_DOWNLOADS_DEFAULTS.useCodeBuild).toBe(false);
+        const config = baseConfig((c) => {
+            c.app.zipDownloads.useCodeBuild = "true";
+        });
+        expect(resolve(config)).toThrow(/app\.zipDownloads\.useCodeBuild must be true or false/);
+        expect(builderViolations(config)).toContain("zip-downloads-use-codebuild-boolean");
+    });
+
+    test("useCodeBuild true validates", () => {
+        const config = baseConfig((c) => {
+            c.app.zipDownloads.useCodeBuild = true;
+        });
+        expect(resolve(config)().app.zipDownloads.useCodeBuild).toBe(true);
+        expect(builderViolations(config)).toEqual([]);
+    });
+
     test("a vCPU size other than 4, 8 or 16 is refused", () => {
         const config = baseConfig((c) => {
             c.app.zipDownloads.computeVcpu = 12;

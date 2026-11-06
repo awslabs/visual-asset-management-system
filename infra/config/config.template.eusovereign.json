@@ -460,7 +460,8 @@
             "maxTotalBytesPerRequest": 5497558138880,
             "maxActiveRequestsPerUser": 5,
             "computeVcpu": 16,
-            "computeMemoryGiB": 32
+            "computeMemoryGiB": 32,
+            "useCodeBuild": false
         }
     }
 }

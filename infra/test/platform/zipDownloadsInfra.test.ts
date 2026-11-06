@@ -308,6 +308,19 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
     });
 
+    test("useCodeBuild off (default): the image is a local Docker asset, with no CodeBuild build", () => {
+        // codeBuildEcrEncryption.test.ts covers useCodeBuild on (repository, build trigger, job image).
+        const archive = synth.resources.filter((r) => /ZipArchiveBuilder/.test(r.stack));
+        expect(archive.filter((r) => r.type === "AWS::ECR::Repository")).toEqual([]);
+        expect(archive.filter((r) => r.type === "AWS::CodeBuild::Project")).toEqual([]);
+        const jobs = archive.filter((r) => r.type === "AWS::Batch::JobDefinition");
+        expect(jobs).toHaveLength(1);
+        // The CDK asset repository, not a VAMS-owned one.
+        expect(SynthResult.flatten(jobs[0].properties.ContainerProperties.Image)).toContain(
+            "cdk-hnb659fds-container-assets"
+        );
+    });
+
     test("the zipArchive state machine ends before the workflow's 12 h task timeout", () => {
         const machines = synth
             .ofType("AWS::StepFunctions::StateMachine")

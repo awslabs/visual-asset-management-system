@@ -37,6 +37,7 @@ import {
     buildPipelineEndFunction,
     buildVamsExecuteZipArchiveFunction,
 } from "../lambdaBuilder/zipArchiveFunctions";
+import { ZipArchiveCodeBuildConstruct } from "./zipArchiveCodeBuild-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import path = require("path");
 
@@ -70,7 +71,8 @@ export interface ZipArchiveConstructProps extends cdk.StackProps {
  * streams a selection of asset files into one zip (ZIP64), tar or tar.gz archive. A Download as Zip
  * job (mode 1) writes it under `vams.preparedDownloads/` in the auxiliary bucket and records progress on
  * the job row; a workflow run (mode 2) writes it to the run's outputs so it becomes an asset file.
- * Mirrors the coordinate transform construct; built only when app.zipDownloads.enabled.
+ * Mirrors the coordinate transform construct; built only when app.zipDownloads.enabled. The image is
+ * built with local Docker, or with AWS CodeBuild when app.zipDownloads.useCodeBuild.
  */
 export class ZipArchiveConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
@@ -203,6 +205,21 @@ export class ZipArchiveConstruct extends Construct {
         // Cross-account external asset buckets encrypted with their own keys (no-op without them).
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // CodeBuild-based container build (when useCodeBuild is true), as the coordinate transform does.
+        let codeBuildConstruct: ZipArchiveCodeBuildConstruct | undefined;
+        if (zip.useCodeBuild === true) {
+            codeBuildConstruct = new ZipArchiveCodeBuildConstruct(this, "ZipArchiveCodeBuild", {
+                config: props.config,
+                kmsKey: props.kmsKey,
+            });
+
+            new cdk.CfnOutput(this, "ZipArchiveCodeBuildProject", {
+                value: codeBuildConstruct.codeBuildProjectName,
+                description:
+                    "CodeBuild project name for the Zip Archive container. Check build status, then use Download as Zip once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
+            });
+        }
+
         // The container's stdout/stderr, in the /aws/vendedlogs/Pipelines/ prefix the execution
         // service may read.
         const containerLogGroup = new logs.LogGroup(this, "ZipArchiveBatchJobLogGroup", {
@@ -251,6 +268,12 @@ export class ZipArchiveConstruct extends Construct {
                 // The engine streams S3 to S3 through bounded memory buffers and never stages a member
                 // on disk, so the Fargate minimum is enough.
                 ephemeralStorageGiB: 21,
+                ecrImage: codeBuildConstruct
+                    ? {
+                          repository: codeBuildConstruct.repository,
+                          tag: codeBuildConstruct.imageTag,
+                      }
+                    : undefined,
                 environment: {
                     ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME:
                         props.storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,

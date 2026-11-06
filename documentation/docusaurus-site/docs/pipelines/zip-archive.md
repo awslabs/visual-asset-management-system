@@ -68,7 +68,7 @@ The container reads members with ranged GET requests of their pinned versions, r
 
 ### Container Image Build
 
-The container image is built during CDK deployment, from `backendPipelines/utility/zipArchive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user. The image is a local Docker build on the deployment machine (a CDK image asset pushed to Amazon ECR), so the machine running `cdk deploy` needs Docker; there is no AWS CodeBuild option for this image.
+The container image is built during CDK deployment, from `backendPipelines/utility/zipArchive/container/` (Python 3.11 slim base image, the Python standard library, and the AWS SDK for Python). It runs as a non-root user. By default the image is a local Docker build on the deployment machine (a CDK image asset pushed to Amazon ECR), so the machine running `cdk deploy` needs Docker. With `app.zipDownloads.useCodeBuild` set to `true`, CDK uploads the container source to Amazon S3 instead, and an AWS CodeBuild project builds the image with `container/buildspec.yml` into an Amazon ECR repository VAMS owns (`<name>-<baseStackName>-ziparchive`, with `-kms` when `app.useKmsCmkEncryption.enabled`). The build runs outside the VPC to pull the public base image, and the deployment does not wait for it: the stack output `ZipArchiveCodeBuildProject` names the project, so check that its latest build SUCCEEDED before the first zip download. The CodeBuild option is supported in the commercial and AWS GovCloud (US) partitions; configuration validation warns when it is set elsewhere.
 
 ## Configuration
 
@@ -80,13 +80,14 @@ The pipeline has no configuration block of its own. It is deployed, and its pipe
         "zipDownloads": {
             "enabled": true,
             "computeVcpu": 16,
-            "computeMemoryGiB": 32
+            "computeMemoryGiB": 32,
+            "useCodeBuild": false
         }
     }
 }
 ```
 
-`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job. The other `app.zipDownloads` keys set the retention and limits of Download as Zip jobs; see [Zip downloads (`app.zipDownloads`)](../deployment/configuration-reference.md#zip-downloads-appzipdownloads).
+`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.zipDownloads` keys set the retention and limits of Download as Zip jobs; see [Zip downloads (`app.zipDownloads`)](../deployment/configuration-reference.md#zip-downloads-appzipdownloads).
 
 ## Running the Zip Archive Workflow
 
@@ -126,14 +127,15 @@ The container runs on AWS Batch with AWS Fargate compute in the VPC's isolated s
 
 The following AWS resources are created when Download as Zip is enabled:
 
-| Resource                     | Service            | Purpose                                                                                            |
-| :--------------------------- | :----------------- | :------------------------------------------------------------------------------------------------- |
-| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                     |
-| Job Queue                    | AWS Batch          | Job scheduling                                                                                     |
-| Job Definition               | AWS Batch          | Container configuration (`computeVcpu`, `computeMemoryGiB`)                                        |
-| Container Repository         | Amazon ECR         | Stores the Zip Archive container image                                                             |
-| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                      |
-| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd) |
+| Resource                     | Service            | Purpose                                                                                                    |
+| :--------------------------- | :----------------- | :--------------------------------------------------------------------------------------------------------- |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                             |
+| Job Queue                    | AWS Batch          | Job scheduling                                                                                             |
+| Job Definition               | AWS Batch          | Container configuration (`computeVcpu`, `computeMemoryGiB`)                                                |
+| Container Repository         | Amazon ECR         | Stores the Zip Archive container image (the CDK asset repository, or a VAMS-owned one with `useCodeBuild`) |
+| CodeBuild Project            | AWS CodeBuild      | Builds the container image, only with `useCodeBuild`                                                       |
+| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                              |
+| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd)         |
 
 The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the auxiliary bucket, and the zip download API functions are deployed whether or not the feature is enabled. See [AWS Resources](../architecture/aws-resources.md).
 

@@ -855,11 +855,13 @@ export const ZIP_DOWNLOADS_DEFAULTS = {
     maxActiveRequestsPerUser: 5,
     computeVcpu: 16,
     computeMemoryGiB: 32,
+    // Build the zipArchive container image with AWS CodeBuild instead of local Docker.
+    useCodeBuild: false,
 };
 
 /** Bounds of each numeric app.zipDownloads key (inclusive integers). */
 export const ZIP_DOWNLOADS_BOUNDS: Record<
-    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled">,
+    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
     { min: number; max: number; unit: string }
 > = {
     retentionDays: { min: 1, max: 30, unit: "days" },
@@ -894,6 +896,11 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
     const block = config.app.zipDownloads;
     if (typeof block.enabled !== "boolean") {
         throw new Error("Configuration Error: app.zipDownloads.enabled must be true or false.");
+    }
+    if (typeof block.useCodeBuild !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.zipDownloads.useCodeBuild must be true or false."
+        );
     }
     for (const [key, bound] of Object.entries(ZIP_DOWNLOADS_BOUNDS)) {
         const value = (block as Record<string, unknown>)[key];
@@ -2126,14 +2133,17 @@ export function getConfig(app: cdk.App): Config {
             "useGenAiVideoSopBom",
             "useImageTo3d",
         ];
-        const enabledOutsideSupport = codeBuildPipelinePaths.filter(
-            (name) => pipelines[name]?.useCodeBuild === true
-        );
+        const enabledOutsideSupport = codeBuildPipelinePaths
+            .filter((name) => pipelines[name]?.useCodeBuild === true)
+            .map((name) => `app.pipelines.${name}`);
+        if (config.app.zipDownloads?.enabled && config.app.zipDownloads.useCodeBuild === true) {
+            enabledOutsideSupport.push("app.zipDownloads");
+        }
         if (enabledOutsideSupport.length > 0) {
             console.warn(
-                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport
-                    .map((name) => `app.pipelines.${name}`)
-                    .join(", ")} while deploying to the '${resolvedPartition}' partition. The ` +
+                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport.join(
+                    ", "
+                )} while deploying to the '${resolvedPartition}' partition. The ` +
                     "in-account CodeBuild container build is supported in the aws and aws-us-gov " +
                     "partitions; elsewhere the build host cannot reach the public GPU base images " +
                     "these containers pull. The build trigger does not wait for the build, so a " +
@@ -5176,6 +5186,7 @@ export interface ConfigPublic {
             maxActiveRequestsPerUser: number;
             computeVcpu: number;
             computeMemoryGiB: number;
+            useCodeBuild: boolean;
         };
     };
 }
