@@ -289,7 +289,10 @@ class TestContainerNeverFailsALandedArchive:
         _assert_one_outcome(s3, table, zd.STATUS_SUCCEEDED)
 
     def test_upload_token_key_matches_the_backend(self):
+        keys = importlib.import_module("common.s3MetadataKeys")
         assert runner.ARCHIVE_UPLOAD_TOKEN_METADATA == zd.ARCHIVE_UPLOAD_TOKEN_METADATA
+        # One upload token key for the zip archive and the large object copy engine.
+        assert runner.ARCHIVE_UPLOAD_TOKEN_METADATA == keys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 
 
 class TestEarlierSameSizeObjectAtTheKey:

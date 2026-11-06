@@ -29,7 +29,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
-from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
+from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY, is_own_upload_object  # noqa: F401
 from customLogging.logger import safeLogger
 
 # Logs under the calling handler's service name.
@@ -468,12 +468,10 @@ def new_upload_token():
     return uuid.uuid4().hex
 
 
-def is_own_upload_object(head, token):
-    """Whether a HEAD describes the object a job's own multipart upload created: the object carries
-    the job's upload token. Never decided by presence or size, since an earlier object of the same
-    size and part count can sit at the key (a re-run of the same output)."""
-    return bool(head) and bool(token) and \
-        (head.get("Metadata") or {}).get(VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY) == token
+# is_own_upload_object (imported above from common.s3MetadataKeys, shared with the zip archive's
+# landed_archive): whether a HEAD describes the object a job's own multipart upload created (the
+# object carries the job's upload token). Never decided by presence or size, since an earlier object
+# of the same size and part count can sit at the key (a re-run of the same output).
 
 
 def landed_object_version(s3_client, row):

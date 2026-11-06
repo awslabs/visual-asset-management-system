@@ -37,6 +37,7 @@ from typing import Callable, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
+from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY, is_own_upload_object
 from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX
 
 PREPARED_DOWNLOADS_PREFIX = AUXILIARY_PREPARED_DOWNLOADS_PREFIX
@@ -57,8 +58,10 @@ CANCELLED_BY_USER = "user"
 CANCELLED_BY_EXECUTION = "execution"
 
 # User metadata key (x-amz-meta-...) the archive container stamps on its upload with the row's
-# archiveUploadToken; mirrored in the container (archive_pipeline/runner.py), pinned by its tests.
-ARCHIVE_UPLOAD_TOKEN_METADATA = "vams-zip-upload-token"
+# archiveUploadToken: the same key the large object copy engine stamps its own token under
+# (common.s3MetadataKeys), compared by the same helper (is_own_upload_object). Mirrored in the
+# container (archive_pipeline/runner.py), pinned by its tests.
+ARCHIVE_UPLOAD_TOKEN_METADATA = VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 
 # The archive system workflow and the system trigger its zip-download runs are recorded under
 # (common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
@@ -507,7 +510,7 @@ def landed_archive(s3_client, bucket: str, row: dict) -> Tuple[bool, Optional[in
         if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
             return False, None
         raise
-    if (head.get("Metadata") or {}).get(ARCHIVE_UPLOAD_TOKEN_METADATA) != token:
+    if not is_own_upload_object(head, token):
         return False, None
     return True, int(head.get("ContentLength", 0))
 

@@ -40,8 +40,10 @@ RETRY_CONFIG = Config(retries={"max_attempts": 8, "mode": "adaptive"}, max_pool_
 REASON_PREFIX = "ZIPDOWNLOAD: "
 GENERIC_FAILURE = "The archive job failed"
 STOPPED = "The archive job was stopped"
-# Mirrors backend common/zipDownloads.ARCHIVE_UPLOAD_TOKEN_METADATA (pinned by the tests).
-ARCHIVE_UPLOAD_TOKEN_METADATA = "vams-zip-upload-token"
+# Mirrors backend common/zipDownloads.ARCHIVE_UPLOAD_TOKEN_METADATA, which is the upload token key
+# the large object copy engine also uses (common/s3MetadataKeys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY);
+# this image cannot import the backend, so the tests pin the two equal.
+ARCHIVE_UPLOAD_TOKEN_METADATA = "vams-copyuploadtoken"
 CONTENT_TYPES = {"zip": "application/zip", "tar": "application/x-tar", "tar.gz": "application/gzip"}
 EXTENSIONS = {"zip": ".zip", "tar": ".tar", "tar.gz": ".tar.gz"}
 PROGRESS_EVERY_BYTES = 64 * 1024 * 1024
