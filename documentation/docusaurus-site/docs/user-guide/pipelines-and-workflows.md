@@ -521,6 +521,13 @@ workflow, trigger, start and stop times and duration — together with where it 
 **Output Path Prefix** the run wrote beneath. Knowing the prefix is what lets you find a particular run's
 output in the asset when several runs have written to the same place.
 
+Output files over 1 GiB are copied into the asset after the last pipeline step, and the run stays
+**Running** until they have landed. While that lasts, the header and the quick view show **Ingesting
+outputs (n of m)** with the bytes copied, and the detail page lists each file with its status
+(Queued, Copying, Landed, Failed or Cancelled), its progress and, for a failed file, the reason. On a
+finished run, the **Outputs** tab marks each output file the copy engine landed with **Ingested by
+copy engine**; a file that did not land is named in the execution error.
+
 The header also shows the **Workflow Version** the run started on: the published version of the
 workflow's state machine, the exact definition the run executed. It reads **(latest)** while the
 workflow still runs that version, and is marked **Superseded** once the workflow's state machine has
