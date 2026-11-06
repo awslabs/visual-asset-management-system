@@ -261,7 +261,7 @@ from .exceptions import (
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
-    UploadStatusNotFoundError
+    UploadStatusNotFoundError, RouteNotDeployedError
 )
 from .exceptions import GlobalInfrastructureError
 from .profile import ProfileManager, read_active_profile_name
@@ -475,7 +475,7 @@ class APIClient(CustomAPIClientMixin):
                         confirmed=forbidden == FORBIDDEN_WAF,
                     )
                 if forbidden == FORBIDDEN_NO_ROUTE:
-                    raise APIError(
+                    raise RouteNotDeployedError(
                         f"No deployed API route matches {method.upper()} {urlparse(url).path} (HTTP 403). "
                         "The deployment may be older than this CLI, or the add-on that serves the route "
                         "is not deployed."
@@ -1258,13 +1258,20 @@ class APIClient(CustomAPIClientMixin):
     def get_upload_status(self, database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
         """Status of an upload and the outcome of each of its files ingested asynchronously
         (files over 1 GiB). A 404 means no such upload is visible to the caller, or its files all
-        landed at completion (its record is removed then)."""
+        landed at completion (its record is removed then).
+
+        Final answers (UploadStatusNotFoundError for a 404 or a deployment without the route,
+        InvalidAssetDataError for a 400, AuthenticationError for a 401) are told apart from
+        transient failures (APIError: a 5xx, a network error), which a caller may poll again."""
         from ..constants import API_UPLOAD_STATUS
 
         try:
             endpoint = API_UPLOAD_STATUS.format(uploadId=upload_id)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
             response = self.get(endpoint, include_auth=True,
-                                params={"databaseId": database_id, "assetId": asset_id})
+                                params={"databaseId": database_id, "assetId": asset_id},
+                                raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -1281,7 +1288,11 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get upload status: {e}")
 
-        except GlobalInfrastructureError:
+        except RouteNotDeployedError as e:
+            # The deployment has no upload status route (older than this CLI).
+            raise UploadStatusNotFoundError(str(e))
+
+        except (GlobalInfrastructureError, APIError):
             raise
 
         except Exception as e:

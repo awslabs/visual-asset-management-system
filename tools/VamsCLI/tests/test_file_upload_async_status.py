@@ -199,20 +199,93 @@ class TestWaitLoop:
         file_cmd.apply_async_outcome(result, waited=True)
         assert result["overall_success"] is False
 
-    def test_a_404_from_the_api_is_the_final_not_found_error(self):
+
+def _http_response(code, headers=None, body=b'{"message": "x"}'):
+    import requests
+    response = requests.Response()
+    response.status_code = code
+    response._content = body
+    response.headers["Content-Type"] = "application/json"
+    response.headers.update(headers or {})
+    response.url = "https://api.example/uploads/u1"
+    return response
+
+
+def _client_answering(response):
+    """An APIClient whose HTTP session answers every request with ``response``: the request goes
+    through the real _make_request, so its status mapping is what a deployment would produce."""
+    from unittest.mock import MagicMock
+    from vamscli.utils.api_client import APIClient
+    client = APIClient.__new__(APIClient)
+    client.base_url = "https://api.example"
+    client.request_timeout = 5
+    client.session = MagicMock()
+    client.session.request.return_value = response
+    client.profile_manager = MagicMock()
+    client.profile_manager.is_override_token.return_value = False
+    client.profile_manager.is_token_expired.return_value = False
+    return client
+
+
+NO_ROUTE_403 = {"x-amzn-ErrorType": "MissingAuthenticationTokenException"}
+
+
+class TestStatusThroughTheRequestPath:
+    """#1123 round 3 M9: get_upload_status used to let _make_request turn every non-2xx into a plain
+    APIError, so a 404, a 400 and a no-route 403 were retried by --wait-async until its timeout
+    (242 polls over an hour). The answers below come through the real request path."""
+
+    def _call(self, response):
         from vamscli.utils.api_client import APIClient
-        import requests
-        response = requests.Response()
-        response.status_code = 404
-        client = APIClient.__new__(APIClient)
-        with patch.object(APIClient, "get", side_effect=requests.exceptions.HTTPError(response=response)):
-            with pytest.raises(UploadStatusNotFoundError):
-                client.get_upload_status("db", "a", "u1")
-        response.status_code = 503
-        with patch.object(APIClient, "get", side_effect=requests.exceptions.HTTPError(response=response)):
-            with pytest.raises(APIError) as error:
-                client.get_upload_status("db", "a", "u1")
-        assert not isinstance(error.value, UploadStatusNotFoundError)
+        client = _client_answering(response)
+        with patch.object(APIClient, "_validate_token_before_request"), \
+                patch.object(APIClient, "_get_headers", return_value={"Authorization": "Bearer x"}):
+            return client, client.get_upload_status("db", "a1", "u1")
+
+    @pytest.mark.parametrize("code,headers,error", [
+        (404, None, UploadStatusNotFoundError),
+        (400, None, InvalidAssetDataError),
+        (403, NO_ROUTE_403, UploadStatusNotFoundError),
+    ])
+    def test_a_final_answer_is_its_own_error(self, code, headers, error):
+        with pytest.raises(error):
+            self._call(_http_response(code, headers))
+
+    def test_a_404_keeps_its_own_message(self):
+        with pytest.raises(UploadStatusNotFoundError) as raised:
+            self._call(_http_response(404))
+        assert "keeps no status" in str(raised.value)
+
+    def test_a_server_error_is_transient(self):
+        with patch("time.sleep"), pytest.raises(APIError) as raised:
+            self._call(_http_response(503))
+        assert not isinstance(raised.value, (UploadStatusNotFoundError, InvalidAssetDataError))
+
+    @pytest.mark.parametrize("code,headers", [(404, None), (400, None), (403, NO_ROUTE_403)])
+    def test_the_wait_ends_at_once_on_a_final_answer(self, code, headers):
+        from vamscli.utils.api_client import APIClient
+        client = _client_answering(_http_response(code, headers))
+        now = [0.0]
+        with patch.object(APIClient, "_validate_token_before_request"), \
+                patch.object(APIClient, "_get_headers", return_value={"Authorization": "Bearer x"}):
+            entries = file_cmd.wait_for_async_ingestion(
+                client, "db", "a1", ["u1"], 3600,
+                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
+        assert entries[0]["status"] == "unknown" and not entries[0].get("timed_out")
+        assert client.session.request.call_count == 1
+        assert now[0] == 0.0
+
+    def test_the_wait_retries_a_server_error_until_the_deadline(self):
+        from vamscli.utils.api_client import APIClient
+        client = _client_answering(_http_response(503))
+        now = [0.0]
+        with patch.object(APIClient, "_validate_token_before_request"), \
+                patch.object(APIClient, "_get_headers", return_value={"Authorization": "Bearer x"}), \
+                patch("time.sleep"):
+            entries = file_cmd.wait_for_async_ingestion(
+                client, "db", "a1", ["u1"], 60,
+                sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
+        assert entries[0]["timed_out"] is True
 
 
 class TestUploadStatusCommand:
