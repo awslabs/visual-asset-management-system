@@ -35,7 +35,7 @@ type ActiveTool = "none" | "section" | "length" | "area";
  * active. This avoids the previous bug where enabling section + a measurement
  * made one double-click both cut a plane and start a measurement.
  *
- * Verified That Open API (v3.4):
+ * Verified That Open API (v3.4, unchanged in v3.6.0):
  *   - Clipper.create(world)  — section planes take the world arg.
  *   - LengthMeasurement / AreaMeasurement: set .world, .enabled, .snappings,
  *     then create()  — measurements take NO args; the cursor position is read
