@@ -53,10 +53,10 @@ class _HandOff:
         return [json.loads(c.kwargs["Payload"]) for c in self.client.invoke.call_args_list]
 
     def assert_handed(self, times=1):
-        assert self.client.invoke.call_count == times
-        for call in self.client.invoke.call_args_list:
-            assert call.kwargs["FunctionName"] == ENGINE_FUNCTION
-            assert call.kwargs["InvocationType"] == "Event"
+        assert times >= 1
+        assert self.client.invoke.call_args_list
+        assert [(c.kwargs["FunctionName"], c.kwargs["InvocationType"])
+                for c in self.client.invoke.call_args_list] == [(ENGINE_FUNCTION, "Event")] * times
         assert self.payloads() == [{"action": "reconcile", "executionArn": EXEC_ARN}] * times
 
     def deliver(self):
@@ -205,16 +205,19 @@ def test_a_job_the_cancel_path_cancelled_is_not_handed_over(env, machine, engine
 
 
 @BUCKETS
-def test_no_hand_over_without_a_stop(env, machine, engine_name, bucket):
-    """The execution no longer exists: no stop was made, nothing can be reconciled, the undecided
-    job is CANCELLED (unchanged) and nothing is handed over."""
+@pytest.mark.parametrize("outcome", ["deferred", "succeeded"])
+def test_no_hand_over_without_a_stop(env, machine, engine_name, bucket, outcome):
+    """The execution no longer exists: no stop was made and there is nothing to reconcile, so
+    nothing is handed over (it would only dead-letter and raise the alarm). An undecided job is
+    CANCELLED; a job whose landing the cancel path can read is kept SUCCEEDED (both unchanged)."""
     run = _Run(env, bucket)
     run.complete_by_hand()
     env["sfn"].stop_execution.side_effect = ClientError(
         {"Error": {"Code": "ExecutionDoesNotExist", "Message": "x"}}, "StopExecution")
     handoff = _HandOff()
-    _abort_route(env, _DeniedHead(env["s3"]), handoff)
-    assert run.row()["status"] == loc.STATUS_CANCELLED
+    _abort_route(env, _cancel_client(run, outcome), handoff)
+    expected = loc.STATUS_CANCELLED if outcome == "deferred" else loc.STATUS_SUCCEEDED
+    assert run.row()["status"] == expected
     handoff.client.invoke.assert_not_called()
 
 

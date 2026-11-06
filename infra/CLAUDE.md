@@ -350,8 +350,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 110, `apiBuilder2` 105                            |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.38 MB                  |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 110, `apiBuilder2` 107                            |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.39 MB                  |
 | API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 124 path-tree nodes (103 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:

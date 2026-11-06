@@ -2026,7 +2026,9 @@ def _reconcile_ended_copies(rows, main_item):
     if not _claim_copy_reconcile_check(main_item):
         return
     try:
-        loc.request_reconcile(lambda_client, function_name, loc.ended_copy_executions(sfn, rows))
+        for execution_arn in loc.ended_copy_executions(sfn, rows):
+            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
     except Exception as e:
         logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
 
