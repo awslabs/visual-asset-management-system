@@ -143,6 +143,11 @@ export function IAMArn(name: string) {
         eventBus: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:events:${
             config.env.region
         }:${config.env.account}:event-bus/${name}`,
+
+        // A rule on the default event bus (a rule on a custom bus carries the bus name in its ARN).
+        eventRule: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:events:${
+            config.env.region
+        }:${config.env.account}:rule/${name}`,
     };
 }
 

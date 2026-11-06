@@ -4,13 +4,13 @@
  */
 
 import * as events from "aws-cdk-lib/aws-events";
-import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
+import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
-import { Duration } from "aws-cdk-lib";
+import { Duration, Names } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
-import { IAMArn } from "../helper/service-helper";
+import { IAMArn, Service } from "../helper/service-helper";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 /**
@@ -28,6 +28,7 @@ export const WORKFLOW_STATUS_EVENT_STATUSES = ["SUCCEEDED", "FAILED", "TIMED_OUT
 /** Construct ids, for the tests and the resource list in documentation. */
 export const WORKFLOW_STATUS_CHANGE_RULE_ID = "WorkflowExecutionStatusChangeRule";
 export const WORKFLOW_STATUS_CHANGE_DLQ_ID = "WorkflowExecutionStatusChangeDLQ";
+export const WORKFLOW_STATUS_CHANGE_PERMISSION_ID = "WorkflowExecutionStatusChangeInvokePermission";
 
 /**
  * Pushes the end of every workflow execution to the execution service, so a run that reached a
@@ -39,7 +40,8 @@ export const WORKFLOW_STATUS_CHANGE_DLQ_ID = "WorkflowExecutionStatusChangeDLQ";
  * terminal statuses, on state machines whose ARN starts with this account and Region's workflow
  * state machine prefix (no account-wide match), and invokes the execution service function, which
  * already holds every permission the read-path reconcile uses. The rule adds no role and no IAM
- * statement: the target adds a resource policy on the function scoped to this rule's ARN.
+ * statement: a resource policy on the function scoped to this rule's ARN lets it invoke, and the
+ * rule is created only after that policy and the dead-letter queue's policy exist.
  *
  * Two retry layers apply. The target's retry policy (3 attempts within 2 hours) covers delivery to
  * Lambda, and events it cannot deliver go to a dead-letter queue (encrypted with the deployment key
@@ -58,6 +60,13 @@ export function buildWorkflowStatusChangeRule(
     executionServiceFunction: lambda.Function,
     storageResources: storageResources
 ): events.Rule {
+    // The rule must not go live before it can deliver. It matches every VAMS deployment's workflow
+    // state machines in the account and Region, so while it exists without the function's resource
+    // policy (or the dead-letter queue's policy) it collects other deployments' events as failed
+    // deliveries, some dropped and the rest in this deployment's dead-letter queue. Both policies
+    // therefore name the rule by an ARN built from its fixed name rather than by a reference to the
+    // rule (a reference would make the dependency below a cycle), and the rule depends on both:
+    // CloudFormation creates the policies first and the rule last.
     const rule = new events.Rule(scope, WORKFLOW_STATUS_CHANGE_RULE_ID, {
         description: "Reconcile VAMS workflow executions that end outside VAMS",
         eventPattern: {
@@ -71,6 +80,9 @@ export function buildWorkflowStatusChangeRule(
             },
         },
     });
+    const cfnRule = rule.node.defaultChild as events.CfnRule;
+    cfnRule.name = workflowStatusChangeRuleName(rule);
+    const ruleArn = IAMArn(cfnRule.name).eventRule;
 
     const dlq = new sqs.Queue(scope, WORKFLOW_STATUS_CHANGE_DLQ_ID, {
         encryption: storageResources.encryption.kmsKey
@@ -90,12 +102,51 @@ export function buildWorkflowStatusChangeRule(
         },
     ]);
 
-    rule.addTarget(
-        new eventsTargets.LambdaFunction(executionServiceFunction, {
-            deadLetterQueue: dlq,
-            retryAttempts: 3,
-            maxEventAge: Duration.hours(2),
+    // What the aws-events-targets LambdaFunction target adds (the function's resource policy for
+    // this rule, the queue policy statement, the target), with the rule named by its built ARN.
+    const permission = new lambda.CfnPermission(scope, WORKFLOW_STATUS_CHANGE_PERMISSION_ID, {
+        action: "lambda:InvokeFunction",
+        functionName: executionServiceFunction.functionArn,
+        principal: Service("EVENTS").PrincipalString,
+        sourceArn: ruleArn,
+    });
+    dlq.addToResourcePolicy(
+        new iam.PolicyStatement({
+            sid: "AllowWorkflowStatusChangeRule",
+            principals: [Service("EVENTS").Principal],
+            effect: iam.Effect.ALLOW,
+            actions: ["sqs:SendMessage"],
+            resources: [dlq.queueArn],
+            conditions: { ArnEquals: { "aws:SourceArn": ruleArn } },
         })
     );
+    // The queue's policy construct (created with the queue for enforceSSL, holding the statement above).
+    const queuePolicy = dlq.node.findChild("Policy") as sqs.QueuePolicy;
+
+    rule.addTarget({
+        bind: (): events.RuleTargetConfig => ({
+            arn: executionServiceFunction.functionArn,
+            deadLetterConfig: { arn: dlq.queueArn },
+            retryPolicy: {
+                maximumRetryAttempts: 3,
+                maximumEventAgeInSeconds: Duration.hours(2).toSeconds(),
+            },
+        }),
+    });
+    cfnRule.addDependency(permission);
+    cfnRule.node.addDependency(queuePolicy);
     return rule;
+}
+
+/**
+ * The status change rule's name: unique per deployment (the top-level stack name and the construct
+ * path, with a hash suffix) and within EventBridge's 64-character limit. Fixed rather than generated
+ * by CloudFormation so its ARN is known without a reference to the rule.
+ */
+export function workflowStatusChangeRuleName(rule: Construct): string {
+    return Names.uniqueResourceName(rule, {
+        maxLength: 64,
+        separator: "-",
+        allowedSpecialCharacters: "-",
+    });
 }

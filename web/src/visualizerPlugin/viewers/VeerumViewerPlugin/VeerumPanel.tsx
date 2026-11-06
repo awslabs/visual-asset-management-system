@@ -6,12 +6,15 @@
 import React, { useState } from "react";
 import VeerumControls from "./VeerumControls";
 import VeerumSceneGraph from "./VeerumSceneGraph";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface VeerumPanelProps {
     viewerController: any;
     loadedModels: any[];
     initError: string | null;
     onClose?: () => void;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 const VeerumPanel: React.FC<VeerumPanelProps> = ({
@@ -19,6 +22,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
     loadedModels,
     initError,
     onClose,
+    panelRef,
 }) => {
     const [activeTab, setActiveTab] = useState<"controls" | "sceneGraph">("controls");
 
@@ -28,6 +32,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: initError ? "50px" : "20px",
@@ -37,7 +42,7 @@ const VeerumPanel: React.FC<VeerumPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",

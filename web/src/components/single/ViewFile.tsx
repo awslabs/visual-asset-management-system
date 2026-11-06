@@ -23,7 +23,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo, isRequestBlocked } from "../../services/APIService";
+import { fetchAssetWithStatus, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
@@ -91,6 +91,89 @@ interface Asset {
 }
 
 // File format detection now handled by plugin system - no longer needed
+
+/** Why the file opened by its direct path could not be shown, as the page words it. */
+interface FileLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the file: it is not known to be missing, refused or archived. */
+    retryable: boolean;
+}
+
+const FILE_NOT_FOUND: FileLoadError = {
+    header: "File Not Found",
+    message: "The file you're looking for doesn't exist or has been moved.",
+    retryable: false,
+};
+
+/**
+ * Words a failed file lookup from the `[false, message, status?]` that fetchFileInfo returns. A
+ * missing asset is a 404 and a missing file a 400 that says it was not found; a 403 is a permission
+ * denial. A request the AWS WAF web ACL blocked, or whose response never arrived, carries no
+ * status and its own message (the request ID, or that the service could not be reached), and may
+ * load when tried again, as may any other failure.
+ */
+function fileLoadFailure(message?: unknown, status?: number): FileLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404 || (status === 400 && /not found/i.test(text))) {
+        return FILE_NOT_FOUND;
+    }
+    if (status === 403) {
+        return {
+            header: "Access Denied",
+            message: "Your role does not allow you to view this file.",
+            retryable: false,
+        };
+    }
+    return {
+        header: "File Unavailable",
+        message: text
+            ? `Failed to load the file. ${text}`
+            : "An error occurred while loading the file.",
+        retryable: true,
+    };
+}
+
+/** Why the asset's details could not be loaded beside a file that did load, as the page words it. */
+interface AssetLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the details: the asset is not known to be missing or refused. */
+    retryable: boolean;
+}
+
+/**
+ * Words a failed asset lookup from the `[false, message, status?]` that fetchAssetWithStatus
+ * returns. The file can still load: the asset and file routes are authorized on their own, and an
+ * asset can be deleted after its file was read. The asset API checks access before existence, so
+ * a 403 is a refusal and a 404 an asset that is gone. A request the AWS WAF web ACL blocked, or
+ * whose response never arrived, carries no status and its own message, and may load when tried
+ * again, as may any other failure.
+ */
+function assetLoadFailure(message?: unknown, status?: number): AssetLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404) {
+        return {
+            header: `${Synonyms.Asset} Not Found`,
+            message: `This ${Synonyms.asset} was not found. It may have been deleted.`,
+            retryable: false,
+        };
+    }
+    if (status === 403) {
+        return {
+            header: `${Synonyms.Asset} Access Denied`,
+            message: `Your role does not allow you to view this ${Synonyms.asset}'s details.`,
+            retryable: false,
+        };
+    }
+    return {
+        header: `${Synonyms.Asset} Details Unavailable`,
+        message: text
+            ? `Failed to load the ${Synonyms.asset}'s details. ${text}`
+            : `An error occurred while loading the ${Synonyms.asset}'s details.`,
+        retryable: true,
+    };
+}
 
 // React Router keeps this route's element mounted when only :databaseId or :assetId change, so a link
 // to another asset's file would re-render the previous asset's page with its loaded file still in
@@ -164,7 +247,9 @@ function ViewFileForAsset() {
 
     // State for direct path loading
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
-    const [directPathError, setDirectPathError] = useState<string | null>(null);
+    const [directPathError, setDirectPathError] = useState<FileLoadError | null>(null);
+    // Counts Retry presses, so the direct-path load runs again for the same URL.
+    const [directPathAttempt, setDirectPathAttempt] = useState(0);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
     // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
     // named no version, the same path with the version that was picked, until the URL names that
@@ -240,6 +325,8 @@ function ViewFileForAsset() {
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState<string | null>(null);
     const [asset, setAsset] = useState<Asset>({});
+    // Set when the last asset lookup failed; the file itself may still have loaded.
+    const [assetLoadError, setAssetLoadError] = useState<AssetLoadError | null>(null);
     // The file and preview streaming APIs refuse a non-distributable asset, so the visualizer and its
     // view selector are left out entirely and the page shows only versions and metadata. This page is
     // normally reached from the file manager, which hides its own entry points for such an asset; a
@@ -247,10 +334,16 @@ function ViewFileForAsset() {
     // distributable, as the API treats it; the empty record held before the fetch resolves (no
     // assetId) still renders the viewer.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
+    // After a failed asset lookup the page cannot tell whether the asset is distributable, so the
+    // visualizer and its view selectors are held back as for a non-distributable asset until a
+    // lookup succeeds.
+    const visualizerHeldBack = isNotDistributable || !!assetLoadError;
+    // The breadcrumb and title name the asset; without its details they fall back to its ID.
+    const assetLabel = asset?.assetName || (assetLoadError ? assetId : undefined);
 
     usePageTitle(
         databaseId,
-        asset?.assetName,
+        assetLabel,
         isMultiFileMode ? `${currentFiles.length} Files` : singleFileInfo?.filename
     );
 
@@ -377,6 +470,15 @@ function ViewFileForAsset() {
         setViewType(event.detail.selectedId);
     };
 
+    // The file alert's Retry. The press itself shows the loading state, as the asset warning's Retry
+    // does, so the alert and its button are gone before the second click of a double-click arrives.
+    // The effect below sets it too, but React applies an effect's update in a later task, which can
+    // run after the second click, and each press would then start its own lookup.
+    const retryDirectPathLoad = () => {
+        setIsLoadingDirectPath(true);
+        setDirectPathAttempt((attempt) => attempt + 1);
+    };
+
     // Handle direct path access - fetch file info from URL
     useEffect(() => {
         // A response for a URL the page has since left is dropped, so it cannot replace the file
@@ -410,7 +512,7 @@ function ViewFileForAsset() {
                 console.log("Requested version:", urlVersion || "latest");
 
                 // Fetch file info
-                const [success, fileInfoResponse] = await fetchFileInfo({
+                const [success, fileInfoResponse, status] = await fetchFileInfo({
                     databaseId,
                     assetId,
                     fileKey: urlFilePath,
@@ -421,11 +523,7 @@ function ViewFileForAsset() {
                 }
 
                 if (!success) {
-                    setDirectPathError(
-                        typeof fileInfoResponse === "string"
-                            ? fileInfoResponse
-                            : "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(fileLoadFailure(fileInfoResponse, status));
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -444,18 +542,21 @@ function ViewFileForAsset() {
 
                 // Check if file exists
                 if (!fileInfo || !fileInfo.key) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(FILE_NOT_FOUND);
                     setIsLoadingDirectPath(false);
                     return;
                 }
 
-                // Check if file is archived
+                // An archived file in a live asset (its latest version is a delete marker). A file
+                // in an archived asset never gets here: without showArchived its lookup is a 404.
+                // The File Manager lists archived files when "Show archived files" is on and offers
+                // Unarchive File for them.
                 if (fileInfo.isArchived) {
-                    setDirectPathError(
-                        `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`
-                    );
+                    setDirectPathError({
+                        header: "File Archived",
+                        message: `This file is archived and cannot be viewed. It can be unarchived from the ${Synonyms.asset}'s File Manager after turning on "Show archived files".`,
+                        retryable: false,
+                    });
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -504,21 +605,9 @@ function ViewFileForAsset() {
                     return;
                 }
                 console.error("Error loading file from direct path:", error);
-
-                // Check for specific error types. The apiClient throws an ApiError
-                // carrying the HTTP status in `.status` and the backend message in `.message`;
-                // a request the AWS WAF web ACL blocked keeps its message.
-                if (error?.status === 403 && !isRequestBlocked(error)) {
-                    setDirectPathError("You don't have permission to access this file.");
-                } else if (error?.status === 404) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
-                } else {
-                    setDirectPathError(
-                        error?.message || "An error occurred while loading the file."
-                    );
-                }
+                // fetchFileInfo answers a rejected request with its status rather than throwing, so
+                // this is a fault in reading its answer, which a second attempt may get past.
+                setDirectPathError(fileLoadFailure());
                 setIsLoadingDirectPath(false);
             }
         };
@@ -536,6 +625,7 @@ function ViewFileForAsset() {
         directPathRequest,
         loadedFileInfo,
         loadedFileRequests,
+        directPathAttempt,
     ]);
 
     // Fetch version info when state is passed but versionId is missing
@@ -630,13 +720,18 @@ function ViewFileForAsset() {
         const getData = async () => {
             if (databaseId && assetId) {
                 console.log("Fetching asset details for:", assetId);
-                const item = await fetchAsset({
+                const [, item, status] = await fetchAssetWithStatus({
                     databaseId: databaseId,
                     assetId: assetId,
                     showArchived: true,
                 });
-                if (item !== false) {
+                // A failed lookup answers with its message in place of the asset, so only a record
+                // is kept as the asset (as the asset page does). On failure the page keeps the file
+                // it loaded and says why the asset's details are missing; the last answer wins, so
+                // a record from an earlier lookup is dropped too.
+                if (item && typeof item === "object") {
                     console.log("Asset details fetched:", item);
+                    setAssetLoadError(null);
                     setAsset(item);
 
                     let defaultViewType: string;
@@ -662,6 +757,12 @@ function ViewFileForAsset() {
 
                     setViewerOptions(newViewerOptions);
                     setViewType(defaultViewType);
+                    setReload(false);
+                } else {
+                    console.log("Asset details could not be loaded:", item);
+                    setAsset({});
+                    setAssetLoadError(assetLoadFailure(item, status));
+                    // The warning's Retry sets reload again, which runs this lookup once more.
                     setReload(false);
                 }
             }
@@ -799,13 +900,23 @@ function ViewFileForAsset() {
                         </Box>
                     )}
 
-                    {/* Show error state for direct path access */}
+                    {/* Show error state for direct path access. The header names the cause, and a
+                        failure that may pass (no response, a blocked or failed request) offers Retry. */}
                     {!isLoadingDirectPath && directPathError && (
                         <Box padding={{ top: "s", horizontal: "l" }}>
                             <Container>
                                 <Box padding="m">
-                                    <Alert type="error" header="File Not Found">
-                                        {directPathError}
+                                    <Alert
+                                        type="error"
+                                        statusIconAriaLabel="Error"
+                                        header={directPathError.header}
+                                        action={
+                                            directPathError.retryable ? (
+                                                <Button onClick={retryDirectPathLoad}>Retry</Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {directPathError.message}
                                         <br />
                                         <br />
                                         <Link href={`#/databases/${databaseId}/assets/${assetId}`}>
@@ -833,7 +944,7 @@ function ViewFileForAsset() {
                                             href: "#/databases/" + databaseId + "/assets/",
                                         },
                                         {
-                                            text: asset?.assetName || "",
+                                            text: assetLabel || "",
                                             href:
                                                 "#/databases/" + databaseId + "/assets/" + assetId,
                                         },
@@ -879,7 +990,7 @@ function ViewFileForAsset() {
                                                 flexWrap: "wrap",
                                             }}
                                         >
-                                            {canCompareSingleFile && !isNotDistributable && (
+                                            {canCompareSingleFile && !visualizerHeldBack && (
                                                 <div data-testid="file-viewer-mode-toggle">
                                                     <SegmentedControl
                                                         label="Viewer mode"
@@ -896,7 +1007,7 @@ function ViewFileForAsset() {
                                                     />
                                                 </div>
                                             )}
-                                            {viewerOptions.length > 0 && !isNotDistributable && (
+                                            {viewerOptions.length > 0 && !visualizerHeldBack && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
                                                     options={viewerOptions}
@@ -917,19 +1028,45 @@ function ViewFileForAsset() {
                                     )}
                                 </div>
 
+                                {/* The file loaded but its asset's details did not. A failure that
+                                    may pass (no response, a blocked or failed request) offers Retry,
+                                    which shows as loading while the lookup runs again. */}
+                                {assetLoadError && (
+                                    <Alert
+                                        type="warning"
+                                        statusIconAriaLabel="Warning"
+                                        header={assetLoadError.header}
+                                        action={
+                                            assetLoadError.retryable ? (
+                                                <Button
+                                                    loading={reload}
+                                                    onClick={() => setReload(true)}
+                                                >
+                                                    Retry
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {assetLoadError.message}
+                                    </Alert>
+                                )}
+
                                 {/* Main content area — vertical stack, no splitter */}
                                 {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
                                 !hasArchivedFiles ? (
                                     <SpaceBetween direction="vertical" size="xs">
-                                        {/* Viewer — omitted for a non-distributable asset */}
-                                        {isNotDistributable ? (
+                                        {/* Viewer — omitted for a non-distributable asset, or one whose
+                                            details could not be loaded */}
+                                        {visualizerHeldBack ? (
                                             <Container>
                                                 <Box
                                                     padding="m"
                                                     textAlign="center"
                                                     color="text-status-inactive"
                                                 >
-                                                    {`Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`}
+                                                    {isNotDistributable
+                                                        ? `Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`
+                                                        : `Visualizer is not available because this ${Synonyms.asset}'s details could not be loaded.`}
                                                 </Box>
                                             </Container>
                                         ) : (

@@ -808,6 +808,42 @@ class TestWriter6StatusEvent:
         describe.assert_not_called()
         client.invoke.assert_not_called()
 
+    # The rule matches every VAMS deployment's workflow state machines in the account and Region, so
+    # most events it delivers belong to another deployment. Each must end quietly: a raise would make
+    # Lambda retry the event and spend this deployment's reads on executions it does not own (in-dev
+    # D2, #1135). No Step Functions call, no write, no callback.
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
+    @pytest.mark.parametrize("event", [
+        # Another deployment's run, an execution id this deployment never stored.
+        lambda status: _status_event(
+            status, execution_id="99999999-9999-4999-8999-999999999999",
+            execution_arn="arn:aws:states:us-east-1:1:execution:vams-other1234:"
+                          "99999999-9999-4999-8999-999999999999",
+            state_machine="arn:aws:states:us-east-1:1:stateMachine:vams-other1234"),
+        # The same execution id under another deployment's state machine.
+        lambda status: _status_event(
+            status, execution_arn="arn:aws:states:us-east-1:1:execution:vams-other1234:" + EXEC,
+            state_machine="arn:aws:states:us-east-1:1:stateMachine:vams-other1234"),
+        # A run of a non-VAMS state machine whose name happens to start with the prefix.
+        lambda status: dict(_status_event(status), detail=dict(
+            _status_event(status)["detail"], name="nightly-batch-run",
+            executionArn="arn:aws:states:us-east-1:1:execution:vams-reports:nightly-batch-run")),
+        # A detail with no execution ARN.
+        lambda status: dict(_status_event(status), detail=dict(
+            _status_event(status)["detail"], executionArn=None)),
+    ], ids=["unknown-execution", "same-id-other-arn", "non-guid-name", "no-execution-arn"])
+    def test_another_deployments_event_ends_without_raising_or_any_side_effect(self, event, status):
+        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution",
+                             side_effect=AssertionError("describe")) as describe:
+            result = le.lambda_handler(event(status), MagicMock())
+            assert result["handled"] is False
+            stored = _stored(table)
+            assert stored["executionStatus"] == "RUNNING"
+            assert not stored.get("executionStopDate")
+        describe.assert_not_called()
+        client.invoke.assert_not_called()
+
     @pytest.mark.parametrize("event", [
         {"source": "aws.states", "detail-type": "Step Functions Execution Status Change",
          "detail": {"name": "not-an-execution-id", "status": "ABORTED", "executionArn": "x"}},

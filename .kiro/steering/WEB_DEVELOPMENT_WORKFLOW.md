@@ -532,6 +532,8 @@ const data = result[1];
 
 A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
 
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
+
 ### **Authentication: Dual-Mode System**
 
 The app supports Cognito and External OAuth2 modes. The auth orchestrator is `src/FedAuth/Auth.tsx`:
