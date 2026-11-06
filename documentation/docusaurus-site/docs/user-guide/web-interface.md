@@ -121,6 +121,7 @@ Below the details pane, a tabbed interface provides access to the following sect
 | **Executions**    | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
 | **Comments**      | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
 | **Versions**      | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
+| **My zip downloads** | Your zip downloads for this asset, with status and progress, and **Download**, **Cancel**, and **Delete** actions. Shown when the deployment enables Download as Zip. See [Zip Downloads](zip-downloads.md).                                                                                   |
 
 ### Metadata Section
 
@@ -192,6 +193,10 @@ The **Executions** page lists workflow executions across every workflow and data
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
+## My Zip Downloads Page
+
+When the deployment enables Download as Zip, the **My zip downloads** page (`#/zipdownloads`) lists your zip downloads across every asset, newest first, with each job's asset, archive name, status, progress, and expiry. A job that has succeeded can be downloaded; a queued or running job can be cancelled; a finished job can be deleted. The page lists only your own downloads. See [Zip Downloads](zip-downloads.md).
+
 ---
 
 ## Settings and Theme Toggle
@@ -223,6 +228,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 | Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
+| My zip downloads      | `https://<VAMS_WEBSITE>/#/zipdownloads`                                                                                 |
 
 ### File Path Encoding
 
