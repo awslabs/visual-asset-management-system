@@ -252,6 +252,79 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(await screen.findByText(nothing)).toBeInTheDocument();
     });
 
+    describe("before the binding read has answered (D154)", () => {
+        // A binding read that answers only when the test says so.
+        const deferBindingRead = () => {
+            let answer: (value: unknown) => void = () => undefined;
+            service().getDatabaseBindings.mockReturnValue(
+                new Promise((resolve) => {
+                    answer = resolve;
+                })
+            );
+            return (value: unknown) => act(async () => answer(value));
+        };
+
+        it("says the binding is loading, not that none is bound, and offers no empty select", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            const answer = deferBindingRead();
+            await mount();
+            await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+
+            expect(screen.getByText("Loading the schema binding")).toBeInTheDocument();
+            expect(screen.queryByText("No compliance schema bound")).not.toBeInTheDocument();
+            expect(screen.queryByText("Select a compliance schema")).not.toBeInTheDocument();
+            expect(screen.getByText("Loading the bound schema")).toBeInTheDocument();
+            expect(schemaSelect().isDisabled()).toBe(true);
+            expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
+            expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+
+            await answer(bindings("std"));
+            expect(await screen.findByText("Schema: std")).toBeInTheDocument();
+            expect(screen.queryByText("Loading the schema binding")).not.toBeInTheDocument();
+            expect(schemaSelect().isDisabled()).toBe(false);
+            expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+        });
+
+        it("says no schema is bound only once the read has said so", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            const answer = deferBindingRead();
+            await mount();
+            expect(screen.queryByText("No compliance schema bound")).not.toBeInTheDocument();
+            await answer(bindings(null));
+            expect(await screen.findByText("No compliance schema bound")).toBeInTheDocument();
+            expect(screen.getByText("Select a compliance schema")).toBeInTheDocument();
+        });
+
+        it("says it is loading to a reader who may not bind either", async () => {
+            mockAllowed = VIEW;
+            const answer = deferBindingRead();
+            await mount();
+            expect(screen.getByText("Loading the schema binding")).toBeInTheDocument();
+            expect(screen.queryByText("No compliance schema bound")).not.toBeInTheDocument();
+            await answer(bindings("std"));
+            expect(await screen.findByText("Schema: std")).toBeInTheDocument();
+        });
+
+        it("shows a failed read's error, not that none is bound, and reads again on Retry", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            service().getDatabaseBindings.mockResolvedValue([false, "Not Authorized"]);
+            await mount();
+
+            expect(
+                await screen.findByText("The schema binding could not be loaded: Not Authorized")
+            ).toBeInTheDocument();
+            expect(screen.queryByText("No compliance schema bound")).not.toBeInTheDocument();
+            expect(screen.getByText("The bound schema could not be loaded")).toBeInTheDocument();
+            expect(schemaSelect().isDisabled()).toBe(true);
+            expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
+
+            service().getDatabaseBindings.mockResolvedValue(bindings("std"));
+            fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+            expect(await screen.findByText("Schema: std")).toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+        });
+    });
+
     it("says how many quarantined assets stay quarantined and how many evaluations were queued", async () => {
         mockAllowed = COMPLIANCE_ADMIN;
         service().bindSchemaToDatabase.mockResolvedValue([

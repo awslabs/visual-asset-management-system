@@ -180,6 +180,10 @@ const DatabaseCompliancePage: React.FC = () => {
     const beginSchemasLoad = useLatestRequest();
     const [overview, setOverview] = useState<DatabaseComplianceOverview | null>(null);
     const [databaseSchema, setDatabaseSchema] = useState<string | null>(null);
+    // Whether the binding read has answered: until it has, the page says the binding is loading
+    // rather than that no schema is bound, and a failed read shows its error (D154).
+    const [bindingStatus, setBindingStatus] = useState<"loading" | "loaded" | "failed">("loading");
+    const [bindingError, setBindingError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [sweeping, setSweeping] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -316,12 +320,22 @@ const DatabaseCompliancePage: React.FC = () => {
         const isCurrent = beginBindingLoad();
         const routeDatabaseId = overviewRouteDatabaseId();
         if (routeDatabaseId !== null && routeDatabaseId !== databaseId) return;
+        setBindingStatus("loading");
+        setBindingError(null);
         const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
         if (!isCurrent()) return;
         if (bindingSuccess && typeof bindingResult !== "string") {
             const bound = bindingResult.databaseSchema || null;
             setDatabaseSchema(bound);
             setSelectedSchema(bound ? { label: bound, value: bound } : null);
+            setBindingStatus("loaded");
+        } else {
+            setBindingStatus("failed");
+            setBindingError(
+                typeof bindingResult === "string" && bindingResult
+                    ? bindingResult
+                    : "Failed to load the schema binding"
+            );
         }
     }, [beginBindingLoad, databaseId]);
 
@@ -472,6 +486,20 @@ const DatabaseCompliancePage: React.FC = () => {
     // A failed load shows no rows: those of an earlier load belong to another page or filter.
     const pageAssets = loadFailed ? [] : overview?.assets || [];
     const isPaging = hasMore || currentPageIndex > 1;
+    // The binding as the last read answered it; nothing is said about it before that.
+    const bindingKnown = bindingStatus === "loaded";
+    const bindingDescription =
+        bindingStatus === "loading" ? (
+            <StatusIndicator type="loading">Loading the schema binding</StatusIndicator>
+        ) : bindingStatus === "failed" ? (
+            <StatusIndicator type="error">
+                {`The schema binding could not be loaded: ${bindingError}`}
+            </StatusIndicator>
+        ) : databaseSchema ? (
+            `Schema: ${databaseSchema}`
+        ) : (
+            "No compliance schema bound"
+        );
 
     return (
         // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
@@ -506,7 +534,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     </Alert>
                 )}
 
-                {(canBind || (canUnbind && databaseSchema)) && (
+                {(canBind || (canUnbind && bindingKnown && databaseSchema)) && (
                     <Container
                         header={
                             <Header
@@ -526,11 +554,17 @@ const DatabaseCompliancePage: React.FC = () => {
                                             setSelectedSchema(detail.selectedOption)
                                         }
                                         options={schemaOptions}
-                                        placeholder="Select a compliance schema"
+                                        placeholder={
+                                            bindingStatus === "loading"
+                                                ? "Loading the bound schema"
+                                                : bindingStatus === "failed"
+                                                ? "The bound schema could not be loaded"
+                                                : "Select a compliance schema"
+                                        }
                                         loadingText="Loading schemas"
                                         statusType={loadingSchemas ? "loading" : "finished"}
                                         filteringType="auto"
-                                        disabled={bindingInProgress}
+                                        disabled={bindingInProgress || !bindingKnown}
                                         data-testid="database-compliance-bound-schema"
                                     />
                                 </FormField>
@@ -540,6 +574,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     onClick={handleBind}
                                     loading={bindingInProgress}
                                     disabled={
+                                        !bindingKnown ||
                                         !selectedSchema?.value ||
                                         selectedSchema.value === databaseSchema
                                     }
@@ -547,7 +582,10 @@ const DatabaseCompliancePage: React.FC = () => {
                                     {databaseSchema ? "Change" : "Bind"}
                                 </Button>
                             )}
-                            {canUnbind && databaseSchema && (
+                            {bindingStatus === "failed" && (
+                                <Button onClick={() => loadBinding()}>Retry</Button>
+                            )}
+                            {canUnbind && bindingKnown && databaseSchema && (
                                 <Button
                                     onClick={() => setConfirmRemove(true)}
                                     disabled={bindingInProgress}
@@ -597,11 +635,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     </Button>
                                 ) : undefined
                             }
-                            description={
-                                databaseSchema
-                                    ? `Schema: ${databaseSchema}`
-                                    : "No compliance schema bound"
-                            }
+                            description={bindingDescription}
                         >
                             {Synonyms.Database} Compliance Overview
                         </Header>
