@@ -103,6 +103,13 @@ class TestUploadStatusHelper:
         assert "asyncFiles" not in _stored(uploads)
         assert us.record_async_file_outcome(uploads, "other", ASSET, "/a.e57", True) is False
 
+    def test_a_file_the_record_does_not_track_is_not_added(self, uploads):
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/other.e57", True) is False
+        stored = _stored(uploads)
+        assert set(stored["asyncFiles"]) == {"/a.e57"}
+        assert stored["status"] == us.STATUS_PROCESSING_ASYNC
+
     def test_a_dotted_relative_key_is_one_map_entry(self, uploads):
         us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/dir.v2/scan.part.e57"], False)
         us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/dir.v2/scan.part.e57", True)
