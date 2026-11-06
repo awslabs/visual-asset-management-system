@@ -100,8 +100,10 @@ REFUSAL_REASONS = (REASON_SOURCE_CHANGED, REASON_TOO_LARGE, REASON_BLOCKED, REAS
 # Copy execution statuses that mean it ended outside its own states (the history quota, a stop in the
 # console or the API, a runtime error): no Fail or notify state ran, so the reconcile finalizes the job.
 RECONCILE_EXECUTION_STATUSES = ("FAILED", "TIMED_OUT", "ABORTED")
-# StopExecution error the cancel path (cancel_execution_copy_jobs) writes; such a stop is not
-# reconciled, as the cancel path marks the job CANCELLED itself.
+# StopExecution error the cancel path (cancel_execution_copy_jobs) writes. The reconcile does not
+# treat such a stop as an unreported end (is_unreported_end): it only finishes what the cancel path
+# decided, or makes the cancel path's decision for a job the cancel path left open
+# (_reconcile_cancelled_stop in the engine).
 STOP_ERROR_CANCELLED = "Cancelled"
 # Copy executions the execution details read checks per read for one that ended unreported.
 MAX_RECONCILE_CHECKS_PER_READ = 5
@@ -226,8 +228,13 @@ def plan_chunks(batches, batches_per_chunk=DEFAULT_BATCHES_PER_CHUNK):
 
 def ended_copy_executions(sfn_client, job_rows, limit=MAX_RECONCILE_CHECKS_PER_READ):
     """Execution ARNs of unfinished copy jobs whose execution ended outside its states (failed, timed
-    out, or stopped other than by the cancel path), checking at most ``limit`` jobs. Best-effort: a
-    failed describe is logged and skipped."""
+    out, or stopped), checking at most ``limit`` jobs. Best-effort: a failed describe is logged and
+    skipped.
+
+    A stop the cancel path made counts too: the cancel path leaves a job open when it cannot tell
+    whether the file landed, and then only the engine's reconcile of that stop decides it. This is
+    the backstop for that reconcile's status change event when the event is lost. The reconcile of a
+    cancelled stop is safe to repeat (every write in it is conditional or claimed)."""
     ended = []
     checked = 0
     for row in job_rows or []:
@@ -242,9 +249,15 @@ def ended_copy_executions(sfn_client, job_rows, limit=MAX_RECONCILE_CHECKS_PER_R
         except Exception as e:
             logger.warning(f"Could not describe copy execution of job {row.get('jobId', '')}: {e}")
             continue
-        if is_unreported_end(described):
+        if is_unreported_end(described) or is_cancelled_stop(described):
             ended.append(execution_arn)
     return ended
+
+
+def is_cancelled_stop(described):
+    """True when a described copy execution was stopped by the cancel path."""
+    return ((described or {}).get("status") == "ABORTED"
+            and (described or {}).get("error") == STOP_ERROR_CANCELLED)
 
 
 def is_unreported_end(described):
@@ -727,10 +740,15 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
             # Not a job row (every job row carries its key); nothing to stop or mark.
             continue
         execution_arn = job.get("executionArn", "")
+        # Whether this call stopped the execution. Only a stop made here raises the status change
+        # event (and leaves the cancelled stop the details read checks) that lets the engine decide
+        # a job left open below.
+        stopped = False
         if execution_arn:
             try:
                 sfn_client.stop_execution(executionArn=execution_arn, error=STOP_ERROR_CANCELLED,
                                           cause="The workflow execution ended.")
+                stopped = True
             except ClientError as e:
                 if e.response.get("Error", {}).get("Code") not in ("ExecutionDoesNotExist",):
                     logger.exception(f"Could not stop copy job {job_id}: {e}")
@@ -754,10 +772,13 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     if found is True:
                         # This job's own object had landed: the landed object wins over the cancel.
                         continue
-                    if found is None and execution_arn:
+                    if found is None and stopped:
                         # Could not tell (the abort route and the error handler cannot read the
                         # asset object): the copy engine's reconcile of the stop just made decides
-                        # the job with the same rule (_reconcile_cancelled_stop).
+                        # the job with the same rule (_reconcile_cancelled_stop), from the stop's
+                        # status change event or, when that is lost, the execution details read
+                        # (ended_copy_executions). With no stop made here no event comes, so the
+                        # job is cancelled below rather than left open.
                         continue
         mark_cancelled(table, job_id)
     return warnings
