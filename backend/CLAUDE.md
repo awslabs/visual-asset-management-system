@@ -603,6 +603,15 @@ A workflow's `perAsset`, `perInputFile` and `perInputFileVersion` concurrency re
 -   **Only a run that has stopped releases.** The abort and a failed launch release only when `StopExecution` succeeded or `sfn_execution_has_ended` shows the execution ended; otherwise the rows wait for a terminal step or the TTL (the sum of the pipelines' timeouts, at least a day, plus 30 minutes).
 -   **Grants** sit in each lock handler's own `ExecutionLockPolicy` (`attachExecutionLockPolicy` in `infra/lib/lambdaBuilder/workflowFunctions.ts`), never its role's default policy.
 
+### System Workflow Runs in the Execution Lists
+
+`executeWorkflow._persist_execution_records` copies the workflow row's stored `isSystem` onto the execution main row (`build_workflow_execution_record(is_system=)`; only a boolean `True` marks a run). Both list routes in `executionService` hide those rows unless `includeSystem` applies (`INCLUDE_SYSTEM_PARAM`, the name `vamscli.constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM` mirrors and a CLI contract test pins):
+
+-   **Default.** `_resolve_include_system`: an explicit `true`/`false` wins (anything else is `400`); otherwise hidden, except a listing scoped to ONE workflow (both halves of its key) that is a system workflow the caller may GET. The definition read is the per-enforcer memo the row authorization uses. The applied value is echoed as `includeSystem`.
+-   **Fail-visible.** `er.execution_row_is_system` is the one reader: a missing attribute (rows written before #1121, no migration) or any non-boolean reads as a user run. The global list's `FilterExpression` term is `attribute_not_exists(isSystem) OR isSystem <> true` for the same reason, and `_global_list_matches_filters` (`excludeSystem`) is the safety net.
+-   **Paging.** A hidden row is a fully evaluated row: on the global list it advances the cursor like any filtered row, and on the asset list it is a post-filter after `build_execution_items`, so short or empty pages with a `NextToken` are possible there, as with the other filters. Token format unchanged.
+-   **Not authorization.** It only chooses which rows a page includes; every row still passes `_execution_access_check`. Details, logs, abort, group abort and re-run do not read it.
+
 ### Workflow Execution Input Metadata: Opt-in Sections
 
 `metadataInputs` carries the four metadata types (default ON) and two opt-in keys (default OFF): `assetFileMetadata` and `metadataSchema`. `METADATA_INPUT_DEFAULTS` and `METADATA_INPUT_OPT_IN_KEYS` in `common/workflows/executionRecords.py` define what an omitted key means; `models/pipelines._METADATA_INPUT_KEYS` and `executionValidation._METADATA_KEYS` list all six, and a new key goes into all three in the same change.

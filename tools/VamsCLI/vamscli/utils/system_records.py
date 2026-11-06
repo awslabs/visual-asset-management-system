@@ -44,3 +44,15 @@ def is_system_record_refusal(error: object) -> bool:
             if _FIELD_NAME.fullmatch(field):
                 return True
     return False
+
+
+def system_runs_hidden_hint(workflow_id=None, workflow_database_id=None) -> str:
+    """The text-mode line an execution list prints when the service hid system workflow runs.
+
+    The service shows a system workflow's runs by default only when the list is filtered to ONE
+    workflow, which takes both -w and --workflow-database-id. With -w alone it is not, so the hint
+    names the missing option as well as --include-system."""
+    if workflow_id and not workflow_database_id:
+        return ("System workflow runs hidden; add --include-system to list them, or add "
+                "--workflow-database-id to filter to that one workflow.")
+    return "System workflow runs hidden; add --include-system to list them."

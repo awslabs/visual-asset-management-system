@@ -61,6 +61,9 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # run launched by a marked cross-call. Read by the terminal callback; never projected by the list
     # or details APIs.
     systemExecutionContext: Optional[str] = ""
+    # Copied from the launched workflow's isSystem at launch. A row written before the flag existed
+    # has no attribute and reads as a user run; the execution lists hide system runs by default.
+    isSystem: Optional[bool] = False
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):

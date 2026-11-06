@@ -162,8 +162,11 @@ def _key_condition_names(kwargs):
 @pytest.mark.unit
 class TestAWorkflowScopeReadsTheWorkflowIndex:
     def test_workflow_id_and_database_select_the_workflow_index_with_no_filter_expression(self):
+        # includeSystem=true leaves the system-run term (#1121) off, so the only possible filter
+        # would be the workflow itself.
         message, calls, _ = _run([_page([_row(i) for i in range(PAGE_SIZE)])],
-                                 {"pageSize": str(PAGE_SIZE), "workflowId": "wf", "workflowDatabaseId": "db"})
+                                 {"pageSize": str(PAGE_SIZE), "workflowId": "wf", "workflowDatabaseId": "db",
+                                  "includeSystem": "true"})
         assert calls[0]["IndexName"] == "WorkflowExecutionsByWorkflowGSI"
         assert "workflowDatabaseId:workflowId" in _key_condition_names(calls[0])
         assert "FilterExpression" not in calls[0], "the workflow is the key, not a post-read filter"
@@ -209,7 +212,8 @@ class TestAWorkflowScopeReadsTheWorkflowIndex:
 @pytest.mark.unit
 class TestAGroupScopeReadsTheGroupIndex:
     def test_group_id_selects_the_group_index(self):
-        message, calls, _ = _run([_page([_row(0, group="g1")])], {"pageSize": "5", "groupId": "g1"})
+        message, calls, _ = _run([_page([_row(0, group="g1")])],
+                                 {"pageSize": "5", "groupId": "g1", "includeSystem": "true"})
         assert calls[0]["IndexName"] == "WorkflowExecutionsByGroupGSI"
         assert "executionGroupId" in _key_condition_names(calls[0])
         assert "FilterExpression" not in calls[0]
