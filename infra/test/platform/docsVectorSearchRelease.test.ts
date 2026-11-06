@@ -1596,3 +1596,48 @@ describe("diagram and screenshot embeds", () => {
         ).toBe(true);
     });
 });
+
+describe("masked values and natural-language search", () => {
+    // The embedding step embeds the guardrail's masked text, so a value the PII filter masks cannot be
+    // searched for; the search pages say so and name the setting that changes it.
+    const config = readRepo("infra/config/config.ts");
+    const guide = section(
+        readDoc("user-guide/search-and-discovery.md"),
+        "## Natural language search"
+    );
+    const limits = section(readDoc("concepts/vector-search.md"), "## Limits");
+
+    test("control: both sections are read and the PII filter defaults to anonymize", () => {
+        expect(guide).toContain("Search inside files");
+        expect(limits).toContain("Only the latest live version of a file is searchable.");
+        expect(config).toContain('guardrail.create.piiFilter ??= "anonymize";');
+        expect(config).toContain(
+            'SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"]'
+        );
+    });
+
+    test("the search user guide says masked values are not searchable and how to change it", () => {
+        for (const literal of [
+            "`bedrockGuardrail.create.piiFilter` set to `anonymize`",
+            "`{NAME}`",
+            "cannot be searched for",
+            "`piiFilter` to `off`",
+            "(../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail)",
+        ]) {
+            expect({ literal, found: guide.includes(literal) }).toEqual({ literal, found: true });
+        }
+    });
+
+    test("the vector search limits name the masked tokens, the setting, and the re-embedding", () => {
+        for (const literal of [
+            "Values the guardrail's PII filter masks are not searchable.",
+            "`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter` at its default `anonymize`",
+            "`{NAME}`",
+            "the query is embedded as typed",
+            "[reindex](#reindexing)",
+            "(../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail)",
+        ]) {
+            expect({ literal, found: limits.includes(literal) }).toEqual({ literal, found: true });
+        }
+    });
+});
