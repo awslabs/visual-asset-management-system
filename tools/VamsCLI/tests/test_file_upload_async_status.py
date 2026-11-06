@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from vamscli.main import cli
-from vamscli.utils.exceptions import APIError
+from vamscli.utils.exceptions import APIError, InvalidAssetDataError, UploadStatusNotFoundError
 from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 # The module, not the click group `vamscli.commands.file` resolves to as an attribute.
@@ -138,16 +138,81 @@ class TestWaitLoop:
         assert slept == [15, 15, 10]
         assert len(calls) == 4
 
-    def test_an_unreadable_status_is_reported_unknown(self):
+    def test_an_upload_without_a_status_is_reported_unknown_at_once(self):
         client = type("C", (), {})()
+        calls = []
 
         def status(db, asset, upload_id):
-            raise APIError("Upload 'u1' not found")
+            calls.append(upload_id)
+            raise UploadStatusNotFoundError("Upload 'u1' not found")
 
         client.get_upload_status = status
         entries = file_cmd.wait_for_async_ingestion(client, "db", "a", ["u1"], 60, sleep=lambda s: None)
         assert entries == [{"upload_id": "u1", "status": "unknown", "files": [],
                             "error": "Upload 'u1' not found"}]
+        assert calls == ["u1"]  # a final answer is not polled again
+
+    def test_an_invalid_request_is_reported_unknown_at_once(self):
+        client = type("C", (), {})()
+        client.get_upload_status = lambda db, asset, upload_id: (_ for _ in ()).throw(
+            InvalidAssetDataError("Invalid upload status request: bad id"))
+        entries = file_cmd.wait_for_async_ingestion(client, "db", "a", ["u1"], 60, sleep=lambda s: None)
+        assert entries[0]["status"] == "unknown" and "timed_out" not in entries[0]
+
+    def test_a_transient_error_is_retried_and_the_wait_still_succeeds(self):
+        """L5: one 5xx or network error during an hour-long --wait-async no longer ends the wait."""
+        client = type("C", (), {})()
+        answers = [APIError("Failed to get upload status: 503 Server Error"),
+                   _status("processing_async", [("/a", "PENDING", "")]),
+                   APIError("Failed to get upload status: connection reset"),
+                   _status("completed", [("/a", "SUCCEEDED", "")])]
+
+        def status(db, asset, upload_id):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        client.get_upload_status = status
+        now = [0.0]
+        entries = file_cmd.wait_for_async_ingestion(
+            client, "db", "a", ["u1"], 3600, sleep=lambda s: now.__setitem__(0, now[0] + s),
+            clock=lambda: now[0])
+        assert answers == []
+        assert entries[0]["status"] == "completed"
+        assert "timed_out" not in entries[0] and "error" not in entries[0]
+        result = {"overall_success": True, "successful_files": 1, "failed_files": 0,
+                  "async_ingestion": entries}
+        file_cmd.apply_async_outcome(result, waited=True)
+        assert result["overall_success"] is True
+
+    def test_errors_until_the_deadline_end_as_unknown_and_timed_out(self):
+        client = type("C", (), {})()
+        client.get_upload_status = lambda db, asset, upload_id: (_ for _ in ()).throw(
+            APIError("Failed to get upload status: 500"))
+        now = [0.0]
+        entries = file_cmd.wait_for_async_ingestion(
+            client, "db", "a", ["u1"], 40, sleep=lambda s: now.__setitem__(0, now[0] + s),
+            clock=lambda: now[0])
+        assert entries[0]["status"] == "unknown" and entries[0]["timed_out"] is True
+        result = {"overall_success": True, "async_ingestion": entries}
+        file_cmd.apply_async_outcome(result, waited=True)
+        assert result["overall_success"] is False
+
+    def test_a_404_from_the_api_is_the_final_not_found_error(self):
+        from vamscli.utils.api_client import APIClient
+        import requests
+        response = requests.Response()
+        response.status_code = 404
+        client = APIClient.__new__(APIClient)
+        with patch.object(APIClient, "get", side_effect=requests.exceptions.HTTPError(response=response)):
+            with pytest.raises(UploadStatusNotFoundError):
+                client.get_upload_status("db", "a", "u1")
+        response.status_code = 503
+        with patch.object(APIClient, "get", side_effect=requests.exceptions.HTTPError(response=response)):
+            with pytest.raises(APIError) as error:
+                client.get_upload_status("db", "a", "u1")
+        assert not isinstance(error.value, UploadStatusNotFoundError)
 
 
 class TestUploadStatusCommand:

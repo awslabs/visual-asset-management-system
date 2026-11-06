@@ -5,7 +5,8 @@
 
 import React from "react";
 import { act, render, screen } from "@testing-library/react";
-import AsyncUploadOutcome from "./AsyncUploadOutcome";
+import AsyncUploadOutcome, { isFinalStatusError } from "./AsyncUploadOutcome";
+import { ApiError } from "../../services/apiClient";
 import type { UploadStatusResponse } from "../../services/AssetUploadService";
 
 jest.mock("../../services/AssetUploadService", () => ({
@@ -109,8 +110,51 @@ describe("AsyncUploadOutcome", () => {
         expect(screen.getByText("Failed")).toBeInTheDocument();
     });
 
+    it.each([502, 503, 500])("retries a transient %s and still reports the outcome", async (code) => {
+        // L5: one transient error during an hour-long wait no longer ends it as "not available".
+        const fetchStatus = jest
+            .fn()
+            .mockRejectedValueOnce(new ApiError(`HTTP ${code}`, code))
+            .mockResolvedValueOnce(pending)
+            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockResolvedValueOnce(
+                status({
+                    status: "completed",
+                    asyncFiles: [{ relativeKey: "/big.e57", status: "SUCCEEDED" }],
+                })
+            );
+        render(
+            <AsyncUploadOutcome
+                uploadIds={["u1"]}
+                assetId="a1"
+                databaseId="db"
+                pollIntervalMs={1000}
+                fetchStatus={fetchStatus}
+            />
+        );
+        for (let i = 0; i < 3; i++) {
+            await flush();
+            expect(
+                screen.queryByText(/The status of some large files is not available here/)
+            ).not.toBeInTheDocument();
+            await act(async () => {
+                jest.advanceTimersByTime(1000);
+            });
+        }
+        await flush();
+        expect(fetchStatus).toHaveBeenCalledTimes(4);
+        expect(screen.getByText("In the asset")).toBeInTheDocument();
+        expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each([400, 403, 404])("treats a %s as final", (code) => {
+        expect(isFinalStatusError(new ApiError(`HTTP ${code}`, code))).toBe(true);
+        expect(isFinalStatusError(new ApiError("HTTP 503", 503))).toBe(false);
+        expect(isFinalStatusError(new TypeError("Failed to fetch"))).toBe(false);
+    });
+
     it("stops with a neutral note when the status cannot be read", async () => {
-        const fetchStatus = jest.fn().mockRejectedValue(new Error("Upload not found"));
+        const fetchStatus = jest.fn().mockRejectedValue(new ApiError("Upload not found", 404));
         render(
             <AsyncUploadOutcome
                 uploadIds={["u1"]}

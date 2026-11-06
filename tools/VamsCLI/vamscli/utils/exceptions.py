@@ -107,6 +107,12 @@ class APIError(BusinessLogicError):
     pass
 
 
+class UploadStatusNotFoundError(APIError):
+    """Raised when an upload has no status the caller can read (a final answer, not a transient
+    failure: polling it again would not change it)."""
+    pass
+
+
 class ProfileNotFoundError(BusinessLogicError):
     """Raised when required profile is not found."""
     pass

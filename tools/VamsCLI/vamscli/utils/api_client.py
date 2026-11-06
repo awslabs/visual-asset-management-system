@@ -260,7 +260,8 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    UploadStatusNotFoundError
 )
 from .exceptions import GlobalInfrastructureError
 from .profile import ProfileManager, read_active_profile_name
@@ -1268,9 +1269,10 @@ class APIClient(CustomAPIClientMixin):
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise APIError(f"Upload '{upload_id}' not found for asset '{asset_id}' in database "
-                               f"'{database_id}' (an upload whose files all landed at completion "
-                               f"keeps no status)")
+                raise UploadStatusNotFoundError(
+                    f"Upload '{upload_id}' not found for asset '{asset_id}' in database "
+                    f"'{database_id}' (an upload whose files all landed at completion "
+                    f"keeps no status)")
             elif e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
                 raise InvalidAssetDataError(f"Invalid upload status request: {error_message}")

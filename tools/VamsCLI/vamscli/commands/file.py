@@ -19,7 +19,7 @@ from ..utils.exceptions import (
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
     InvalidPathError, FilePermissionError, FileAlreadyExistsError, 
     FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError,
-    DatabaseNotFoundError, APIError
+    DatabaseNotFoundError, APIError, UploadStatusNotFoundError
 )
 from ..utils.file_processor import (
     FileInfo, collect_files_from_directory, collect_files_from_list,
@@ -229,7 +229,9 @@ def wait_for_async_ingestion(api_client, database_id: str, asset_id: str, upload
                              timeout_seconds: int, sleep=time.sleep, clock=time.monotonic) -> List[dict]:
     """Poll each upload's status until it is completed or completed_with_errors, or the timeout
     passes (an upload still processing is marked timed_out). An upload whose status cannot be read
-    (for example a deployment without the status route) is reported with status 'unknown'."""
+    (not found, for example a deployment without the status route, or an invalid request) is
+    reported with status 'unknown' at once. Any other failure (a 5xx or a network error) is
+    transient: the upload is polled again on the next round, until the timeout."""
     deadline = clock() + max(0, int(timeout_seconds or 0))
     entries = {}
     pending = list(upload_ids)
@@ -237,11 +239,17 @@ def wait_for_async_ingestion(api_client, database_id: str, asset_id: str, upload
         for upload_id in list(pending):
             try:
                 body = api_client.get_upload_status(database_id, asset_id, upload_id)
-            except APIError as e:
-                log_debug(f"Upload status of {upload_id} could not be read: {e}")
+            except (UploadStatusNotFoundError, InvalidAssetDataError) as e:
+                log_debug(f"Upload status of {upload_id} is not available: {e}")
                 entries[upload_id] = {"upload_id": upload_id, "status": "unknown", "files": [],
                                       "error": str(e)}
                 pending.remove(upload_id)
+                continue
+            except APIError as e:
+                log_debug(f"Upload status of {upload_id} could not be read, retrying: {e}")
+                # Keep the last status read; with none yet, report unknown if the wait times out.
+                entries.setdefault(upload_id, {"upload_id": upload_id, "status": "unknown",
+                                               "files": [], "error": str(e)})
                 continue
             entries[upload_id] = async_ingestion_entry(upload_id, body)
             if body.get("status") in ASYNC_TERMINAL_STATUSES:

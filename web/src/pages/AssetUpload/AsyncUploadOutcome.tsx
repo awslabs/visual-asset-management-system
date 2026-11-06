@@ -7,12 +7,14 @@
  * The outcome of the files an upload processes asynchronously (files over 1 GiB). After a completion
  * that reported largeFileAsynchronousHandling, GET /uploads/{uploadId} is polled until every such file
  * has landed or failed, the wait limit passes, or the panel unmounts. Display only: it shows what the
- * API returned and decides nothing; a 404 or an error stops the polling with a neutral note.
+ * API returned and decides nothing; a 400, 401, 403 or 404 stops the polling with a neutral note,
+ * and any other error is retried on the next poll until the wait limit.
  */
 
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, Box, SpaceBetween, StatusIndicator } from "@cloudscape-design/components";
 import AssetUploadService, { UploadStatusResponse } from "../../services/AssetUploadService";
+import { ApiError } from "../../services/apiClient";
 
 export const ASYNC_POLL_INTERVAL_MS = 15_000;
 export const ASYNC_POLL_LIMIT_MS = 60 * 60 * 1000;
@@ -37,6 +39,12 @@ interface UploadView {
     /** Polling stopped without an outcome: the upload keeps no status, or it could not be read. */
     unavailable?: boolean;
 }
+
+/** HTTP statuses that will not change on a later poll (no such upload, not readable, bad request). */
+const FINAL_STATUS_CODES = [400, 401, 403, 404];
+
+export const isFinalStatusError = (error: unknown) =>
+    error instanceof ApiError && FINAL_STATUS_CODES.includes(error.status);
 
 const isPending = (view: UploadView) =>
     !view.unavailable &&
@@ -77,8 +85,12 @@ export default function AsyncUploadOutcome({
                 pending.map(async (id) => {
                     try {
                         updates[id] = { status: await fetchStatus(id, assetId, databaseId) };
-                    } catch {
-                        updates[id] = { unavailable: true };
+                    } catch (error) {
+                        // A final answer stops polling; a transient error (a 5xx, a network error)
+                        // keeps the last status read and is retried on the next poll.
+                        if (isFinalStatusError(error)) {
+                            updates[id] = { unavailable: true };
+                        }
                     }
                 })
             );
