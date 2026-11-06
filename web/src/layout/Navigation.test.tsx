@@ -90,6 +90,34 @@ describe("Navigation", () => {
         expect(screen.queryByText("User")).not.toBeInTheDocument();
     });
 
+    it("lists My zip downloads only when the deployment has the feature and the route is allowed", async () => {
+        localStorage.setItem("vams_cache_config", JSON.stringify({ featuresEnabled: [] }));
+        allowRoutes("/zipdownloads", "/auth/api-keys");
+        let container = await renderNavigation();
+        await waitFor(() => {
+            expect(findNavLink(container, "#/auth/api-keys/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/zipdownloads/")).toBeFalsy();
+        container.remove();
+
+        localStorage.setItem(
+            "vams_cache_config",
+            JSON.stringify({ featuresEnabled: ["ZIPDOWNLOADS"] })
+        );
+        container = await renderNavigation();
+        await waitFor(() => {
+            expect(findNavLink(container, "#/zipdownloads/")).toBeTruthy();
+        });
+
+        allowRoutes("/auth/api-keys");
+        container = await renderNavigation();
+        await waitFor(() => {
+            expect(findNavLink(container, "#/auth/api-keys/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/zipdownloads/")).toBeFalsy();
+        localStorage.removeItem("vams_cache_config");
+    });
+
     it("checks the same route paths the router checks, without a trailing slash", async () => {
         allowRoutes("/databases", "/");
         const container = await renderNavigation();

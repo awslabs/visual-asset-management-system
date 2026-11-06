@@ -8,6 +8,7 @@ import { Container, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
+import { isZipDownloadsEnabled } from "../zipDownloads/zipDownloads";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -15,6 +16,10 @@ const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
 const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
+const ZipDownloadsTab = React.lazy(() => import("./tabs/ZipDownloadsTab"));
+
+/** Tab id of the asset page's "My zip downloads" tab. */
+export const ZIP_DOWNLOADS_TAB_ID = "zipDownloads";
 
 interface TabbedContainerProps {
     assetName: string;
@@ -36,6 +41,8 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
+    // The feature switches are applied before the app renders, so one reading per mount is enough.
+    const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
 
     return (
         <ErrorBoundary componentName="Tabbed Container">
@@ -130,6 +137,30 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     </Suspense>
                                 ),
                             },
+                            // Download as Zip: present only when the deployment has the feature
+                            ...(zipDownloadsEnabled
+                                ? [
+                                      {
+                                          id: ZIP_DOWNLOADS_TAB_ID,
+                                          label: "My zip downloads",
+                                          content: (
+                                              <Suspense
+                                                  fallback={
+                                                      <LoadingSpinner text="Loading zip downloads..." />
+                                                  }
+                                              >
+                                                  <ZipDownloadsTab
+                                                      databaseId={databaseId}
+                                                      assetId={assetId}
+                                                      isActive={
+                                                          activeTabId === ZIP_DOWNLOADS_TAB_ID
+                                                      }
+                                                  />
+                                              </Suspense>
+                                          ),
+                                      },
+                                  ]
+                                : []),
                         ]}
                     />
                 </div>
