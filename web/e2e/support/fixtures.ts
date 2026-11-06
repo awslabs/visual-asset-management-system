@@ -723,3 +723,60 @@ export async function findNestedAssetFile(
     }
     return null;
 }
+
+/**
+ * Up to `count` distributable assets, each with one live top-level file, or null when the running
+ * app exposes no API context. Assets are taken in listing order across databases and the scan is
+ * bounded like `findAssetFiles`, so fewer than `count` come back when the environment has fewer.
+ */
+export async function findAssetsWithFiles(
+    page: Page,
+    count: number,
+    options: Pick<FindAssetFilesOptions, "maxDatabases" | "maxAssetsPerDatabase"> = {}
+): Promise<AssetFileRef[] | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const headers = { Authorization: `Bearer ${ctx.token}` };
+    const asJson = async (path: string) => {
+        const r = await page.request.get(`${ctx.base}${path}`, { headers });
+        if (!r.ok()) return null;
+        const b = await r.json().catch(() => null);
+        return b?.message ?? b ?? null;
+    };
+    const itemsOf = (body: any): any[] => {
+        const items = body?.Items ?? body?.items ?? body ?? [];
+        return Array.isArray(items) ? items : [];
+    };
+
+    const found: AssetFileRef[] = [];
+    const databases = itemsOf(await asJson("/database"));
+    for (const db of databases.slice(0, options.maxDatabases ?? 8)) {
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf(await asJson(`/database/${databaseId}/assets`));
+        for (const asset of assets.slice(0, options.maxAssetsPerDatabase ?? 20)) {
+            if (found.length >= count) return found;
+            const assetId = asset?.assetId;
+            if (!assetId || asset.isDistributable !== true) continue;
+            const files = itemsOf(
+                await asJson(`/database/${databaseId}/assets/${assetId}/listFiles?basic=true`)
+            );
+            const file = files.find((f) => {
+                const relative: string = f?.relativePath ?? "";
+                return (
+                    relative &&
+                    !f.isFolder &&
+                    !f.isArchived &&
+                    !relative.endsWith("/") &&
+                    relative.replace(/^\/+/, "").split("/").length === 1
+                );
+            });
+            if (file) {
+                const relative: string = file.relativePath;
+                const key = relative.startsWith("/") ? relative : `/${relative}`;
+                found.push({ databaseId, assetId, key });
+            }
+        }
+    }
+    return found;
+}

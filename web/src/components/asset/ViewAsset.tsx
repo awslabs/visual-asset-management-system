@@ -11,13 +11,14 @@ import {
     Container,
     Header,
     SpaceBetween,
+    StatusIndicator,
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
 import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
-import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
+import { fetchAssetLinks, fetchAssetWithStatus, fetchtagTypes } from "../../services/APIService";
 import { fetchAllAssetVersions } from "../../services/AssetVersionService";
 import { StatusMessageProvider } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -83,6 +84,7 @@ export default function ViewAsset() {
     const [versionsLoading, setVersionsLoading] = useState(false);
 
     usePageTitle(databaseId, asset?.assetName);
+    const assetLoaded = !!assetId && asset?.assetId === assetId;
 
     // Config
     const config = appCache.getItem("config");
@@ -90,24 +92,62 @@ export default function ViewAsset() {
         config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
     );
 
-    // Fetch asset data
+    // Fetch asset data. In-app navigation to another asset keeps this page mounted, so the previous
+    // asset's details and error are cleared first and an answer for an asset already left is
+    // dropped.
     useEffect(() => {
+        let cancelled = false;
+        setAsset({});
+        setShowApiError(false);
+        setApiError(null);
+        setSelectedVersionId(new URLSearchParams(location.search).get("assetVersionId") || null);
+
         const fetchAssetData = async (): Promise<void> => {
             if (!databaseId || !assetId) return;
 
             try {
-                const item = await fetchAsset({
+                const [, item, status] = await fetchAssetWithStatus({
                     databaseId,
                     assetId,
                     showArchived: true,
                 });
+                if (cancelled) return;
 
-                if (item !== false && item !== undefined && typeof item !== "string") {
+                if (item && typeof item === "object") {
                     setAsset(item);
+                    dispatch({
+                        type: "SET_ASSET_DETAIL",
+                        payload: {
+                            isMultiFile: item.isMultiFile,
+                            assetId: assetId,
+                            assetName: item.assetName,
+                            databaseId: databaseId,
+                            description: item.description,
+                            key: item.key || (item.assetLocation && item.assetLocation["Key"]),
+                            assetLocation: {
+                                Key: item.key || (item.assetLocation && item.assetLocation["Key"]),
+                            },
+                            assetType: item.assetType,
+                            isDistributable: item.isDistributable,
+                            Asset: [],
+                        },
+                    });
+                } else if (status === 403) {
+                    setApiError(
+                        `Access denied. Your role does not allow you to view this ${Synonyms.asset}.`
+                    );
+                    setShowApiError(true);
+                    setApiErrorType("error");
                 } else if (typeof item === "string" && item.includes("not found")) {
                     setApiError(
                         `${Synonyms.Asset} not found. The requested ${Synonyms.asset} may have been deleted or you may not have permission to access it.`
                     );
+                    setShowApiError(true);
+                    setApiErrorType("error");
+                } else if (status === undefined && typeof item === "string" && item) {
+                    // A request rejected without a status keeps its own message: a request whose
+                    // response never arrived says the service could not be reached.
+                    setApiError(`Failed to load ${Synonyms.asset} data. ${item}`);
                     setShowApiError(true);
                     setApiErrorType("error");
                 } else {
@@ -120,39 +160,27 @@ export default function ViewAsset() {
                     console.error("Invalid asset data returned:", item);
                 }
             } catch (error) {
+                if (cancelled) return;
                 console.error("Error fetching asset:", error);
                 setApiError(`Failed to load ${Synonyms.asset} data. Please try again later.`);
                 setShowApiError(true);
                 setApiErrorType("error");
             }
-
-            // Only set asset details if we don't have an API error
-            if (!showApiError && asset && asset.assetId) {
-                dispatch({
-                    type: "SET_ASSET_DETAIL",
-                    payload: {
-                        isMultiFile: asset.isMultiFile,
-                        assetId: assetId,
-                        assetName: asset.assetName,
-                        databaseId: databaseId,
-                        description: asset.description,
-                        key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
-                        assetLocation: {
-                            Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
-                        },
-                        assetType: asset.assetType,
-                        isDistributable: asset.isDistributable,
-                        Asset: [],
-                    },
-                });
-            }
         };
 
         fetchAssetData();
-    }, [databaseId, assetId, asset?.assetId]);
+        return () => {
+            cancelled = true;
+        };
+        // location.search seeds the version selection only when the asset changes; a later query
+        // change (version or file selection) must not refetch the asset.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [databaseId, assetId]);
 
     // Fetch asset versions for the version dropdown
     useEffect(() => {
+        let cancelled = false;
+        setVersions([]);
         const loadVersions = async () => {
             if (!databaseId || !assetId) return;
             setVersionsLoading(true);
@@ -161,6 +189,7 @@ export default function ViewAsset() {
                     databaseId,
                     assetId,
                 });
+                if (cancelled) return;
                 if (success && result?.versions) {
                     // Sort versions by DateModified (newest first)
                     const sorted = [...result.versions].sort((a: any, b: any) => {
@@ -173,10 +202,13 @@ export default function ViewAsset() {
             } catch (error) {
                 console.log("Failed to load asset versions:", error);
             } finally {
-                setVersionsLoading(false);
+                if (!cancelled) setVersionsLoading(false);
             }
         };
         loadVersions();
+        return () => {
+            cancelled = true;
+        };
     }, [databaseId, assetId]);
 
     // Handle version selection change and sync to URL query parameter
@@ -267,14 +299,16 @@ export default function ViewAsset() {
                                 statusIconAriaLabel="Error"
                                 header="API Error"
                                 dismissible
+                                dismissAriaLabel="Dismiss error"
                                 onDismiss={() => setShowApiError(false)}
                             >
                                 {apiError}
                             </Alert>
                         )}
 
-                        {/* Asset Header - only shown on error, otherwise asset name is in the details container */}
-                        {showApiError && (
+                        {/* Asset Header - only shown on error, otherwise asset name is in the details
+                            container. It stays after the alert is dismissed so the page is not left empty. */}
+                        {apiError && (
                             <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
                         )}
                     </SpaceBetween>
@@ -282,8 +316,14 @@ export default function ViewAsset() {
                     {/* Content with more spacing between containers */}
                     <div style={{ marginTop: "12px" }} />
                     <SpaceBetween direction="vertical" size="xs">
-                        {/* Only render asset details and related components if there's no API error */}
-                        {!showApiError && (
+                        {/* The asset's details, files, metadata and map mount only once the
+                            asset has loaded, so a refused or missing asset never starts them */}
+                        {!apiError && !assetLoaded && (
+                            <StatusIndicator type="loading">
+                                {`Loading ${Synonyms.asset}...`}
+                            </StatusIndicator>
+                        )}
+                        {!showApiError && assetLoaded && (
                             <>
                                 {/* Asset Details Pane */}
                                 <AssetDetailsPane
