@@ -18,7 +18,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from backend.tests.handlers.compliance import _cdkTables
+from backend.tests.handlers.compliance import _bindingApply, _cdkTables
 from backend.tests.handlers.compliance._harness import (
     REAL_TO_UPDATE_EXPR, USER, body_of, claims_for, rest_event, schema_row,
 )
@@ -27,6 +27,9 @@ from common.compliance import evaluationEngine as engine
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 from handlers.compliance import complianceSchemaBindingService as binding_svc
+
+# The apply record of a database binding change lives in the moto tables (conftest).
+USES_BINDING_APPLY_RECORD = True
 
 DB = "quarantine-time-db"
 OLD, NEW = "old-schema", "new-schema"
@@ -95,8 +98,12 @@ class World:
                 "completed", [], {})
 
     def call(self, service, method, path, params=None, body=None, query=None):
+        """A request; a database binding change accepted for the background (202) is then
+        applied to its end, as the trigger applies it (D161)."""
         response = service.lambda_handler(
             rest_event(method, path, params, query, body=body), MagicMock())
+        if response["statusCode"] == 202 and service is binding_svc:
+            _bindingApply.drain(DB)
         return response["statusCode"], body_of(response)
 
     def asset_path(self, prefix):
@@ -132,7 +139,7 @@ class TestTheQuarantineTime:
                     ("DELETE", path, params, None),
                     ("DELETE", f"/compliance/bind/{DB}", {"databaseId": DB}, None)):
                 status, _ = world.call(binding_svc, method, request_path, request_params, body)
-                assert status == 200
+                assert status == (202 if request_path == f"/compliance/bind/{DB}" else 200)
                 row = world.state()
                 assert row["complianceState"] == "quarantined"
                 assert row["quarantinedAt"] == QUARANTINED
@@ -203,7 +210,7 @@ class TestReleaseAndAnExceptionEndTheReevaluationMarker:
             if marked_by == "binding change":
                 status, _ = world.call(binding_svc, "PUT", f"/compliance/bind/{DB}",
                                        {"databaseId": DB}, {"schemaName": NEW})
-                assert status == 200
+                assert status == 202
             else:
                 world.t["complianceAssetStateStorage"].update_item(
                     Key={"databaseId": DB, "assetId": ASSET},

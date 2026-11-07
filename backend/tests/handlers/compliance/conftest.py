@@ -91,3 +91,17 @@ def no_database_retirement(request):
             patch.object(_retirement, "last_deleted_at", return_value=None), \
             patch.object(_retirement, "has_history", return_value=False):
         yield
+
+
+@pytest.fixture(autouse=True)
+def no_binding_apply(request):
+    """The table doubles of most tests here hold no apply record of a database binding change
+    applied in the background (`complianceBindingApply`, D161): it is read as absent, so no change
+    reads as being applied. A test module whose (moto) tables hold the record sets
+    `USES_BINDING_APPLY_RECORD = True` and reads it from its tables."""
+    if getattr(request.module, "USES_BINDING_APPLY_RECORD", False):
+        yield
+        return
+    from handlers.compliance import complianceBindingApply as binding_apply
+    with patch.object(binding_apply, "get_record", return_value=None):
+        yield

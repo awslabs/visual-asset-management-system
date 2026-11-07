@@ -201,6 +201,26 @@ export function grantRetirementRecordRead(
     );
 }
 
+/**
+ * The apply record of a database binding change applied in the background (D161,
+ * `complianceBindingApply`): one item per database in the evaluation table, keyed
+ * `bindingApply#<databaseId>`. The binding service records it (PutItem), resumes or ends it
+ * (UpdateItem) and reads it (GetItem) on those keys only; the trigger, which runs the apply, already
+ * holds read and write access to the table.
+ */
+export function grantBindingApplyRecordWrite(fun: lambda.Function, storageResources: storageResources) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+            resources: [storageResources.dynamo.complianceEvaluationStorageTable.tableArn],
+            conditions: {
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["bindingApply#*"] },
+            },
+        })
+    );
+}
+
 export function buildComplianceSchemaServiceFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -290,8 +310,10 @@ export function buildComplianceSchemaBindingServiceFunction(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     grantRetirementRecordRead(fun, storageResources);
-    // With automatic evaluation on, a binding change queues the evaluation of each asset it
-    // reached on the compliance trigger's queue, which evaluates them as automatic evaluation does.
+    grantBindingApplyRecordWrite(fun, storageResources);
+    // A database binding change is applied to the asset records by the compliance trigger: the
+    // request queues the apply's first message on its queue. An asset override with automatic
+    // evaluation on queues that asset's evaluation there.
     const triggerQueue = storageResources.sqs.complianceTriggerQueue;
     triggerQueue.grantSendMessages(fun);
     fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);

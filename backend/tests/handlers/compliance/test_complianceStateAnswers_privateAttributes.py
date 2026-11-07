@@ -119,10 +119,12 @@ def _documented_state_properties():
 # Spelled out rather than read from `listing`, so the answers are checked against the attributes a
 # record carries, not against the list the code keeps of them.
 LISTING_ATTRIBUTES = ("assetNameSort", "assetSearchText")
+# And the id of the background binding change that last wrote the record (D161).
+PRIVATE_ATTRIBUTES = LISTING_ATTRIBUTES + ("bindingApplyId",)
 
 
 def _private(record):
-    return sorted(set(record) & set(LISTING_ATTRIBUTES))
+    return sorted(set(record) & set(PRIVATE_ATTRIBUTES))
 
 
 @pytest.fixture
@@ -170,16 +172,18 @@ class TestStateAnswersLeaveOutTheListingAttributes:
 class TestStateAnswersCarryOnlyDocumentedAttributes:
 
     def test_the_code_keeps_the_listing_attributes_private(self):
-        assert listing.PRIVATE_STATE_ATTRIBUTES == LISTING_ATTRIBUTES
+        assert listing.LISTING_STATE_ATTRIBUTES == LISTING_ATTRIBUTES
+        assert listing.PRIVATE_STATE_ATTRIBUTES == PRIVATE_ATTRIBUTES
 
     def test_the_listing_attributes_are_not_documented(self):
-        assert set(LISTING_ATTRIBUTES).isdisjoint(_documented_state_properties())
+        assert set(PRIVATE_ATTRIBUTES).isdisjoint(_documented_state_properties())
 
     def test_every_attribute_the_name_attributes_add_besides_the_name_is_private(self):
         """A listing attribute added to `asset_name_attributes` must be added to
         PRIVATE_STATE_ATTRIBUTES too, or the answers return it."""
         written = set(listing.asset_name_attributes("a1", "Name")) - {"assetName"}
-        assert written == set(LISTING_ATTRIBUTES) == set(listing.PRIVATE_STATE_ATTRIBUTES)
+        assert written == set(LISTING_ATTRIBUTES) == set(listing.LISTING_STATE_ATTRIBUTES)
+        assert written < set(listing.PRIVATE_STATE_ATTRIBUTES)
 
     @pytest.mark.parametrize("asset_id", [QUARANTINED, COMPLIANT, ARCHIVED])
     def test_the_asset_state_read(self, world, asset_id):

@@ -276,7 +276,10 @@ class TestBindingAGlobalSchema:
                 patch(f"{mod}.database_table", database_table), \
                 patch(f"{mod}.asset_state_table", state_table), \
                 patch(f"{mod}.asset_table", live_only_asset_table()), \
-                patch(f"{STORE}.update_asset_state"), patch(f"{STORE}.write_audit"):
+                patch(f"{STORE}.asset_table", live_only_asset_table()), \
+                patch(f"{STORE}.evaluation_table", MagicMock(name="evaluation_table")), \
+                patch(f"{STORE}.update_asset_state"), patch(f"{STORE}.write_audit"), \
+                patch("handlers.compliance.complianceBindingApply.send_message"):
             response = binding_svc.lambda_handler(
                 rest_event("PUT", f"/compliance/bind/{DB}", {"databaseId": DB},
                            body={"schemaName": "schema-1"}), MagicMock())
@@ -284,7 +287,8 @@ class TestBindingAGlobalSchema:
 
     def test_read_access_to_the_global_schema_is_enough(self):
         response, database_table = self._bind(database_admin_rules(), "GLOBAL")
-        assert response["statusCode"] == 200
+        # Saved, and applied to the asset records in the background (D161).
+        assert response["statusCode"] == 202
         database_table.update_item.assert_called_once()
 
     def test_another_databases_schema_is_refused_before_it_is_bound(self):

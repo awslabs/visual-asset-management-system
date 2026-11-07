@@ -16,10 +16,12 @@ from backend.tests.handlers.compliance._harness import (
     ASSET, DB, SCHEMA, USER, body_of, claims_for, decode_token, encode_token, enforcer,
     enforcer_for_object_types, rest_event, schema_row,
 )
+from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceSchemaBindingService as svc
 
 MOD = "handlers.compliance.complianceSchemaBindingService"
 STORE = "handlers.compliance.complianceEvaluationStore"
+APPLY = "handlers.compliance.complianceBindingApply"
 
 # The stored asset row, as the asset table holds it: the attributes ABAC constraints match on.
 ASSET_ROW = {"databaseId": DB, "assetId": ASSET, "assetName": "Turbine", "assetType": "glb",
@@ -45,6 +47,7 @@ def _tables(schema_rows=None, database_item=None, state_rows=None, asset_rows=No
 def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, compliance_record=None,
          casbin=None, **table_kwargs):
     schema_table, database_table, state_table, asset_table = _tables(**table_kwargs)
+    evaluation_table = MagicMock(name="evaluation_table")
     casbin = casbin if casbin is not None else enforcer(api=api, obj=obj)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=casbin), \
@@ -52,15 +55,52 @@ def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, complianc
             patch(f"{MOD}.database_table", database_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{MOD}.asset_table", asset_table), \
+            patch(f"{STORE}.asset_table", asset_table), \
+            patch(f"{STORE}.asset_state_table", state_table), \
+            patch(f"{STORE}.evaluation_table", evaluation_table), \
             patch(f"{STORE}.get_asset_item",
                   return_value=dict(ASSET_ROW) if asset_exists else None), \
             patch(f"{STORE}.get_compliance_record", return_value=compliance_record), \
             patch(f"{STORE}.update_asset_state") as update_state, \
-            patch(f"{STORE}.write_audit") as write_audit:
+            patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{APPLY}.send_message") as send_message:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"schema": schema_table, "database": database_table, "state": state_table,
                       "asset": asset_table, "update_state": update_state, "audit": write_audit,
-                      "casbin": casbin}
+                      "casbin": casbin, "evaluation": evaluation_table,
+                      "send_message": send_message}
+
+
+def _begun(tables):
+    """The apply record a database binding change recorded (D161)."""
+    return tables["evaluation"].put_item.call_args.kwargs["Item"]
+
+
+def _apply_run(record, database_item, state_rows=(), asset_pages=None, records=None):
+    """Run a recorded apply to its end against table mocks: `asset_pages` are the asset table's
+    query answers in order, `records` the asset-state records by asset id. Returns what it wrote,
+    audited and ended with."""
+    asset_table = MagicMock(name="asset_table")
+    asset_table.query.side_effect = list(asset_pages or [{"Items": []}])
+    state_table = MagicMock(name="asset_state_table")
+    state_table.query.return_value = {"Items": list(state_rows)}
+    database_table = MagicMock(name="database_table")
+    database_table.get_item.return_value = {"Item": database_item}
+    records = records or {}
+    with patch(f"{APPLY}.get_record", return_value=record), \
+            patch(f"{STORE}.asset_table", asset_table), \
+            patch(f"{STORE}.asset_state_table", state_table), \
+            patch(f"{STORE}.database_table", database_table), \
+            patch(f"{STORE}.get_compliance_record",
+                  side_effect=lambda db, asset_id, consistent_read=False: records.get(asset_id)), \
+            patch(f"{STORE}.update_asset_state") as update_state, \
+            patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{APPLY}._save_progress", return_value=True) as save, \
+            patch(f"{APPLY}.finish", return_value=True) as finish:
+        done = binding_apply.run(DB, record["applyId"], record["runId"], float("inf"))
+    return {"done": done, "asset": asset_table, "state": state_table,
+            "update_state": update_state, "audit": write_audit, "save": save, "finish": finish,
+            "counts": finish.call_args.kwargs.get("counts") if finish.call_args else None}
 
 
 def _assert_nothing_written(tables):
@@ -111,13 +151,13 @@ class TestRouteDispatch:
     def test_put_database_binds(self):
         response, _ = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
                            database_item={"databaseId": DB})
-        assert response["statusCode"] == 200, response
+        assert response["statusCode"] == 202, response
         assert body_of(response)["schemaName"] == SCHEMA
 
     def test_delete_database_unbinds(self):
         response, _ = _run(rest_event("DELETE", DB_PATH, DB_PARAMS),
                            database_item={"databaseId": DB, "complianceSchemaName": SCHEMA})
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert body_of(response)["previousSchema"] == SCHEMA
 
     def test_put_asset_binds_an_override(self):
@@ -222,7 +262,9 @@ class TestAuthorization:
             rest_event(method, path, params, body=body),
             casbin=enforcer_for_object_types("complianceSchema", "database", "complianceBinding"),
             database_item=dict(DATABASE_ROW))
-        assert response["statusCode"] == 200, response
+        # A removal is applied in the background (202); a read and a bind of the schema in force
+        # answer 200.
+        assert response["statusCode"] == (202 if method == "DELETE" else 200), response
 
     def test_binding_a_database_checks_the_binding_the_schema_and_the_stored_database_row(self):
         _, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
@@ -357,7 +399,8 @@ class TestBindingPermission:
             self, method, path, params, body, target):
         response, _ = _run_bind_path(method, path, params, body,
                                      _enforcer_granting(_binding_grants(method, target)))
-        assert response["statusCode"] == 200, response
+        assert response["statusCode"] == (202 if (method, target) == ("DELETE", "database")
+                                          else 200), response
 
     @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
     def test_without_the_binding_action_the_operation_is_refused(
@@ -511,22 +554,40 @@ class TestDatabaseBinding:
             database_item={"databaseId": DB, "complianceSchemaName": "previous"},
             state_rows=[{"assetId": "a", "schemaSource": "asset"}],
             asset_rows=[{"assetId": "a"}, {"assetId": "b"}, {"assetId": "c"}])
-        assert response["statusCode"] == 200
-        assert body_of(response)["assetsPendingEvaluation"] == 2
+        # The request saves the binding and answers at once; no asset record is written in it.
+        assert response["statusCode"] == 202
+        body = body_of(response)
+        assert (body["applyStatus"], body["apply"]["operation"]) == ("applying", "change")
         update = tables["database"].update_item.call_args.kwargs
         assert update["ExpressionAttributeValues"][":schema"] == SCHEMA
         assert update["ExpressionAttributeValues"][":autoEval"] is False
-        # One write per record, each conditional on the record as read (none here), D159.
-        writes = tables["update_state"].call_args_list
-        assert [c.args[1] for c in writes] == ["b", "c"]
-        assert {(c.args[2]["complianceState"], c.args[2]["schemaSource"], c.args[2]["schemaName"])
-                for c in writes} == {("pending_evaluation", "database", SCHEMA)}
-        assert [c.kwargs["computed_from"] for c in writes] == [{}, {}]
-        tables["state"].batch_writer.assert_not_called()
+        tables["update_state"].assert_not_called()
+        record = _begun(tables)
+        assert (record["operation"], record["schemaName"], record["previousSchema"],
+                record["actor"]) == ("change", SCHEMA, "previous", USER)
         audit = tables["audit"].call_args
         assert audit.kwargs["event_type"] == "schema_bound_to_database"
-        assert audit.kwargs["details"] == {"previousSchema": "previous", "affectedAssets": 2,
-                                           "assetsKeptQuarantined": 0, "evaluationsQueued": 0}
+        assert audit.kwargs["actor"] == USER
+        assert audit.kwargs["details"] == {"previousSchema": "previous",
+                                           "complianceAutoEval": False,
+                                           "applyId": record["applyId"], "assetCount": 0}
+        tables["send_message"].assert_called_once()
+        # The apply then writes one record per asset without an override, each conditional on
+        # the record as read (none here), D159, and audits each as the caller.
+        ran = _apply_run(record, {"databaseId": DB, "complianceSchemaName": SCHEMA,
+                                  "complianceAutoEval": False},
+                         asset_pages=[{"Items": [{"assetId": "a"}, {"assetId": "b"},
+                                                 {"assetId": "c"}]}],
+                         records={"a": {"assetId": "a", "schemaSource": "asset"}})
+        writes = ran["update_state"].call_args_list
+        assert [c.args[1] for c in writes] == ["b", "c"]
+        assert {(c.args[2]["complianceState"], c.args[2]["schemaSource"], c.args[2]["schemaName"],
+                 c.args[2]["bindingApplyId"]) for c in writes} == {
+            ("pending_evaluation", "database", SCHEMA, record["applyId"])}
+        assert [c.kwargs["computed_from"] for c in writes] == [{}, {}]
+        assert [(c.kwargs["event_type"], c.kwargs["actor"]) for c in ran["audit"].call_args_list
+                ] == [("schema_binding_applied_to_asset", USER)] * 2
+        assert ran["counts"]["assetsPendingEvaluation"] == 2
 
     @pytest.mark.parametrize("stored,body_flag,expected", [
         # An existing binding keeps its stored setting when the request omits the flag (the web's
@@ -549,29 +610,22 @@ class TestDatabaseBinding:
             body["complianceAutoEval"] = body_flag
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=body),
                                 database_item={"databaseId": DB, **stored})
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         update = tables["database"].update_item.call_args.kwargs
         assert update["ExpressionAttributeValues"][":autoEval"] is expected
 
     def test_binding_pages_the_asset_listing_to_exhaustion(self):
-        schema_table, database_table, state_table, asset_table = _tables(
-            database_item={"databaseId": DB})
-        asset_table.query.side_effect = [
-            {"Items": [{"assetId": "a"}], "LastEvaluatedKey": {"assetId": "a"}},
-            {"Items": [{"assetId": "b"}]},
-        ]
-        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
-                patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
-                patch(f"{MOD}.schema_table", schema_table), \
-                patch(f"{MOD}.database_table", database_table), \
-                patch(f"{MOD}.asset_state_table", state_table), \
-                patch(f"{MOD}.asset_table", asset_table), \
-                patch(f"{STORE}.update_asset_state"), \
-                patch(f"{STORE}.write_audit"):
-            response = svc.lambda_handler(
-                rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY), MagicMock())
-        assert body_of(response)["assetsPendingEvaluation"] == 2
-        assert asset_table.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"assetId": "a"}
+        response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+                                database_item={"databaseId": DB})
+        assert response["statusCode"] == 202
+        ran = _apply_run(_begun(tables), {"databaseId": DB, "complianceSchemaName": SCHEMA},
+                         asset_pages=[
+                             {"Items": [{"assetId": "a"}], "LastEvaluatedKey": {"assetId": "a"}},
+                             {"Items": [{"assetId": "b"}]}])
+        assert ran["counts"]["assetsPendingEvaluation"] == 2
+        assert ran["asset"].query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"assetId": "a"}
+        # The cursor is saved after the first page.
+        assert ran["save"].call_args.args[1] == {"assetId": "a"}
 
     def test_binding_a_missing_schema_is_refused(self):
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
@@ -601,7 +655,7 @@ class TestDatabaseBinding:
         response, _ = _run(
             rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
             schema_rows=[schema_row(database_id=scope)], database_item={"databaseId": DB})
-        assert response["statusCode"] == 200, response
+        assert response["statusCode"] == 202, response
 
     def test_binding_to_a_missing_database_is_refused(self):
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY))
@@ -642,7 +696,7 @@ class TestDatabaseBinding:
         """The one query the visibility check already makes answers the format too."""
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
                                 database_item={"databaseId": DB})
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert tables["schema"].query.call_count == 1
         query = tables["schema"].query.call_args.kwargs
         assert query["ScanIndexForward"] is False and query["Limit"] == 1
@@ -654,16 +708,23 @@ class TestDatabaseBinding:
             state_rows=[{"assetId": "a", "schemaSource": "asset"},
                         {"assetId": "b", "schemaSource": "database"},
                         {"assetId": "c"}])
-        assert response["statusCode"] == 200
-        assert body_of(response)["removedComplianceRecords"] == 2
+        assert response["statusCode"] == 202
         assert "REMOVE complianceSchemaName" in tables["database"].update_item.call_args.kwargs[
             "UpdateExpression"]
+        tables["state"].delete_item.assert_not_called()
+        assert tables["audit"].call_args.kwargs["event_type"] == "schema_unbound_from_database"
+        record = _begun(tables)
+        assert (record["operation"], record["previousSchema"]) == ("unbind", SCHEMA)
+        ran = _apply_run(record, {"databaseId": DB},
+                         state_rows=[{"assetId": "a", "schemaSource": "asset"},
+                                     {"assetId": "b", "schemaSource": "database"},
+                                     {"assetId": "c"}])
+        assert ran["counts"]["removedComplianceRecords"] == 2
         # One delete per record, each conditional on the record as read (D159).
-        deletes = tables["state"].delete_item.call_args_list
+        deletes = ran["state"].delete_item.call_args_list
         assert [c.kwargs["Key"]["assetId"] for c in deletes] == ["b", "c"]
         assert {c.kwargs["ConditionExpression"] for c in deletes} == {
             "attribute_not_exists(#recordRevision)"}
-        assert tables["audit"].call_args.kwargs["event_type"] == "schema_unbound_from_database"
 
     def test_unbinding_a_database_with_no_binding_changes_nothing(self):
         response, tables = _run(rest_event("DELETE", DB_PATH, DB_PARAMS),

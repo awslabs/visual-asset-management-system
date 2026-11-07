@@ -43,6 +43,15 @@ evaluates them. Re-binding the schema already bound with the same automatic-eval
 or an asset to the override it already has, changes nothing and answers `200` with
 `changed: false`; changing only automatic evaluation updates the flag (and, turned on, queues the
 assets still pending).
+
+A database binding change (bind, change, removal, and automatic evaluation turned on with assets
+pending) is applied to the asset records in the background (D161, `complianceBindingApply`): the
+request saves the binding, audits it naming the caller and answers `202` with the number of assets
+the change goes through (`applyStatus` `applying`, `applyId`, `assetCount`, `apply`); the trigger
+applies it page by page. While it is applied, another binding change of the database answers
+`409`; a stalled change resumes when the same change is requested again. The binding read reports
+the last change's `apply` (status, counts, times). An asset-level override is one record and is
+written in the request, as before.
 """
 
 import base64
@@ -67,6 +76,7 @@ from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
+from handlers.compliance import complianceBindingApply as apply
 from handlers.compliance import complianceEvaluationStore as store
 from models.common import (
     APIGatewayProxyResponseV2,
@@ -107,9 +117,7 @@ REASON_SCHEMA_BOUND, REASON_SCHEMA_UNBOUND, REASON_OVERRIDE_SET, REASON_OVERRIDE
     store.AWAITING_REEVALUATION_REASONS
 # The binding a kept-quarantined record loses when no schema applies to it any more (a database
 # unbind, or an override cleared with no database binding): it then names no schema (D127).
-UNBOUND_RECORD_FIELDS = ("schemaName", "schemaSource")
-# SendMessageBatch takes at most ten entries.
-QUEUE_BATCH = 10
+UNBOUND_RECORD_FIELDS = apply.UNBOUND_RECORD_FIELDS
 # The one client-visible message for a bind that names a schema whose stored body is not a
 # vams-rules-v1 document (a `legacy` row in the schema listing). It names no schema.
 LEGACY_SCHEMA_MESSAGE = "Schema body must be a vams-rules-v1 document"
@@ -384,10 +392,14 @@ def resolved_auto_eval(requested, db_item):
 
 
 def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel):
-    """Bind a schema to a database; every asset without an asset-level override becomes
-    pending_evaluation under it. `complianceAutoEval` is the request's when it names one; when it
-    is omitted, a database that already has a binding keeps its stored value (so changing the schema
-    never turns automatic evaluation on or off) and a new binding defaults it to true."""
+    """Bind a schema to a database, or change its schema. The request saves the binding on the
+    database row, writes the database-level audit entry naming the caller and answers `202` at
+    once with the number of assets the change goes through; the trigger then applies it to every
+    asset record in the background (`complianceBindingApply`). `complianceAutoEval` is the
+    request's when it names one; when it is omitted, a database that already has a binding keeps
+    its stored value (so changing the schema never turns automatic evaluation on or off) and a new
+    binding defaults it to true. While a change of the database is being applied, another answers
+    `409`; repeating a stalled change resumes it."""
     (valid, message) = _validate_database(database_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -417,95 +429,168 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
     old_schema = db_item.get("complianceSchemaName")
     auto_eval = resolved_auto_eval(request.complianceAutoEval, db_item)
 
+    running = _change_while_applying(event, database_id, apply.OPERATION_BIND,
+                                     request.schemaName, auto_eval, actor)
+    if running is not None:
+        return running
+
     if old_schema == request.schemaName:
         return _rebind_same_schema(event, database_id, request.schemaName, db_item, auto_eval,
                                    actor)
 
-    database_table.update_item(
-        Key={"databaseId": database_id},
-        UpdateExpression=(
-            "SET complianceSchemaName = :schema,"
-            " complianceSchemaUpdatedAt = :now,"
-            " complianceAutoEval = :autoEval"
-        ),
-        ExpressionAttributeValues={
-            ":schema": request.schemaName,
-            ":now": now,
-            ":autoEval": auto_eval,
-        },
-    )
-
-    changes = mark_database_assets_pending(database_id, request.schemaName)
-    affected = sum(1 for change in changes if change["newState"] == STATE_PENDING_EVALUATION)
-    kept = len(changes) - affected
-    _audit_asset_changes(database_id, changes, actor, request.schemaName, old_schema)
-    queued = queue_evaluations(database_id, [c["assetId"] for c in changes]) if auto_eval else 0
+    operation = apply.OPERATION_CHANGE if old_schema else apply.OPERATION_BIND
+    record = apply.begin(database_id, operation, request.schemaName, old_schema, actor,
+                         apply.count_assets(database_id, operation), auto_eval)
+    if record is None:
+        # Another request's change began between the read and this one.
+        return apply.applying_response(event, apply.get_record(database_id))
+    try:
+        database_table.update_item(
+            Key={"databaseId": database_id},
+            UpdateExpression=(
+                "SET complianceSchemaName = :schema,"
+                " complianceSchemaUpdatedAt = :now,"
+                " complianceAutoEval = :autoEval"
+            ),
+            ExpressionAttributeValues={
+                ":schema": request.schemaName,
+                ":now": now,
+                ":autoEval": auto_eval,
+            },
+        )
+    except Exception:
+        apply.finish(record, apply.STATUS_FAILED, reason=apply.FAILED_NOT_SAVED, audit=False)
+        raise
 
     store.write_audit(
         database_id, "*",
         event_type="schema_bound_to_database",
         actor=actor,
         schema_name=request.schemaName,
-        details={"previousSchema": old_schema, "affectedAssets": len(changes),
-                 "assetsKeptQuarantined": kept, "evaluationsQueued": queued},
+        details={"previousSchema": old_schema, "complianceAutoEval": auto_eval,
+                 "applyId": record["applyId"], "assetCount": record["assetCount"]},
     )
+    apply.send_message(sqs_client, trigger_queue_url, record)
 
-    return success(body={
-        "message": f"Schema '{request.schemaName}' bound to database '{database_id}'",
+    return _accepted(record, {
+        "message": (f"Schema '{request.schemaName}' bound to database '{database_id}'; the "
+                    f"binding is being applied to {record['assetCount']} assets"),
         "schemaName": request.schemaName,
         "databaseId": database_id,
         "complianceAutoEval": auto_eval,
         "changed": True,
-        "assetsPendingEvaluation": affected,
-        "assetsKeptQuarantined": kept,
-        "evaluationsQueued": queued,
     })
+
+
+def _accepted(record, body):
+    """The `202` of a binding change applied in the background: the request's answer plus the
+    apply (`applyStatus`, `applyId`, `assetCount`, and `apply` as the binding read shows it)."""
+    view = apply.answer(record)
+    return success(status_code=202, body={
+        **body,
+        "applyStatus": view["status"],
+        "applyId": view["applyId"],
+        "assetCount": view["assetCount"],
+        "apply": view,
+    })
+
+
+def _change_while_applying(event, database_id, operation, schema_name, auto_eval, actor):
+    """The answer to a binding change of a database whose last change is still being applied:
+    when that apply is stalled and the request repeats its change, the apply resumes from its
+    cursor (`202`); otherwise `409` (`complianceBindingApply.applying_response`). None when no
+    change of the database is being applied."""
+    running = apply.applying_record(database_id)
+    if running is None:
+        return None
+    if apply.is_stalled(running) and apply.same_change(running, operation, schema_name, auto_eval):
+        resumed = apply.resume(running, actor)
+        if resumed is None:
+            return apply.applying_response(event, apply.get_record(database_id))
+        apply.send_message(sqs_client, trigger_queue_url, resumed)
+        logger.info(f"Binding apply {resumed['applyId']} of {database_id} resumed")
+        body = {"message": (f"The binding change of database '{database_id}' resumes from where "
+                            "it stopped"),
+                "databaseId": database_id, "changed": True, "resumed": True}
+        if resumed.get("operation") == apply.OPERATION_UNBIND:
+            body["previousSchema"] = resumed.get("previousSchema")
+        else:
+            body.update(schemaName=resumed.get("schemaName"),
+                        complianceAutoEval=bool(resumed.get("complianceAutoEval")))
+        return _accepted(resumed, body)
+    return apply.applying_response(event, running)
 
 
 def _rebind_same_schema(event, database_id, schema_name, db_item, auto_eval, actor):
     """A bind naming the schema the database already has. With the same automatic-evaluation
     setting nothing changes and nothing is recorded; with another, only the flag changes (one
-    database-level audit entry), and turning it on queues the assets still pending."""
-    queued = 0
+    database-level audit entry). Turning it on queues the evaluations of the assets still pending
+    or awaiting re-evaluation in the background, as a binding change is applied (`202`); with none
+    pending, or turning it off, the request answers `200`."""
     changed = (db_item.get("complianceAutoEval") is True) != auto_eval
-    if changed:
+    if not changed:
+        return success(body={
+            "message": (f"Schema '{schema_name}' is already bound to database '{database_id}' "
+                        f"with automatic evaluation {'on' if auto_eval else 'off'}; nothing "
+                        "changed"),
+            "schemaName": schema_name,
+            "databaseId": database_id,
+            "complianceAutoEval": auto_eval,
+            "changed": False,
+            "assetsPendingEvaluation": 0,
+            "assetsKeptQuarantined": 0,
+            "evaluationsQueued": 0,
+        })
+    pending = apply.count_assets(database_id, apply.OPERATION_EVALUATE_PENDING) if auto_eval else 0
+    record = None
+    if pending:
+        record = apply.begin(database_id, apply.OPERATION_EVALUATE_PENDING, schema_name, None,
+                             actor, pending, auto_eval)
+        if record is None:
+            return apply.applying_response(event, apply.get_record(database_id))
+    try:
         database_table.update_item(
             Key={"databaseId": database_id},
             UpdateExpression="SET complianceAutoEval = :autoEval",
             ExpressionAttributeValues={":autoEval": auto_eval},
         )
-        if auto_eval:
-            queued = queue_evaluations(database_id, [
-                item["assetId"] for item in _database_asset_state_rows(database_id)
-                if item.get("schemaSource") != SCHEMA_SOURCE_ASSET
-                and (item.get("complianceState") == STATE_PENDING_EVALUATION
-                     or item.get(store.AWAITING_REEVALUATION_SINCE))])
-        store.write_audit(
-            database_id, "*",
-            event_type=AUDIT_BINDING_AUTO_EVAL_CHANGED,
-            actor=actor,
-            schema_name=schema_name,
-            details={"complianceAutoEval": auto_eval, "evaluationsQueued": queued},
-        )
-        message = (f"Automatic evaluation turned {'on' if auto_eval else 'off'} for database "
-                   f"'{database_id}'; the asset records are unchanged")
-    else:
-        message = (f"Schema '{schema_name}' is already bound to database '{database_id}' with "
-                   f"automatic evaluation {'on' if auto_eval else 'off'}; nothing changed")
-    return success(body={
-        "message": message,
+    except Exception:
+        if record is not None:
+            apply.finish(record, apply.STATUS_FAILED, reason=apply.FAILED_NOT_SAVED, audit=False)
+        raise
+    details = {"complianceAutoEval": auto_eval}
+    details.update({"applyId": record["applyId"], "assetCount": pending} if record
+                   else {"evaluationsQueued": 0})
+    store.write_audit(
+        database_id, "*",
+        event_type=AUDIT_BINDING_AUTO_EVAL_CHANGED,
+        actor=actor,
+        schema_name=schema_name,
+        details=details,
+    )
+    body = {
+        "message": (f"Automatic evaluation turned {'on' if auto_eval else 'off'} for database "
+                    f"'{database_id}'; the asset records are unchanged"),
         "schemaName": schema_name,
         "databaseId": database_id,
         "complianceAutoEval": auto_eval,
-        "changed": changed,
-        "assetsPendingEvaluation": 0,
-        "assetsKeptQuarantined": 0,
-        "evaluationsQueued": queued,
-    })
+        "changed": True,
+    }
+    if record is None:
+        return success(body={**body, "assetsPendingEvaluation": 0, "assetsKeptQuarantined": 0,
+                             "evaluationsQueued": 0})
+    apply.send_message(sqs_client, trigger_queue_url, record)
+    body["message"] += f"; the evaluations of {pending} pending assets are being queued"
+    return _accepted(record, body)
 
 
 def unbind_schema_from_database(event, database_id):
-    """Remove the database binding and the asset rows that inherited it."""
+    """Remove the database binding. The request removes it from the database row, writes the
+    database-level audit entry naming the caller and answers `202` at once with the number of
+    records the removal goes through; the trigger then removes the records that inherited the
+    binding (keeping a quarantined one, marked) in the background (`complianceBindingApply`).
+    While a change of the database is being applied, another answers `409`; repeating a stalled
+    removal resumes it."""
     (valid, message) = _validate_database(database_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -526,39 +611,48 @@ def unbind_schema_from_database(event, database_id):
     if not db_item:
         return general_error(body={"message": "Database not found"}, event=event)
 
+    actor = claims_and_roles["tokens"][0]
+    running = _change_while_applying(event, database_id, apply.OPERATION_UNBIND, None, None, actor)
+    if running is not None:
+        return running
+
     if not old_schema:
         return success(body={
             "message": "Database has no schema binding to remove",
             "databaseId": database_id,
         })
 
-    actor = claims_and_roles["tokens"][0]
-    database_table.update_item(
-        Key={"databaseId": database_id},
-        UpdateExpression=(
-            "REMOVE complianceSchemaName, complianceSchemaUpdatedAt, complianceAutoEval"
-        ),
-    )
-
-    changes = _remove_database_compliance_records(database_id)
-    removed = sum(1 for change in changes if change["newState"] == STATE_UNKNOWN)
-    kept = len(changes) - removed
-    _audit_asset_changes(database_id, changes, actor, None, old_schema)
+    record = apply.begin(database_id, apply.OPERATION_UNBIND, None, old_schema, actor,
+                         apply.count_assets(database_id, apply.OPERATION_UNBIND),
+                         db_item.get("complianceAutoEval") is True)
+    if record is None:
+        return apply.applying_response(event, apply.get_record(database_id))
+    try:
+        database_table.update_item(
+            Key={"databaseId": database_id},
+            UpdateExpression=(
+                "REMOVE complianceSchemaName, complianceSchemaUpdatedAt, complianceAutoEval"
+            ),
+        )
+    except Exception:
+        apply.finish(record, apply.STATUS_FAILED, reason=apply.FAILED_NOT_SAVED, audit=False)
+        raise
 
     store.write_audit(
         database_id, "*",
         event_type="schema_unbound_from_database",
         actor=actor,
         schema_name=old_schema,
-        details={"removedComplianceRecords": removed, "assetsKeptQuarantined": kept},
+        details={"applyId": record["applyId"], "assetCount": record["assetCount"]},
     )
+    apply.send_message(sqs_client, trigger_queue_url, record)
 
-    return success(body={
-        "message": f"Schema binding removed from database '{database_id}'",
+    return _accepted(record, {
+        "message": (f"Schema binding removed from database '{database_id}'; the removal is being "
+                    f"applied to {record['assetCount']} assets"),
         "databaseId": database_id,
         "previousSchema": old_schema,
-        "removedComplianceRecords": removed,
-        "assetsKeptQuarantined": kept,
+        "changed": True,
     })
 
 
@@ -838,10 +932,14 @@ def get_bindings(event, database_id, query_params):
             })
     asset_overrides.sort(key=lambda override: override["assetId"])
 
+    # The database's last binding change, while it is applied in the background and after.
+    last_apply = apply.answer(apply.current_record(database_id))
     body = {
         "databaseId": database_id,
         "databaseSchema": db_schema,
         "complianceAutoEval": bool(db_item.get("complianceAutoEval", False)),
+        "applyStatus": last_apply["status"] if last_apply else None,
+        "apply": last_apply,
         "assetOverrides": asset_overrides[offset:offset + page_size],
         "assetOverrideCount": len(asset_overrides),
     }
@@ -861,208 +959,16 @@ def _database_asset_state_rows(database_id):
 
 
 def _awaiting(now, schema_name, reason):
-    """The re-evaluation marker of a quarantined record a binding change reached."""
-    marker = {store.AWAITING_REEVALUATION_SINCE: now, store.AWAITING_REEVALUATION_REASON: reason}
-    if schema_name:
-        marker[store.AWAITING_REEVALUATION_SCHEMA] = schema_name
-    return marker
-
-
-def _change(asset_id, previous, new_state, asset_name=None):
-    """One asset a binding change reached: its state before and after, and its schema before."""
-    previous = previous or {}
-    return {"assetId": asset_id,
-            "previousState": previous.get("complianceState") or STATE_UNKNOWN,
-            "previousSchema": previous.get("schemaName"),
-            "newState": new_state,
-            "assetName": asset_name or previous.get("assetName")}
-
-
-# The key attributes of an asset-state record, and its revision, which a binding's replacement of
-# the record keeps (`_replacing_fields`).
-_KEPT_ON_REPLACE = ("databaseId", "assetId", store.RECORD_REVISION_FIELD)
-
-
-def _replacing_fields(existing, written):
-    """The attributes of `existing` that a write of `written` removes so the record ends as
-    `written` alone, as the put it replaces left it (the keys and the revision stay)."""
-    return tuple(field for field in (existing or {})
-                 if field not in written and field not in _KEPT_ON_REPLACE)
-
-
-def _bind_record(database_id, asset_id, existing, schema_name, asset_name):
-    """Apply a database binding to one asset's record, computed from `existing` (the record as the
-    binding's read found it, None for none) and conditional on its revision
-    (`store.revision_condition`, D159): an asset-level override is left alone; a quarantined record
-    stays quarantined, marked awaiting re-evaluation under the schema; any other record is replaced
-    by a `pending_evaluation` one under the schema (created when absent). When the record changed
-    since the read it is read again consistently and the binding applied to it as it is now, up to
-    `store.STATE_WRITE_ATTEMPTS` tries; after the last it is left as it is (logged). Returns the
-    change (`_change`), or None when nothing was written."""
-    for attempt in range(store.STATE_WRITE_ATTEMPTS):
-        if attempt:
-            existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
-        if existing and existing.get("schemaSource") == SCHEMA_SOURCE_ASSET:
-            return None
-        written_at = store.now_iso()
-        if existing and existing.get("complianceState") == STATE_QUARANTINED:
-            updates = {
-                "schemaName": schema_name,
-                "schemaSource": SCHEMA_SOURCE_DATABASE,
-                "updatedAt": written_at,
-                **_awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
-            }
-            removed = ()
-            new_state = STATE_QUARANTINED
-        else:
-            updates = {
-                "schemaName": schema_name,
-                "schemaSource": SCHEMA_SOURCE_DATABASE,
-                "complianceState": STATE_PENDING_EVALUATION,
-                "updatedAt": written_at,
-                **listing.asset_name_attributes(asset_id, asset_name),
-            }
-            removed = _replacing_fields(existing, updates)
-            new_state = STATE_PENDING_EVALUATION
-        try:
-            store.update_asset_state(database_id, asset_id, updates, remove_fields=removed,
-                                     computed_from=existing or {})
-        except Exception as e:
-            if not store.is_conditional_check_failure(e):
-                raise
-            continue
-        return _change(asset_id, existing, new_state, asset_name)
-    logger.warning(f"The binding of {schema_name} did not reach asset {database_id}:{asset_id}: "
-                   f"its record changed under each of {store.STATE_WRITE_ATTEMPTS} writes")
-    return None
-
-
-def mark_database_assets_pending(database_id, schema_name):
-    """Bind `schema_name` on the record of every asset in the database that has no asset-level
-    override: a quarantined record stays quarantined (its reason and download block with it),
-    marked awaiting re-evaluation under the schema; any other is created or replaced as
-    pending_evaluation under it. Each record's `updatedAt`, and a quarantined record's
-    `awaitingReevaluationSince`, are the time of its own write, not the request's start: its
-    `updatedAt` does not step back past an evaluation's write made while the change went through
-    the database (D155), and an evaluation that began before the change reached the record, under
-    the binding before it, keeps the marker past its verdict (D152, D158). Each record's write is
-    conditional on the record as read and re-decided on a re-read when it changed (`_bind_record`,
-    D159). Returns one change (`_change`) per asset the binding reached."""
-    existing_items = {
-        item["assetId"]: item for item in _database_asset_state_rows(database_id)
-    }
-    asset_rows = query_all_items(
-        asset_table,
-        KeyConditionExpression=Key("databaseId").eq(database_id),
-        ProjectionExpression="assetId, assetName",
-    )
-
-    changes = []
-    for row in asset_rows:
-        asset_id = row.get("assetId")
-        if not asset_id:
-            continue
-        change = _bind_record(database_id, asset_id, existing_items.get(asset_id), schema_name,
-                              row.get("assetName"))
-        if change is not None:
-            changes.append(change)
-    return changes
-
-
-def _unbind_record(database_id, item):
-    """Remove the database binding from one record that inherited it, computed from `item` (the
-    record as the removal's read found it) and conditional on its revision (D159): a quarantined
-    record stays quarantined, marked awaiting re-evaluation with no schema; any other is deleted;
-    an asset-level override (or a record gone since) is left alone. When the record changed since
-    the read it is read again consistently and decided as it is now, up to
-    `store.STATE_WRITE_ATTEMPTS` tries; after the last it is left as it is (logged). Returns the
-    change (`_change`), or None when nothing was written."""
-    asset_id = item["assetId"]
-    for attempt in range(store.STATE_WRITE_ATTEMPTS):
-        if attempt:
-            item = store.get_compliance_record(database_id, asset_id, consistent_read=True)
-        if not item or item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
-            return None
-        try:
-            if item.get("complianceState") == STATE_QUARANTINED:
-                # No schema applies any more: the record keeps the quarantine and names none.
-                written_at = store.now_iso()
-                store.update_asset_state(
-                    database_id, asset_id,
-                    {"updatedAt": written_at, **_awaiting(written_at, None, REASON_SCHEMA_UNBOUND)},
-                    remove_fields=(store.AWAITING_REEVALUATION_SCHEMA, *UNBOUND_RECORD_FIELDS),
-                    computed_from=item)
-                return _change(asset_id, item, STATE_QUARANTINED)
-            store.delete_asset_state(database_id, asset_id, item, table=asset_state_table)
-            return _change(asset_id, item, STATE_UNKNOWN)
-        except Exception as e:
-            if not store.is_conditional_check_failure(e):
-                raise
-    logger.warning(f"The binding removal did not reach asset {database_id}:{asset_id}: its record "
-                   f"changed under each of {store.STATE_WRITE_ATTEMPTS} writes")
-    return None
-
-
-def _remove_database_compliance_records(database_id):
-    """Remove the database binding from the records that inherited it (schemaSource "database"):
-    a quarantined one stays quarantined, marked awaiting re-evaluation with no schema (an
-    evaluation under a binding set later, or a release, decides it); any other is deleted. Asset
-    overrides stay. Each kept record's `updatedAt` and marker time are the time of its own write
-    (D155, D158); each record's write or delete is conditional on the record as read and
-    re-decided on a re-read when it changed (`_unbind_record`, D159). Returns one change
-    (`_change`) per record the removal reached."""
-    changes = []
-    for item in _database_asset_state_rows(database_id):
-        if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
-            continue
-        change = _unbind_record(database_id, item)
-        if change is not None:
-            changes.append(change)
-    return changes
-
-
-def _audit_asset_changes(database_id, changes, actor, schema_name, previous_schema):
-    """One `schema_binding_applied_to_asset` entry per asset a database binding change reached:
-    its state before and after, the schema now bound (None when the binding was removed) and the
-    one before."""
-    for change in changes:
-        store.write_audit(
-            database_id, change["assetId"],
-            event_type=AUDIT_BINDING_APPLIED_TO_ASSET,
-            actor=actor,
-            schema_name=schema_name or previous_schema,
-            previous_state=change["previousState"],
-            new_state=change["newState"],
-            asset_name=change.get("assetName"),
-            details={"binding": SCHEMA_SOURCE_DATABASE, "schemaName": schema_name,
-                     "previousSchema": change.get("previousSchema") or previous_schema,
-                     "awaitingReevaluation": change["newState"] == STATE_QUARANTINED},
-        )
+    """The re-evaluation marker of a quarantined record a binding change reached
+    (`complianceBindingApply.awaiting`)."""
+    return apply.awaiting(now, schema_name, reason)
 
 
 def queue_evaluations(database_id, asset_ids):
-    """Queue one evaluation message (`{databaseId, assetId}`) per asset on the compliance trigger's
-    queue, ten to a SendMessageBatch; the trigger evaluates each as automatic evaluation does.
-    Best-effort: an entry that is not queued is logged (the asset stays pending, and its next change
-    or a sweep evaluates it). Returns the count queued."""
-    if not trigger_queue_url or not asset_ids:
-        return 0
-    queued = 0
-    ids = list(dict.fromkeys(asset_ids))
-    for start in range(0, len(ids), QUEUE_BATCH):
-        entries = [{"Id": str(index),
-                    "MessageBody": json.dumps({"databaseId": database_id, "assetId": asset_id})}
-                   for index, asset_id in enumerate(ids[start:start + QUEUE_BATCH])]
-        try:
-            response = sqs_client.send_message_batch(QueueUrl=trigger_queue_url, Entries=entries)
-        except Exception as e:
-            logger.exception(f"Could not queue {len(entries)} evaluations of {database_id}: {e}")
-            continue
-        failed = response.get("Failed") or []
-        if failed:
-            logger.error(f"{len(failed)} evaluations of {database_id} were not queued")
-        queued += len(entries) - len(failed)
-    return queued
+    """Queue one evaluation message per asset on the compliance trigger's queue
+    (`complianceBindingApply.queue_evaluations`, with this function's queue client). Returns the
+    count queued."""
+    return apply.queue_evaluations(database_id, asset_ids, sqs_client, trigger_queue_url)
 
 
 def _schema_visibility(schema_row, database_id):

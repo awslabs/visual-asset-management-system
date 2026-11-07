@@ -20,7 +20,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from backend.tests.handlers.compliance import _cdkTables
+from backend.tests.handlers.compliance import _bindingApply, _cdkTables
 from backend.tests.handlers.compliance._harness import (
     REAL_TO_UPDATE_EXPR, USER, body_of, claims_for, rest_event, schema_row,
 )
@@ -29,6 +29,9 @@ from common.compliance import quarantineGuard
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceSchemaBindingService as binding_svc
 from models.common import VAMSGeneralErrorResponse
+
+# The apply record of a database binding change lives in the moto tables (conftest).
+USES_BINDING_APPLY_RECORD = True
 
 DB = "bind-db"
 OLD, NEW = "old-schema", "new-schema"
@@ -91,10 +94,22 @@ class World:
         return response["statusCode"], body_of(response)
 
     def bind_database(self, schema=NEW, auto_eval=None):
+        """The bind request, then its apply run to the end as the trigger runs it (D161); the
+        answer's `apply` is the apply as it ended."""
         body = {"schemaName": schema}
         if auto_eval is not None:
             body["complianceAutoEval"] = auto_eval
-        return self.call("PUT", f"/compliance/bind/{DB}", {"databaseId": DB}, body)
+        return self._applied(self.call("PUT", f"/compliance/bind/{DB}", {"databaseId": DB}, body))
+
+    def unbind_database(self):
+        return self._applied(self.call("DELETE", f"/compliance/bind/{DB}", {"databaseId": DB}))
+
+    def _applied(self, answer):
+        status, body = answer
+        if status == 202:
+            body = dict(body, apply=_bindingApply.binding_apply.answer(
+                _bindingApply.drain(DB, self.sqs, QUEUE)))
+        return status, body
 
     def state(self, asset_id):
         return self.t["complianceAssetStateStorage"].get_item(
@@ -130,9 +145,11 @@ class TestBindingANewSchema:
     def test_quarantine_and_its_download_block_hold_until_re_evaluation(self, auto_eval):
         with World(auto_eval=auto_eval) as world:
             status, body = world.bind_database(NEW)
-            assert status == 200
-            assert (body["changed"], body["assetsPendingEvaluation"], body["assetsKeptQuarantined"],
-                    body["evaluationsQueued"]) == (True, 1, 1, 2 if auto_eval else 0)
+            assert status == 202
+            applied = body["apply"]
+            assert (body["changed"], applied["status"], applied["assetsPendingEvaluation"],
+                    applied["assetsKeptQuarantined"], applied["evaluationsQueued"]) == (
+                True, "applied", 1, 1, 2 if auto_eval else 0)
             row = world.state("quarantined")
             assert row["complianceState"] == "quarantined"
             assert row["quarantineReason"] == "units missing"
@@ -148,12 +165,14 @@ class TestBindingANewSchema:
                 ("schema_binding_applied_to_asset", "quarantined", "quarantined", "quarantined")]
             assert [e[0] for e in world.audit("schema_bound_to_database")] == [
                 "schema_bound_to_database"]
+            assert [e[0] for e in world.audit("schema_binding_apply_finished")] == [
+                "schema_binding_apply_finished"]
             assert world.queued() == (["compliant", "quarantined"] if auto_eval else [])
 
     def test_a_first_binding_marks_every_asset_and_audits_each(self):
         with World(bound=None) as world:
             status, body = world.bind_database(NEW)
-            assert status == 200 and body["assetsKeptQuarantined"] == 1
+            assert status == 202 and body["apply"]["assetsKeptQuarantined"] == 1
             assert len(world.audit("schema_binding_applied_to_asset")) == 2
             # A new binding defaults automatic evaluation on.
             assert world.queued() == ["compliant", "quarantined"]
@@ -187,13 +206,15 @@ class TestReBindingTheSchemaInForce:
                 "schemaName": OLD, "schemaSource": "database"})
             before = {r["assetId"]: r for r in world.t["complianceAssetStateStorage"].scan()["Items"]}
             status, body = world.bind_database(OLD, auto_eval=True)
-            assert (status, body["changed"], body["evaluationsQueued"]) == (200, True, 1)
+            assert (status, body["changed"], body["apply"]["operation"],
+                    body["apply"]["evaluationsQueued"]) == (202, True, "evaluatePending", 1)
             after = {r["assetId"]: r for r in world.t["complianceAssetStateStorage"].scan()["Items"]}
             assert after == before
             assert world.t["databaseStorage"].get_item(
                 Key={"databaseId": DB})["Item"]["complianceAutoEval"] is True
             assert world.queued() == ["pending"]
-            assert [e[0] for e in world.audit()] == ["schema_binding_auto_eval_changed"]
+            assert [e[0] for e in world.audit()] == ["schema_binding_apply_finished",
+                                                     "schema_binding_auto_eval_changed"]
 
     def test_turning_it_off_queues_nothing(self):
         with World(auto_eval=True) as world:
@@ -208,9 +229,10 @@ class TestRemovingTheBinding:
 
     def test_a_quarantined_asset_stays_quarantined_and_the_others_lose_their_record(self):
         with World() as world:
-            status, body = world.call("DELETE", f"/compliance/bind/{DB}", {"databaseId": DB})
-            assert status == 200
-            assert (body["removedComplianceRecords"], body["assetsKeptQuarantined"]) == (1, 1)
+            status, body = world.unbind_database()
+            assert status == 202
+            assert (body["apply"]["removedComplianceRecords"],
+                    body["apply"]["assetsKeptQuarantined"]) == (1, 1)
             row = world.state("quarantined")
             assert row["complianceState"] == "quarantined"
             assert _awaiting(row) == {"awaitingReevaluationSince": row["awaitingReevaluationSince"],
@@ -325,16 +347,24 @@ class TestTheMarkerTimeIsWhenTheChangeReachedTheRecord:
     def _evaluation_begins_while_the_change_runs(world, request):
         """Run `request` with an evaluation of the quarantined asset beginning right after the
         change reads the database's records; returns that evaluation's start."""
-        real = binding_svc._database_asset_state_rows
+        apply_module = _bindingApply.binding_apply
+        real_bind, real_unbind = apply_module.bind_record, apply_module.unbind_record
         started = []
 
-        def rows(database_id):
-            result = real(database_id)
-            started.append(store.now_iso())
-            return result
-        with patch.object(binding_svc, "_database_asset_state_rows", side_effect=rows):
+        def bind(database_id, asset_id, existing, *args):
+            if asset_id == "quarantined":
+                started.append(store.now_iso())
+            return real_bind(database_id, asset_id, existing, *args)
+
+        def unbind(database_id, item, *args):
+            if item["assetId"] == "quarantined":
+                started.append(store.now_iso())
+            return real_unbind(database_id, item, *args)
+        # The record has been read; the evaluation begins before the change writes it.
+        with patch.object(apply_module, "bind_record", side_effect=bind), \
+                patch.object(apply_module, "unbind_record", side_effect=unbind):
             status, _ = request()
-        assert status == 200 and started
+        assert status == 202 and started
         return started[-1]
 
     @staticmethod
@@ -360,7 +390,7 @@ class TestTheMarkerTimeIsWhenTheChangeReachedTheRecord:
     def test_removing_the_binding(self):
         with World(auto_eval=False) as world:
             evaluated_at = self._evaluation_begins_while_the_change_runs(
-                world, lambda: world.call("DELETE", f"/compliance/bind/{DB}", {"databaseId": DB}))
+                world, world.unbind_database)
             row = world.state("quarantined")
             assert row["awaitingReevaluationSince"] > evaluated_at
             self._quarantining_verdict(world, evaluated_at)

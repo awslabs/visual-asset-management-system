@@ -457,6 +457,15 @@ const retirementRecordRead = (handlerModule: string) =>
         : RETIREMENT_RECORD_READ;
 
 /**
+ * Services that read and write the apply record of a database binding change applied in the
+ * background (`complianceBindingApply`, D161) and nothing else of the evaluation table: GetItem,
+ * PutItem and UpdateItem on the record's `bindingApply#` keys (`grantBindingApplyRecordWrite`),
+ * beside their GetItem on the retirement record's keys.
+ */
+const BINDING_APPLY_RECORD_WRITERS = new Set(["handlers.compliance.complianceSchemaBindingService"]);
+const BINDING_APPLY_RECORD_ACTIONS = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"];
+
+/**
  * The trigger runs the move of a deleted database's compliance data (`databaseRetirement.run`),
  * which reaches its tables through a `databaseRetirement.Tables` holder the analysis does not
  * follow. Of the tables it moves rows in, the schema table is the only one the trigger's own code
@@ -485,6 +494,10 @@ function needsOf(handlerModule: string): Needs {
     const needs = deriveNeeds(handlerModule);
     const evaluation = needs.get("COMPLIANCE_EVALUATION_STORAGE_TABLE");
     if (RETIREMENT_RECORD_READERS.has(handlerModule) && evaluation && !evaluation.write) {
+        evaluation.readActions = retirementRecordRead(handlerModule);
+    }
+    if (BINDING_APPLY_RECORD_WRITERS.has(handlerModule) && evaluation) {
+        // Single-item reads of the two records; the writes are the apply record's.
         evaluation.readActions = retirementRecordRead(handlerModule);
     }
     for (const key of GET_ITEM_ONLY_READS[handlerModule] ?? []) {
@@ -902,8 +915,13 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         const evaluationTable = resolver.tableFor("COMPLIANCE_EVALUATION_STORAGE_TABLE");
         for (const handlerModule of RETIREMENT_RECORD_READERS) {
             const lambda = lambdas.find((l) => l.handlerModule === handlerModule)!;
+            const writesTheApply = BINDING_APPLY_RECORD_WRITERS.has(handlerModule);
             expect(needsOf(handlerModule).get("COMPLIANCE_EVALUATION_STORAGE_TABLE")).toMatchObject(
-                { write: false, index: false, readActions: retirementRecordRead(handlerModule) }
+                {
+                    write: writesTheApply,
+                    index: false,
+                    readActions: retirementRecordRead(handlerModule),
+                }
             );
             const onTable = resolver
                 .statementsOf(lambda)
@@ -911,6 +929,10 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
                     ([] as unknown[])
                         .concat(statement.Resource ?? [])
                         .some((entry) => resolver.tableOfResource(entry)?.table === evaluationTable)
+                )
+                .filter(
+                    (statement) =>
+                        JSON.stringify(statement.Condition ?? {}).indexOf("bindingApply#") < 0
                 );
             expect(onTable).toHaveLength(1);
             expect(([] as string[]).concat(onTable[0].Action).sort()).toEqual(
@@ -918,6 +940,38 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             );
             expect(onTable[0].Condition).toEqual({
                 "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["databaseRetirement#*"] },
+            });
+        }
+    });
+
+    test("the binding apply record is read and written on its own keys only", () => {
+        // The binding service records, resumes and ends a database binding change applied in the
+        // background (D161) on the apply record's `bindingApply#` keys, with the three single-item
+        // actions its code calls and nothing else; its other access to the table is the retirement
+        // record's read.
+        const evaluationTable = resolver.tableFor("COMPLIANCE_EVALUATION_STORAGE_TABLE");
+        for (const handlerModule of BINDING_APPLY_RECORD_WRITERS) {
+            const lambda = lambdas.find((l) => l.handlerModule === handlerModule)!;
+            const evaluation = needsOf(handlerModule).get("COMPLIANCE_EVALUATION_STORAGE_TABLE")!;
+            expect([...evaluation.writeActions].sort()).toEqual([
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+            ]);
+            expect(evaluation.batchWrite).toBe(false);
+            const onTable = resolver
+                .statementsOf(lambda)
+                .filter((statement) =>
+                    ([] as unknown[])
+                        .concat(statement.Resource ?? [])
+                        .some((entry) => resolver.tableOfResource(entry)?.table === evaluationTable)
+                );
+            expect(onTable).toHaveLength(2);
+            const apply = onTable.find(
+                (statement) => JSON.stringify(statement.Condition ?? {}).indexOf("bindingApply#") >= 0
+            )!;
+            expect(([] as string[]).concat(apply.Action).sort()).toEqual(BINDING_APPLY_RECORD_ACTIONS);
+            expect(apply.Condition).toEqual({
+                "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["bindingApply#*"] },
             });
         }
     });

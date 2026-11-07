@@ -123,6 +123,7 @@ from common.s3MetadataKeys import (
 )
 from common.validators import validate
 from customLogging.logger import safeLogger
+from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluationStore as store
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -419,11 +420,16 @@ def lambda_handler(event, context):
     error failed (`batchItemFailures`), so only those are redelivered."""
     batch = TriggerBatch()
     moves = []
+    applies = []
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
         move_database = databaseRetirement.move_message_database(record)
         if move_database is not None:
             moves.append((message_id, move_database))
+            continue
+        apply_target = binding_apply.message_target(record)
+        if apply_target is not None:
+            applies.append((message_id, apply_target))
             continue
         batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
@@ -437,7 +443,42 @@ def lambda_handler(event, context):
     for message_id, database_id in moves:
         if not run_database_move(database_id, context):
             failures.append({"itemIdentifier": message_id})
+    for message_id, (database_id, apply_id, run_id) in applies:
+        if not run_binding_apply(database_id, apply_id, run_id, context):
+            failures.append({"itemIdentifier": message_id})
     return {"batchItemFailures": failures}
+
+
+def run_binding_apply(database_id, apply_id, run_id, context) -> bool:
+    """Apply a database binding change (`complianceBindingApply.run`) until this invocation's
+    deadline, and queue the next message when it is not done. Only the ids come from the message;
+    the change itself is read from the stored apply and the database row. Returns False when the
+    run failed, so the message is redelivered (and, past the queue's receive limit, kept in its
+    dead-letter queue) rather than queued again."""
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID"},
+        "applyId": {"value": apply_id, "validator": "UUID"},
+        "runId": {"value": run_id, "validator": "UUID"},
+    })
+    if not valid:
+        logger.error(f"Compliance binding apply message rejected: {message}")
+        return True
+    remaining = context.get_remaining_time_in_millis() / 1000 if context else 60
+    deadline = time.monotonic() + max(1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
+    try:
+        done = binding_apply.run(database_id, apply_id, run_id, deadline, sqs=sqs_client,
+                                 queue_url=trigger_queue_url)
+    except Exception as e:
+        logger.exception(f"Compliance binding apply of database {database_id} failed: {e}")
+        return False
+    if not done:
+        record = binding_apply.get_record(database_id) or {}
+        if record.get("applyId") != apply_id or record.get("runId") != run_id:
+            return True
+        if not binding_apply.send_message(sqs_client, trigger_queue_url, record):
+            return False
+        logger.info(f"Compliance binding apply of database {database_id} continues in a new message")
+    return True
 
 
 def run_database_move(database_id, context) -> bool:

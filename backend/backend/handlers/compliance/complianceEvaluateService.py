@@ -46,6 +46,7 @@ from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
+from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance.complianceTrigger import (
     EVALUATION_TARGET_ARCHIVED, EVALUATION_TARGET_REMOVED, automatic_evaluation_target,
@@ -579,6 +580,11 @@ def evaluate_database(event, database_id, starting_token=None):
         return authorization_error()
     if store.database_moving(database_id):
         return databaseRetirement.moving_response(event)
+    # While a binding change is applied in the background, the records it has not reached yet
+    # still carry the binding before it: Evaluate All waits for it (D161).
+    running_apply = binding_apply.applying_record(database_id)
+    if running_apply is not None:
+        return binding_apply.applying_response(event, running_apply)
 
     db_item = store.get_database_item(database_id)
     if not db_item:

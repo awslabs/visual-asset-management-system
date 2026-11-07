@@ -593,6 +593,7 @@ The compliance audit log records every compliance action across the deployment.
 | `cascade_timed_out`                | A pending cascade reached its approval timeout unapproved and was aborted                                                |
 | `schema_binding_applied_to_asset`  | A binding change reached an asset (its previous and new state; a quarantined asset stays quarantined until re-evaluated) |
 | `schema_binding_auto_eval_changed` | Re-binding the same schema changed only automatic evaluation                                                             |
+| `schema_binding_apply_finished`    | A database binding change finished applying to the assets (or failed), with its totals                                   |
 | `cascade_database_deleted`         | A pending cascade was aborted because its database was deleted                                                           |
 | `database_deleted`                 | A database was deleted; its compliance history moves under `<databaseId>#deleted`                                        |
 | `database_compliance_moved`        | The deleted database's compliance history finished moving under `<databaseId>#deleted`                                   |

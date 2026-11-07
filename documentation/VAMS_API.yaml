@@ -18333,6 +18333,7 @@ components:
                         - cascade_timed_out
                         - schema_binding_applied_to_asset
                         - schema_binding_auto_eval_changed
+                        - schema_binding_apply_finished
                         - cascade_database_deleted
                         - database_deleted
                         - database_compliance_moved

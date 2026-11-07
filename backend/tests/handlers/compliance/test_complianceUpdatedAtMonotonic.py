@@ -36,6 +36,10 @@ from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 from handlers.compliance import complianceSchemaBindingService as binding_svc
 
+# The binding tests use the QuarantinedAt world, whose moto tables hold the apply record of a
+# database binding change (conftest `no_binding_apply`).
+USES_BINDING_APPLY_RECORD = True
+
 
 def _ticking_clock():
     """A `now_iso` that moves forward one millisecond each time it is read."""
@@ -146,6 +150,19 @@ def _after_reading(target, name, world, stamps):
     return patch.object(target, name, side_effect=read)
 
 
+def _after_first_reading(target, name, world, stamps):
+    """`_after_reading` for the first read only: the record a change re-reads after the write
+    that landed meanwhile is read as it is."""
+    real = getattr(target, name)
+
+    def read(*args, **kwargs):
+        result = real(*args, **kwargs)
+        if not stamps:
+            stamps.append(_write_meanwhile(world))
+        return result
+    return patch.object(target, name, side_effect=read)
+
+
 @pytest.mark.unit
 class TestRouteWrites:
     """A write that lands while a route is between its reads and its own write is not stepped
@@ -171,10 +188,11 @@ class TestRouteWrites:
         with World() as world:
             self._quarantined(world)
             stamps = []
-            with _after_reading(binding_svc, "_database_asset_state_rows", world, stamps):
+            # The background apply reads each record before it writes it (D161).
+            with _after_first_reading(store, "get_compliance_record", world, stamps):
                 status, _ = world.call(binding_svc, "PUT", f"/compliance/bind/{T_DB}",
                                        {"databaseId": T_DB}, {"schemaName": NEW})
-            assert status == 200 and stamps
+            assert status == 202 and stamps
             row = world.state()
             assert row["awaitingReevaluationReason"] == "schemaBound"
             assert row["updatedAt"] >= stamps[-1]
@@ -183,10 +201,12 @@ class TestRouteWrites:
         with World() as world:
             self._quarantined(world)
             stamps = []
-            with _after_reading(binding_svc, "_database_asset_state_rows", world, stamps):
+            # The background apply reads the records a page at a time (D161).
+            with _after_first_reading(world.t["complianceAssetStateStorage"], "query", world,
+                                      stamps):
                 status, _ = world.call(binding_svc, "DELETE", f"/compliance/bind/{T_DB}",
                                        {"databaseId": T_DB})
-            assert status == 200 and stamps
+            assert status == 202 and stamps
             row = world.state()
             assert row["awaitingReevaluationReason"] == "schemaUnbound"
             assert row["updatedAt"] >= stamps[-1]

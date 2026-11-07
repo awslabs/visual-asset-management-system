@@ -44,6 +44,10 @@ from common.compliance import evaluationEngine as engine
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 
+# The database bind test uses the D118 world, whose moto tables hold the apply record of a
+# database binding change (conftest `no_binding_apply`).
+USES_BINDING_APPLY_RECORD = True
+
 PENDING = engine.EVALUATION_STATUS_PENDING_PIPELINE
 # The record and evaluation-row fields and the answers this change adds, spelled out so the cases
 # run (and fail on their assertions) against code without them; `test_the_names_are_the_stores`
@@ -429,13 +433,13 @@ class TestOtherWritersUnderTheSameCondition:
                 quarantine)
             with between:
                 status, body = world.bind_database(NEW)
-            assert done and status == 200
+            assert done and status == 202
             row = world.state("compliant")
             assert (row["complianceState"], row["quarantineReason"]) == ("quarantined",
                                                                           "units missing")
             assert (row["awaitingReevaluationReason"], row["awaitingReevaluationSchema"]) == (
                 "schemaBound", NEW)
-            assert body["assetsKeptQuarantined"] == 2
+            assert body["apply"]["assetsKeptQuarantined"] == 2
             assert world.download_blocked("compliant") is True
 
     def test_every_write_increments_the_revision_and_a_route_write_is_conditional_on_it(

@@ -78,7 +78,12 @@ def once_per_key(decide: Callable[[Hashable], Any]) -> Callable[[Hashable], bool
 
 # The asset-state attributes kept for the listings only: the name index's sort key and what the
 # `text` filter matches (`asset_name_attributes`). No API answer returns them (D163).
-PRIVATE_STATE_ATTRIBUTES = ("assetNameSort", "assetSearchText")
+LISTING_STATE_ATTRIBUTES = ("assetNameSort", "assetSearchText")
+# The id of the background database binding change that last wrote the record
+# (`complianceBindingApply`, D161), kept so a page it applies twice writes nothing twice.
+BINDING_APPLY_STAMP_ATTRIBUTE = "bindingApplyId"
+# Every asset-state attribute no API answer returns.
+PRIVATE_STATE_ATTRIBUTES = LISTING_STATE_ATTRIBUTES + (BINDING_APPLY_STAMP_ATTRIBUTE,)
 
 
 def state_record_answer(record: Dict[str, Any]) -> Dict[str, Any]:
