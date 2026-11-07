@@ -34,7 +34,7 @@ once on the job row, and the upload outcome is an idempotent write that raises s
 - reconcile: finalize the job of a copy execution that ended outside its states (a status change
              event from the copy state machine, or the execution details read).
 - sweep:     the delayed sweep of a stopped or failed job (the copy state machine's sweep branch,
-             about 5 and 15 minutes after the stop): abort the upload the job row recorded if it is
+             about 5 and 16 minutes after the stop): abort the upload the job row recorded if it is
              still listed at the job's key, unless the job's own object landed (#1123 D5).
 
 Invoked only by the state machines, the status change rule and the copy engine's own reconcile

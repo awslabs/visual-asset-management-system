@@ -455,11 +455,12 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
                 Seconds: LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second,
             })
         );
-        expect(LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS).toEqual({ first: 300, second: 600 });
-        // The last pass runs after the longest a copy task alive at the stop can still run.
+        expect(LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS).toEqual({ first: 300, second: 660 });
+        // The last pass runs strictly after the longest a copy task alive at the stop can still run
+        // (a minute of margin past the engine's task timeout).
         expect(
             LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.first + LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second
-        ).toBeGreaterThanOrEqual(engineFunction.Properties.Timeout);
+        ).toBeGreaterThanOrEqual(engineFunction.Properties.Timeout + 60);
         expect(first.Next).toBe("LargeObjectCopySweepFirst");
 
         const sweepFirst = jobStates.LargeObjectCopySweepFirst;

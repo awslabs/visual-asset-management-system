@@ -10,7 +10,7 @@ later with a part whose copy S3 had accepted before the stop; one later manual a
 good.
 
 Now every stopped or failed job with a recorded upload gets a delayed sweep: an execution of the
-copy state machine's sweep branch (Wait 5 min, sweep, Wait 10 min, sweep), started once per job by
+copy state machine's sweep branch (Wait 5 min, sweep, Wait 11 min, sweep), started once per job by
 the cancel path and by the engine's failure cleanup. Each pass decides by the landed object first,
 lists the uploads at the job's exact key and aborts only the upload the job row recorded.
 
@@ -336,6 +336,59 @@ def test_no_sweep_is_scheduled_without_a_state_machine():
     with patch.dict("os.environ", {loc.ENV_STATE_MACHINE_ARN: ""}):
         assert loc.schedule_delayed_sweep(sfn, "j1") is False
     sfn.start_execution.assert_not_called()
+
+
+def test_a_missing_state_machine_or_client_is_logged():
+    """Without the ARN or the client no later pass runs for the job: say so (round-10 review)."""
+    with patch.object(loc, "logger") as logger, \
+            patch.dict("os.environ", {loc.ENV_STATE_MACHINE_ARN: ""}):
+        assert loc.schedule_delayed_sweep(MagicMock(), "j1") is False
+    logger.warning.assert_called_once()
+    assert loc.ENV_STATE_MACHINE_ARN in logger.warning.call_args.args[0]
+    with patch.object(loc, "logger") as logger:
+        assert loc.schedule_delayed_sweep(None, "j1", machine_arn=MACHINE_ARN) is False
+    logger.warning.assert_called_once()
+    assert "client" in logger.warning.call_args.args[0]
+
+
+def test_the_final_pass_runs_after_the_longest_copy_task():
+    """The last pass is a minute past the engine's 15-minute task timeout, not at it."""
+    assert (loc.SWEEP_FIRST_WAIT_SECONDS, loc.SWEEP_SECOND_WAIT_SECONDS) == (300, 660)
+    assert FINAL >= 15 * 60 + 60
+
+
+def _without_execution_arn(env, job):
+    env["jobs"].update_item(Key={"jobId": job["jobId"]}, UpdateExpression="REMOVE executionArn")
+
+
+@BUCKETS
+@pytest.mark.parametrize("no_stop", ["execution-gone", "no-execution-arn"])
+def test_a_cancel_that_made_no_stop_schedules_the_delayed_sweep_itself(env, machine, bucket,
+                                                                       no_stop):
+    """With no stop made here (the copy execution is gone, or the row names none) no status change
+    event and no reconcile follow, so the cancel path's own schedule_delayed_sweep call is the only
+    scheduler (round-10 review). Fails when that call is removed."""
+    job, _prepared = _start(env, bucket)
+    if no_stop == "execution-gone":
+        env["sfn"].stop_execution.side_effect = ClientError(
+            {"Error": {"Code": "ExecutionDoesNotExist", "Message": "gone"}}, "StopExecution")
+    else:
+        _without_execution_arn(env, job)
+    ghost = _GhostS3(env["s3"], 480)
+    with patch.object(engine, "_client_for_bucket", lambda b: ghost):
+        assert loc.cancel_execution_copy_jobs(env["jobs"], env["sfn"], ghost, "e1") == []
+        if no_stop == "no-execution-arn":
+            env["sfn"].stop_execution.assert_not_called()
+        # No stop was made, so the job is decided here and nothing reconciles it.
+        assert _row(env, job)["status"] == loc.STATUS_CANCELLED
+        assert len(_uploads(env, bucket)) == 1
+        starts = _sweep_starts(env)
+        assert [(s["name"], s["input"]) for s in starts] == [
+            (loc.sweep_execution_name_for(job["jobId"]), loc.sweep_input(job["jobId"]))]
+        result = _run_sweep_execution(env, ghost, starts[0])
+    assert _uploads(env, bucket) == []
+    assert result["remaining"] is False
+    assert _row(env, job)["status"] == loc.STATUS_CANCELLED
 
 
 def test_a_cancel_whose_sweep_cannot_be_scheduled_still_cancels(env, machine):
