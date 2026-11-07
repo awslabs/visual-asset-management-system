@@ -296,6 +296,26 @@ class TestCreate:
         assert response["statusCode"] == 400
         assert "archived" in h.body_of(response)["message"]
 
+    def test_an_archived_file_is_refused_as_archived_not_as_missing(self, env):
+        """#1125 D12: VAMS archives a file by putting a delete marker over it, so S3 answers its
+        HeadObject 404 with x-amz-delete-marker. The refusal says archived (the web's words), not
+        'File not found in S3', and never repeats the caller's key."""
+        env.s3.add("xasset1/old-part.glb", version="v1")
+        env.s3.add("xasset1/old-part.glb", version="dm1", delete_marker=True)
+        response = _create(env, {"selection": [{"type": "file", "relativePath": "/a.glb"},
+                                               {"type": "file", "relativePath": "/old-part.glb"}]})
+        assert response["statusCode"] == 400
+        message = h.body_of(response)["message"]
+        assert message.endswith(env.zd.MSG_ARCHIVED_IN_SELECTION)
+        assert "not found" not in message
+        assert "old-part" not in response["body"]
+        assert env.zip.items == {}
+
+    def test_a_missing_file_is_still_not_found(self, env):
+        response = _create(env, {"selection": [{"type": "file", "relativePath": "/never.glb"}]})
+        assert response["statusCode"] == 400
+        assert h.body_of(response)["message"].endswith("File not found in S3")
+
     def test_delete_marker_version_refused_410(self, env):
         env.s3.add("xasset1/a.glb", version="dm1", delete_marker=True)
         response = _create(env, {"selection": [{"type": "file", "relativePath": "/a.glb", "versionId": "dm1"}]})

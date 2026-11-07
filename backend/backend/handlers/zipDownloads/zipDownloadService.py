@@ -271,6 +271,12 @@ def _head(bucket, key, version_id=None):
     return s3.head_object(**params)
 
 
+def _is_delete_marker(error):
+    """Whether a HeadObject error answered for a delete marker (x-amz-delete-marker: true)."""
+    headers = (error.response.get("ResponseMetadata") or {}).get("HTTPHeaders") or {}
+    return str(headers.get("x-amz-delete-marker", "")).lower() == "true"
+
+
 def _check_member(bucket, key, version_id):
     """Every per-file refusal rule on one resolved member. Returns its size."""
     try:
@@ -278,6 +284,9 @@ def _check_member(bucket, key, version_id):
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code")
         if code in ("404", "NoSuchKey", "NotFound", "NoSuchVersion"):
+            # An archived file's current version is a delete marker: S3 answers 404 and marks it.
+            if _is_delete_marker(e):
+                raise ZipRefusal(zd.MSG_ARCHIVED_IN_SELECTION)
             raise ZipRefusal(MSG_FILE_NOT_FOUND)
         if code in ("405", "MethodNotAllowed"):
             raise ZipRefusal(MSG_VERSION_ARCHIVED, status_code=STATUS_VERSION_ARCHIVED)
@@ -285,8 +294,7 @@ def _check_member(bucket, key, version_id):
             raise ZipRefusal(MSG_FILE_NOT_FOUND)
         raise
     if is_file_archived(head):
-        raise ZipRefusal("The selection includes an archived file; archived files cannot be "
-                         "included in a zip download")
+        raise ZipRefusal(zd.MSG_ARCHIVED_IN_SELECTION)
     if not validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")):
         raise ZipRefusal(MSG_FILE_TYPE_NOT_ALLOWED)
     return int(head.get("ContentLength", 0))

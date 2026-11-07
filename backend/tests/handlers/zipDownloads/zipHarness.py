@@ -35,8 +35,11 @@ AUX = "test-asset-auxiliary-bucket"
 ASSET_BUCKET = "asset-bucket"
 
 
-def _client_error(code, op="Op"):
-    return ClientError({"Error": {"Code": code, "Message": code}}, op)
+def _client_error(code, op="Op", headers=None):
+    response = {"Error": {"Code": code, "Message": code}}
+    if headers:
+        response["ResponseMetadata"] = {"HTTPHeaders": dict(headers)}
+    return ClientError(response, op)
 
 
 def _load(name, rel_path):
@@ -188,7 +191,9 @@ class FakeS3:
         if chosen is None:
             raise _client_error("404", "HeadObject")
         if chosen["DeleteMarker"]:
-            raise _client_error("405" if VersionId else "404", "HeadObject")
+            # Amazon S3 marks both answers with x-amz-delete-marker: true.
+            raise _client_error("405" if VersionId else "404", "HeadObject",
+                                {"x-amz-delete-marker": "true"})
         head = {"ContentLength": chosen["Size"], "ContentType": chosen["ContentType"],
                 "Metadata": chosen["Metadata"], "VersionId": chosen["VersionId"]}
         if chosen["StorageClass"] != "STANDARD":
