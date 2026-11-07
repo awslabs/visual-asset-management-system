@@ -462,8 +462,14 @@ const retirementRecordRead = (handlerModule: string) =>
  * PutItem and UpdateItem on the record's `bindingApply#` keys (`grantBindingApplyRecordWrite`),
  * beside their GetItem on the retirement record's keys.
  */
-const BINDING_APPLY_RECORD_WRITERS = new Set(["handlers.compliance.complianceSchemaBindingService"]);
-const BINDING_APPLY_RECORD_ACTIONS = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"];
+const BINDING_APPLY_RECORD_WRITERS = new Set([
+    "handlers.compliance.complianceSchemaBindingService",
+]);
+const BINDING_APPLY_RECORD_ACTIONS = [
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+];
 
 /**
  * The trigger runs the move of a deleted database's compliance data (`databaseRetirement.run`),
@@ -967,9 +973,12 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
                 );
             expect(onTable).toHaveLength(2);
             const apply = onTable.find(
-                (statement) => JSON.stringify(statement.Condition ?? {}).indexOf("bindingApply#") >= 0
+                (statement) =>
+                    JSON.stringify(statement.Condition ?? {}).indexOf("bindingApply#") >= 0
             )!;
-            expect(([] as string[]).concat(apply.Action).sort()).toEqual(BINDING_APPLY_RECORD_ACTIONS);
+            expect(([] as string[]).concat(apply.Action).sort()).toEqual(
+                BINDING_APPLY_RECORD_ACTIONS
+            );
             expect(apply.Condition).toEqual({
                 "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["bindingApply#*"] },
             });

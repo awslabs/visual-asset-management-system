@@ -208,7 +208,10 @@ export function grantRetirementRecordRead(
  * (UpdateItem) and reads it (GetItem) on those keys only; the trigger, which runs the apply, already
  * holds read and write access to the table.
  */
-export function grantBindingApplyRecordWrite(fun: lambda.Function, storageResources: storageResources) {
+export function grantBindingApplyRecordWrite(
+    fun: lambda.Function,
+    storageResources: storageResources
+) {
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

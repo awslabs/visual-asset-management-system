@@ -272,7 +272,9 @@ describe("a binding change applied in the background", () => {
         await waitFor(() =>
             expect(service().bindSchemaToDatabase).toHaveBeenCalledWith("db1", "strict")
         );
-        expect(await screen.findByText(/The binding was applied to 2,500 assets/)).toBeInTheDocument();
+        expect(
+            await screen.findByText(/The binding was applied to 2,500 assets/)
+        ).toBeInTheDocument();
     });
 
     it("a reader who may not bind sees a stalled change without Resume", async () => {

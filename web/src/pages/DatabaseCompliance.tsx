@@ -567,7 +567,11 @@ const DatabaseCompliancePage: React.FC = () => {
         }
         await finishAction(
             success
-                ? { message: result?.apply ? `${bindingApplyProgressText(result.apply)}.` : message }
+                ? {
+                      message: result?.apply
+                          ? `${bindingApplyProgressText(result.apply)}.`
+                          : message,
+                  }
                 : { refusal: `The binding change did not resume: ${message}` }
         );
         setBindingInProgress(false);
@@ -640,7 +644,9 @@ const DatabaseCompliancePage: React.FC = () => {
     const applyDescription =
         !bindingKnown || !bindingApply ? null : bindingApply.status === BINDING_APPLY_APPLYING ? (
             <SpaceBetween size="xxs">
-                <StatusIndicator type="in-progress">{bindingApplyLabel(bindingApply)}</StatusIndicator>
+                <StatusIndicator type="in-progress">
+                    {bindingApplyLabel(bindingApply)}
+                </StatusIndicator>
                 <ProgressBar
                     value={
                         bindingApply.assetCount > 0
