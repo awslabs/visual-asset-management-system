@@ -125,7 +125,7 @@ This software includes third party software subject to the following copyrights:
 | playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
-| three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
+| three                      | [0.187.0, 0.182.0](https://threejs.org/)                     | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |
 | web-ifc                    | [0.0.77, 0.0.68](https://github.com/ThatOpen/engine_web-ifc) | MPL-2.0\*\*           |
 | draco3d                    | [1.5.7](https://github.com/google/draco)                     | Apache-2.0            |
