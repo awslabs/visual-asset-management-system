@@ -856,8 +856,13 @@ def build_workflow_execution_record(
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
     last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
+    system_execution_context="",
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
+
+    system_execution_context is the serialized server-only context of a system-pipeline run
+    (common.workflows.systemPipelines). It is written only when set, so every other row keeps its
+    existing shape, and no list or details projection reads it.
 
     execution_group_id groups executions launched together (bulk / re-run). When set it is the PK of
     the WorkflowExecutionsByGroupGSI (SK executionStartDate), so abort-by-group can enumerate a group's
@@ -902,6 +907,8 @@ def build_workflow_execution_record(
     # Absent for an execution started on the unqualified state machine ARN.
     if workflow_version_arn:
         record["workflowVersionArn"] = workflow_version_arn
+    if system_execution_context:
+        record["systemExecutionContext"] = system_execution_context
     return record
 
 
@@ -1381,10 +1388,14 @@ def build_input_configuration_record(
 
 def build_output_file_record(
     pipeline_execution_id, file_type, relative_file_path, s3_bucket, s3_key,
-    file_size, content_type, s3_version_id,
+    file_size, content_type, s3_version_id, ingestion_status="",
 ):
-    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview})."""
-    return {
+    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview}).
+
+    ingestion_status is set only for a file a large object copy job ingested (its outcome; s3Key and
+    s3VersionId stay the staged object's locator, as for every other row). Rows without it read as
+    before."""
+    row = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "fileType:relativeFilePath": f"{file_type}:{relative_file_path}",  # SK
         "fileType": file_type,
@@ -1395,6 +1406,9 @@ def build_output_file_record(
         "contentType": content_type or "",
         "s3VersionId": s3_version_id or "",
     }
+    if ingestion_status:
+        row["ingestionStatus"] = ingestion_status
+    return row
 
 
 OUTPUT_METADATA_TYPE_METADATA = "metadata"

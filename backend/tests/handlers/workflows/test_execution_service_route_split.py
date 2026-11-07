@@ -41,6 +41,7 @@ for _name, _value in [
     ("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows"),
     ("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines"),
     ("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "t-execv2"),
+    ("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME", "t-copy-jobs"),
 ]:
     os.environ.setdefault(_name, _value)
 
@@ -68,6 +69,9 @@ EXECUTION_SERVICE_WRITES = {
     ("main", "UpdateItem"),
     ("pipelineExecutions", "UpdateItem"),
     ("locks", "DeleteItem"),
+    # The abort route marks the run's unfinished large object copy jobs CANCELLED (its managed
+    # LargeObjectCopyCoordinationPolicy: GetItem, UpdateItem, Query on the jobs table and its index).
+    ("copyJobs", "UpdateItem"),
 }
 
 #: Every call the permanent-delete route makes, reads included: the main row and the configuration
@@ -108,6 +112,11 @@ EXECUTION_SERVICE_READS = {
     *{f"{table}/index/{index}" for table, indexes in EXECUTION_SERVICE_READ_INDEXES.items()
       for index in indexes},
     "locks/index/WorkflowExecutionLocksByHolderGSI",
+    # The abort route lists the run's copy jobs (LargeObjectCopyCoordinationPolicy; the index is
+    # queried by common.largeObjectCopy, not spelled in this module).
+    "copyJobs", "copyJobs/index/WorkflowExecutionIdIndex",
+    # The abort's Region lookup for a copy job row without destRegion (common.s3, #1123 D6).
+    "buckets/index/bucketNameGSI",
 }
 READ_ACTIONS = {"GetItem", "BatchGetItem", "Query"}
 
@@ -132,6 +141,7 @@ def _logical_names():
         le.pipeline_database: "pipeline",
         le.asset_storage_table_name: "asset",
         "t-file-version-history": "fileVersionHistory",
+        "t-copy-jobs": "copyJobs",
     }
 
 
@@ -295,6 +305,10 @@ def _create_tables(ddb):
     _create(ddb, le.asset_storage_table_name, "databaseId", "assetId")
     _create(ddb, "t-file-version-history", "databaseId:assetId:filePath", "versionId", gsis=[
         _gsi("WorkflowExecutionIdIndex", "changeWorkflowExecutionId", "databaseId:assetId:filePath")])
+    _create(ddb, "t-copy-jobs", "jobId", gsis=[
+        {"IndexName": "WorkflowExecutionIdIndex",
+         "KeySchema": [{"AttributeName": "workflowExecutionId", "KeyType": "HASH"}],
+         "Projection": {"ProjectionType": "ALL"}}])
 
 
 def _main_row(execution_id, status, minutes_ago):

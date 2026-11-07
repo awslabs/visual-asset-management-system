@@ -95,6 +95,7 @@ secrets** — just the command:
                 "get_database",
                 "list_assets",
                 "get_asset",
+                "get_upload_status",
                 "search_assets",
                 "find_and_summarize",
                 "list_asset_comments",
@@ -125,7 +126,7 @@ in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
 
 `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
 `list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
-`list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
+`list_asset_files`, `get_upload_status`, `get_asset_metadata`, `get_database_metadata`,
 `list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
 `search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,

@@ -411,7 +411,38 @@ export interface ExecutionDetailPipeline {
     [key: string]: any;
 }
 
+/** Status of one output file's copy into the asset (large object copy engine job). */
+export type OutputIngestionFileStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+export interface OutputIngestionFile {
+    relativeKey: string;
+    status: OutputIngestionFileStatus;
+    bytesTotal: number;
+    /** 0 while the copy is not planned yet (QUEUED). */
+    partsTotal: number;
+    partsDone: number;
+    /** Generic reason, set only for FAILED or CANCELLED. */
+    error?: string;
+}
+
+/** Progress of a RUNNING execution whose output files over 1 GiB are being copied into the asset. */
+export interface OutputIngestion {
+    filesTotal: number;
+    filesDone: number;
+    bytesTotal: number;
+    bytesDone: number;
+    /** At most 100 files; absent from older backends. */
+    files?: OutputIngestionFile[];
+    filesTruncated?: boolean;
+}
+
 export interface ExecutionDetail extends Execution {
+    /**
+     * "INGESTING_OUTPUTS" while the RUNNING execution's output files over 1 GiB are being copied
+     * into the asset; absent for every other execution, including every terminal one.
+     */
+    executionPhase?: string;
+    outputIngestion?: OutputIngestion;
     /**
      * The workflow's systemConfig, read LIVE from the workflow record — so it reflects the workflow as
      * it stands now, not necessarily as it was when this execution ran. Per-step settings below ARE the

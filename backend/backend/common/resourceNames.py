@@ -81,6 +81,8 @@ class ResourceKeys:
     WORKFLOW_STORAGE_TABLE_V2 = ResourceParamKey("dynamoTables/workflowStorageV2", ("WORKFLOW_STORAGE_TABLE_V2_NAME",))
     WORKFLOW_TRIGGERS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowTriggersStorage", ("WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME",))
     WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowExecutionLocksStorage", ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",))
+    # Large object copy engine: one row per copy job, plus one per workflow ingestion batch
+    LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = ResourceParamKey("dynamoTables/largeObjectCopyJobsStorage", ("LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE_NAME",))
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = ResourceParamKey("s3Buckets/assetAuxiliary", ("S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME", "S3_ASSETAUXILIARY_STORAGE_BUCKET"))
     ARTEFACTS_BUCKET = ResourceParamKey("s3Buckets/artefacts", ("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET",))

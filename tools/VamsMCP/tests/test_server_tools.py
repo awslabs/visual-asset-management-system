@@ -1958,3 +1958,12 @@ def test_get_execution_results_empty_shape(mock_client):
     result = server.get_execution_results("e1")
     assert result["resultContent"] == ""
     assert result["resultRowCount"] == 0
+
+
+def test_get_upload_status_forwards_every_identifier(mock_client):
+    mock_client.api.get_upload_status.return_value = {"status": "completed_with_errors",
+                                                      "asyncFiles": [{"relativeKey": "/a.e57",
+                                                                      "status": "FAILED"}]}
+    result = server.get_upload_status("db1", "a1", "y1")
+    assert result["status"] == "completed_with_errors"
+    mock_client.api.get_upload_status.assert_called_once_with("db1", "a1", "y1")

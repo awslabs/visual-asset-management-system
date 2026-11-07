@@ -9,6 +9,7 @@ import QuickView from "../components/QuickView";
 import StatusBadge from "../components/StatusBadge";
 import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
+import OutputIngestionProgress, { IngestedBadge } from "./OutputIngestionProgress";
 import { useExecutionDetails } from "../api/queries";
 import type { ReturnFocusTo } from "../components/useReturnFocus";
 
@@ -126,6 +127,11 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({
                         <div className="flex items-center gap-2 mb-2">
                             <StatusBadge status={details.executionStatus} />
                         </div>
+                        <OutputIngestionProgress
+                            executionPhase={details.executionPhase}
+                            outputIngestion={details.outputIngestion}
+                            compact
+                        />
                         {/* The panel is also opened from a file's provenance link, where nothing
                             else on screen names the run. */}
                         <Row
@@ -263,6 +269,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({
                                             {f.assetFileVersionId
                                                 ? ` (v ${f.assetFileVersionId})`
                                                 : ""}
+                                            <IngestedBadge ingestionStatus={f.ingestionStatus} />
                                         </li>
                                     ))}
                                 {outputMetadata

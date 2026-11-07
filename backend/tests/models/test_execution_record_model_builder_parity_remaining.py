@@ -81,8 +81,10 @@ def input_configuration_record_keys():
 
 
 def output_file_record_keys():
+    # ingestion_status is written only for a file a large object copy job ingested.
     row = er.build_output_file_record(
-        "P1", "file", "/out/scan.glb", "bucket", "k/out/scan.glb", 1024, "model/gltf-binary", "v1")
+        "P1", "file", "/out/scan.glb", "bucket", "k/out/scan.glb", 1024, "model/gltf-binary", "v1",
+        ingestion_status="SUCCEEDED")
     return set(row), row
 
 

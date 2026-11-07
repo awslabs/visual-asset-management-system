@@ -24,6 +24,7 @@
 
 import * as fs from "fs";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
+import * as seam from "../../lib/lambdaBuilder/systemPipelineCallbacks";
 import {
     IAM_INLINE_POLICY_LIMIT,
     IAM_MANAGED_POLICY_LIMIT,
@@ -43,6 +44,12 @@ interface Cell {
     name: string;
     template: TemplateName;
     mutate?: (c: any) => void;
+    /**
+     * Synthesize with one system pipeline terminal callback registered (the shipped registry is
+     * empty), so the grant a feature adds is measured on the three terminal-writer roles before any
+     * feature registers one. The cell's inline sizes must equal its unregistered twin's.
+     */
+    registeredCallbackOf?: string;
 }
 
 /**
@@ -71,6 +78,16 @@ const CELLS: Cell[] = [
             c.app.useGlobalVpc.useForAllLambdas = true;
         },
     },
+    { name: "commercial-callback", template: "commercial", registeredCallbackOf: "commercial" },
+    { name: "govcloud-callback", template: "govcloud", registeredCallbackOf: "govcloud" },
+    { name: "eusovereign-callback", template: "eusovereign", registeredCallbackOf: "eusovereign" },
+];
+
+/** The roles of the three functions that run the system pipeline terminal writers. */
+const TERMINAL_WRITER_ROLES = [
+    "processWorkflowExecutionOutputServiceRole",
+    "handleExecutionErrorServiceRole",
+    "executionServiceServiceRole",
 ];
 
 /** The nested stacks whose roles this budget covers: every API Lambda. */
@@ -100,8 +117,31 @@ const BUDGET_EXCEPTIONS: Record<string, { ceiling: number; reason: string }> = {
 };
 const MAX_EXCEPTIONS = 2;
 
+/**
+ * A synth with one callback registered: the seam is wrapped so the shipped empty registry gains the
+ * error handler as a stand-in callback (an Fn::GetAtt ARN in the same nested stack, the shape a
+ * feature's callback has). The spy is process-local state, so this synth never uses the shared cache.
+ */
+function synthWithRegisteredCallback(cell: Cell): SynthResult {
+    const original = seam.attachSystemPipelineCallbacks;
+    const spy = jest
+        .spyOn(seam, "attachSystemPipelineCallbacks")
+        .mockImplementation((scope, writers, registry) =>
+            original(scope, writers, { ...registry, "Zip-Download": writers[1] })
+        );
+    try {
+        const synth = synthTemplate(cell.template, { mutateKey: cell.name, sharedCache: false });
+        expect(spy).toHaveBeenCalledTimes(1);
+        return synth;
+    } finally {
+        spy.mockRestore();
+    }
+}
+
 const synthCell = (cell: Cell): SynthResult =>
-    cell.mutate
+    cell.registeredCallbackOf
+        ? synthWithRegisteredCallback(cell)
+        : cell.mutate
         ? synthTemplate(cell.template, { mutate: cell.mutate, mutateKey: cell.name })
         : synthTemplate(cell.template);
 
@@ -183,6 +223,30 @@ describe.each(CELLS)("API Lambda role inline policy budget ($name)", (cell) => {
         expect(over).toEqual([]);
     });
 });
+
+test.each(CELLS.filter((c) => c.registeredCallbackOf))(
+    "a registered callback adds nothing to the terminal writers' inline policies ($name)",
+    (cell) => {
+        // Runs after the cells above have filled the report.
+        const registered = report[cell.name];
+        const base = report[cell.registeredCallbackOf!];
+        for (const prefix of TERMINAL_WRITER_ROLES) {
+            const re = new RegExp(`^${prefix}[0-9A-F]{8}$`);
+            const roleId = Object.keys(registered).find((k) => re.test(k));
+            expect(roleId).toBeDefined();
+            expect(registered[roleId!]).toBe(base[roleId!]);
+            // The grant is carried by the one managed policy instead, measured by the cell's
+            // managed-policy budget test.
+            expect(
+                Object.keys(registered).some(
+                    (k) =>
+                        k.startsWith(`${roleId}:`) &&
+                        k.includes(seam.SYSTEM_PIPELINE_CALLBACK_POLICY_ID)
+                )
+            ).toBe(true);
+        }
+    }
+);
 
 test("every exception is still above the budget in some cell", () => {
     // Runs after the cells above have filled the report.

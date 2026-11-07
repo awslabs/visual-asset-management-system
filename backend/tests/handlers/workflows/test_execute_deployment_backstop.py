@@ -51,6 +51,7 @@ def _redeploy_response(outcome, pipelines=None, version_arn=NEW_VERSION_ARN, rea
             "workflowVersionArn": version_arn,
             "jobNames": ["job-p1"],
             "pipelineFingerprints": workflowAsl.workflow_pipeline_fingerprints(pipelines or []),
+            "aslSchemaVersion": str(workflowAsl.ASL_SCHEMA_VERSION),
         })
     if reason:
         message["reason"] = reason
@@ -257,3 +258,47 @@ class TestStaleDeploymentFailsClosed:
         assert err is not None and err["statusCode"] == 409
         # The workflow passed in is left as it was, so nothing downstream reads a half-updated view.
         assert workflow["workflowVersionArn"] == OLD_VERSION_ARN
+
+
+@pytest.mark.unit
+class TestOlderAslSchemaMovesAtNextLaunch:
+    """A workflow deployed before the large-output wait existed (ASL schema 1) is redeployed by its
+    next launch, so its run waits for its large outputs (#1123). The redeploy is the same synchronous
+    one a pipeline change triggers."""
+
+    def _schema_one(self):
+        workflow = with_current_deployment(tew._WORKFLOW, [tew._PIPELINE], version_arn=OLD_VERSION_ARN)
+        workflow["aslSchemaVersion"] = "1"
+        return workflow
+
+    def test_a_schema_one_workflow_is_redeployed_before_the_run_starts(self):
+        resp, m_sfn, redeploys, _items = _launch(
+            self._schema_one(), tew._PIPELINE,
+            redeploy=_redeploy_response("redeployed", [tew._PIPELINE]))
+        assert resp["statusCode"] == 200, resp
+        assert redeploys, "the launch did not ask for a redeploy"
+        assert m_sfn.start_execution.call_args.kwargs["stateMachineArn"] == NEW_VERSION_ARN
+
+    def test_a_failed_move_starts_the_stored_version_instead_of_refusing_the_launch(self):
+        # The pipelines are unchanged, so the stored version runs their current settings; its large
+        # outputs are finalized by the copy engine. Refusing would block a workflow that ran before.
+        resp, m_sfn, redeploys, _items = _launch(
+            self._schema_one(), tew._PIPELINE,
+            redeploy=_redeploy_response("failed", reason="A pipeline name is invalid."))
+        assert resp["statusCode"] == 200, resp
+        assert redeploys
+        assert m_sfn.start_execution.call_args.kwargs["stateMachineArn"] == OLD_VERSION_ARN
+
+    def test_a_failed_redeploy_of_changed_pipelines_is_still_refused(self):
+        resp, m_sfn, _redeploys, _items = _launch(
+            self._schema_one(), _changed_pipeline(),
+            redeploy=_redeploy_response("failed", reason="x"))
+        assert resp["statusCode"] == 409
+        m_sfn.start_execution.assert_not_called()
+
+
+@pytest.mark.unit
+def test_the_redeploy_result_carries_the_wait_the_launch_compares():
+    """Low L1: the launch reads the wait a redeploy recorded back onto the workflow, so its deployment
+    check compares the same value the redeploy wrote."""
+    assert "outputIngestionWaitHours" in ewv2._DEPLOYMENT_FIELDS

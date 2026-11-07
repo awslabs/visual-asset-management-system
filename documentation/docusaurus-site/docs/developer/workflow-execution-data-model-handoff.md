@@ -51,7 +51,9 @@ the read source for the data migration. No handler reads it.
 -   **`triggeredByUserId` and `triggerType`** are recorded on the main row. `triggerType` is stored as
     `Manual` or `File-Upload`; the execute request accepts the lowercase `manual` / `fileUpload` forms and
     the handler maps them. A trigger-launched run is attributed to `SYSTEM_USER`, because a user may
-    upload a file without holding permission to run the workflow the upload triggers.
+    upload a file without holding permission to run the workflow the upload triggers. A system pipeline
+    run stores a system trigger value such as `Zip-Download`, which the execute request never accepts
+    (see [System pipeline runs](#system-pipeline-runs)).
 -   **Every write path stamps the global-list partition.** `allListPartition` carries the constant value
     `execution` on every main row and is the partition key of `WorkflowExecutionsByDateGSI`, which backs the
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
@@ -93,6 +95,34 @@ Pipeline rows start at `NEW` (queued), advance to `RUNNING` when the step begins
 status. `TERMINAL_STATUSES` is `SUCCEEDED`, `FAILED`, `ABORTED`, `TIMED_OUT`; a reconcile or an abort leaves
 a row that already reached one of those untouched.
 
+### Terminal writers
+
+Five paths write a terminal status on the main row, and all of them use the same terminal guard
+(`executionOutputs.not_terminal_condition`), so the first to write wins and the others leave the row alone:
+
+| Writer              | Code                                                                                     | Status written                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| End state           | `processWorkflowExecutionOutput` (`_write_execution_outputs`)                            | `SUCCEEDED`, or `FAILED` on an output failure                    |
+| Error handler       | `sfn/handleExecutionError.py` (`executionOutputs.finalize_main_row`)                     | `FAILED`                                                         |
+| Abort               | `executionService.abort_execution`                                                       | `ABORTED`                                                        |
+| Group abort         | `executionService.abort_group`, through `abort_execution` per member                     | `ABORTED`                                                        |
+| Read-path reconcile | `executionService._reconcile_main_status` (details) and `_persist_list_reconcile` (list) | the status Step Functions reports for a run stopped outside VAMS |
+| Status change event | `executionService.handle_sfn_status_change`, through `_reconcile_main_status`            | the status Step Functions reports for a run stopped outside VAMS |
+
+The status change event writer is the push form of the details reconcile. An Amazon EventBridge rule on
+the default bus matches the Step Functions "Execution Status Change" events with a terminal status for
+this account and Region's `vams-` workflow state machines and invokes the execution service. The handler
+acts only when the event names an execution with a main row in this deployment whose recorded
+`workflow_execution_arn` is the event's (several deployments share the prefix), takes the status from its
+own `DescribeExecution` call rather than from the event, and does not log the event, whose detail
+carries the execution's input and output. A run that finished through the state machine is already
+terminal when the event arrives, so the handler only reads the row. It handles every run, not only
+system runs, because what it writes is what the next read would write, and it releases the locks of a
+run stopped outside VAMS right away.
+
+Each guarded write returns whether it won. A path that must act once per terminal transition, such as
+the system pipeline callback below, acts only when its own write won.
+
 ### `executionLog` compared with `executionError`
 
 The main row captures the full CloudWatch log for the run in `executionLog` on **every** terminal
@@ -118,6 +148,78 @@ route (`GET /workflows/executions/{executionId}/logs`), which the shipped Databa
 permission templates deny; both fields are passed through log redaction before they leave the handler.
 The per-asset executions list returns a shortened copy of `executionLog` (the newest 16 KB,
 `LISTED_EXECUTION_LOG_MAX_BYTES`) so a 200-row page stays under the Lambda response limit.
+
+## System pipeline runs
+
+A system pipeline run is an execution VAMS itself launches for a system feature (for example Download as
+Zip). The workflow core treats it as an ordinary run, with three differences, all implemented in
+`common/workflows/systemPipelines.py` so the core never imports the feature:
+
+-   **Server-only trigger.** The run's `triggerType` is a system trigger value
+    (`SYSTEM_TRIGGER_TYPE_TO_STORED`, currently `zipDownload` stored as `Zip-Download`). The execute
+    handler sets it only for a `lambdaCrossCall` carrying `SYSTEM_USER` **and** the `vamsSystemPipeline`
+    source marker, plus a top-level `systemExecution` object (`{"triggerType": "zipDownload", "context":
+{...}}`). An API Gateway request cannot carry either top-level key, and the public request model does
+    not list any system value, so a public request naming one is answered `400`. A malformed marked call is
+    answered `400` with a fixed message before any record is read.
+-   **Server-only context.** The marked call may carry `context`, a JSON object of at most 4096 bytes once
+    serialized. It is written to the first pipeline step's manifest under `systemExecutionContext` and to
+    the main row as serialized text, and nowhere else: not in `systemConfig` or `effectiveSystemConfig`,
+    not in the Step Functions input (which the workflow Lambda functions log), not in the list or details
+    responses, and never replayed. Later steps of a multi-step system workflow do not receive it.
+-   **Terminal callback.** When a terminal writer wins the guard on a system run, it calls
+    `notify_terminal_transition`, which invokes the feature's callback function asynchronously
+    (`InvocationType` `Event`) with `{callbackType, schemaVersion, idempotencyKey, workflowExecutionId,
+workflowDatabaseId, workflowId, triggerType, executionStatus, executionStopDate, executionError,
+writer, systemExecutionContext}`. `executionStatus` includes `ABORTED` and `TIMED_OUT`; the feature maps
+    them. The helper never raises, so a failing or missing callback never changes the run's own terminal
+    record. The callback must be idempotent on `idempotencyKey` (`<executionId>:<status>`), because
+    asynchronous invocation retries a failed delivery. A run stopped outside VAMS is sent by the status
+    change event writer without waiting for a read.
+-   **Abort callback after a confirmed stop.** An abort that cannot confirm the Step Functions
+    execution stopped still writes `ABORTED` but holds the callback, recorded on the main row as
+    `systemCallbackPending`. The held callback is sent by the next abort that confirms the stop, or when
+    the status change event reports the execution ended. If that event never arrives, the next details
+    read whose `DescribeExecution` shows the execution ended sends it (at most one describe per 30
+    seconds for such a row). Whichever removes the attribute first (a conditional write) sends it, so
+    it is still sent once.
+    A system trigger whose callback does not depend on the stop can opt in
+    (`STOP_INDEPENDENT_CALLBACK_TRIGGERS`, empty by default) to also be sent the `ABORTED` callback at
+    once by that abort (writer `abortUnconfirmed`); the held callback still follows, so that callback
+    must be idempotent across both deliveries.
+-   **Status change event retries.** The handler raises when it cannot read the main row, cannot
+    reach Step Functions (for example, throttling when many runs end at once), or a write fails for
+    any reason other than the terminal guard, so Lambda's asynchronous invocation retries the event
+    (twice, with backoff). A lost guard means another writer finished the run and is not an error.
+    A retry is safe: either nothing was written, or the row is terminal and the retry ends like a
+    duplicate. When every retry fails, the read paths reconcile the run when it is next read.
+-   **Delivery guarantee.** At most once per terminal transition from VAMS, then Lambda's
+    asynchronous delivery to the target, which retries a failed invocation twice. A writer that stops
+    between its won write and the invoke sends nothing, and the push cannot resend for a row that is
+    already terminal. A guarded write that reports an error after it actually applied is the same
+    case: the retried event finds the row terminal and sends nothing. A run that is permanently deleted while not terminal sends nothing. A feature that
+    must see every transition gives its callback function an on-failure destination and reconciles its
+    own open jobs against the execution rows.
+
+The launch path's trust rests on who can invoke the execute function directly: any principal with
+`lambda:InvokeFunction` on `executeWorkflowV2` can send the marked call and start a system run with a
+context the feature's callback then acts on. Today only the execution service (re-run) and the workflow
+trigger dispatcher hold that grant, and neither sends the marker, so a new invoke grant on that function
+is a grant to launch system runs and is reviewed as one.
+
+A re-run (`POST /workflows/executions/{executionId}/rerun`) of a system run is refused with `400`.
+
+The registry of callback targets is the `CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER` environment variable
+(`{"<stored trigger value>": "<function name>"}`) on the three functions that run the terminal writers:
+`processWorkflowExecutionOutput`, `handleExecutionError` and `executionService`. A feature registers its
+callback in the `systemPipelineCallbacks` registry in `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`;
+`attachSystemPipelineCallbacks` (`infra/lib/lambdaBuilder/systemPipelineCallbacks.ts`) sets the variable
+and grants those three roles `lambda:InvokeFunction` on exactly the registered functions, through one
+customer managed policy attached to all three. The grant stays out of their inline policies, which are
+close to IAM's inline quota in the AWS GovCloud (US) and AWS European Sovereign Cloud templates. The registry
+ships empty, so a deployment without a system feature gains no variable and no IAM policy. A new system
+trigger value is added to both `SYSTEM_TRIGGER_TYPE_TO_STORED` and `SYSTEM_PIPELINE_TRIGGER_TYPES`; a test
+holds the two lists equal.
 
 ## Which record populates when
 

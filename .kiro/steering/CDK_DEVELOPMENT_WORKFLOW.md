@@ -65,7 +65,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 67 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 68 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -134,7 +134,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 49 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 50 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -187,6 +187,7 @@ interface storageResources {
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
+        largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; GSI WorkflowExecutionIdIndex (PK workflowExecutionId); large object copy job rows + workflow ingestion batch rows
     };
 }
 ```
@@ -2183,6 +2184,10 @@ Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and ad
 **IAM inline policy budget** (mirrors `infra/CLAUDE.md`): IAM refuses a role whose inline policies exceed 10,240 characters, and deployed sizes grow with the stack name, the partition and Region names, a customer managed key and an enabled execution type, so a role that fits in a commercial synth can fail a GovCloud deploy. CDK's own overflow split estimates 150 characters per ARN (real table ARNs are about 200) and does not count a policy of its own, so it does not keep a role under the limit. Every role in `apiBuilder` and `apiBuilder2` stays at or under 9,216 (90%) in the commercial, CMK, GovCloud, EU Sovereign and worst-case cells (`infra/test/security/iamInlinePolicyBudget.test.ts`, estimator `infra/test/support/iamPolicySize.ts`; a role already above it is a named, shrink-only exception), and each customer managed policy on them at or under 5,530. On a large role, write DynamoDB grants as exact statements (each table once, only the actions the handler calls, only the indexes it queries), pinned by a backend test that records the handler's calls and a synth test of the same list; move a statement that cannot shrink into a customer managed policy attached with `role.addManagedPolicy()` (`attachManagedHandlerPolicy`); and split a route needing grants the rest do not onto its own function, as permanent delete runs the execution service handler on `executionPermanentDelete` with `EXECUTION_SERVICE_ROUTES` selecting the routes each function serves.
 
 **Workflow service internal-action invoke** (mirrors `infra/CLAUDE.md`): `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) gives `pipelineService` and `executeWorkflow`, the callers of the workflow service's internal redeploy actions, `lambda:InvokeFunction` on the workflow service's exact `functionArn` in an explicit `PolicyStatement` (env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`). It is written out instead of `grantInvoke()`, which adds `{functionArn}:*`, because the internal actions have no API Gateway authorizer: this grant and the handler's `SYSTEM_USER` cross-call check are their whole boundary. Neither caller gets a Step Functions or `iam:PassRole` grant; `test/security/workflowLambdaGrants.test.ts` pins it. Other Lambda-to-Lambda grants use `grantInvoke()`, as in the examples in this guide.
+
+**System pipeline terminal callbacks** (mirrors `infra/CLAUDE.md`): `attachSystemPipelineCallbacks` (`lambdaBuilder/systemPipelineCallbacks.ts`) gives the three terminal-writer functions (`processWorkflowExecutionOutput`, `handleExecutionError`, `executionService`; never `executionPermanentDelete`) env `CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER` and ONE customer managed policy (`SystemPipelineCallbackInvokePolicy`) attached to all three roles, with one `lambda:InvokeFunction` statement on exactly the functions registered in `systemPipelineCallbacks` (`apiBuilder2-nestedStack.ts`), with no `:*` or wildcard. Never an inline statement: those roles are at the IAM inline budget in GovCloud / EU Sovereign. The registry ships empty, which adds nothing. An unknown trigger value fails the synth; `test/workflows/systemPipelineCallbacks.test.ts` holds `SYSTEM_PIPELINE_TRIGGER_TYPES` equal to the backend's `SYSTEM_TRIGGER_TYPE_TO_STORED`, and `test/security/iamInlinePolicyBudget.test.ts`'s `*-callback` cells prove a registration adds nothing inline in every partition.
+
+**Workflow execution status change rule** (mirrors `infra/CLAUDE.md`): `buildWorkflowStatusChangeRule` (`lambdaBuilder/workflowStatusEvents.ts`) is a default-bus rule on Step Functions `Execution Status Change` events with a terminal status and `stateMachineArn` prefix `IAMArn("vams-").statemachine` (never an account-wide match), targeting the execution service function with a KMS-aware DLQ. No new role or IAM statement; the Lambda permission is scoped to the rule ARN. Pinned by `test/workflows/workflowStatusEvents.test.ts`.
 
 #### **KMS Key Permissions Pattern**
 

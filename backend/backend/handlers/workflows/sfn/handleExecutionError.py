@@ -36,6 +36,9 @@ from common.workflows import executionRecords as er
 from common.workflows import executionLogCapture as elc
 from common.workflows import executionOutputs as eo
 from common.workflows import executionLocks as el
+from common.workflows import systemPipelines as sp
+from common import largeObjectCopy as loc
+from common.s3 import region_routing_s3_client
 
 logger = safeLogger(service="HandleExecutionError")
 
@@ -44,6 +47,10 @@ logs_client = boto3.client('logs', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
 batch_client = boto3.client('batch', config=retry_config)
+# Aborts the multipart uploads of the run's cancelled large output copies (in the asset bucket's Region).
+s3_client = region_routing_s3_client()
+# Hands a cancelled copy whose outcome the cancel left to the copy engine to its reconcile.
+lambda_client = boto3.client('lambda', config=retry_config)
 # Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
 # inside try/except and left None on failure: the execution type is accepted only in the commercial
 # partition, so a partition where the service does not resolve must not lose the whole reconciliation
@@ -273,6 +280,19 @@ def _derive_failure_output_types(pipeline_rows):
     return er.derive_output_types(has_file, has_metadata, has_result)
 
 
+def _cancel_output_copies(execution_id):
+    """Stop the large object copy jobs of a failing run and abort their multipart uploads. Returns
+    one message per copy that could not be stopped or cleaned up. Never raises."""
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id,
+                                              lambda_client, loc.engine_function_name())
+    except Exception as e:
+        # Best-effort like every step here; a run with no large outputs has nothing to cancel.
+        logger.warning(f"Could not cancel the output copies of execution {execution_id} (continuing): {e}")
+        return []
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
@@ -307,6 +327,10 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error marking pipeline rows failed (continuing): {e}")
         pipeline_rows = []
+
+    # 1b) Stop the run's large output copies (its output wait timed out, or a later state failed)
+    #     and discard their partial uploads. A run with no large outputs has no copy jobs.
+    stop_failures.extend(_cancel_output_copies(execution_id))
 
     # 2) Per-pipeline log row for each in-flight pipeline that was just failed. Step Functions
     #    cannot inject the failing state's id into this handler's static payload, so attribute
@@ -344,10 +368,20 @@ def reconcile_failed_execution(body, error_info):
         rows = existing.get('Items', [])
         current_status = rows[0].get('executionStatus', '') if rows else ''
         if current_status not in eo.TERMINAL_STATUSES:
-            eo.finalize_main_row(
+            won = eo.finalize_main_row(
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
+            # Terminal callback of a system-pipeline run: sent only when this write won the terminal
+            # guard. Never raises. With no main row read there is no trigger to identify a system run
+            # by (the guarded update created the row), so nothing is sent and nothing is wrong.
+            if won is True and not rows:
+                logger.warning(f"Main execution row of {execution_id} was missing; it was written "
+                               f"{FAILED_STATUS} and no terminal callback was sent")
+            elif won is True:
+                sp.notify_terminal_transition(
+                    rows[0], FAILED_STATUS, stop_date=now, execution_error=error_message,
+                    writer=sp.WRITER_ERROR_HANDLER)
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 

@@ -16,9 +16,11 @@ TEST_VERSION_SUFFIX = ":1"
 
 
 def with_current_deployment(workflow, pipelines, version_arn=None):
-    """A copy of `workflow` carrying a published version ARN and the fingerprints of `pipelines`."""
+    """A copy of `workflow` carrying a published version ARN, the fingerprints of `pipelines` and the
+    current ASL schema version (a definition generated with an older schema is redeployed at launch)."""
     stamped = dict(workflow)
     base_arn = stamped.get("workflow_arn") or "arn:aws:states:us-east-1:1:stateMachine:vams-test"
     stamped["workflowVersionArn"] = version_arn or base_arn + TEST_VERSION_SUFFIX
     stamped["pipelineFingerprints"] = workflowAsl.workflow_pipeline_fingerprints(pipelines)
+    stamped["aslSchemaVersion"] = str(workflowAsl.ASL_SCHEMA_VERSION)
     return stamped

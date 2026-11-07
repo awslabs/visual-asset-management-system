@@ -107,6 +107,19 @@ class APIError(BusinessLogicError):
     pass
 
 
+class RouteNotDeployedError(APIError):
+    """Raised when no deployed API route matches the request (HTTP 403 from API Gateway): the
+    deployment is older than this CLI, or the add-on that serves the route is not deployed. Final:
+    resending the request would not change it."""
+    pass
+
+
+class UploadStatusNotFoundError(APIError):
+    """Raised when an upload has no status the caller can read (a final answer, not a transient
+    failure: polling it again would not change it)."""
+    pass
+
+
 class ProfileNotFoundError(BusinessLogicError):
     """Raised when required profile is not found."""
     pass

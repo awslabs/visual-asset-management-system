@@ -55,7 +55,11 @@ def _captured_audit_call(event):
     context = MagicMock()
     context.aws_request_id = "req-1"
 
+    # The upload record claims the entry for this receive and records the outcome (#1123 L10).
     with patch.object(sq, 'process_large_file', return_value=True), \
+            patch.object(sq, 'upload_table', return_value=MagicMock()), \
+            patch.object(sq.uploadStatus, 'claim_async_file_audit', return_value=True), \
+            patch.object(sq.uploadStatus, 'record_async_file_outcome', return_value=True), \
             patch.object(sq, 'log_file_upload') as mock_audit:
         sq.lambda_handler(event, context)
 
@@ -158,6 +162,9 @@ class TestAsyncLargeUploadAuditEntryStillWritten:
         context.aws_request_id = "req-1"
 
         with patch.object(sq, 'process_large_file', return_value=True) as mock_process, \
+                patch.object(sq, 'upload_table', return_value=MagicMock()), \
+                patch.object(sq.uploadStatus, 'claim_async_file_audit', return_value=True), \
+                patch.object(sq.uploadStatus, 'record_async_file_outcome', return_value=True), \
                 patch.object(sq, 'log_file_upload'):
             sq.lambda_handler(_sqs_event(changeUserId="alice@corp"), context)
 

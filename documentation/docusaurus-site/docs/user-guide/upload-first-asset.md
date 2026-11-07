@@ -177,7 +177,7 @@ After submitting, the upload workflow begins:
     - File uploads to Amazon S3 (with individual progress bars per file)
     - Workflow execution (if auto-triggered workflows are configured)
 
-2. For large files, VAMS uses multipart upload to Amazon S3 for reliability. The progress bar updates in real time as each part completes.
+2. For large files, VAMS uses multipart upload to Amazon S3 for reliability. The progress bar updates in real time as each part completes. A file over 1 GiB is processed into the asset after its upload completes: the page then lists it under **Large files** as Processing, In the asset or Failed, and names each failed file with its reason. The page checks for up to an hour; `vamscli file upload-status` reads the same outcome later.
 
 3. Do not close or navigate away from the page until all uploads complete.
 

@@ -769,6 +769,79 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
     }
 }
 
+const GIB = 1024 * 1024 * 1024;
+const MIB = 1024 * 1024;
+
+/**
+ * Defaults of app.largeFileIngestion, mirrored by SETTINGS_BOUNDS in
+ * backend/backend/common/largeObjectCopy.py (the backend falls back to the same values).
+ */
+export const LARGE_FILE_INGESTION_DEFAULTS = {
+    apiUploadEngineThresholdBytes: 5 * GIB,
+    minPartSizeBytes: 256 * MIB,
+    partsPerBatch: 16,
+    threadsPerBatch: 8,
+    maxConcurrentBatches: 10,
+    engineReservedConcurrency: 0,
+    maxOutputIngestionWaitHours: 48,
+};
+
+/** Bounds of each app.largeFileIngestion key (inclusive integers). */
+export const LARGE_FILE_INGESTION_BOUNDS: Record<
+    keyof typeof LARGE_FILE_INGESTION_DEFAULTS,
+    { min: number; max: number; unit: string }
+> = {
+    // Above the 1 GiB async threshold, at most the 5 TiB Amazon S3 object limit.
+    apiUploadEngineThresholdBytes: { min: GIB, max: 5 * 1024 * GIB, unit: "bytes" },
+    // Amazon S3 parts are 5 MiB..5 GiB; 64 MiB keeps a 5 TiB object near the 9,000-part plan.
+    minPartSizeBytes: { min: 64 * MIB, max: 5 * GIB, unit: "bytes" },
+    partsPerBatch: { min: 1, max: 64, unit: "parts" },
+    threadsPerBatch: { min: 1, max: 32, unit: "threads" },
+    // Inline Map concurrency of the copy state machine (copy tasks one file runs at once).
+    maxConcurrentBatches: { min: 1, max: 40, unit: "batches" },
+    // Reserved concurrency of the copy-engine function: a deployment-wide cap on copy tasks running
+    // at once, which also keeps the copies from drawing on the pool the API functions use. 0 leaves
+    // the function unreserved (accounts with a low concurrency quota cannot reserve).
+    engineReservedConcurrency: { min: 0, max: 1000, unit: "concurrent executions" },
+    // The AwaitOutputIngestion state's timeout.
+    maxOutputIngestionWaitHours: { min: 1, max: 168, unit: "hours" },
+};
+
+/** Fill each unset app.largeFileIngestion key with its default (an absent block is all defaults). */
+export function applyLargeFileIngestionDefaults(config: ConfigPublic): void {
+    const block = (config.app.largeFileIngestion ?? {}) as Partial<
+        ConfigPublic["app"]["largeFileIngestion"]
+    >;
+    const filled = { ...LARGE_FILE_INGESTION_DEFAULTS };
+    for (const key of Object.keys(LARGE_FILE_INGESTION_DEFAULTS) as Array<
+        keyof typeof LARGE_FILE_INGESTION_DEFAULTS
+    >) {
+        if (block[key] !== undefined && block[key] !== null) {
+            filled[key] = block[key] as number;
+        }
+    }
+    config.app.largeFileIngestion = filled;
+}
+
+/** Reject an app.largeFileIngestion value that is not an integer within its bounds. */
+export function validateLargeFileIngestionConfig(config: ConfigPublic): void {
+    const block = config.app.largeFileIngestion;
+    for (const [key, bound] of Object.entries(LARGE_FILE_INGESTION_BOUNDS)) {
+        const value = (block as Record<string, unknown>)[key];
+        if (
+            typeof value !== "number" ||
+            !Number.isInteger(value) ||
+            value < bound.min ||
+            value > bound.max
+        ) {
+            throw new Error(
+                `Configuration Error: app.largeFileIngestion.${key} must be a whole number of ` +
+                    `${bound.unit} between ${bound.min} and ${bound.max}.`
+            );
+        }
+    }
+}
+
 export function getConfig(app: cdk.App): Config {
     // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
     const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
@@ -1790,6 +1863,10 @@ export function getConfig(app: cdk.App): Config {
             autoLoadDefaultAssetFileSchema: true,
         };
     }
+
+    // Large object copy engine tuning: fill each unset key with its default, then validate.
+    applyLargeFileIngestionDefaults(config);
+    validateLargeFileIngestionConfig(config);
 
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
@@ -4991,6 +5068,18 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
+        };
+        // Tuning of the large object copy engine, which ingests workflow outputs over 1 GiB and API
+        // uploads over apiUploadEngineThresholdBytes into their asset. Every key is optional; the
+        // defaults suit most deployments (see LARGE_FILE_INGESTION_DEFAULTS).
+        largeFileIngestion: {
+            apiUploadEngineThresholdBytes: number;
+            minPartSizeBytes: number;
+            partsPerBatch: number;
+            threadsPerBatch: number;
+            maxConcurrentBatches: number;
+            engineReservedConcurrency: number;
+            maxOutputIngestionWaitHours: number;
         };
     };
 }
