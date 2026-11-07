@@ -30,10 +30,17 @@ POTREE_INPUT_EXTENSIONS = (".las", ".laz")
 INPUT_LAS_POINT_FORMAT_KEY = "inputLasPointFormat"
 
 
+# True when openPipeline found an Extra Bytes descriptor whose name or description has no NUL (#783).
+INPUT_LAS_UNTERMINATED_EXTRA_BYTES_KEY = "inputLasUnterminatedExtraBytes"
+
+
 def las_input_needs_pdal(event) -> bool:
-    """True when openPipeline read a point data record format PotreeConverter cannot read (8 to 10).
-    A missing or malformed value (an unreadable header, or an execution started before the field)
-    keeps the direct path to the POTREE stage."""
+    """True when openPipeline read a point data record format PotreeConverter cannot read (8 to 10),
+    or found an Extra Bytes descriptor PotreeConverter reads past (#783). A missing or malformed value
+    (an unreadable header, or an execution started before the field) keeps the direct path to the
+    POTREE stage."""
+    if event.get(INPUT_LAS_UNTERMINATED_EXTRA_BYTES_KEY) is True:
+        return True
     point_format = event.get(INPUT_LAS_POINT_FORMAT_KEY)
     if isinstance(point_format, bool) or not isinstance(point_format, int):
         return False
@@ -110,10 +117,12 @@ def lambda_handler(event, context):
             definition = construct_pdal_definition(event)
         elif input_s3_asset_extension in POTREE_INPUT_EXTENSIONS:
             if las_input_needs_pdal(event):
-                # PotreeConverter cannot read this point format: PDAL rewrites it as LAS 1.2 / format 3
+                # PotreeConverter cannot read this file safely: PDAL rewrites it as LAS 1.2 / format 3
                 # first, as it does an E57 or PLY input.
-                logger.info(f"LAS point data record format {event.get(INPUT_LAS_POINT_FORMAT_KEY)} is "
-                            f"not read by PotreeConverter; converting it with PDAL first")
+                logger.info(f"LAS input (point data record format {event.get(INPUT_LAS_POINT_FORMAT_KEY)}, "
+                            f"unterminated Extra Bytes text: "
+                            f"{event.get(INPUT_LAS_UNTERMINATED_EXTRA_BYTES_KEY) is True}) is not read "
+                            f"safely by PotreeConverter; converting it with PDAL first")
                 definition = construct_pdal_definition(event)
             else:
                 definition = construct_potree_definition(event)

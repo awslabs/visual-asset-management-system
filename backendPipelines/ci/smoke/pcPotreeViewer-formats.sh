@@ -15,8 +15,9 @@
 # Every input is translated by PDAL here so the PDAL versions can be compared on it. What PotreeConverter
 # is given follows constructPipeline: the PDAL output for E57/PLY, and for LAS/LAZ the file itself when
 # its header's point data record format is 0-7 (the formats PotreeConverter reads) or the PDAL output
-# when it is not (8-10, #1215). LAS_ROUTING=extension gives every LAS/LAZ to PotreeConverter directly,
-# the routing before #1215.
+# when it is not (8-10, #1215) or when an Extra Bytes descriptor's name or description has no NUL (#783).
+# The header is read with the pipeline's own lambda/lasHeader.py. LAS_ROUTING=extension gives every
+# LAS/LAZ to PotreeConverter directly, the routing before #1215 and #783.
 #
 # Usage:
 #   pcPotreeViewer-formats.sh fetch <samples-dir>
@@ -35,6 +36,13 @@
 #         with RGB and intensity (format 3; autzen_trim_7 is the same in LAS 1.4 format 7); 4_6.las is
 #         LAS 1.4 format 6; las_with_several_extra_byte_bloc.laz carries several Extra Bytes VLRs in
 #         point format 8, which PotreeConverter does not read (#1215).
+#   las/extrabytes.las - PDAL test data (format 3, LAS 1.4) with NUL-terminated Extra Bytes descriptors,
+#         including deprecated array data types PotreeConverter has no handler for: it stays on the
+#         direct path and PotreeConverter fails on it before and after #783 (not a #783 case).
+#         extrabytes.laz is written from it with its descriptors forwarded; PDAL fills one description
+#         with 32 characters and no NUL, so it is a #783 case and goes through PDAL.
+#   autzen_trim_eb.laz - written from autzen_trim.las with one Height Extra Bytes dimension (NUL-padded
+#         name and description): a well-formed Extra Bytes LAZ that stays on the direct path.
 #   autzen_trim_{0,1,2}.las, autzen_trim_8.las - written from autzen_trim.las by the PDAL image under
 #         test as LAS 1.2 formats 0, 1 and 2 and as LAS 1.4 format 8 (RGB + NIR), so every format has a
 #         real-world input. (PDAL's permutations/1.2_*.las hold one point, a zero-size bounding box
@@ -63,6 +71,7 @@ PDAL_FILES=(
   laz/autzen_trim.laz
   las/autzen_trim_7.las
   las/4_6.las
+  las/extrabytes.las
   laz/las_with_several_extra_byte_bloc.laz
   ply/simple_binary.ply
   ply/simple_text.ply
@@ -118,19 +127,31 @@ print(f"{fmt}\t{count}\tR{rng('Red')} G{rng('Green')} B{rng('Blue')}\t{rng('Inte
 PY
 }
 
-# las_point_format <file>: the point data record format in a LAS/LAZ header (byte 104, LAZ compression
-# bits cleared), as openPipeline reads it (lambda/lasHeader.py); "-" for another file type, "?" when the
-# file has no LAS header.
-las_point_format() {
+LAMBDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../preview/pcPotreeViewer/lambda" && pwd)"
+
+# las_routing_facts <file>: "<point format>\t<unterminated>" from the pipeline's own header reader
+# (lambda/lasHeader.py read_routing_facts, served from the local file): the point data record format,
+# and "yes" when an Extra Bytes descriptor's name or description has no NUL (#783). "-" for another
+# file type, "?" when the file has no LAS header.
+las_routing_facts() {
   case "$1" in
     *.las|*.laz|*.LAS|*.LAZ) ;;
-    *) echo "-"; return ;;
+    *) printf -- '-\tno\n'; return ;;
   esac
-  python3 - "$1" <<'PY'
-import sys
-with open(sys.argv[1], "rb") as handle:
-    prefix = handle.read(105)
-print(prefix[104] & 0x3F if len(prefix) == 105 and prefix[:4] == b"LASF" else "?")
+  python3 - "$LAMBDA_DIR" "$1" <<'PY'
+import io, sys, types
+from unittest.mock import MagicMock
+logger = types.ModuleType("customLogging.logger"); logger.safeLogger = lambda **kw: MagicMock()
+sys.modules["customLogging"] = types.ModuleType("customLogging"); sys.modules["customLogging.logger"] = logger
+sys.path.insert(0, sys.argv[1])
+import lasHeader
+data = open(sys.argv[2], "rb").read(70 * 1024)
+def get_object(**kwargs):
+    first, last = (int(x) for x in kwargs["Range"][len("bytes="):].split("-"))
+    return {"Body": io.BytesIO(data[first:last + 1])}
+client = MagicMock(); client.get_object.side_effect = get_object
+facts = lasHeader.read_routing_facts(client, "local", sys.argv[2])
+print(f"{facts.get('pointFormat', '?')}\t{'yes' if facts.get('unterminatedExtraBytes') else 'no'}")
 PY
 }
 
@@ -153,7 +174,7 @@ PY
 run() {
   local pdal_image="$1" potree_image="$2"
   SAMPLES="$(cd "$3" && pwd)"; mkdir -p "$4"; OUT="$(cd "$4" && pwd)"
-  local tsv="$OUT/results.tsv" f base laz rc bytes octree prc points source route input_dir input_fmt
+  local tsv="$OUT/results.tsv" f base laz rc bytes octree prc points source route input_dir input_fmt eb_flag
   mkdir -p "$OUT/laz" "$OUT/potree" "$OUT/info" "$OUT/logs"
 
   if [ -f "$SAMPLES/las/autzen_trim.las" ] && [ ! -f "$OUT/autzen_trim.ply" ]; then
@@ -167,6 +188,19 @@ run() {
         "--writers.las.minor_version=$minor" "--writers.las.dataformat_id=$pdrf" > "$OUT/logs/make-las$pdrf.log" 2>&1
     fi
   done
+  # A well-formed Extra Bytes LAZ (format 3, a Height dimension with a NUL-padded name and
+  # description), from autzen_trim: stays on the direct path.
+  if [ -f "$SAMPLES/las/autzen_trim.las" ] && [ ! -f "$OUT/autzen_trim_eb.laz" ]; then
+    pdal_in "$pdal_image" translate -i /in/las/autzen_trim.las -o /out/autzen_trim_eb.laz \
+      -f filters.ferry --filters.ferry.dimensions="Intensity=>Height" --writers.las.extra_dims=all \
+      --writers.las.minor_version=2 --writers.las.dataformat_id=3 > "$OUT/logs/make-autzen-eb.log" 2>&1
+  fi
+  # PDAL's extrabytes.las re-written as LAZ with its descriptors forwarded: PDAL copies the 32-character
+  # OffsetTime description with no NUL, so this file goes through PDAL (#783).
+  if [ -f "$SAMPLES/las/extrabytes.las" ] && [ ! -f "$OUT/extrabytes.laz" ]; then
+    pdal_in "$pdal_image" translate -i /in/las/extrabytes.las -o /out/extrabytes.laz \
+      --writers.las.extra_dims=all --writers.las.forward=all > "$OUT/logs/make-extrabytes-laz.log" 2>&1
+  fi
 
   printf 'file\tinput_pdrf\tpdal_exit\tlaz_bytes\tlas_format\tpoints\tcolour\tintensity\troute\tpotree_exit\toctree_points\toctree_attributes\toctree_rgb\tpdal_last_line\n' > "$tsv"
   while IFS= read -r f; do
@@ -175,10 +209,10 @@ run() {
     rm -f "$laz"
     # Files this script writes (autzen_trim.ply, autzen_trim_<format>.las) are in the output folder.
     case "$f" in
-      autzen_trim.ply|autzen_trim_?.las) source="/out/$f"; input_dir="$OUT" ;;
+      autzen_trim.ply|autzen_trim_?.las|autzen_trim_eb.laz|extrabytes.laz) source="/out/$f"; input_dir="$OUT" ;;
       *) source="/in/$f"; input_dir="$SAMPLES" ;;
     esac
-    input_fmt="$(las_point_format "$input_dir/$f")"
+    IFS=$'\t' read -r input_fmt eb_flag < <(las_routing_facts "$input_dir/$f")
     # The PDAL stage's command (pipelines/pdal/pipeline.py: pdal translate -i <in> -o <out>.laz plus
     # its LAS writer options). For an image built before #1203, run with PDAL_LAS_OPTIONS="" to get
     # the command that image's stage ran.
@@ -196,11 +230,16 @@ run() {
     fi
     # What PotreeConverter is given, as constructPipeline routes it: the PDAL output for E57/PLY; for
     # LAS/LAZ the file itself when its header's point format is one PotreeConverter reads (0-7) or
-    # cannot be read, the PDAL output otherwise. LAS_ROUTING=extension sends every LAS/LAZ directly.
+    # cannot be read, the PDAL output when it is 8-10 or an Extra Bytes descriptor has no NUL (#783,
+    # route "pdal-eb"). LAS_ROUTING=extension sends every LAS/LAZ directly.
     route="pdal"
     case "$f" in
       *.las|*.laz)
-        if [ "${LAS_ROUTING:-header}" = extension ] || [ "$input_fmt" = "?" ] || [ "$input_fmt" -le 7 ]; then
+        if [ "${LAS_ROUTING:-header}" = extension ]; then
+          route="direct"
+        elif [ "$eb_flag" = yes ]; then
+          route="pdal-eb"
+        elif [ "$input_fmt" = "?" ] || [ "$input_fmt" -le 7 ]; then
           route="direct"
         fi ;;
     esac
@@ -226,7 +265,7 @@ run() {
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$input_fmt" "$rc" "$bytes" "$(summarize "$OUT/info/$base.json" "$laz")" \
       "$route" "$prc" "$points" "$(grep -v '^\s*$' "$OUT/logs/$base.pdal.log" | grep -v 'conda.cli.main_run' | tail -1)" >> "$tsv"
-  done < <(printf '%s\n' "${E57_FILES[@]}" "${PDAL_FILES[@]}" "$POTREE_783_FILE" autzen_trim.ply \
+  done < <(printf '%s\n' "${E57_FILES[@]}" "${PDAL_FILES[@]}" "$POTREE_783_FILE" autzen_trim.ply autzen_trim_eb.laz extrabytes.laz \
     autzen_trim_0.las autzen_trim_1.las autzen_trim_2.las autzen_trim_8.las)
   column -t -s $'\t' "$tsv"
 }

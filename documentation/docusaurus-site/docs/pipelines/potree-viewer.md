@@ -12,7 +12,7 @@ The Potree Point Cloud Viewer pipeline converts point cloud files into the Potre
 | LAZ    | `.laz`    | Compressed LAS format. Same point format rule as LAS.                                                                                           |
 
 :::info[Two-Stage Processing]
-E57 and PLY files require a two-stage pipeline: first, PDAL converts the file to LAZ format, then PotreeConverter generates the octree. LAS and LAZ files in point data record formats 0 to 7 skip the PDAL stage and go directly to PotreeConverter. A LAS or LAZ file in format 8, 9 or 10 (LAS 1.4 with near-infrared or waveform data) takes the two-stage path, because PotreeConverter does not read those formats.
+E57 and PLY files require a two-stage pipeline: first, PDAL converts the file to LAZ format, then PotreeConverter generates the octree. LAS and LAZ files in point data record formats 0 to 7 skip the PDAL stage and go directly to PotreeConverter. A LAS or LAZ file in format 8, 9 or 10 (LAS 1.4 with near-infrared or waveform data) takes the two-stage path, because PotreeConverter does not read those formats. So does a file in format 0 to 7 with an Extra Bytes field whose name or description fills all 32 bytes with no terminating NUL character, which PotreeConverter cannot read reliably.
 :::
 
 ## Architecture
@@ -48,10 +48,10 @@ flowchart LR
 The `constructPipeline` Lambda function inspects the input file extension, and for a LAS or LAZ file its point data record format, and builds a pipeline definition with either one or two stages:
 
 -   **E57 and PLY files**: Two stages -- PDAL converts the file to LAZ, then PotreeConverter generates the octree from the intermediate LAZ file. If PDAL cannot read an E57 file, the run fails with `E57 file could not be read by the converter:` followed by PDAL's message; for other PDAL failures the message names PDAL's exit code instead.
--   **LAS and LAZ files**: Single stage -- PotreeConverter processes the file directly into the octree format. Before the run starts, the `openPipeline` Lambda function reads the file's point data record format from the first 105 bytes of its LAS header (a ranged Amazon S3 read; the extension is not used for this). A file in format 8, 9 or 10 gets the two stages an E57 file gets instead. If the header cannot be read, the file goes directly to PotreeConverter, as before.
+-   **LAS and LAZ files**: Single stage -- PotreeConverter processes the file directly into the octree format. Before the run starts, the `openPipeline` Lambda function reads the file's point data record format from the first 105 bytes of its LAS header (a ranged Amazon S3 read; the extension is not used for this). A file in format 8, 9 or 10 gets the two stages an E57 file gets instead. For a file in format 0 to 7 that declares variable-length records, it also reads those records (up to the start of the point data, at most 64 KiB, in a second ranged read). If an Extra Bytes field's 32-byte name or description has no terminating NUL character, which the LAS specification allows, the file gets the two stages as well: PotreeConverter reads past the end of such a field and can fail with a crash on some runs. If the header or its records cannot be read, the file goes directly to PotreeConverter, as before.
 
 :::note[What the PDAL conversion keeps]
-A LAS or LAZ file converted by PDAL reaches PotreeConverter as LAS 1.2, point data record format 3. Positions, intensity, return number and number of returns, classification with its synthetic, key-point and withheld flags, scan angle (in whole degrees), user data, point source ID, GPS time and RGB colour are kept. Near-infrared (NIR), waveform data, Extra Bytes dimensions, the overlap flag and the scanner channel are dropped, and a classification above 31 becomes 1. Files in formats 0 to 7 are not converted and keep all of their attributes, including Extra Bytes.
+A LAS or LAZ file converted by PDAL reaches PotreeConverter as LAS 1.2, point data record format 3. Positions, intensity, return number and number of returns, classification with its synthetic, key-point and withheld flags, scan angle (in whole degrees), user data, point source ID, GPS time and RGB colour are kept. Near-infrared (NIR), waveform data, Extra Bytes dimensions, the overlap flag and the scanner channel are dropped, and a classification above 31 becomes 1. A file converted because of an unterminated Extra Bytes name or description therefore loses all of its Extra Bytes attributes in the preview. Other files in formats 0 to 7 are not converted and keep all of their attributes, including Extra Bytes.
 :::
 
 ### Output Location
@@ -64,7 +64,7 @@ s3://<auxiliary-bucket>/<assetId>/preview/PotreeViewer/
 
 The octree files at this location include `metadata.json`, `hierarchy.bin`, and the octree node files that the Potree web viewer loads on demand.
 
-For an E57 or PLY file, or a LAS or LAZ file in format 8 to 10, the intermediate LAZ file is written to a working folder of that run's own, `<file>/preview/PotreeViewerRuns/<jobName>/` in the auxiliary bucket, and the Potree stage removes it when it ends, whether the run succeeded or failed. The previous octree is replaced only after every new octree file is uploaded, so a failed run leaves the previous preview in place. When several runs on one file overlap, each one completes and the last one to finish is the preview.
+For an E57 or PLY file, or a LAS or LAZ file that is converted first, the intermediate LAZ file is written to a working folder of that run's own, `<file>/preview/PotreeViewerRuns/<jobName>/` in the auxiliary bucket, and the Potree stage removes it when it ends, whether the run succeeded or failed. The previous octree is replaced only after every new octree file is uploaded, so a failed run leaves the previous preview in place. When several runs on one file overlap, each one completes and the last one to finish is the preview.
 
 Both AWS Batch jobs are submitted by job definition name without a revision, so AWS Batch runs the latest active revision. An E57 or PLY run that is in progress while a deploy changes the pipeline's container images finishes on the new job definition.
 
@@ -116,7 +116,7 @@ This pipeline uses a third-party open-source library with a GPL license. Refer t
 ## How It Works
 
 1. A workflow execution triggers the `vamsExecute` Lambda function, which receives the input file path and Amazon S3 output paths from the workflow state.
-2. The `openPipeline` Lambda function reads a LAS or LAZ file's point data record format from its header, and the `constructPipeline` Lambda function builds a stage definition targeting either PDAL + Potree (for E57/PLY, and LAS/LAZ in formats 8 to 10) or Potree only (for LAS/LAZ in formats 0 to 7).
+2. The `openPipeline` Lambda function reads a LAS or LAZ file's point data record format from its header, and the `constructPipeline` Lambda function builds a stage definition targeting either PDAL + Potree (for E57/PLY, LAS/LAZ in formats 8 to 10, and LAS/LAZ with an unterminated Extra Bytes name or description) or Potree only (for other LAS/LAZ in formats 0 to 7).
 3. AWS Batch submits an AWS Fargate job with the pipeline definition. The container downloads the input file from Amazon S3, runs the appropriate processing stages, and uploads the resulting octree files to the auxiliary bucket.
 4. Upon completion, AWS Step Functions receives a task token callback, and the `pipelineEnd` Lambda function finalizes the workflow execution.
 5. The VAMS web frontend detects the Potree viewer data in the auxiliary bucket and renders the point cloud using the built-in Potree viewer plugin.
