@@ -470,7 +470,7 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
         details={"previousSchema": old_schema, "complianceAutoEval": auto_eval,
                  "applyId": record["applyId"], "assetCount": record["assetCount"]},
     )
-    apply.send_message(sqs_client, trigger_queue_url, record)
+    record = _queue_first_message(record)
 
     return _accepted(record, {
         "message": (f"Schema '{request.schemaName}' bound to database '{database_id}'; the "
@@ -495,19 +495,35 @@ def _accepted(record, body):
     })
 
 
+def _queue_first_message(record):
+    """Queue the message that runs an apply (begun or resumed); when it cannot be queued, the apply
+    is recorded as having none, so it reads stalled at once and the same request resumes it.
+    Returns the record as it now stands."""
+    if apply.send_message(sqs_client, trigger_queue_url, record):
+        return record
+    return apply.message_not_queued(record)
+
+
 def _change_while_applying(event, database_id, operation, schema_name, auto_eval, actor):
     """The answer to a binding change of a database whose last change is still being applied:
     when that apply is stalled and the request repeats its change, the apply resumes from its
-    cursor (`202`); otherwise `409` (`complianceBindingApply.applying_response`). None when no
-    change of the database is being applied."""
+    cursor (`202`); otherwise `409` (`complianceBindingApply.applying_response`). A change whose
+    records are all written but whose evaluations stopped being queued resumes the same way when
+    the request repeats it; any other request goes on (it replaces that change). None when the
+    request goes on."""
     running = apply.applying_record(database_id)
     if running is None:
-        return None
+        current = apply.current_record(database_id)
+        if (current is None
+                or apply.evaluation_status(current) != apply.EVALUATIONS_STALLED
+                or not apply.same_change(current, operation, schema_name, auto_eval)):
+            return None
+        running = current
     if apply.is_stalled(running) and apply.same_change(running, operation, schema_name, auto_eval):
         resumed = apply.resume(running, actor)
         if resumed is None:
             return apply.applying_response(event, apply.get_record(database_id))
-        apply.send_message(sqs_client, trigger_queue_url, resumed)
+        resumed = _queue_first_message(resumed)
         logger.info(f"Binding apply {resumed['applyId']} of {database_id} resumed")
         body = {"message": (f"The binding change of database '{database_id}' resumes from where "
                             "it stopped"),
@@ -579,7 +595,7 @@ def _rebind_same_schema(event, database_id, schema_name, db_item, auto_eval, act
     if record is None:
         return success(body={**body, "assetsPendingEvaluation": 0, "assetsKeptQuarantined": 0,
                              "evaluationsQueued": 0})
-    apply.send_message(sqs_client, trigger_queue_url, record)
+    record = _queue_first_message(record)
     body["message"] += f"; the evaluations of {pending} pending assets are being queued"
     return _accepted(record, body)
 
@@ -645,7 +661,7 @@ def unbind_schema_from_database(event, database_id):
         schema_name=old_schema,
         details={"applyId": record["applyId"], "assetCount": record["assetCount"]},
     )
-    apply.send_message(sqs_client, trigger_queue_url, record)
+    record = _queue_first_message(record)
 
     return _accepted(record, {
         "message": (f"Schema binding removed from database '{database_id}'; the removal is being "

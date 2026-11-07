@@ -119,8 +119,8 @@ def _documented_state_properties():
 # Spelled out rather than read from `listing`, so the answers are checked against the attributes a
 # record carries, not against the list the code keeps of them.
 LISTING_ATTRIBUTES = ("assetNameSort", "assetSearchText")
-# And the id of the background binding change that last wrote the record (D161).
-PRIVATE_ATTRIBUTES = LISTING_ATTRIBUTES + ("bindingApplyId",)
+# And the id of the background binding change that last wrote the record, and when (D161).
+PRIVATE_ATTRIBUTES = LISTING_ATTRIBUTES + ("bindingApplyId", "bindingAppliedAt")
 
 
 def _private(record):

@@ -3002,3 +3002,35 @@ class TestABindingChangeAppliedInTheBackground:
                 constants.COMPLIANCE_BINDING_APPLY_STALLED,
                 constants.COMPLIANCE_BINDING_APPLY_FAILED) == (
             'applying', 'applied', 'stalled', 'failed')
+
+
+class TestTheEvaluationsABindingChangeQueues:
+    """D161 follow-up: once every record carries the binding the change is applied, and its
+    evaluations are queued afterwards; --wait waits for the binding, and the output says where the
+    evaluations stand."""
+
+    def test_wait_ends_when_the_records_are_done_and_prints_the_evaluations(
+            self, cli_runner, generic_command_mocks, monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+        queueing = dict(APPLIED, evaluationStatus='queueing', evaluationsToQueue=2500,
+                        evaluationsQueued=300)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(queueing)
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 0, result.output
+            assert 'The binding change was applied' in result.output
+            assert 'Evaluations: queueing (300 of 2500 queued)' in result.output
+
+    def test_bindings_shows_stopped_evaluations_and_why(self, cli_runner, generic_command_mocks):
+        stopped = dict(APPLIED, evaluationStatus='stalled', evaluationsToQueue=2500,
+                       evaluationsQueued=400,
+                       evaluationReason='Its last step failed on every delivery; repeat the '
+                                        'same change to resume it')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_bindings.return_value = _read(stopped)
+            result = cli_runner.invoke(cli, ['compliance', 'bindings', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'Evaluations: stalled (400 of 2500 queued)' in result.output
+            assert 'Evaluations Reason: Its last step failed on every delivery' in result.output

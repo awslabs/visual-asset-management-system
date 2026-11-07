@@ -213,8 +213,8 @@ class TestReBindingTheSchemaInForce:
             assert world.t["databaseStorage"].get_item(
                 Key={"databaseId": DB})["Item"]["complianceAutoEval"] is True
             assert world.queued() == ["pending"]
-            assert [e[0] for e in world.audit()] == ["schema_binding_apply_finished",
-                                                     "schema_binding_auto_eval_changed"]
+            # Only the flag changed; queueing the evaluations is not a change of its own.
+            assert [e[0] for e in world.audit()] == ["schema_binding_auto_eval_changed"]
 
     def test_turning_it_off_queues_nothing(self):
         with World(auto_eval=True) as world:

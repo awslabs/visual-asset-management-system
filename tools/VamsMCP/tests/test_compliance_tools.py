@@ -1133,3 +1133,12 @@ def test_the_binding_tools_return_the_apply_as_the_api_answers_it(gated):
             "apply": {"applyId": "apply-1", "status": "applied", "assetsPendingEvaluation": 2497}}
     client.api.get_compliance_bindings.return_value = read
     assert srv.get_compliance_bindings("db1") == read
+
+
+def test_the_bindings_tool_says_what_stalled_means_and_how_evaluations_follow():
+    """D161 follow-up: `stalled` means the change really stopped, never that it waits on a busy
+    queue; with automatic evaluation on the evaluations follow an applied change and hold nothing."""
+    read = _docstring_of("get_compliance_bindings")
+    for words in ("really stopped", "stays `applying`", "evaluationStatus", "evaluationsToQueue",
+                  "evaluationReason", "cancelled", "other changes are not refused"):
+        assert words in read, words

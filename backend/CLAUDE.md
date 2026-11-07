@@ -224,8 +224,13 @@ backend/
 │   │   │                                           #   answers 202 and is applied in the background by
 │   │   │                                           #   complianceBindingApply: apply record
 │   │   │                                           #   `bindingApply#<db>` in the evaluation table, message
-│   │   │                                           #   with ids only, run() pages from the trigger, 409
-│   │   │                                           #   while applying, stalled/resume; D161),
+│   │   │                                           #   with ids only, run() pages from the trigger in a
+│   │   │                                           #   records phase (409 while it runs, queues no
+│   │   │                                           #   evaluation) then an evaluations phase (a bounded
+│   │   │                                           #   share per run, holds nothing); stalled is derived
+│   │   │                                           #   from its own messages (stop_reason: queued step,
+│   │   │                                           #   run in flight, redelivery), never from elapsed
+│   │   │                                           #   time; resume repeats the change; D161),
 │   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
 │   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
 │   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger

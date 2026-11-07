@@ -615,6 +615,33 @@ export function buildComplianceAuditServiceFunction(
  *   concurrency away from the API handlers; at 5 invocations of up to 10 messages each, a
  *   1000-asset burst drains in minutes, which an asynchronous compliance check tolerates.
  */
+/**
+ * The compliance trigger's recursive-loop setting. Two kinds of work continue themselves on the
+ * trigger's own queue, one message per run until they are done: the move of a deleted database's
+ * compliance data (`databaseRetirement`) and a database binding change applied in the background
+ * (`complianceBindingApply`, D161), whose evaluations phase also hands over after each bounded share
+ * of evaluations so its next message never waits behind more than that share. A large database
+ * needs more runs than Lambda's recursive-loop detection allows in one chain (about 16), and the
+ * detection then stops the invocation before the handler runs and dead-letters its whole batch,
+ * unrelated evaluations included, so the work would need a manual resume. Each chain ends by design:
+ * a move ends with its last phase, an apply with its last record and its last evaluation queued, and
+ * a message is acted on only while the stored work names it. ALLOW turns the detection off for this
+ * function only.
+ *
+ * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and
+ * the AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not
+ * available, so `aws-us-gov` and any other partition omit the property.
+ */
+export function complianceTriggerRecursiveLoop(
+    config: Config.Config
+): lambda.RecursiveLoop | undefined {
+    const partition = config.env.partition;
+    if (partition !== "aws" && partition !== "aws-eusc") {
+        return undefined;
+    }
+    return lambda.RecursiveLoop.ALLOW;
+}
+
 export const COMPLIANCE_TRIGGER_TIMEOUT = Duration.minutes(5);
 export const COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT = Duration.minutes(30);
 export const COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT = 3;
@@ -744,6 +771,7 @@ export function buildComplianceTriggerFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: COMPLIANCE_TRIGGER_TIMEOUT,
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        recursiveLoop: complianceTriggerRecursiveLoop(config),
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc

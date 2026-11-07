@@ -95,6 +95,7 @@ def _apply_run(record, database_item, state_rows=(), asset_pages=None, records=N
                   side_effect=lambda db, asset_id, consistent_read=False: records.get(asset_id)), \
             patch(f"{STORE}.update_asset_state") as update_state, \
             patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{APPLY}.mark_run_started", side_effect=lambda r, *a, **k: r), \
             patch(f"{APPLY}._save_progress", return_value=True) as save, \
             patch(f"{APPLY}.finish", return_value=True) as finish:
         done = binding_apply.run(DB, record["applyId"], record["runId"], float("inf"))

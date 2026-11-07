@@ -17603,7 +17603,7 @@ components:
                 status:
                     type: string
                     enum: [applying, stalled, applied, failed]
-                    description: "`applying` while it runs; `stalled` when it made no progress for 15 minutes (the same request resumes it); `applied` once every record was reached; `failed` (see `reason`)."
+                    description: "`applying` while its records are written; `stalled` when it really stopped (its last step failed on every delivery, its next step could not be queued, or a step was not delivered within the queue's retention period; the same request resumes it), never because it waits on a busy queue; `applied` once every record carries the binding; `failed` (see `reason`)."
                 schemaName:
                     type: string
                     description: "The schema the change applies; absent for `unbind`."
@@ -17637,6 +17637,15 @@ components:
                 reason:
                     type: string
                     description: "Why it failed or is stalled."
+                evaluationStatus:
+                    type: string
+                    enum: [queueing, stalled, queued, cancelled]
+                    description: "With `complianceAutoEval` on: the evaluations of the records it reached, queued after it is `applied` and holding nothing; `stalled` when that stopped (the same request resumes it); `cancelled` by a later change or automatic evaluation turned off. Absent when the change queues none."
+                evaluationsToQueue:
+                    type: integer
+                evaluationReason:
+                    type: string
+                    description: "Why its evaluations are stalled or cancelled."
             required:
                 - applyId
                 - operation

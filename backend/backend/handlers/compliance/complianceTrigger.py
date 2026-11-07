@@ -285,6 +285,7 @@ class TriggerBatch:
         self.stamps = {}
         self._failed = []
         self._database_items = {}
+        self._binding_applies = {}
         self._targets = {}
         self._file_targets = {}
         self._link_endpoints = {}
@@ -398,6 +399,12 @@ class TriggerBatch:
             self._link_endpoints[asset_link_id] = _link_endpoints_from_table(asset_link_id)
         return self._link_endpoints[asset_link_id]
 
+    def binding_apply(self, database_id):
+        """The database's current binding change (`complianceBindingApply.current_record`)."""
+        if database_id not in self._binding_applies:
+            self._binding_applies[database_id] = binding_apply.current_record(database_id)
+        return self._binding_applies[database_id]
+
     def database_item(self, database_id):
         if database_id not in self._database_items:
             self._database_items[database_id] = _database_item(database_id)
@@ -429,7 +436,7 @@ def lambda_handler(event, context):
             continue
         apply_target = binding_apply.message_target(record)
         if apply_target is not None:
-            applies.append((message_id, apply_target))
+            applies.append((message_id, apply_target, _receive_count(record)))
             continue
         batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
@@ -443,18 +450,29 @@ def lambda_handler(event, context):
     for message_id, database_id in moves:
         if not run_database_move(database_id, context):
             failures.append({"itemIdentifier": message_id})
-    for message_id, (database_id, apply_id, run_id) in applies:
-        if not run_binding_apply(database_id, apply_id, run_id, context):
+    for message_id, (database_id, apply_id, run_id), receive_count in applies:
+        if not run_binding_apply(database_id, apply_id, run_id, context, receive_count):
             failures.append({"itemIdentifier": message_id})
     return {"batchItemFailures": failures}
 
 
-def run_binding_apply(database_id, apply_id, run_id, context) -> bool:
-    """Apply a database binding change (`complianceBindingApply.run`) until this invocation's
+def _receive_count(record):
+    """How many times SQS has delivered a queue record (`ApproximateReceiveCount`, 1 when absent)."""
+    try:
+        return max(1, int(((record or {}).get("attributes") or {}).get(
+            "ApproximateReceiveCount", "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
+def run_binding_apply(database_id, apply_id, run_id, context, receive_count=1) -> bool:
+    """Run a database binding change (`complianceBindingApply.run`) until this invocation's
     deadline, and queue the next message when it is not done. Only the ids come from the message;
-    the change itself is read from the stored apply and the database row. Returns False when the
-    run failed, so the message is redelivered (and, past the queue's receive limit, kept in its
-    dead-letter queue) rather than queued again."""
+    the change itself is read from the stored apply and the database row. `receive_count` is the
+    message's delivery count, recorded on the apply so its status knows whether the queue delivers
+    the message again if this run fails. Returns False when the run failed, so the message is
+    redelivered (and, past the queue's receive limit, kept in its dead-letter queue) rather than
+    queued again."""
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID"},
         "applyId": {"value": apply_id, "validator": "UUID"},
@@ -464,10 +482,11 @@ def run_binding_apply(database_id, apply_id, run_id, context) -> bool:
         logger.error(f"Compliance binding apply message rejected: {message}")
         return True
     remaining = context.get_remaining_time_in_millis() / 1000 if context else 60
-    deadline = time.monotonic() + max(1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
+    deadline = binding_apply.monotonic() + max(
+        1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
     try:
         done = binding_apply.run(database_id, apply_id, run_id, deadline, sqs=sqs_client,
-                                 queue_url=trigger_queue_url)
+                                 queue_url=trigger_queue_url, receive_count=receive_count)
     except Exception as e:
         logger.exception(f"Compliance binding apply of database {database_id} failed: {e}")
         return False
@@ -476,6 +495,9 @@ def run_binding_apply(database_id, apply_id, run_id, context) -> bool:
         if record.get("applyId") != apply_id or record.get("runId") != run_id:
             return True
         if not binding_apply.send_message(sqs_client, trigger_queue_url, record):
+            # This run's own message is delivered again (its progress is saved); the apply is
+            # not recorded as having a message queued meanwhile.
+            binding_apply.message_not_queued(record)
             return False
         logger.info(f"Compliance binding apply of database {database_id} continues in a new message")
     return True
@@ -530,6 +552,10 @@ def _dispatch_event(message, batch=None, message_id=""):
             _process_indexed_change(message, kind, batch, message_id)
     elif message.get("s3") or message.get("Records"):
         _process_file_event(message, batch, message_id)
+    elif message.get("databaseId") and message.get("assetId") and \
+            message.get(binding_apply.APPLY_STAMP_FIELD):
+        batch.add_candidate(message_id, _process_binding_evaluation, message.get("databaseId"),
+                            message.get("assetId"), message.get(binding_apply.APPLY_STAMP_FIELD))
     elif message.get("databaseId") and message.get("assetId"):
         batch.add_candidate(message_id, _process_compliance_event,
                             message.get("databaseId"), message.get("assetId"))
@@ -626,6 +652,39 @@ def upload_completion_superseded(asset_row, completion):
         return False
     latest = file_event_completion_time(asset_row)
     return latest is not None and latest > completion
+
+
+def _process_binding_evaluation(database_id, asset_id, apply_id, batch=None):
+    """An evaluation a database binding change queued in its evaluations phase
+    (`complianceBindingApply`). Run only while that change is the database's current one (a later
+    change, or automatic evaluation turned off, queues or skips its own), and for a bind or a
+    change only for a record the change reached (its stamp). It is judged as a change made when
+    the binding reached the record (`bindingAppliedAt`), or, for automatic evaluation turned on,
+    when that was saved: an evaluation that started since, a duplicate of this message included,
+    covers it and nothing more is evaluated. Only the ids come from the message."""
+    batch = batch if batch is not None else TriggerBatch()
+    if (database_id, asset_id) in batch.evaluated:
+        return
+    change = batch.binding_apply(database_id)
+    if not change or change.get("applyId") != apply_id:
+        logger.info(f"Evaluation of {database_id}:{asset_id} queued by binding change {apply_id} "
+                    "skipped: another change is the database's now")
+        return
+    target = batch.evaluation_target(database_id, asset_id)
+    if target is None:
+        return
+    record = target[0]
+    if change.get("operation") == binding_apply.OPERATION_EVALUATE_PENDING:
+        changed_at = parse_event_time(change.get("startedAt"))
+    elif record.get(binding_apply.APPLY_STAMP_FIELD) == apply_id:
+        changed_at = parse_event_time(record.get(binding_apply.APPLIED_AT_FIELD))
+    else:
+        logger.info(f"Evaluation of {database_id}:{asset_id} queued by binding change {apply_id} "
+                    "skipped: the change no longer holds its record")
+        return
+    _evaluate_if_uncovered(database_id, asset_id, target, completion_time=changed_at,
+                           path=COVERAGE_PATH_DIRECT,
+                           stamp_attribute=binding_apply.APPLIED_AT_FIELD, batch=batch)
 
 
 def _process_upload_completion(database_id, asset_id, completion=None, stamp_time=None, batch=None):

@@ -396,7 +396,20 @@ export interface ComplianceBindingApply {
     lastProgressAt?: string;
     finishedAt?: string;
     reason?: string;
+    /**
+     * With automatic evaluation on, the evaluations the change queues once every record carries
+     * the binding: `queueing` (a share at a time, so they never flood the queue), `stalled` (the
+     * same change resumes it), `queued`, or `cancelled` (`evaluationReason`: a later change, or
+     * automatic evaluation turned off). Absent when the change queues none. It does not hold the
+     * database: another change or Evaluate All may run meanwhile.
+     */
+    evaluationStatus?: "queueing" | "stalled" | "queued" | "cancelled";
+    evaluationsToQueue?: number;
+    evaluationReason?: string;
 }
+
+export const BINDING_EVALUATIONS_QUEUEING = "queueing";
+export const BINDING_EVALUATIONS_STALLED = "stalled";
 
 export const BINDING_APPLY_APPLYING = "applying";
 export const BINDING_APPLY_STALLED = "stalled";
@@ -476,7 +489,11 @@ export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string =
             } quarantined until re-evaluated.`
         );
     }
-    if (apply.evaluationsQueued > 0) {
+    if (apply.evaluationStatus === BINDING_EVALUATIONS_QUEUEING) {
+        parts.push(
+            `The evaluations of ${assetsText(apply.evaluationsToQueue || 0)} are being queued.`
+        );
+    } else if (apply.evaluationsQueued > 0) {
         parts.push(
             `${apply.evaluationsQueued} ${
                 apply.evaluationsQueued === 1 ? "evaluation was" : "evaluations were"
@@ -485,6 +502,12 @@ export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string =
     }
     return parts.join(" ");
 };
+
+/** The evaluations phase while it runs: "120 of 2,500 evaluations queued". */
+export const bindingEvaluationsProgressText = (apply: ComplianceBindingApply): string =>
+    `${(apply.evaluationsQueued || 0).toLocaleString("en-US")} of ${(
+        apply.evaluationsToQueue || 0
+    ).toLocaleString("en-US")} evaluations queued`;
 
 export type ComplianceEvaluationVerdict =
     | "compliant"

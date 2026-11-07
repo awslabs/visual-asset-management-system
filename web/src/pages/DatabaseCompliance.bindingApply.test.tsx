@@ -320,6 +320,110 @@ describe("a binding change applied in the background", () => {
     });
 });
 
+describe("the evaluations a binding change queues (D161 follow-up)", () => {
+    // The answers an earlier test queued and did not use are not this block's.
+    beforeEach(() => {
+        service().getDatabaseBindings.mockReset();
+        service().bindSchemaToDatabase.mockReset();
+    });
+
+    const queueing = apply({
+        status: "applied",
+        assetsProcessed: 2500,
+        assetsPendingEvaluation: 2497,
+        assetsKeptQuarantined: 3,
+        finishedAt: "2026-11-07T15:01:00+00:00",
+        evaluationStatus: "queueing",
+        evaluationsToQueue: 2500,
+        evaluationsQueued: 300,
+    });
+
+    it("shows them being queued without holding the controls, until they are queued", async () => {
+        mockAllowed = BINDER;
+        let resolveEnd: (value: unknown) => void = () => undefined;
+        const end = new Promise((resolve) => (resolveEnd = resolve));
+        service()
+            .getDatabaseBindings.mockResolvedValueOnce(bindings("strict", queueing))
+            .mockImplementation(() => end);
+        await mount();
+        expect(await screen.findByText("Queueing evaluations")).toBeInTheDocument();
+        expect(screen.getByText("300 of 2,500 evaluations queued")).toBeInTheDocument();
+        // Every record carries the binding: another change and Evaluate All may run.
+        expect(button("Remove")).not.toBeDisabled();
+        expect(button("Evaluate All Assets")).not.toBeDisabled();
+        expect(screen.queryByText("Applying the binding")).not.toBeInTheDocument();
+        // It is followed until the evaluations are queued.
+        await waitFor(() => expect(service().getDatabaseBindings).toHaveBeenCalledTimes(2));
+        await act(async () =>
+            resolveEnd(
+                bindings("strict", {
+                    ...queueing,
+                    evaluationStatus: "queued",
+                    evaluationsQueued: 2500,
+                })
+            )
+        );
+        await waitFor(() =>
+            expect(screen.queryByText("Queueing evaluations")).not.toBeInTheDocument()
+        );
+    });
+
+    it("says the evaluations are being queued when the records are done", async () => {
+        mockAllowed = BINDER;
+        service()
+            .getDatabaseBindings.mockResolvedValueOnce(bindings("std", null))
+            .mockResolvedValueOnce(bindings("strict", apply()))
+            .mockResolvedValue(bindings("strict", queueing));
+        service().bindSchemaToDatabase.mockResolvedValue([
+            true,
+            "bound",
+            { changed: true, applyStatus: "applying", applyId: "apply-1", apply: apply() },
+        ]);
+        await mount();
+        await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+        choose("strict");
+        fireEvent.click(screen.getByRole("button", { name: "Change" }));
+        expect(
+            await screen.findByText(
+                "The binding was applied to 2,500 assets: 2497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated. The evaluations of 2,500 assets are being queued."
+            )
+        ).toBeInTheDocument();
+        expect(screen.getByText("Queueing evaluations")).toBeInTheDocument();
+    });
+
+    it("stopped evaluations say why and offer Resume to a binder", async () => {
+        mockAllowed = BINDER;
+        service()
+            .getDatabaseBindings.mockResolvedValueOnce(
+                bindings("strict", {
+                    ...queueing,
+                    evaluationStatus: "stalled",
+                    evaluationReason:
+                        "Its last step failed on every delivery; repeat the same change to resume it",
+                })
+            )
+            .mockResolvedValue(bindings("strict", { ...queueing, evaluationStatus: "queued" }));
+        service().bindSchemaToDatabase.mockResolvedValue([
+            true,
+            "resumes",
+            { changed: true, resumed: true, apply: queueing },
+        ]);
+        await mount();
+        expect(await screen.findByText("Evaluations stopped")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Queueing the evaluations stopped: Its last step failed on every delivery; repeat the same change to resume it."
+            )
+        ).toBeInTheDocument();
+        // The binding itself is applied: the controls are offered.
+        expect(button("Remove")).not.toBeDisabled();
+        fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+        await waitFor(() =>
+            expect(service().bindSchemaToDatabase).toHaveBeenCalledWith("db1", "strict")
+        );
+    });
+});
+
 describe("binding change texts", () => {
     it("back off to 15 s", () => {
         const actual = jest.requireActual("../services/ComplianceService");

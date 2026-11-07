@@ -272,6 +272,13 @@ def format_binding_apply(apply: Dict[str, Any]) -> List[str]:
         lines.append(f"  Last Progress: {apply['lastProgressAt']}")
     if apply.get('reason'):
         lines.append(f"  Reason: {apply['reason']}")
+    if apply.get('evaluationStatus'):
+        # With automatic evaluation on, the evaluations are queued once every record carries the
+        # binding, a share at a time; the change does not wait for them.
+        lines.append(f"  Evaluations: {apply['evaluationStatus']} ({apply.get('evaluationsQueued', 0)} "
+                     f"of {apply.get('evaluationsToQueue', 0)} queued)")
+        if apply.get('evaluationReason'):
+            lines.append(f"  Evaluations Reason: {apply['evaluationReason']}")
     return lines
 
 

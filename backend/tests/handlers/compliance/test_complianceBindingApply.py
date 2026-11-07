@@ -151,7 +151,7 @@ class World:
 
     def drain(self, page_size=2):
         runs = 0
-        while (self.apply_record() or {}).get("applyStatus") == "applying":
+        while binding_apply.active_phase(self.apply_record()) is not None:
             self.run_once(page_size)
             runs += 1
             assert runs < 100
@@ -345,19 +345,21 @@ class TestAPageAppliedTwiceChangesNothingTwice:
         counts = binding_apply.counts_of(world.apply_record())
         assert counts["assetsPendingEvaluation"] + counts["assetsKeptQuarantined"] == len(ASSETS) - 1
 
-    def test_automatic_evaluation_queues_each_asset_once(self):
+    def test_automatic_evaluation_queues_each_asset_once_after_every_record_is_written(self):
         with World(auto_eval=True) as world:
             world.bind(NEW)
-            with patch.object(binding_apply, "_save_progress",
-                              side_effect=[ClientError({"Error": {"Code": "Throttling"}},
-                                                       "UpdateItem")]):
-                with pytest.raises(ClientError):
-                    world.run_once(page_size=3)
+            while world.apply_record()["applyStatus"] == "applying":
+                world.run_once(page_size=3)
+                # Nothing is queued while records still carry the binding before the change.
+                assert world.queued() == []
+            record = world.apply_record()
+            assert (record["phase"], record["evaluationStatus"], record["evaluationsToQueue"]) == (
+                "evaluations", "queueing", len(ASSETS) - 1)
             world.drain(page_size=3)
             assert world.queued() == sorted(asset_id for asset_id in ASSETS if asset_id != OVERRIDE)
-            # The count is what the runs that saved their progress queued: the failed run's three
-            # are queued but not counted.
-            assert binding_apply.counts_of(world.apply_record())["evaluationsQueued"] == 3
+            record = world.apply_record()
+            assert (record.get("phase"), record["evaluationStatus"]) == (None, "queued")
+            assert binding_apply.counts_of(record)["evaluationsQueued"] == len(ASSETS) - 1
 
     def test_without_a_failure_the_count_is_every_queued_evaluation(self):
         with World(auto_eval=True) as world:
@@ -537,10 +539,13 @@ class TestAStalledApply:
 
     @staticmethod
     def _stall(world, minutes=20):
+        """The apply's last run started `minutes` ago on its message's last delivery and ended
+        without handing over: nothing will run it again."""
         past = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
         world.t["complianceEvaluationStorage"].update_item(
-            Key=binding_apply.record_key(DB), UpdateExpression="SET lastProgressAt = :p",
-            ExpressionAttributeValues={":p": past})
+            Key=binding_apply.record_key(DB),
+            UpdateExpression="SET runStartedAt = :p, runReceiveCount = :n REMOVE nextMessageAt",
+            ExpressionAttributeValues={":p": past, ":n": 3})
 
     def test_it_reads_stalled_and_another_change_is_told_how_to_resume(self, world):
         world.bind(NEW)
@@ -549,7 +554,7 @@ class TestAStalledApply:
         assert status == 200
         assert (body["applyStatus"], body["apply"]["status"]) == ("stalled", "stalled")
         assert body["apply"]["reason"] == (
-            "No progress for 15 minutes; repeat the same change to resume it")
+            "Its last step failed on every delivery; repeat the same change to resume it")
         assert (world.unbind()[0], world.unbind()[1]["message"]) == (409, STALLED_MESSAGE)
         assert world.bind(OLD)[0] == 409
 
@@ -576,7 +581,11 @@ class TestAStalledApply:
     def test_a_running_apply_never_reads_stalled(self, world):
         world.bind(NEW)
         world.run_once()
-        assert binding_apply.status(world.apply_record()) == "applying"
+        record = world.apply_record()
+        assert binding_apply.status(record) == "applying"
+        # Its next message is queued: however long it waits, the apply has not stopped.
+        later = datetime.now(timezone.utc) + timedelta(hours=6)
+        assert binding_apply.status(record, now=later) == "applying"
 
 
 @pytest.mark.unit
@@ -633,4 +642,5 @@ def test_the_literals_are_the_modules():
     assert (binding_apply.APPLYING_MESSAGE, binding_apply.STALLED_MESSAGE,
             binding_apply.APPLY_ACTION, binding_apply.APPLY_STAMP_FIELD) == (
         APPLYING_MESSAGE, STALLED_MESSAGE, "applyDatabaseBinding", "bindingApplyId")
-    assert binding_apply.STALLED_AFTER_SECONDS == 900
+    assert (binding_apply.EVALUATIONS_PER_RUN, binding_apply.APPLIED_AT_FIELD) == (
+        100, "bindingAppliedAt")

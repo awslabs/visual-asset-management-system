@@ -196,7 +196,8 @@ web/
       # the binding read's `apply` (short status label + ProgressBar), re-reads the binding with
       # `bindingApplyPollDelay` backoff while it is `applying`, disables Bind/Change/Remove and
       # Evaluate All while it is applying or stalled, and offers Resume (the same request) to a
-      # caller with the route for a stalled one; the API decides each request.
+      # caller with the route for a stalled one; the API decides each request. Its evaluations
+      # phase (`evaluationStatus` queueing/stalled) shows its own line and holds no control.
       ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
       ComplianceAuditLog.tsx DatabaseCompliance.tsx
 

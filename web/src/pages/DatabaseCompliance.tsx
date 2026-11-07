@@ -32,6 +32,7 @@ import {
     bindingApplyOutcomeText,
     bindingApplyPollDelay,
     bindingApplyProgressText,
+    bindingEvaluationsProgressText,
     unbindSchemaFromDatabase,
     revokeException,
     ComplianceBindingApply,
@@ -42,6 +43,8 @@ import {
     BINDING_APPLY_APPLYING,
     BINDING_APPLY_FAILED,
     BINDING_APPLY_STALLED,
+    BINDING_EVALUATIONS_QUEUEING,
+    BINDING_EVALUATIONS_STALLED,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import {
@@ -139,6 +142,10 @@ export const bindingApplyLabel = (apply: ComplianceBindingApply): string => {
     if (apply.operation === "evaluatePending") return "Queueing evaluations";
     return "Applying the binding";
 };
+
+/** The evaluations phase of a binding change: queueing, and stopped (short, as above). */
+export const BINDING_EVALUATIONS_LABEL = "Queueing evaluations";
+export const BINDING_EVALUATIONS_STOPPED_LABEL = "Evaluations stopped";
 
 /** Whether a binding change of the database is under way (running or stalled): the API answers
  * 409 to another change and to Evaluate All until it ends, so the page does not offer them. */
@@ -407,8 +414,11 @@ const DatabaseCompliancePage: React.FC = () => {
         [beginBindingLoad, databaseId, restartWalk]
     );
 
-    // While a binding change is applied, the binding is read again with backoff until it ends.
-    const applyRunning = bindingApply?.status === BINDING_APPLY_APPLYING;
+    // While a binding change is applied, or its evaluations are queued, the binding is read again
+    // with backoff until it ends.
+    const applyRunning =
+        bindingApply?.status === BINDING_APPLY_APPLYING ||
+        bindingApply?.evaluationStatus === BINDING_EVALUATIONS_QUEUEING;
     const runningApplyId = applyRunning ? bindingApply?.applyId : undefined;
     useEffect(() => {
         setApplyPolls(0);
@@ -639,7 +649,8 @@ const DatabaseCompliancePage: React.FC = () => {
     // answers 409 to them); a stalled change offers Resume to a caller who may make it.
     const applyBusy = bindingApplyBusy(bindingApply);
     const canResume =
-        bindingApply?.status === BINDING_APPLY_STALLED &&
+        (bindingApply?.status === BINDING_APPLY_STALLED ||
+            bindingApply?.evaluationStatus === BINDING_EVALUATIONS_STALLED) &&
         (bindingApply.operation === "unbind" ? canUnbind : canBind);
     const applyDescription =
         !bindingKnown || !bindingApply ? null : bindingApply.status === BINDING_APPLY_APPLYING ? (
@@ -675,6 +686,31 @@ const DatabaseCompliancePage: React.FC = () => {
                 </StatusIndicator>
                 <Box variant="span" color="inherit">
                     {bindingApplyOutcomeText(bindingApply)}
+                </Box>
+                {canResume && (
+                    <Button onClick={handleResume} loading={bindingInProgress}>
+                        Resume
+                    </Button>
+                )}
+            </SpaceBetween>
+        ) : bindingApply.evaluationStatus === BINDING_EVALUATIONS_QUEUEING ? (
+            // Every record carries the binding; the evaluations are queued a share at a time and
+            // nothing waits on them.
+            <SpaceBetween size="xxs">
+                <StatusIndicator type="in-progress">{BINDING_EVALUATIONS_LABEL}</StatusIndicator>
+                <Box variant="span" color="inherit">
+                    {bindingEvaluationsProgressText(bindingApply)}
+                </Box>
+            </SpaceBetween>
+        ) : bindingApply.evaluationStatus === BINDING_EVALUATIONS_STALLED ? (
+            <SpaceBetween size="xxs">
+                <StatusIndicator type="warning">
+                    {BINDING_EVALUATIONS_STOPPED_LABEL}
+                </StatusIndicator>
+                <Box variant="span" color="inherit">
+                    {`Queueing the evaluations stopped: ${
+                        bindingApply.evaluationReason || "repeat the same change to resume it"
+                    }.`}
                 </Box>
                 {canResume && (
                     <Button onClick={handleResume} loading={bindingInProgress}>

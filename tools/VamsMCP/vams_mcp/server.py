@@ -1829,7 +1829,13 @@ def get_compliance_bindings(
     repeating the same bind or unbind resumes it), `applied` with its counts
     (`assetsPendingEvaluation`, `assetsKeptQuarantined`, `removedComplianceRecords`,
     `evaluationsQueued`) and `finishedAt`, or `failed` with its `reason`. Report a running change
-    as still being applied, never as done.
+    as still being applied, never as done. `stalled` means it really stopped (its last step failed
+    on every delivery, or its next step could not be queued), never that it is slow: a change
+    waiting for its turn on a busy queue stays `applying`. With automatic evaluation on, an
+    `applied` change then queues its evaluations: `evaluationStatus` `queueing`
+    (`evaluationsQueued` of `evaluationsToQueue`), `queued`, `stalled` (with `evaluationReason`;
+    the same bind resumes it) or `cancelled` (a later change, or automatic evaluation turned off);
+    the binding itself is in force meanwhile and other changes are not refused.
     """
     return CLIENT.api.get_compliance_bindings(
         database_id, max_items=max_items, starting_token=starting_token

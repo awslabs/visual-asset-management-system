@@ -284,7 +284,7 @@ vamscli compliance bindings -d my-database --max-items 20 --starting-token "toke
 vamscli compliance bindings -d my-database --json-output
 ```
 
-`assetOverrideCount` is the total number of asset-level overrides; `assetOverrides` is one page of them. The response carries a `NextToken` when more overrides exist; pass it back as `--starting-token`. The output ends with the database's last binding change (`Binding Change: schema change, applied (2500 of 2500 assets)` and its counts, or its `Reason` when it failed or stopped); in JSON it is `apply`.
+`assetOverrideCount` is the total number of asset-level overrides; `assetOverrides` is one page of them. The response carries a `NextToken` when more overrides exist; pass it back as `--starting-token`. The output ends with the database's last binding change (`Binding Change: schema change, applied (2500 of 2500 assets)` and its counts, or its `Reason` when it failed or stopped), and, with automatic evaluation on, its evaluations (`Evaluations: queueing (300 of 2500 queued)`); in JSON it is `apply`. `--wait` on `bind` waits for every record to carry the binding, not for the evaluations, which are queued afterwards and hold nothing.
 
 ---
 

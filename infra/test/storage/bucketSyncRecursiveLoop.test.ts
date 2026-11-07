@@ -21,6 +21,11 @@
  * is emitted only in the partitions where the detection exists: commercial and EU Sovereign. GovCloud
  * documents it as not available and gets no property. The opt-out is a stopgap until the self-write is
  * removed (#1207).
+ *
+ * The compliance trigger opts out too, in the same partitions: a deleted database's compliance move
+ * and a database binding change applied in the background continue themselves on its own queue, one
+ * message per run, for as many runs as the database's size needs (D161). Every other function keeps
+ * the default.
  */
 
 import { Resource, SynthResult, synthTemplate, TemplateName } from "../support/templateSynth";
@@ -29,6 +34,9 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 
 const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created";
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
+const COMPLIANCE_TRIGGER_HANDLER = "handlers.compliance.complianceTrigger.lambda_handler";
+/** The functions that opt out of recursive-loop detection where the partition has it. */
+const OPTED_OUT = new Set([CREATED_HANDLER, COMPLIANCE_TRIGGER_HANDLER]);
 
 /** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
 const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
@@ -82,10 +90,16 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         }
     });
 
+    test("the compliance trigger allows recursion in commercial and EU Sovereign only", () => {
+        const triggers = functionsWithHandler(synth, COMPLIANCE_TRIGGER_HANDLER);
+        expect(triggers).toHaveLength(1);
+        expect(triggers[0].properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+    });
+
     test("no other function changes its recursive-loop setting", () => {
         const offenders = synth
             .ofType("AWS::Lambda::Function")
-            .filter((fn) => fn.properties.Handler !== CREATED_HANDLER)
+            .filter((fn) => !OPTED_OUT.has(fn.properties.Handler))
             .filter((fn) => fn.properties.RecursiveLoop !== undefined)
             .map((fn) => `${fn.stack}/${fn.logicalId}`);
         expect(synth.countOfType("AWS::Lambda::Function")).toBeGreaterThan(1);
