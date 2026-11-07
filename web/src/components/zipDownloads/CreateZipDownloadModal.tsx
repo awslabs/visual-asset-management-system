@@ -183,6 +183,7 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
             onDismiss={() => {
                 if (!submitting) onDismiss();
             }}
+            closeAriaLabel="Close modal"
             header="Download as Zip"
             footer={
                 <Box float="right">

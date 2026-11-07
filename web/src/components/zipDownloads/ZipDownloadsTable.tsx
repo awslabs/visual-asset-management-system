@@ -493,6 +493,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 onDismiss={() => {
                     if (!confirming) setConfirm(null);
                 }}
+                closeAriaLabel="Close modal"
                 header={confirm?.kind === "cancel" ? "Cancel zip download" : "Delete zip download"}
                 footer={
                     <Box float="right">

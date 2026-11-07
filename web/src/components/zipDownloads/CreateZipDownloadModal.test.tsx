@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import CreateZipDownloadModal from "./CreateZipDownloadModal";
@@ -64,6 +64,14 @@ describe("CreateZipDownloadModal", () => {
                 ],
             },
         ]);
+    });
+
+    it("gives the dialog's close button an accessible name (D14)", () => {
+        renderModal();
+        const dialog = screen.getByRole("dialog");
+        expect(screen.getByRole("button", { name: "Close modal" })).toBeInTheDocument();
+        // The axe button-name rule: no button in the dialog may have an empty name.
+        expect(within(dialog).queryAllByRole("button", { name: "" })).toHaveLength(0);
     });
 
     it("summarizes the selection and lists the selected paths", () => {

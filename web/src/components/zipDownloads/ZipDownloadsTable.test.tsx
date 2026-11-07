@@ -286,6 +286,23 @@ describe("ZipDownloadsTable", () => {
         expect(await screen.findByText("archive-1.zip was cancelled.")).toBeInTheDocument();
     });
 
+    it.each([
+        ["cancel", "RUNNING", "Cancel archive-1.zip"],
+        ["delete", "SUCCEEDED", "Delete archive-1.zip"],
+    ])(
+        "gives the %s confirm's close button an accessible name (D14)",
+        async (_kind, status, opener) => {
+            mockAssetList.mockResolvedValue(page([job("1", status)]));
+            renderTable();
+            await screen.findByText("archive-1.zip");
+            await userEvent.click(screen.getByRole("button", { name: opener }));
+            const dialog = await screen.findByRole("dialog");
+            expect(within(dialog).getByRole("button", { name: "Close modal" })).toBeInTheDocument();
+            // The axe button-name rule: no button in the dialog may have an empty name.
+            expect(within(dialog).queryAllByRole("button", { name: "" })).toHaveLength(0);
+        }
+    );
+
     it("lists across assets with a link to each asset when not scoped", async () => {
         mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")], "tok"));
         mockGlobalList.mockResolvedValueOnce(page([job("2", "SUCCEEDED")], "tok"));
