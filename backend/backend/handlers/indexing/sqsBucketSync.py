@@ -1146,6 +1146,8 @@ def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool
             # Keys come back in ascending order and the exact key sorts first, so the object's own
             # versions and delete markers end at the first entry for another key. All of them are
             # collected before any is deleted, so the continuation markers stay valid.
+            # Not common.s3.list_all_object_versions: it reads the whole prefix, folder contents
+            # included, and its cap counts entries, not keys.
             own_version_ids = []
             list_kwargs = {'Bucket': bucket_name, 'Prefix': object_key}
             while True:
