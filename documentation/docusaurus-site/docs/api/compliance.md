@@ -1041,11 +1041,11 @@ POST /compliance/quarantine/{databaseId}/{assetId}/release
 
 ### Error responses
 
-| Status | Description                                                                             |
-| ------ | --------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                 |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the asset has no compliance record, the asset is not quarantined, or its record changed under every try |
-| `403`  | Not authorized                                                                          |
-| `500`  | Internal server error                                                                   |
+| `403`  | Not authorized                                                                                                              |
+| `500`  | Internal server error                                                                                                       |
 
 ---
 
@@ -1078,11 +1078,11 @@ POST /compliance/quarantine/{databaseId}/{assetId}/exception
 
 ### Error responses
 
-| Status | Description                                                                                              |
-| ------ | -------------------------------------------------------------------------------------------------------- |
+| Status | Description                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, no reason given, the asset has no compliance record, the asset is not quarantined, or its record changed under every try |
-| `403`  | Not authorized                                                                                           |
-| `500`  | Internal server error                                                                                    |
+| `403`  | Not authorized                                                                                                                               |
+| `500`  | Internal server error                                                                                                                        |
 
 ---
 
@@ -1107,11 +1107,11 @@ DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
 
 ### Error responses
 
-| Status | Description                                                                       |
-| ------ | --------------------------------------------------------------------------------- |
+| Status | Description                                                                                                           |
+| ------ | --------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, the asset has no compliance record, no exception is active, or its record changed under every try |
-| `403`  | Not authorized                                                                    |
-| `500`  | Internal server error                                                             |
+| `403`  | Not authorized                                                                                                        |
+| `500`  | Internal server error                                                                                                 |
 
 ---
 
