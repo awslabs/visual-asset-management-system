@@ -366,7 +366,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: after updating, replay a bucket-sync created dead-letter queue whose alarm is in `ALARM` (see the update guide).
 -   **Backend** Fixed searches across both assets and files reporting the database and tag facet counts and `aggregationTotal` of assets only; they now count assets and files. ([#1027](https://github.com/awslabs/visual-asset-management-system/issues/1027))
 -   **CDK** Fixed `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` having no effect: the configured boundary is now set on every IAM role VAMS creates, and synthesis rejects a value that is not an IAM managed policy ARN in the deployment's partition. ([#431](https://github.com/awslabs/visual-asset-management-system/issues/431))
--   **Backend** Fixed bucket sync permanently deleting asset files whose names end in `init`, such as `postinit` or `config.init`, with all their versions. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions, across every page of its version listing. ([#1223](https://github.com/awslabs/visual-asset-management-system/issues/1223))
+-   **Backend** Fixed bucket sync permanently deleting asset files whose names end in `init`, such as `postinit` or `config.init`, with all their versions. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. ([#1223](https://github.com/awslabs/visual-asset-management-system/issues/1223))
 
 ### Chores
 
