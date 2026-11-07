@@ -339,9 +339,11 @@ class TestGlobalListExclusion:
         with patch(f"{MOD}.dynamodb") as ddb, \
                 patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()):
             ddb.Table.return_value = table
-            le.get_global_executions({}, {"status": "FAILED"})
+            # includeSystem=true keeps #1121's default system-run filter out of the query, so the
+            # comparison isolates excludeStatus (the system filter has its own query-shape tests).
+            le.get_global_executions({}, {"status": "FAILED", "includeSystem": "true"})
             with_status = table.query.call_args.kwargs
-            le.get_global_executions({}, {})
+            le.get_global_executions({}, {"includeSystem": "true"})
             plain = table.query.call_args.kwargs
         assert "FilterExpression" not in plain
         assert with_status["FilterExpression"].get_expression()["operator"] == "="

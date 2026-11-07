@@ -4726,7 +4726,8 @@ class APIClient(CustomAPIClientMixin):
         """List executions globally (permission-filtered). GET /workflows/executions.
 
         params may include the filter query strings: workflowId, workflowDatabaseId, status,
-        triggerType, groupId, triggeredByUserId, plus pageSize/startingToken.
+        triggerType, groupId, triggeredByUserId, includeSystem ('true'/'false'; system workflow runs
+        are hidden by default), plus pageSize/startingToken.
         """
         try:
             return self._pwe_request('GET', API_WORKFLOW_EXECUTIONS_GLOBAL, params=params or {})

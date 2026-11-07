@@ -856,6 +856,7 @@ def build_workflow_execution_record(
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
     last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
+    is_system=False,
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
 
@@ -863,6 +864,11 @@ def build_workflow_execution_record(
     the WorkflowExecutionsByGroupGSI (SK executionStartDate), so abort-by-group can enumerate a group's
     executions. Empty when the execution is not part of a group (the attribute is omitted so it stays
     out of the sparse GSI).
+
+    is_system is the launched workflow's stored isSystem flag, copied onto the row at launch so the
+    execution lists can hide system runs by default without reading the workflow table per row. Only
+    an exact boolean True marks the run as system; a row written before the flag existed has no
+    attribute and lists as a user run (see execution_row_is_system).
     """
     record = {
         "workflowExecutionId": execution_id,  # PK
@@ -893,6 +899,9 @@ def build_workflow_execution_record(
         # Both empty at launch.
         "executionError": "",
         "executionLog": "",
+        # Whether the run was launched from a system workflow (isSystem on the workflow row). The
+        # execution lists hide these unless the caller asks for them (includeSystem).
+        "isSystem": is_system is True,
     }
     # executionGroupId is a sparse GSI PK: set it only when the execution belongs to a group, so
     # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
@@ -905,6 +914,12 @@ def build_workflow_execution_record(
     return record
 
 
+def execution_row_is_system(main_item) -> bool:
+    """True only when an execution main row carries isSystem as the boolean True.
+
+    A missing attribute (a row written before the flag existed), False, or any non-boolean value reads
+    as a user run, so a row the launch did not stamp stays visible rather than hidden."""
+    return isinstance(main_item, dict) and main_item.get("isSystem") is True
 # A fileUpload trigger launch refused by the workflow's concurrency restriction is recorded as ONE
 # SKIPPED execution per blocking run and lock key, however many launches that run refuses: the record
 # counts them (skippedLaunchCount) and lists the files they named, up to MAX_SKIP_RECORD_INPUT_ROWS input

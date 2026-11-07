@@ -2692,7 +2692,10 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
         execution_log_group_arn=workflow_execution_log_group_arn,
         execution_group_id=execution_group_id or "",
-        workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
+        workflow_version_arn=workflow.get("workflowVersionArn", "") or "",
+        # The workflow row was read strongly consistent at launch (_get_workflow); its stored isSystem
+        # is what the execution lists hide by default.
+        is_system=workflow.get("isSystem") is True)
     main_table.put_item(Item=main_row)
 
     # 2) One workflow-input row per selected input (asset-scoped GET source of truth). A file named

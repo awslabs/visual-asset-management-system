@@ -866,6 +866,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'triggerType': main_item.get('triggerType', ''),
             'triggeredByUserId': main_item.get('triggeredByUserId', ''),
             'executionGroupId': main_item.get('executionGroupId', ''),
+            # True for a run of a system workflow (stamped at launch); a legacy row reads False. The
+            # caller drops these unless includeSystem applies.
+            'isSystem': er.execution_row_is_system(main_item),
             'startDate': start_date,
             'stopDate': stop_date,
             # Alias the dates under the same keys the global/workflow lists use, so the shared web
@@ -918,7 +921,14 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
     parameter, or 90 days before now by default; the applied value is echoed back as
     `filterStartDate`. A caller `filterEndDate` adds the upper bound and is echoed back when set.
     A `warnings` entry means the MAX_EXECUTIONS_INSPECTED cap withheld rows from this page.
+    Runs of system workflows are left out unless `includeSystem=true`, or unless the listing is scoped
+    to one system workflow (see _resolve_include_system); the applied value is echoed as
+    `includeSystem`.
     """
+    include_system_valid, include_system_explicit = _parse_include_system(query_params)
+    if not include_system_valid:
+        return validation_error(body={'message': INCLUDE_SYSTEM_INVALID_MESSAGE}, event=event)
+
     asset_of_workflow = get_asset_details(database_id, asset_id)
 
     if not asset_of_workflow:
@@ -1388,6 +1398,20 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             "groupId": (query_params.get("groupId") or "").strip(),
             "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
         }
+        # System runs: hidden unless asked for, or unless the listing is scoped to one system
+        # workflow — by the path form (workflowId + the body's workflowDatabaseId) or by the query form.
+        # A post-filter like the equality filters above, so the index cursor stays correct and a page
+        # can come back short (or empty) with a NextToken, exactly as a filtered page does today.
+        # The path form's database arrives in the request body, which a browser cannot send on a GET,
+        # so the query form's workflowDatabaseId completes it as well.
+        scoped_workflow_id = workflow_id or extra_filters["workflowId"]
+        scoped_workflow_database_id = ((workflow_database_id if workflow_id else '')
+                                       or extra_filters["workflowDatabaseId"])
+        include_system = _resolve_include_system(
+            include_system_explicit, casbin_enforcer,
+            scoped_workflow_database_id or '', scoped_workflow_id or '')
+        if not include_system:
+            extra_filters["excludeSystem"] = True
         # The walk excluded on the STORED status; a row this request's reconcile moved into an
         # excluded status is dropped here too.
         if excluded_statuses:
@@ -1397,8 +1421,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
         # Surface the effective start-date filter that was applied (the caller's filterStartDate
         # or the default 90-days-before-now), so the response is self-describing. The upper bound is
-        # echoed only when the caller supplied one — there is no default end date.
-        result = {"Items": items, "filterStartDate": filter_start_date}
+        # echoed only when the caller supplied one — there is no default end date. includeSystem
+        # echoes whether system runs were included.
+        result = {"Items": items, "filterStartDate": filter_start_date,
+                  "includeSystem": include_system}
         if filter_end_date:
             result["filterEndDate"] = filter_end_date
 
@@ -5704,10 +5730,63 @@ def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None, 
     return allowed
 
 
+# Query parameter both execution lists accept to list runs of system workflows (isSystem on the
+# workflow row, stamped onto the execution main row at launch). Hidden by default.
+INCLUDE_SYSTEM_PARAM = "includeSystem"
+INCLUDE_SYSTEM_INVALID_MESSAGE = "includeSystem must be true or false."
+
+
+def _parse_include_system(query_params):
+    """(valid, value) for the includeSystem query parameter.
+
+    value is True / False when the caller sent it (case-insensitive "true" / "false"), and None when
+    absent or blank, which leaves the default to _resolve_include_system. Anything else is invalid, so a
+    typo is a 400 rather than a silently applied default."""
+    raw = (query_params or {}).get(INCLUDE_SYSTEM_PARAM)
+    if raw is None:
+        return True, None
+    text = str(raw).strip().lower()
+    if text == "":
+        return True, None
+    if text in ("true", "false"):
+        return True, text == "true"
+    return False, None
+
+
+def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id):
+    """Whether this listing returns system runs.
+
+    An explicit includeSystem wins. Otherwise system runs are hidden, except when the listing is scoped
+    to ONE workflow (both halves of its key) that is itself a system workflow the caller may GET: its
+    runs are what such a view is for, so they show by default. The workflow GET gate keeps the default
+    from saying anything about a workflow the caller cannot see (its rows would be withheld by the
+    per-row workflow GET anyway), and the definition read is the one the per-row authorization memoizes
+    for the same enforcer. Any failure falls back to hiding system runs, which never hides a user run.
+
+    Presentation only: this decides which rows a page includes, never whether a caller may see a row —
+    every row still passes the same per-row visibility check."""
+    if explicit is not None:
+        return explicit
+    if not workflow_database_id or not workflow_id or casbin_enforcer is None:
+        return False
+    try:
+        workflow_obj = _execution_workflow_casbin_object(
+            casbin_enforcer, workflow_database_id, workflow_id)
+        if workflow_obj.get("isSystem") is not True:
+            return False
+        return _enforce_cached(casbin_enforcer, workflow_obj, "GET") is True
+    except Exception:
+        logger.exception("Could not resolve the system-workflow default for an execution listing")
+        return False
+
+
 def _global_list_matches_filters(main_item, filters):
     """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
-    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, and excludeStatus
-    (a list of statuses a row must not carry; absent or empty excludes nothing)."""
+    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, excludeStatus
+    (a list of statuses a row must not carry; absent or empty excludes nothing), plus excludeSystem
+    (set when system runs are hidden: drops a row whose isSystem is exactly True)."""
+    if filters.get("excludeSystem") and er.execution_row_is_system(main_item):
+        return False
     if filters.get("workflowId") and main_item.get("workflowId", "") != filters["workflowId"]:
         return False
     if filters.get("workflowDatabaseId") and main_item.get("workflowDatabaseId", "") != filters["workflowDatabaseId"]:
@@ -5756,8 +5835,10 @@ def _select_global_list_index(filters):
     """(index descriptor, partition value, filter keys the key condition already answers).
 
     A workflow scope needs BOTH halves of the composite key; a workflow id on its own falls back to the
-    by-date index with the id as a filter, which is the one case the web never sends (it always carries
-    the scope's database). A group id keys the group index. Everything else walks the by-date index."""
+    by-date index with the id as a filter. The web's workflow filters send both halves (the option
+    carries the workflow's own database); a CLI or API caller can still send the id alone, which is
+    not a single-workflow scope. A group id keys the group index. Everything else walks the by-date
+    index."""
     if filters.get("workflowId") and filters.get("workflowDatabaseId"):
         return (GLOBAL_LIST_INDEXES["workflow"],
                 er.workflow_composite_key(filters["workflowDatabaseId"], filters["workflowId"]),
@@ -5798,6 +5879,8 @@ def _global_list_row(main_item, config_row=None):
         "triggerType": main_item.get("triggerType", ""),
         "triggeredByUserId": main_item.get("triggeredByUserId", ""),
         "executionGroupId": main_item.get("executionGroupId", ""),
+        # True for a run launched from a system workflow; a legacy row without the flag reads False.
+        "isSystem": er.execution_row_is_system(main_item),
         "outputLocationType": config_row.get("outputLocationType", ""),
         "outputAssetId": config_row.get("outputAssetId", ""),
         "outputDatabaseId": config_row.get("outputDatabaseId", ""),
@@ -5831,6 +5914,9 @@ def get_global_executions(event, query_params):
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }
+    include_system_valid, include_system_explicit = _parse_include_system(query_params)
+    if not include_system_valid:
+        return validation_error(body={"message": INCLUDE_SYSTEM_INVALID_MESSAGE}, event=event)
     # excludeStatus (validated by the route handler): rows of these statuses drop in the query's
     # FilterExpression, before the page is cut, so a page stays full and the cursor stays exact. Only
     # added to the filters when given, so a request without it builds the same query as before.
@@ -5887,8 +5973,8 @@ def get_global_executions(event, query_params):
         # rows itself (see GLOBAL_LIST_QUERY_LIMIT).
         "Limit": GLOBAL_LIST_QUERY_LIMIT,
     }
-    if filter_expr is not None:
-        query_kwargs["FilterExpression"] = filter_expr
+    # The FilterExpression is attached once the page's enforcer exists (below): whether system runs
+    # are hidden can depend on the scoped workflow, which is read through that enforcer's memo.
     starting_token = query_params.get("startingToken") or query_params.get("NextToken")
     if starting_token:
         decoded = _decode_starting_token(starting_token)
@@ -5911,6 +5997,23 @@ def get_global_executions(event, query_params):
     _authz_decision_cache.clear()
     _arm_authz_entity_budget()
     page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
+    # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow
+    # (_resolve_include_system). Hidden server-side as one more FilterExpression term on the walked
+    # index — `attribute_not_exists(isSystem) OR isSystem <> true`, so a legacy row with no flag and any
+    # row whose flag is not exactly true stay listed — and again by the Python safety net. A row the
+    # FilterExpression drops never reaches the loop below, so it never moves last_row_key; it is
+    # skipped all the same, because the cursor is either the last row the loop returned or the query's
+    # LastEvaluatedKey, and DynamoDB has already read past the dropped rows in both cases. The
+    # continuation semantics and the token format are unchanged.
+    include_system = _resolve_include_system(
+        include_system_explicit, page_enforcer,
+        filters["workflowDatabaseId"], filters["workflowId"])
+    if not include_system:
+        filters["excludeSystem"] = True
+        system_cond = Attr("isSystem").not_exists() | Attr("isSystem").ne(True)
+        filter_expr = system_cond if filter_expr is None else (filter_expr & system_cond)
+    if filter_expr is not None:
+        query_kwargs["FilterExpression"] = filter_expr
     # The key of the last row this page FULLY evaluated. Any stop that leaves unread rows in the current
     # query page resumes from it rather than from that query's LastEvaluatedKey, which points PAST the
     # rows the page never returned — so a withheld row is deferred to the next request rather than
@@ -6020,7 +6123,9 @@ def get_global_executions(event, query_params):
 
     # Echo the applied recency window so the caller can show the active range (matches the per-asset
     # list's filterStartDate echo). filterEndDate is included only when the caller set one.
-    result = {"Items": items, "filterStartDate": filter_start_date}
+    # includeSystem echoes whether this page included system runs, so a caller that left it unset can
+    # show the default the server applied (true for a listing scoped to one system workflow).
+    result = {"Items": items, "filterStartDate": filter_start_date, "includeSystem": include_system}
     if filter_end_date:
         result["filterEndDate"] = filter_end_date
     # A stop that left rows unread in the current query page resumes from the last row FULLY evaluated,

@@ -1125,7 +1125,10 @@ Each filter is optional and all supplied filters are AND-ed.
 | `excludeStatus`      | string | No       | --                 | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                                        |
 | `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
+| `includeSystem`      | string | No       | see below          | `true` to include runs of system workflows, `false` to leave them out. Any other value returns 400.                                                                                         |
 | `startingToken`      | string | No       | --                 | Continuation token from a previous response's `NextToken`. A token that cannot be decoded returns 400 rather than serving the first page again.                                             |
+
+Runs of [system workflows](#system-workflow-runs) are not returned unless `includeSystem=true`. When the list is filtered to one workflow (`workflowId` with `workflowDatabaseId`, or the path form) and that workflow is a system workflow you can read, its runs are returned unless `includeSystem=false`. They are removed after the asset's candidate executions are read, so a page can come back short or empty with a `NextToken`, the same as with the other filters.
 
 ### Response
 
@@ -1152,13 +1155,17 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "assetId": "building-01",
                 "executionError": "",
                 "executionLog": "",
+                "isSystem": false,
                 "outputTypes": ["File"]
             }
         ],
-        "filterStartDate": "2025-12-15T10:30:00Z"
+        "filterStartDate": "2025-12-15T10:30:00Z",
+        "includeSystem": false
     }
 }
 ```
+
+`includeSystem` in the response says whether the page includes system workflow runs, and each row's `isSystem` marks one.
 
 Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced — the
 same field the global list reports, read from the execution's configuration record. It is `[]` for a
@@ -1212,6 +1219,7 @@ GET /workflows/executions
 | `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                                                                  |
 | `groupId`                     | string  | No       | Filter by execution group id.                                                                                                                                                      |
 | `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                                                                    |
+| `includeSystem`               | string  | No       | `true` to include runs of system workflows, `false` to leave them out. Any other value returns 400. See [System workflow runs](#system-workflow-runs).                             |
 
 ### Response
 
@@ -1229,6 +1237,7 @@ GET /workflows/executions
                 "triggerType": "Manual",
                 "triggeredByUserId": "user@example.com",
                 "executionGroupId": "",
+                "isSystem": false,
                 "outputLocationType": "asset",
                 "outputAssetId": "x1a2b3c4-d5e6-7890",
                 "outputDatabaseId": "my-database",
@@ -1236,10 +1245,21 @@ GET /workflows/executions
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z",
+        "includeSystem": false,
         "NextToken": "…"
     }
 }
 ```
+
+### System workflow runs
+
+A run launched from a system workflow (one registered with `isSystem: true`, see [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines)) is recorded with `isSystem: true`. Both execution lists leave these runs out by default, so the lists show the runs users start:
+
+-   `includeSystem=true` returns them, each row marked `isSystem: true`.
+-   When the list is filtered to one workflow (`workflowId` with `workflowDatabaseId`) and that workflow is a system workflow you can read, its runs are returned by default; `includeSystem=false` still leaves them out.
+-   The response's `includeSystem` reports which applied.
+
+A run recorded before this field existed reads `isSystem: false` and is always listed. The setting only chooses which rows a page includes: every listed row still passes the same permission check, and the details, logs and abort routes are unchanged. Hidden rows count toward the page's work like rows other filters remove, and a continuation token resumes after the last row read either way.
 
 Each row reports the run's output target: `outputLocationType` (`asset`, or `none` for a results-only
 execution that writes no files), and `outputAssetId` / `outputDatabaseId` naming the destination. These
