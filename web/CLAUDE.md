@@ -188,6 +188,10 @@ web/
 
       # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
       # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      # A record action on them or on the asset Compliance tab (release, exception grant/revoke,
+      # Evaluate, bind/change/remove, cascade approve/reject) re-reads what the page shows after
+      # its outcome, success OR refusal (`finishAction`), and keeps the refusal in its own alert
+      # (`actionError`), apart from the load error each re-read clears (D162).
       ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
       ComplianceAuditLog.tsx DatabaseCompliance.tsx
 

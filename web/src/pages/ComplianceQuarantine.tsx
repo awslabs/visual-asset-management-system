@@ -71,11 +71,15 @@ const ComplianceQuarantine: React.FC = () => {
     const canGrantException = canCallRoute("POST", QUARANTINE_EXCEPTION_API_ROUTE);
     const [items, setItems] = useState<QuarantinedAsset[]>([]);
     const [loading, setLoading] = useState(true);
+    // Why the last listing load failed.
     const [error, setError] = useState<string | null>(null);
-    // Whether the last listing load failed (an action's failure is in `error` only): the table
-    // then says the list could not be loaded, not that every asset is compliant.
+    // Whether the last listing load failed: the table then says the list could not be loaded,
+    // not that every asset is compliant.
     const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    // Why the API refused the last row action. Kept apart from `error`, which every load clears,
+    // so the refusal stays on the page while the listing is read again after it.
+    const [actionError, setActionError] = useState<string | null>(null);
     const [selectedItems, setSelectedItems] = useState<QuarantinedAsset[]>([]);
     const [exceptionTarget, setExceptionTarget] = useState<QuarantinedAsset | null>(null);
     const [granting, setGranting] = useState(false);
@@ -154,13 +158,32 @@ const ComplianceQuarantine: React.FC = () => {
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
 
+    // Clears the last action's outcome before the next action is sent.
+    const beginAction = () => {
+        setActionMessage(null);
+        setActionError(null);
+    };
+
+    // Reports a row action's outcome, then reads the listing again whether the action succeeded
+    // or was refused (D162). A refusal usually means the row is out of date: another tab or user
+    // released the asset ("Asset is not quarantined"), or its record changed while the request was
+    // made (D159). After the read the rows and their actions follow the records as the API now
+    // holds them; the refusal stays shown and names the asset, whose row may have left the page.
+    const finishAction = async (outcome: { message: string } | { refusal: string }) => {
+        if ("message" in outcome) {
+            setActionMessage(outcome.message);
+        } else {
+            setActionError(outcome.refusal);
+        }
+        await loadData();
+    };
+
     // A release needs a reason, as on the asset's Compliance tab; it is recorded in the audit log.
     const handleRelease = async (reason: string) => {
         if (!releaseTarget) return;
         const item = releaseTarget;
         setReleasing(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message] = await releaseFromQuarantine(
             item.databaseId,
             item.assetId,
@@ -168,12 +191,11 @@ const ComplianceQuarantine: React.FC = () => {
         );
         setReleasing(false);
         setReleaseTarget(null);
-        if (success) {
-            setActionMessage(`${assetLabel(item)} released from quarantine.`);
-            await loadData();
-        } else {
-            setError(message);
-        }
+        await finishAction(
+            success
+                ? { message: `${assetLabel(item)} released from quarantine.` }
+                : { refusal: `${assetLabel(item)} was not released: ${message}` }
+        );
     };
 
     const handleException = async (reason: string) => {
@@ -181,23 +203,26 @@ const ComplianceQuarantine: React.FC = () => {
         const target = exceptionTarget;
         const { databaseId, assetId } = target;
         setGranting(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message] = await grantException(databaseId, assetId, reason);
         setGranting(false);
         setExceptionTarget(null);
-        if (success) {
-            setActionMessage(`Exception granted for ${assetLabel(target)}.`);
-            await loadData();
-        } else {
-            setError(message);
-        }
+        await finishAction(
+            success
+                ? { message: `Exception granted for ${assetLabel(target)}.` }
+                : { refusal: `No exception was granted for ${assetLabel(target)}: ${message}` }
+        );
     };
 
     return (
         // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
         <Box padding={VAMS_PAGE_PADDING}>
             <SpaceBetween size="l">
+                {actionError && (
+                    <Alert type="error" dismissible onDismiss={() => setActionError(null)}>
+                        {actionError}
+                    </Alert>
+                )}
                 {error && (
                     <Alert type="error" dismissible onDismiss={() => setError(null)}>
                         {error}

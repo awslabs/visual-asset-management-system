@@ -112,6 +112,9 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
     const [evaluating, setEvaluating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    // Why the API refused the last action. Kept apart from `error`, which every load clears, so
+    // the refusal stays on the tab while the state and history are read again after it.
+    const [actionError, setActionError] = useState<string | null>(null);
     const [releaseModalVisible, setReleaseModalVisible] = useState(false);
     const [releasing, setReleasing] = useState(false);
     const [exceptionModalVisible, setExceptionModalVisible] = useState(false);
@@ -213,61 +216,75 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
         }
     };
 
+    // Clears the last action's outcome before the next action is sent.
+    const beginAction = () => {
+        setActionMessage(null);
+        setActionError(null);
+    };
+
+    // Reports an action's outcome, then reads the state and history again whether the action
+    // succeeded or was refused (D162). A refusal usually means the record is not as the tab shows
+    // it: another tab or user released the asset ("Asset is not quarantined"), or the record
+    // changed while the request was made (D159). After the read the state, the actions offered and
+    // the header badge follow the record as the API now holds it, and the refusal stays shown.
+    const finishAction = async (outcome: { message: string } | { refusal: string }) => {
+        if ("message" in outcome) {
+            setActionMessage(outcome.message);
+        } else {
+            setActionError(outcome.refusal);
+        }
+        await loadComplianceData();
+    };
+
     const handleEvaluate = async () => {
         setEvaluating(true);
-        setActionMessage(null);
-
+        beginAction();
         const [success, result] = await evaluateAssetCompliance(databaseId, assetId);
-        if (success) {
-            setActionMessage(evaluationStartedMessage(result));
-            await loadComplianceData();
-        } else {
-            setError(typeof result === "string" ? result : "Evaluation failed");
-        }
+        await finishAction(
+            success
+                ? { message: evaluationStartedMessage(result) }
+                : { refusal: typeof result === "string" ? result : "Evaluation failed" }
+        );
         setEvaluating(false);
     };
 
     const handleRelease = async (reason: string) => {
         setReleasing(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message] = await releaseFromQuarantine(databaseId, assetId, reason);
         setReleasing(false);
         setReleaseModalVisible(false);
-        if (success) {
-            setActionMessage(`The ${Synonyms.asset} was released from quarantine.`);
-            await loadComplianceData();
-        } else {
-            setError(message);
-        }
+        await finishAction(
+            success
+                ? { message: `The ${Synonyms.asset} was released from quarantine.` }
+                : { refusal: message }
+        );
     };
 
     const handleException = async (reason: string) => {
         setGranting(true);
+        beginAction();
         const [success, message] = await grantException(databaseId, assetId, reason);
         setGranting(false);
         setExceptionModalVisible(false);
-        if (success) {
-            setActionMessage(`Exception granted for this ${Synonyms.asset}.`);
-            await loadComplianceData();
-        } else {
-            setError(message);
-        }
+        await finishAction(
+            success
+                ? { message: `Exception granted for this ${Synonyms.asset}.` }
+                : { refusal: message }
+        );
     };
 
     const handleRevokeException = async () => {
         setRevoking(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, result] = await revokeException(databaseId, assetId);
         setRevoking(false);
         setRevokeModalVisible(false);
-        if (success && typeof result !== "string") {
-            setActionMessage(result.message);
-            await loadComplianceData();
-        } else {
-            setError(typeof result === "string" ? result : "Failed to revoke exception");
-        }
+        await finishAction(
+            success && typeof result !== "string"
+                ? { message: result.message }
+                : { refusal: typeof result === "string" ? result : "Failed to revoke exception" }
+        );
     };
 
     if (!routesLoading && !canViewCompliance) {
@@ -288,6 +305,11 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
 
     return (
         <SpaceBetween size="l">
+            {actionError && (
+                <Alert type="error" dismissible onDismiss={() => setActionError(null)}>
+                    {actionError}
+                </Alert>
+            )}
             {error && (
                 <Alert type="error" dismissible onDismiss={() => setError(null)}>
                     {error}

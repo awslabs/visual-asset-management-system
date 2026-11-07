@@ -111,11 +111,15 @@ const ComplianceCascades: React.FC = () => {
     const canReject = canCallRoute("POST", CASCADE_REJECT_API_ROUTE);
     const [items, setItems] = useState<CascadeRecord[]>([]);
     const [loading, setLoading] = useState(true);
+    // Why the last listing load failed.
     const [error, setError] = useState<string | null>(null);
-    // Whether the last listing load failed (an action's failure is in `error` only): the table
-    // then says the list could not be loaded, and shows no rows of an earlier load.
+    // Whether the last listing load failed: the table then says the list could not be loaded, and
+    // shows no rows of an earlier load.
     const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    // Why the API refused the last approval or rejection. Kept apart from `error`, which every
+    // load clears, so the refusal stays on the page while the listing is read again after it.
+    const [actionError, setActionError] = useState<string | null>(null);
     const [rejectTarget, setRejectTarget] = useState<CascadeRecord | null>(null);
     const [rejecting, setRejecting] = useState(false);
     const [approveTarget, setApproveTarget] = useState<CascadeRecord | null>(null);
@@ -257,25 +261,47 @@ const ComplianceCascades: React.FC = () => {
         });
     };
 
+    // Clears the last action's outcome before the next action is sent.
+    const beginAction = () => {
+        setActionMessage(null);
+        setActionError(null);
+    };
+
+    // Reports an approval's or rejection's outcome, then reads the listing again whether it
+    // succeeded or was refused (D162). A refusal usually means the row is out of date: another tab
+    // or user approved or rejected the cascade, or its approval timed out. After the read the rows
+    // and their actions follow the cascades as the API now holds them; the refusal stays shown and
+    // names the cascade, whose row may have left the page.
+    const finishAction = async (outcome: { message: string } | { refusal: string }) => {
+        if ("message" in outcome) {
+            setActionMessage(outcome.message);
+        } else {
+            setActionError(outcome.refusal);
+        }
+        await loadData();
+    };
+
     // Approve and Reject each take an optional reason; an empty one sends none (the API records
     // "approved" / "rejected").
     const handleApprove = async (reason: string) => {
         if (!approveTarget) return;
         const cascadeId = approveTarget.cascadeId;
         setApproving(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, result] = await approveCascade(cascadeId, reason || undefined);
         setApproving(false);
         setApproveTarget(null);
         if (success && typeof result !== "string") {
-            setActionMessage(
-                `${result.message}: execution started for cascade ${shortId(cascadeId)}.`
-            );
             trackCascade(cascadeId);
-            await loadData();
+            await finishAction({
+                message: `${result.message}: execution started for cascade ${shortId(cascadeId)}.`,
+            });
         } else {
-            setError(typeof result === "string" ? result : "Failed to approve cascade");
+            await finishAction({
+                refusal: `Cascade ${shortId(cascadeId)} was not approved: ${
+                    typeof result === "string" ? result : "Failed to approve cascade"
+                }`,
+            });
         }
     };
 
@@ -283,18 +309,15 @@ const ComplianceCascades: React.FC = () => {
         if (!rejectTarget) return;
         const cascadeId = rejectTarget.cascadeId;
         setRejecting(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message] = await rejectCascade(cascadeId, reason || undefined);
         setRejecting(false);
-        if (success) {
-            setRejectTarget(null);
-            setActionMessage(message);
-            await loadData();
-        } else {
-            setRejectTarget(null);
-            setError(message);
-        }
+        setRejectTarget(null);
+        await finishAction(
+            success
+                ? { message }
+                : { refusal: `Cascade ${shortId(cascadeId)} was not rejected: ${message}` }
+        );
     };
 
     const renderTracked = (entry: TrackedCascade) => {
@@ -361,6 +384,11 @@ const ComplianceCascades: React.FC = () => {
         // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
         <Box padding={VAMS_PAGE_PADDING}>
             <SpaceBetween size="l">
+                {actionError && (
+                    <Alert type="error" dismissible onDismiss={() => setActionError(null)}>
+                        {actionError}
+                    </Alert>
+                )}
                 {error && (
                     <Alert type="error" dismissible onDismiss={() => setError(null)}>
                         {error}

@@ -198,6 +198,10 @@ const DatabaseCompliancePage: React.FC = () => {
     // than that the database tracks no assets.
     const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    // Why the API refused the last action (bind, change, removal, Evaluate All, revoke). Kept apart
+    // from `error`, which every overview load clears, so the refusal stays on the page while the
+    // binding and the overview are read again after it.
+    const [actionError, setActionError] = useState<string | null>(null);
     // The NextToken of the last Evaluate All while assets remained: the next Evaluate All
     // continues that evaluation with the assets not evaluated yet.
     const [evaluateAllToken, setEvaluateAllToken] = useState<string | undefined>(undefined);
@@ -388,30 +392,49 @@ const DatabaseCompliancePage: React.FC = () => {
         loadSchemas();
     }, [beginSchemasLoad, canBind, databaseId]);
 
+    // Clears the last action's outcome before the next action is sent.
+    const beginAction = () => {
+        setActionMessage(null);
+        setActionError(null);
+    };
+
+    // Reports an action's outcome, then reads the binding and the overview again whether the
+    // action succeeded or was refused (D162). A refusal can follow a change made elsewhere (another
+    // tab or user bound or removed the schema, released an asset or revoked its exception), and
+    // the binding, the counts and the rows then follow the records as the API now holds them; the
+    // refusal stays shown.
+    const finishAction = async (outcome: { message: string | null } | { refusal: string }) => {
+        if ("refusal" in outcome) {
+            setActionError(outcome.refusal);
+        } else {
+            setActionMessage(outcome.message);
+        }
+        await loadData();
+    };
+
     // Binds the selected schema, or replaces the bound one, then re-reads the binding and the
     // overview.
     const handleBind = async () => {
         const schemaName = selectedSchema?.value;
         if (!databaseId || !schemaName) return;
         setBindingInProgress(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message, result] = await bindSchemaToDatabase(databaseId, schemaName);
         if (success) {
             const detail = bindingResultText(result);
-            setActionMessage(
-                result?.changed === false
-                    ? detail
-                    : [
-                          `Compliance schema ${schemaName} bound to this ${Synonyms.database}.`,
-                          detail,
-                      ]
-                          .filter(Boolean)
-                          .join(" ")
-            );
-            await loadData();
+            await finishAction({
+                message:
+                    result?.changed === false
+                        ? detail
+                        : [
+                              `Compliance schema ${schemaName} bound to this ${Synonyms.database}.`,
+                              detail,
+                          ]
+                              .filter(Boolean)
+                              .join(" "),
+            });
         } else {
-            setError(`The compliance schema binding failed: ${message}`);
+            await finishAction({ refusal: `The compliance schema binding failed: ${message}` });
         }
         setBindingInProgress(false);
     };
@@ -421,22 +444,20 @@ const DatabaseCompliancePage: React.FC = () => {
         if (!databaseId || !databaseSchema) return;
         const removed = databaseSchema;
         setBindingInProgress(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
         const [success, message, result] = await unbindSchemaFromDatabase(databaseId);
-        if (success) {
-            setActionMessage(
-                [
-                    `Compliance schema ${removed} removed from this ${Synonyms.database}.`,
-                    bindingResultText(result),
-                ]
-                    .filter(Boolean)
-                    .join(" ")
-            );
-            await loadData();
-        } else {
-            setError(`Removing the compliance schema binding failed: ${message}`);
-        }
+        await finishAction(
+            success
+                ? {
+                      message: [
+                          `Compliance schema ${removed} removed from this ${Synonyms.database}.`,
+                          bindingResultText(result),
+                      ]
+                          .filter(Boolean)
+                          .join(" "),
+                  }
+                : { refusal: `Removing the compliance schema binding failed: ${message}` }
+        );
         setBindingInProgress(false);
     };
 
@@ -452,36 +473,39 @@ const DatabaseCompliancePage: React.FC = () => {
     const handleEvaluateAll = async () => {
         if (!databaseId) return;
         setSweeping(true);
-        setActionMessage(null);
-        setError(null);
+        beginAction();
 
         const [success, result] = await evaluateDatabaseCompliance(databaseId, evaluateAllToken);
         if (success && typeof result !== "string") {
             setEvaluateAllToken(result.NextToken || undefined);
-            setActionMessage(evaluateAllMessage(result));
-            await loadData();
+            await finishAction({ message: evaluateAllMessage(result) });
         } else {
-            setError(typeof result === "string" ? result : "Evaluation failed");
+            await finishAction({
+                refusal: typeof result === "string" ? result : "Evaluation failed",
+            });
         }
         setSweeping(false);
     };
 
     const handleRevokeException = async () => {
         if (!databaseId || !revokeTarget) return;
+        const target = revokeTarget;
+        const label = target.assetName || target.assetId;
         setRevoking(true);
-        setActionMessage(null);
-        setError(null);
-        const [success, result] = await revokeException(databaseId, revokeTarget.assetId);
+        beginAction();
+        const [success, result] = await revokeException(databaseId, target.assetId);
         setRevoking(false);
         setRevokeTarget(null);
-        if (success && typeof result !== "string") {
-            setActionMessage(
-                `Exception revoked for ${revokeTarget.assetName || revokeTarget.assetId}.`
-            );
-            await loadData();
-        } else {
-            setError(typeof result === "string" ? result : "Failed to revoke exception");
-        }
+        // The refusal names the asset: after the re-read its row may show another state.
+        await finishAction(
+            success && typeof result !== "string"
+                ? { message: `Exception revoked for ${label}.` }
+                : {
+                      refusal: `The exception for ${label} was not revoked: ${
+                          typeof result === "string" ? result : "Failed to revoke exception"
+                      }`,
+                  }
+        );
     };
 
     const summary = overview?.summary;
@@ -537,6 +561,11 @@ const DatabaseCompliancePage: React.FC = () => {
                     }
                 />
 
+                {actionError && (
+                    <Alert type="error" dismissible onDismiss={() => setActionError(null)}>
+                        {actionError}
+                    </Alert>
+                )}
                 {error && (
                     <Alert type="error" dismissible onDismiss={() => setError(null)}>
                         {error}

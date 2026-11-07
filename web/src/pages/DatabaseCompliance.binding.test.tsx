@@ -195,7 +195,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(await screen.findByText("No compliance schema bound")).toBeInTheDocument();
     });
 
-    it("shows a refused bind on the page and keeps the binding as it was", async () => {
+    it("shows a refused bind on the page and re-reads the binding as it is", async () => {
         mockAllowed = COMPLIANCE_ADMIN;
         service().bindSchemaToDatabase.mockResolvedValue([false, "Not Authorized"]);
         await mount();
@@ -207,11 +207,35 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(
             await screen.findByText("The compliance schema binding failed: Not Authorized")
         ).toBeInTheDocument();
-        expect(service().fetchDatabaseComplianceOverview).toHaveBeenCalledTimes(1);
+        // A refusal re-reads the binding and the overview, as a success does (D162).
+        await waitFor(() => expect(service().getDatabaseBindings).toHaveBeenCalledTimes(2));
+        expect(service().fetchDatabaseComplianceOverview).toHaveBeenCalledTimes(2);
         expect(screen.getByText("No compliance schema bound")).toBeInTheDocument();
+        expect(
+            screen.getByText("The compliance schema binding failed: Not Authorized")
+        ).toBeInTheDocument();
     });
 
-    it("shows a refused removal on the page", async () => {
+    it("shows a refused bind beside the binding another user made meanwhile (D162)", async () => {
+        mockAllowed = COMPLIANCE_ADMIN;
+        service().bindSchemaToDatabase.mockResolvedValue([false, "The binding changed; try again"]);
+        await mount();
+        await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+
+        choose("std");
+        service().getDatabaseBindings.mockResolvedValue(bindings("strict"));
+        fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+
+        expect(
+            await screen.findByText(
+                "The compliance schema binding failed: The binding changed; try again"
+            )
+        ).toBeInTheDocument();
+        expect(await screen.findByText("Schema: strict")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Change" })).toBeInTheDocument();
+    });
+
+    it("shows a refused removal on the page and re-reads the binding as it is", async () => {
         mockAllowed = COMPLIANCE_ADMIN;
         service().getDatabaseBindings.mockResolvedValue(bindings("std"));
         service().unbindSchemaFromDatabase.mockResolvedValue([false, "Not Authorized"]);
@@ -224,6 +248,8 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(
             await screen.findByText("Removing the compliance schema binding failed: Not Authorized")
         ).toBeInTheDocument();
+        await waitFor(() => expect(service().getDatabaseBindings).toHaveBeenCalledTimes(2));
+        expect(service().fetchDatabaseComplianceOverview).toHaveBeenCalledTimes(2);
         expect(screen.getByText("Schema: std")).toBeInTheDocument();
     });
 
