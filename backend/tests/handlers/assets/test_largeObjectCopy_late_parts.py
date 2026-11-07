@@ -86,6 +86,19 @@ class _LateS3:
         return getattr(self._s3, name)
 
 
+class _HeadDenied:
+    """The abort route's view of the asset bucket: AbortMultipartUpload only, HeadObject denied."""
+
+    def __init__(self, s3):
+        self._s3 = s3
+
+    def head_object(self, **kwargs):
+        raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject")
+
+    def __getattr__(self, name):
+        return getattr(self._s3, name)
+
+
 def _one_thread():
     """One copy thread per batch, so the part order is deterministic."""
     return patch.object(loc, "settings", lambda environ=None: {**SMALL_PARTS, "threadsPerBatch": 1})
@@ -163,25 +176,55 @@ def test_a_cancel_during_a_part_copy_leaves_no_upload(env, machine, bucket):
 
 @BUCKETS
 def test_a_cancel_between_two_parts_copies_no_further_part(env, machine, bucket):
-    """The cancel lands after part 1 returned and before part 2 starts: part 2 is not copied."""
+    """The cancel lands after part 1's copy and its check returned, before part 2 starts: part 2 is
+    never attempted."""
     with _one_thread():
         job, prepared = _start(env, bucket)
         late = _LateS3(env["s3"])
-        copied = []
+        attempted = []
         real_copy = engine._copy_part
+        real_reason = engine._stop_reason
+        part_one_checked = []
 
-        def copy_then_cancel(j, number):
+        def copy_part(j, number):
+            attempted.append(number)
             real_copy(j, number)
-            copied.append(number)
-            if number == 1:
+
+        def stop_reason(job_id):
+            reason = real_reason(job_id)
+            if attempted == [1] and not part_one_checked:
+                # Part 1's check after its copy has just answered "go on"; the cancel lands now.
+                part_one_checked.append(True)
                 _cancel(env, late)
+            return reason
 
         with patch.object(engine, "_client_for_bucket", lambda b: late), \
-                patch.object(engine, "_copy_part", copy_then_cancel):
+                patch.object(engine, "_copy_part", copy_part), \
+                patch.object(engine, "_stop_reason", stop_reason):
             refusals = _copy_all(prepared)
-    # Before: parts 2 and 3 were copied after the cancel.
-    assert copied == [1]
+    # Before: parts 2 and 3 were attempted after the cancel.
+    assert attempted == [1]
     assert refusals == [loc.REASON_CANCELLED, loc.REASON_CANCELLED]
+    assert _uploads(env, bucket) == []
+
+
+@BUCKETS
+def test_a_cancel_that_cannot_read_the_object_still_stops_the_copy(env, machine, bucket):
+    """The abort route holds no read on the asset bucket, so the cancel path leaves the job open for
+    the engine's reconcile (#1123 D9). Its stop marker still stops the CopyBatch tasks at once: no
+    further part is copied and the batch aborts the upload, before any reconcile runs."""
+    with _one_thread():
+        job, prepared = _start(env, bucket)
+        late = _LateS3(env["s3"])
+        late.during_part[2] = lambda: _cancel(env, _HeadDenied(late))
+        with patch.object(engine, "_client_for_bucket", lambda b: late):
+            refusals = _copy_all(prepared)
+        assert loc.is_open_job(_row(env, job))  # left to the engine's reconcile
+        # Before: the copy went on (part 3 copied) and the upload stayed until the reconcile.
+        assert refusals == [loc.REASON_CANCELLED, loc.REASON_CANCELLED]
+        assert _uploads(env, bucket) == []
+        result = _reconcile_cancelled_stop(env, job)
+    assert result["status"] == loc.STATUS_CANCELLED
     assert _uploads(env, bucket) == []
 
 
@@ -202,6 +245,29 @@ def test_a_console_stop_during_a_part_copy_leaves_no_upload(env, machine, bucket
     assert refusals and set(refusals) <= {loc.REASON_CANCELLED, loc.REASON_COPY_FAILED}
     # Before: parts 1-3 stayed in the upload.
     assert _uploads(env, bucket) == []
+
+
+def test_a_console_stop_is_visible_to_the_copy_tasks_from_its_first_abort(env, machine):
+    """The reconcile of a console stop records the stop before its abort, so a CopyBatch task that
+    checks the job while the reconcile is still deciding (its landed check) stops, rather than
+    copying further parts until the job is finalized."""
+    seen = []
+    real_landed = loc.landed_object_version
+
+    def landed_check(client, row):
+        seen.append(engine._stop_reason(row["jobId"]))
+        return real_landed(client, row)
+
+    with _one_thread():
+        job, prepared = _start(env, VERSIONED)
+        _copy_all({**prepared, "batches": prepared["batches"][:1]})
+        env["sfn"].describe_execution.return_value = _described(job, status="ABORTED", error="")
+        with patch.object(loc, "landed_object_version", landed_check):
+            engine.reconcile(EXEC_ARN)
+    # Before: the task saw an open job (None) and went on copying.
+    assert seen == [loc.REASON_CANCELLED]
+    assert _row(env, job)["status"] == loc.STATUS_FAILED
+    assert _uploads(env, VERSIONED) == []
 
 
 @BUCKETS
