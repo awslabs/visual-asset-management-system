@@ -978,10 +978,11 @@ def abort_until_gone(s3_client, bucket, key, upload_id, attempts=ABORT_SWEEP_ATT
 # final: every stopped or failed job with an upload also gets a delayed sweep, an execution of the
 # copy state machine itself (its sweep branch: Wait SWEEP_FIRST_WAIT_SECONDS, sweep, Wait
 # SWEEP_SECOND_WAIT_SECONDS, sweep; infra lambdaBuilder/largeObjectCopyEngine.ts). The second pass
-# runs after the longest a copy task alive at the stop can still run (the engine's 15-minute timeout).
+# runs about 16 minutes after the stop, a minute past the longest a copy task alive at the stop can
+# still run (the engine's 15-minute timeout).
 SWEEP_EXECUTION_PREFIX = "locsweep-"
 SWEEP_FIRST_WAIT_SECONDS = 300
-SWEEP_SECOND_WAIT_SECONDS = 600
+SWEEP_SECOND_WAIT_SECONDS = 660
 # Upload pages read per pass for one key (the prefix is the exact key, so normally one page).
 SWEEP_MAX_LIST_PAGES = 10
 SWEEPABLE_STATUSES = (STATUS_FAILED, STATUS_CANCELLED)
@@ -1005,7 +1006,13 @@ def schedule_delayed_sweep(sfn_client, job_id, machine_arn=None):
     as scheduled). Best-effort: returns False (logged) when it could not be started; the immediate
     aborts already ran and the asset bucket's AbortIncompleteMultipartUpload rule still applies."""
     machine_arn = machine_arn or state_machine_arn()
-    if not machine_arn or not job_id or sfn_client is None:
+    if not job_id:
+        return False
+    if not machine_arn or sfn_client is None:
+        # A deployed caller always has both; without them no later pass runs for this job.
+        missing = (f"no state machine ARN ({ENV_STATE_MACHINE_ARN})" if not machine_arn
+                   else "no Step Functions client")
+        logger.warning(f"Could not schedule the delayed sweep of copy job {job_id}: {missing}")
         return False
     try:
         sfn_client.start_execution(stateMachineArn=machine_arn, name=sweep_execution_name_for(job_id),

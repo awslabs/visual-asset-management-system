@@ -699,10 +699,11 @@ export const CHUNK_START_RETRY = {
 
 /**
  * Waits of the delayed sweep branch (#1123 D5): the first pass about 5 minutes after the stop, the
- * last one 10 minutes later, past the engine's 15-minute task timeout. Same values as backend
- * common/largeObjectCopy.py SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
+ * last one 11 minutes later (about 16 minutes after the stop), a minute past the engine's 15-minute
+ * task timeout. Same values as backend common/largeObjectCopy.py SWEEP_FIRST_WAIT_SECONDS /
+ * SWEEP_SECOND_WAIT_SECONDS.
  */
-export const LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };
+export const LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS = { first: 300, second: 660 };
 
 /** Construct ids, for the tests and the resource list in documentation. */
 export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
@@ -935,8 +936,8 @@ function buildCopyStateMachine(
 
     // The delayed sweep (#1123 D5): an execution whose input carries `sweep` (started by the cancel
     // path and the engine's failure cleanup, backend loc.schedule_delayed_sweep, once per job) waits,
-    // sweeps the job's recorded upload, waits again past the longest a copy task alive at the stop can
-    // run (the engine's 15-minute timeout), and sweeps a last time. An abort's immediate answer is not
+    // sweeps the job's recorded upload, waits again until a minute past the longest a copy task alive
+    // at the stop can run (the engine's 15-minute timeout), and sweeps a last time. An abort's immediate answer is not
     // final: a part copy accepted before the stop can land minutes later. A failed first pass still
     // runs the second. Bounded history: two waits and two engine tasks (see the history budget).
     const sweepFirstWait = new sfn.Wait(scope, "LargeObjectCopySweepFirstWait", {
@@ -1015,7 +1016,9 @@ function buildCopyStateMachine(
         alarmName: `${config.name}-${config.app.baseStackName}-largeObjectCopyExecutionsFailed`,
         alarmDescription:
             "A large object copy did not complete or could not report its outcome. The copy job " +
-            "row, the upload status or the workflow execution names the file.",
+            "row, the upload status or the workflow execution names the file. A failed delayed " +
+            "sweep execution (name starts with locsweep-) counts too: the partial upload of a " +
+            "stopped copy may still be listed.",
         metric: stateMachine.metricFailed({
             period: Duration.minutes(5),
             statistic: cloudwatch.Stats.SUM,
