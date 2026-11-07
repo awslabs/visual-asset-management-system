@@ -237,6 +237,14 @@ def _abort_quietly(bucket, key, upload_id):
         logger.warning(f"Could not abort multipart upload {upload_id}: {e}")
 
 
+def _sweep_upload(bucket, key, upload_id):
+    """Abort until S3 no longer lists the upload (loc.abort_until_gone, bounded). Best-effort."""
+    try:
+        loc.abort_until_gone(_client_for_bucket(bucket), bucket, key, upload_id)
+    except Exception as e:
+        logger.warning(f"Could not abort multipart upload {upload_id}: {e}")
+
+
 # --------------------------------------------------------------------------------------------- #
 # copyBatch
 # --------------------------------------------------------------------------------------------- #
@@ -311,9 +319,48 @@ def _record_batch_refusal(job_id, error_name, reason):
         logger.warning(f"Could not record the refusal of copy job {job_id}: {e}")
 
 
+class _CopyStopped(Exception):
+    """A part copy found its job stopped or finalized (raised inside the batch's thread pool)."""
+
+
+def _stop_reason(job_id):
+    """The refusal for a job whose copy must stop (loc.copy_should_stop), else None."""
+    row = loc.get_job_row(jobs_table, job_id)
+    if not loc.copy_should_stop(row):
+        return None
+    if loc.is_open_job(row):
+        # A stopper recorded its stop (loc.request_stop) and has not finalized the job yet.
+        return loc.REASON_CANCELLED
+    return _finished_reason(row)
+
+
+def _guarded_copy_part(job, number):
+    """Copy one part only while the job is open and no stop is recorded, and read the job again once
+    the copy ended: a part that ended after a stopper's abort is still in the upload (#1123 D5), so
+    the batch aborts again once all of its own copies have ended."""
+    if _stop_reason(job["jobId"]):
+        raise _CopyStopped()
+    _copy_part(job, number)
+    if _stop_reason(job["jobId"]):
+        raise _CopyStopped()
+
+
+def _abort_after_stop(job):
+    """The batch's own abort after its copies ended for a stopped job (#1123 D5). Never for a job
+    finalized SUCCEEDED: its upload was completed and its object landed."""
+    row = loc.get_job_row(jobs_table, job["jobId"])
+    if row.get("status") == loc.STATUS_SUCCEEDED:
+        return
+    _sweep_upload(job["dest"]["bucket"], job["dest"]["key"], job["uploadIdS3"])
+
+
 def _copy_batch(job, batch):
     _register_regions(job)
     start, end = int(batch["startPart"]), int(batch["endPart"])
+    reason = _stop_reason(job["jobId"])
+    if reason:
+        # Stopped or finalized before this batch started: nothing is copied, nothing to abort here.
+        raise loc.CopyRefused(reason)
     have = _listed_parts(job["dest"]["bucket"], job["dest"]["key"], job["uploadIdS3"], start, end)
     missing = []
     for number in range(start, end + 1):
@@ -322,8 +369,21 @@ def _copy_batch(job, batch):
             missing.append(number)
     if missing:
         threads = STREAMED_COPY_THREADS if _streams_parts(job) else int(job.get("threads") or 8)
+        # The pool's exit waits for every copy it started, so the abort below follows them all.
         with ThreadPoolExecutor(max_workers=max(1, min(threads, len(missing)))) as pool:
-            list(pool.map(lambda n: _copy_part(job, n), missing))
+            futures = [pool.submit(_guarded_copy_part, job, n) for n in missing]
+        outcomes = [f.exception() for f in futures]
+        stopped = any(isinstance(e, _CopyStopped) for e in outcomes)
+        refused = next((e for e in outcomes if isinstance(e, loc.CopyRefused)
+                        and str(e) == loc.REASON_CANCELLED), None)
+        if stopped or refused:
+            # Stopped while copying (or the upload was aborted under a copy): parts that ended after
+            # the stopper's abort are removed here, after this batch's last copy.
+            _abort_after_stop(job)
+            raise loc.CopyRefused(_stop_reason(job["jobId"]) or loc.REASON_CANCELLED)
+        error = next((e for e in outcomes if e is not None), None)
+        if error is not None:
+            raise error
         logger.info(f"Copy job {job['jobId']}: copied parts {missing[0]}..{missing[-1]} "
                     f"({len(missing)} of batch {start}-{end})")
     _record_batch_copied(job["jobId"], start, end - start + 1)
@@ -449,8 +509,9 @@ def _finish(job, row):
     reason = row.get("error") or loc.REASON_COPY_FAILED
     upload_id = row.get("uploadIdS3") or job.get("uploadIdS3", "")
     if upload_id:
-        # Failed copies discard their partial upload at once.
-        _abort_quietly(job["dest"]["bucket"], job["dest"]["key"], upload_id)
+        # Failed copies discard their partial upload at once, aborting again while a part copy that
+        # was in flight still lands one (#1123 D5).
+        _sweep_upload(job["dest"]["bucket"], job["dest"]["key"], upload_id)
     if job.get("kind") == loc.KIND_UPLOAD:
         # An upload's staged object is not kept (the queue consumer's cleanup behaves the same way);
         # a workflow output's stays under the run's pipelines/ folder for inspection or a re-run.
@@ -678,15 +739,24 @@ def reconcile(execution_arn):
         logger.warning("Reconcile skipped: the copy execution carries no job")
         return {"reconciled": False}
     row = loc.get_job_row(jobs_table, job["jobId"])
-    if not row or row.get("status") == loc.STATUS_CANCELLED:
+    if not row:
         return {"reconciled": False}
     if row.get("executionArn") and row["executionArn"] != execution_arn:
+        return {"reconciled": False}
+    if row.get("status") == loc.STATUS_CANCELLED:
+        # The cancel path decided it and aborted once, while part copies of the stopped execution
+        # could still be in flight: abort again until no part is left (#1123 D5). Nothing else.
+        _register_regions(job)
+        _sweep_cancelled_upload(job, row)
         return {"reconciled": False}
 
     _register_regions(job)
     if cancelled_stop:
         return _reconcile_cancelled_stop(job, row)
     if loc.is_open_job(row):
+        # A console or API stop: its CopyBatch tasks may still run; recorded before the abort below
+        # so they copy no further part and abort again after their last copy (#1123 D5).
+        loc.request_stop(jobs_table, job["jobId"])
         landed, version_id = _landed_after_abort(job, row)
         values = {"reconciledStatus": described.get("status", "")}
         if landed:
@@ -720,9 +790,12 @@ def _reconcile_cancelled_stop(job, row):
       key, finalize it SUCCEEDED and finish it, otherwise write the cancel path's CANCELLED.
     - FAILED or CANCELLED: nothing (the cancel path's CANCELLED rows are left alone, as before)."""
     if loc.is_open_job(row):
+        # The cancel path recorded it before its stop; recorded again for a row it had not reached.
+        loc.request_stop(jobs_table, job["jobId"])
         landed, version_id = _landed_after_abort(job, row)
         if not landed:
             loc.mark_cancelled(jobs_table, job["jobId"])
+            _sweep_cancelled_upload(job, loc.get_job_row(jobs_table, job["jobId"]))
             return {"reconciled": True, "status": loc.STATUS_CANCELLED}
         if loc.finalize_job(jobs_table, job["jobId"], loc.STATUS_SUCCEEDED,
                             {"destVersionId": version_id, "reconciledStatus": "ABORTED"}):
@@ -734,6 +807,16 @@ def _reconcile_cancelled_stop(job, row):
     _finish(job, row)
     result = notify(job, loc.STATUS_SUCCEEDED)
     return {"reconciled": True, "status": result.get("status")}
+
+
+def _sweep_cancelled_upload(job, row):
+    """Abort a CANCELLED job's upload until S3 no longer lists it (#1123 D5). Only for CANCELLED: a
+    job superseded SUCCEEDED (its Complete landed the file after the cancel) keeps its object, and
+    abort_until_gone removes no object in any case."""
+    upload_id = (row or {}).get("uploadIdS3", "")
+    if not upload_id or (row or {}).get("status") != loc.STATUS_CANCELLED:
+        return
+    _sweep_upload(job["dest"]["bucket"], job["dest"]["key"], upload_id)
 
 
 def _landed_after_abort(job, row):

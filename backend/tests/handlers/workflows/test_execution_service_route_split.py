@@ -115,6 +115,8 @@ EXECUTION_SERVICE_READS = {
     # The abort route lists the run's copy jobs (LargeObjectCopyCoordinationPolicy; the index is
     # queried by common.largeObjectCopy, not spelled in this module).
     "copyJobs", "copyJobs/index/WorkflowExecutionIdIndex",
+    # The abort's Region lookup for a copy job row without destRegion (common.s3, #1123 D6).
+    "buckets/index/bucketNameGSI",
 }
 READ_ACTIONS = {"GetItem", "BatchGetItem", "Query"}
 
