@@ -17,7 +17,7 @@ logger = log.get_logger()
 PDAL_LAS_WRITER_OPTIONS = ['--writers.las.minor_version=2', '--writers.las.dataformat_id=3']
 
 # PDAL's message is carried in the task failure `error` (256 characters, after the
-# "Pipeline Failure: " prefixes the container and pipelineEnd add) behind a ~45-character headline.
+# "Pipeline Failure: " prefix) behind a ~45-character headline.
 PDAL_MESSAGE_MAX_CHARS = 160
 
 #Local Testing Commands - Powershell / unix:

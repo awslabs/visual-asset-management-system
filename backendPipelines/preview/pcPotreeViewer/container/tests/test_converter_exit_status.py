@@ -239,13 +239,13 @@ class TestPdalStage:
         assert not os.path.exists(laz)
 
     def test_long_pdal_text_is_bounded(self, tmp_path):
-        """The message heads the Step Functions task failure `error` (256 characters, after two
-        "Pipeline Failure: " prefixes), so PDAL's text is cut to fit."""
+        """The message heads the Step Functions task failure `error` (256 characters, after its
+        "Pipeline Failure: " prefix), so PDAL's text is cut to fit."""
         harness = StageHarness(self._module(), tmp_path)
         result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(1, output="PDAL: " + "x" * 2000))
 
         assert result.errorMessage.startswith("E57 file could not be read by the converter: PDAL: x")
-        assert len("Pipeline Failure: Pipeline Failure: " + result.errorMessage) <= 256
+        assert len("Pipeline Failure: " + result.errorMessage) <= 256
 
     def test_command_keeps_the_las_1_2_format_3_output_shape(self, tmp_path):
         """PDAL 2.10 writes LAS 1.4 / point format 7 by default; the stage pins the LAS 1.2 / format 3

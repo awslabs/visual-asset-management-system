@@ -1,13 +1,14 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""``pipelineEnd`` reports a failed run to the calling VAMS workflow with SendTaskFailure, adding its
-own "Pipeline Failure: " prefix to the error the container already prefixed.
+"""``pipelineEnd`` reports a failed run to the calling VAMS workflow with SendTaskFailure. The container
+has already prefixed its error with "Pipeline Failure: ", so pipelineEnd adds the prefix only to an
+error that lacks it (#1217).
 
 SendTaskFailure rejects an ``error`` over 256 characters, and ``pipelineEnd`` swallows that exception,
 so an over-long error left the workflow's task waiting out its full timeout. #1203 adds PDAL's text to
-the container's message, so the report is bounded here, and the container's own cause (its full
-message) is passed on in place of the generic one. A cause from any other caught error is not passed
+the container's message, so the report is bounded here, and the container's own cause (the log pointer,
+or its full message when the error was cut) is passed on in place of the generic one. A cause from any other caught error is not passed
 on: a Lambda or Batch fault's cause can carry stack traces and resource names."""
 
 import os
@@ -50,21 +51,30 @@ def _run(error):
 
 @pytest.mark.unit
 class TestPipelineEndFailureReport:
-    def test_container_cause_is_passed_on(self):
+    def test_container_failure_keeps_one_prefix(self):
+        """#1217: the container's error already starts "Pipeline Failure: "; the workflow is told it
+        once. On development the error reads "Pipeline Failure: Pipeline Failure: ..."."""
         sent = _run({
             "Error": "Pipeline Failure: E57 file could not be read by the converter: PDAL: E57 exception",
-            "Cause": "E57 file could not be read by the converter: PDAL: E57 exception See AWS cloudwatch logs",
+            "Cause": "See AWS cloudwatch logs for full error log and cause.",
         })
         assert sent["taskToken"] == "tok-1"
-        assert sent["error"] == ("Pipeline Failure: Pipeline Failure: E57 file could not be read by the "
-                                 "converter: PDAL: E57 exception")
-        assert sent["cause"].startswith("E57 file could not be read by the converter: PDAL: E57 exception")
+        assert sent["error"] == ("Pipeline Failure: E57 file could not be read by the converter: "
+                                 "PDAL: E57 exception")
+        shown = f"{sent['error']}: {sent['cause']}"
+        assert shown.count("Pipeline Failure:") == 1
+        assert shown.count("E57 file could not be read by the converter") == 1
+
+    def test_container_cause_is_passed_on(self):
+        """A container cause (here, the full message of an error cut to fit) reaches the workflow."""
+        sent = _run({"Error": "Pipeline Failure: " + "x" * 235 + "...", "Cause": "x" * 300 + " See logs"})
+        assert sent["cause"] == "x" * 300 + " See logs"
 
     def test_error_at_the_container_limit_still_fits(self):
-        """The container's error can be a full 256 characters; with the second prefix it must still
-        fit. Unfixed, 274 characters are sent and the report is rejected."""
+        """The container's error can be a full 256 characters and must still fit."""
         sent = _run({"Error": "Pipeline Failure: " + "x" * 238, "Cause": "c"})
         assert len(sent["error"]) <= 256
+        assert sent["error"].count("Pipeline Failure:") == 1
 
     def test_other_errors_keep_the_generic_cause(self):
         sent = _run({"Error": "States.TaskFailed", "Cause": "{\"errorMessage\": \"Traceback ...\"}"})
