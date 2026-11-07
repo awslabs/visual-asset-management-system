@@ -36,13 +36,27 @@ def send_task_success(output: PipelineExecutionParams):
         raise
 
 
+# SendTaskFailure caps `error` at 256 characters and `cause` at 32,768; a longer value is rejected
+# with a ValidationException, the failure is never reported and the step waits out its timeout.
+TASK_FAILURE_ERROR_MAX_CHARS = 256
+TASK_FAILURE_CAUSE_MAX_CHARS = 32768
+TASK_FAILURE_CAUSE_SUFFIX = 'See AWS cloudwatch logs for full error log and cause.'
+
+
+def _bounded(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
 def send_task_failure(errorMessage: str = ''):
     logger.error("Sending Task Failure")
+    errorMessage = errorMessage or ''
+    # The full message also goes in `cause`, so the part cut from `error` is still recorded.
+    cause = f"{errorMessage} {TASK_FAILURE_CAUSE_SUFFIX}" if errorMessage else TASK_FAILURE_CAUSE_SUFFIX
     try:
         return client.send_task_failure(
             taskToken=task_token,
-            error='Pipeline Failure: '+errorMessage,
-            cause='See AWS cloudwatch logs for full error log and cause.'
+            error=_bounded('Pipeline Failure: ' + errorMessage, TASK_FAILURE_ERROR_MAX_CHARS),
+            cause=_bounded(cause, TASK_FAILURE_CAUSE_MAX_CHARS)
         )
     except ClientError as e:
         logger.exception(e)
