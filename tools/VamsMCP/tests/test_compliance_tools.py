@@ -1100,3 +1100,36 @@ def test_the_compliance_tools_build_no_path_of_their_own():
                  and any(isinstance(part, ast.Constant) and "/compliance" in str(part.value)
                          for part in node.values)]
     assert formatted == []
+
+
+def test_the_binding_tools_say_a_database_change_is_applied_in_the_background():
+    """D161: a database bind or unbind answers at once (202) and the change is applied to the asset
+    records in the background; the tools tell the model so, where its status and counts are read,
+    that another change is refused meanwhile, and that a stalled one resumes when repeated."""
+    for name in ("bind_compliance_schema", "unbind_compliance_schema"):
+        docstring = _docstring_of(name)
+        assert "IN THE BACKGROUND" in docstring, name
+        assert "applyStatus" in docstring and "assetCount" in docstring, name
+        assert "get_compliance_bindings()" in docstring, name
+        assert "stalled" in docstring, name
+    bind = _docstring_of("bind_compliance_schema")
+    assert "still being applied; try again when it finishes" in bind
+    assert "before saying it is done" in bind
+    read = _docstring_of("get_compliance_bindings")
+    for word in ("applyStatus", "applying", "stalled", "applied", "failed", "assetsProcessed",
+                 "finishedAt", "never as done"):
+        assert word in read, word
+
+
+def test_the_binding_tools_return_the_apply_as_the_api_answers_it(gated):
+    srv, client = gated
+    accepted = {"message": "Schema 'cad-quality' bound to database 'db1'; the binding is being "
+                           "applied to 2500 assets",
+                "applyStatus": "applying", "applyId": "apply-1", "assetCount": 2500,
+                "apply": {"applyId": "apply-1", "status": "applying", "assetsProcessed": 0}}
+    client.api.bind_compliance_schema.return_value = accepted
+    assert srv.bind_compliance_schema("db1", "cad-quality") == accepted
+    read = {"databaseId": "db1", "databaseSchema": "cad-quality", "applyStatus": "applied",
+            "apply": {"applyId": "apply-1", "status": "applied", "assetsPendingEvaluation": 2497}}
+    client.api.get_compliance_bindings.return_value = read
+    assert srv.get_compliance_bindings("db1") == read

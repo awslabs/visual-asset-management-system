@@ -21,12 +21,20 @@ re-evaluates the dependents of a changed asset, optionally after a human approva
 
 import json
 import sys
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 
 from ..constants import (
     COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    COMPLIANCE_BINDING_APPLY_APPLIED,
+    COMPLIANCE_BINDING_APPLY_APPLYING,
+    COMPLIANCE_BINDING_APPLY_FAILED,
+    COMPLIANCE_BINDING_APPLY_POLL_DELAYS,
+    COMPLIANCE_BINDING_APPLY_STALLED,
+    DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT,
+    MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT,
     DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
     DEFAULT_COMPLIANCE_LIST_PAGE_SIZE,
     MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
@@ -233,6 +241,118 @@ def pipeline_rule_names(stored: Any) -> List[str]:
             if isinstance(entry, dict) and isinstance(entry.get('ruleName'), str)]
 
 
+_APPLY_OPERATION_TEXT = {
+    'bind': 'bind',
+    'change': 'schema change',
+    'unbind': 'removal',
+    'evaluatePending': 'automatic evaluation turned on',
+}
+
+
+def format_binding_apply(apply: Dict[str, Any]) -> List[str]:
+    """The lines of a database binding change applied in the background (the `apply` of a bind or
+    unbind answer, or of the bindings read): what it is, its status, its progress and its counts."""
+    operation = _APPLY_OPERATION_TEXT.get(apply.get('operation'), apply.get('operation') or 'change')
+    status = apply.get('status') or 'unknown'
+    total = apply.get('assetCount', 0)
+    lines = [f"Binding Change: {operation}, {status} "
+             f"({apply.get('assetsProcessed', 0)} of {total} assets)"]
+    if apply.get('operation') == 'unbind':
+        lines.append(f"  Compliance Records Removed: {apply.get('removedComplianceRecords', 0)}")
+    elif apply.get('operation') != 'evaluatePending':
+        lines.append(f"  Assets Pending Evaluation: {apply.get('assetsPendingEvaluation', 0)}")
+    if apply.get('operation') != 'evaluatePending':
+        lines.append(f"  Assets Kept Quarantined: {apply.get('assetsKeptQuarantined', 0)}")
+    lines.append(f"  Evaluations Queued: {apply.get('evaluationsQueued', 0)}")
+    if apply.get('startedAt'):
+        lines.append(f"  Started: {apply['startedAt']}")
+    if apply.get('finishedAt'):
+        lines.append(f"  Finished: {apply['finishedAt']}")
+    elif apply.get('lastProgressAt'):
+        lines.append(f"  Last Progress: {apply['lastProgressAt']}")
+    if apply.get('reason'):
+        lines.append(f"  Reason: {apply['reason']}")
+    return lines
+
+
+def format_binding_change(result: Dict[str, Any]) -> str:
+    """A bind or unbind answer whose change is applied in the background (HTTP 202)."""
+    lines = [result.get('message') or 'The binding change was accepted.']
+    if result.get('resumed'):
+        lines.append("Resumed from where it stopped.")
+    lines.extend(format_binding_apply(result.get('apply') or {}))
+    if result.get('waitTimedOut'):
+        lines.append("Stopped waiting; the change is still being applied.")
+    if (result.get('apply') or {}).get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
+        lines.append(f"Follow it with: vamscli compliance bindings -d {result.get('databaseId')}"
+                     " (or pass --wait)")
+    return '\n'.join(lines)
+
+
+def _wait_for_binding_apply(api_client: APIClient, database_id: str, apply_id: str, timeout: int,
+                            json_output: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Read the database's binding until the change `apply_id` is no longer applying, backing off
+    over COMPLIANCE_BINDING_APPLY_POLL_DELAYS, for at most `timeout` seconds. Returns `(apply as
+    last read, timed out)`. A read that names another change (a later one replaced it) ends the
+    wait with that read."""
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        read = api_client.get_compliance_bindings(database_id, max_items=1)
+        apply = read.get('apply') if isinstance(read, dict) else None
+        if not apply or apply.get('applyId') != apply_id:
+            return apply, False
+        if apply.get('status') != COMPLIANCE_BINDING_APPLY_APPLYING:
+            return apply, False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return apply, True
+        output_status(f"  {apply.get('assetsProcessed', 0)} of {apply.get('assetCount', 0)} "
+                      f"assets done; waiting...", json_output)
+        delay = COMPLIANCE_BINDING_APPLY_POLL_DELAYS[
+            min(attempt, len(COMPLIANCE_BINDING_APPLY_POLL_DELAYS) - 1)]
+        attempt += 1
+        time.sleep(min(delay, remaining))
+
+
+def _report_binding_change(ctx: click.Context, api_client: APIClient, database_id: str,
+                           result: Dict[str, Any], wait: bool, wait_timeout: int,
+                           json_output: bool, success_message: str) -> Dict[str, Any]:
+    """Print a database bind or unbind answer. A change applied in the background prints its
+    apply; with `wait`, the command follows it to its end and exits non-zero unless it was applied
+    (failed, stalled, or still applying when the wait timed out)."""
+    apply = result.get('apply') if isinstance(result, dict) else None
+    if not apply:
+        output_result(result, json_output, success_message=success_message)
+        return result
+    timed_out = False
+    if wait and apply.get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
+        output_status("Waiting for the binding change to be applied...", json_output)
+        last, timed_out = _wait_for_binding_apply(api_client, database_id, apply.get('applyId'),
+                                                  wait_timeout, json_output)
+        if last and last.get('applyId') == apply.get('applyId'):
+            apply = last
+            result = dict(result, apply=last, applyStatus=last.get('status'))
+        if timed_out:
+            result = dict(result, waitTimedOut=True)
+    status = apply.get('status')
+    if not wait:
+        message = "✓ The binding change was accepted and is being applied."
+    elif status == COMPLIANCE_BINDING_APPLY_APPLIED:
+        message = "✓ The binding change was applied."
+    elif status == COMPLIANCE_BINDING_APPLY_FAILED:
+        message = "✗ The binding change failed."
+    elif status == COMPLIANCE_BINDING_APPLY_STALLED:
+        message = "✗ The binding change stopped; run the same command again to resume it."
+    else:
+        message = (f"✗ Stopped waiting after {wait_timeout} s; the binding change is still being "
+                   "applied.")
+    output_result(result, json_output, success_message=message, cli_formatter=format_binding_change)
+    if wait and status != COMPLIANCE_BINDING_APPLY_APPLIED:
+        ctx.exit(1)
+    return result
+
+
 def format_bindings(result: Dict[str, Any]) -> str:
     overrides = result.get('assetOverrides') or []
     lines = [
@@ -241,6 +361,8 @@ def format_bindings(result: Dict[str, Any]) -> str:
         f"Auto Evaluate: {result.get('complianceAutoEval', False)}",
         f"Asset Overrides: {result.get('assetOverrideCount', 0)} ({len(overrides)} on this page)",
     ]
+    if result.get('apply'):
+        lines.extend(format_binding_apply(result['apply']))
     if overrides:
         lines.append("-" * 80)
         for override in overrides:
@@ -925,11 +1047,17 @@ def delete_schema(ctx: click.Context, schema_name: str, confirm: bool, json_outp
 @click.option('--auto-eval/--no-auto-eval', 'auto_eval', default=None,
               help='Re-evaluate the database\'s assets automatically, or not (database binding '
                    'only). Omitted: a new binding turns it on, an existing binding keeps its setting')
+@click.option('--wait', is_flag=True,
+              help='Database binding: wait until the change is applied to every asset record '
+                   '(exit code 1 when it failed, stopped, or the wait timed out)')
+@click.option('--wait-timeout', type=click.IntRange(1, MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT),
+              default=DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT, show_default=True,
+              help='Seconds --wait waits at most')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optional[str],
-         auto_eval: Optional[bool], json_output: bool):
+         auto_eval: Optional[bool], wait: bool, wait_timeout: int, json_output: bool):
     """Bind a compliance schema to a database, or to one asset as an override.
 
     A database binding marks every asset in the database (except those with their own override)
@@ -937,12 +1065,20 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
     Only a GLOBAL schema or one scoped to the database can be bound. A legacy schema (schemaFormat
     legacy in 'schema list') is refused with 'Schema body must be a vams-rules-v1 document'.
 
+    A database binding is applied to the asset records in the background: the command returns
+    once the binding is saved, with the number of assets the change goes through, and the
+    change's status (applying, stalled, applied, failed) and counts are read with 'compliance
+    bindings'. --wait follows it to its end. While it is applied, another binding change of the
+    database is refused; when it stopped (stalled), running the same command again resumes it.
+
     A quarantined asset stays quarantined until it is re-evaluated (assetsKeptQuarantined); with
     automatic evaluation on, the binding queues the evaluations (evaluationsQueued). Binding the
     schema already bound with the same setting changes nothing (changed: False).
 
     Examples:
         vamscli compliance bind -n cad-quality -d my-database
+        vamscli compliance bind -n cad-quality -d my-database --wait
+        vamscli compliance bind -n cad-quality -d my-database --wait --wait-timeout 1800
         vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
         vamscli compliance bind -n cad-quality-v2 -d my-database   # keeps the auto-eval setting
         vamscli compliance bind -n strict-cad -d my-database -a my-asset
@@ -954,6 +1090,9 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
             "--auto-eval/--no-auto-eval applies to a database binding; the asset route does not "
             "read it"
         )
+    if asset_id and wait:
+        raise click.ClickException(
+            "--wait applies to a database binding; an asset override is written in the request")
     target = f"asset '{asset_id}'" if asset_id else f"database '{database_id}'"
     output_status(f"Binding schema '{schema_name}' to {target}...", json_output)
     try:
@@ -961,10 +1100,9 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
             database_id, schema_name, asset_id=asset_id,
             auto_eval=None if asset_id else auto_eval)
         unchanged = isinstance(result, dict) and result.get('changed') is False
-        output_result(result, json_output,
-                      success_message="✓ Nothing changed." if unchanged
-                      else "✓ Compliance schema bound.")
-        return result
+        return _report_binding_change(
+            ctx, api_client, database_id, result, wait, wait_timeout, json_output,
+            "✓ Nothing changed." if unchanged else "✓ Compliance schema bound.")
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
 
@@ -974,10 +1112,17 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
               help='[REQUIRED] Database to unbind, or the database of --asset-id')
 @click.option('-a', '--asset-id', default=None,
               help='Remove this asset\'s override instead, falling back to the database binding')
+@click.option('--wait', is_flag=True,
+              help='Database binding: wait until the removal is applied to every asset record '
+                   '(exit code 1 when it failed, stopped, or the wait timed out)')
+@click.option('--wait-timeout', type=click.IntRange(1, MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT),
+              default=DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT, show_default=True,
+              help='Seconds --wait waits at most')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def unbind(ctx: click.Context, database_id: str, asset_id: Optional[str], json_output: bool):
+def unbind(ctx: click.Context, database_id: str, asset_id: Optional[str], wait: bool,
+           wait_timeout: int, json_output: bool):
     """Remove a database's schema binding, or one asset's override.
 
     Unbinding a database removes the compliance records of every asset that inherited the binding,
@@ -985,18 +1130,26 @@ def unbind(ctx: click.Context, database_id: str, asset_id: Optional[str], json_o
     asset-level overrides are kept. Removing an asset's override reverts it to the database binding
     and marks it pending evaluation (a quarantined one stays quarantined until re-evaluated).
 
+    A database removal is applied to the asset records in the background, as a bind is: the
+    command returns once the binding is removed from the database, and --wait follows the change to
+    its end. Running the same command again resumes a removal that stopped (stalled).
+
     Examples:
         vamscli compliance unbind -d my-database
+        vamscli compliance unbind -d my-database --wait
         vamscli compliance unbind -d my-database -a my-asset
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
+    if asset_id and wait:
+        raise click.ClickException(
+            "--wait applies to a database binding; an asset override is removed in the request")
     target = f"asset '{asset_id}'" if asset_id else f"database '{database_id}'"
     output_status(f"Removing the schema binding from {target}...", json_output)
     try:
         result = api_client.unbind_compliance_schema(database_id, asset_id=asset_id)
-        output_result(result, json_output, success_message="✓ Compliance schema binding removed.")
-        return result
+        return _report_binding_change(ctx, api_client, database_id, result, wait, wait_timeout,
+                                      json_output, "✓ Compliance schema binding removed.")
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
 
@@ -1015,7 +1168,9 @@ def bindings(ctx: click.Context, database_id: str, max_items: Optional[int],
     """Show a database's schema binding and its asset-level overrides.
 
     assetOverrideCount is the total number of overrides; assetOverrides is one page of them, and
-    the response carries a NextToken when more exist — pass it back as --starting-token.
+    the response carries a NextToken when more exist — pass it back as --starting-token. apply is
+    the database's last binding change applied in the background: its status (applying, stalled,
+    applied, failed), its progress and its counts.
 
     Examples:
         vamscli compliance bindings -d my-database

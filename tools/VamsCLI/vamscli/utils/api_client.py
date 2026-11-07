@@ -7400,7 +7400,9 @@ class APIClient(CustomAPIClientMixin):
         Returns:
             API response data: {databaseId, databaseSchema, complianceAutoEval,
             assetOverrides: [{assetId, schemaName, complianceState}] (one page),
-            assetOverrideCount (the total across every page), "NextToken"?: str}
+            assetOverrideCount (the total across every page), "NextToken"?: str,
+            applyStatus, apply: the last binding change applied in the background (status,
+            operation, counts, startedAt, lastProgressAt, finishedAt) or None}
 
         Raises:
             DatabaseNotFoundError: When the database does not exist
@@ -7427,8 +7429,10 @@ class APIClient(CustomAPIClientMixin):
                 (database binding only; the asset route does not read it)
 
         Returns:
-            API response data — database: {message, schemaName, databaseId, assetsPendingEvaluation};
-            asset: {message, databaseId, assetId, schemaName, schemaSource}
+            API response data — database (HTTP 202, applied in the background): {message,
+            schemaName, databaseId, complianceAutoEval, changed, applyStatus, applyId, assetCount,
+            apply}; the schema already bound: {message, changed: False, ...counts 0}; asset:
+            {message, databaseId, assetId, schemaName, schemaSource}
 
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
@@ -7454,9 +7458,10 @@ class APIClient(CustomAPIClientMixin):
         (DELETE /compliance/bind/{databaseId}/{assetId}).
 
         Returns:
-            API response data — database: {message, databaseId, previousSchema,
-            removedComplianceRecords}; asset: {message, databaseId, assetId, fallbackSchema,
-            schemaSource}. Both routes answer 200 when there was nothing to remove.
+            API response data — database (HTTP 202, applied in the background): {message,
+            databaseId, previousSchema, changed, applyStatus, applyId, assetCount, apply}; asset:
+            {message, databaseId, assetId, fallbackSchema, schemaSource}. Both routes answer 200
+            when there was nothing to remove.
 
         Raises:
             DatabaseNotFoundError: When the database does not exist

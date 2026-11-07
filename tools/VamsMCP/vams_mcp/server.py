@@ -1822,6 +1822,14 @@ def get_compliance_bindings(
     applies its default when omitted and caps larger values), and a `NextToken` in the response
     means more overrides exist — pass it back as `starting_token` to read the next page. Judge
     completeness by `assetOverrideCount` against the rows seen, not by the length of one page.
+
+    `apply` is the database's last binding change applied in the background (null when it had
+    none), and `applyStatus` its status: `applying` while it runs (`assetsProcessed` of
+    `assetCount` so far), `stalled` when it made no progress for a while (`reason` says so;
+    repeating the same bind or unbind resumes it), `applied` with its counts
+    (`assetsPendingEvaluation`, `assetsKeptQuarantined`, `removedComplianceRecords`,
+    `evaluationsQueued`) and `finishedAt`, or `failed` with its `reason`. Report a running change
+    as still being applied, never as done.
     """
     return CLIENT.api.get_compliance_bindings(
         database_id, max_items=max_items, starting_token=starting_token
@@ -2896,8 +2904,18 @@ if CONFIG.enable_writes:
         database is refused, and so is a `legacy` schema (see `schemaFormat` in
         list_compliance_schemas()) — with `Schema body must be a vams-rules-v1 document`, because
         it could never be evaluated. A database binding marks every asset in the database that has
-        no override pending_evaluation and returns `assetsPendingEvaluation`; an asset binding marks
-        that one asset. `auto_eval` (database binding only — the asset route does not read it, so
+        no override pending_evaluation; an asset binding marks that one asset.
+
+        A DATABASE binding (or a schema change) is applied to the asset records IN THE BACKGROUND:
+        the call returns once the binding is saved (HTTP 202) with `applyStatus` `applying`,
+        `applyId`, `assetCount` (the assets it goes through) and `apply`. The counts below are not
+        in that answer: read them with get_compliance_bindings(), whose `apply` reports the status
+        (`applying`, `stalled`, `applied`, `failed`) and the counts. Tell the user the change is
+        being applied, and check it with get_compliance_bindings() before saying it is done. While
+        it runs, another bind or unbind of the database (and evaluate_database_compliance()) is
+        refused with "still being applied; try again when it finishes"; a `stalled` change resumes
+        when the same bind is requested again (`resumed: true`). An asset binding is one record
+        and is written in the call. `auto_eval` (database binding only — the asset route does not read it, so
         it is not sent there) records whether the database's assets are re-evaluated
         automatically; when it is omitted, a new binding turns it on and a database that is already
         bound keeps its setting (changing the schema does not change it).
@@ -2906,8 +2924,10 @@ if CONFIG.enable_writes:
         until an evaluation under the new binding decides it: it is counted in
         `assetsKeptQuarantined` and its record carries `awaitingReevaluationSince` /
         `awaitingReevaluationSchema`. Each asset gets its own `schema_binding_applied_to_asset`
-        audit entry. With automatic evaluation on, the binding queues the evaluations
-        (`evaluationsQueued`); with it off, run a sweep or evaluate_database_compliance(). Binding
+        audit entry naming the person who bound it, and the end of a database change one
+        `schema_binding_apply_finished` entry with the totals. With automatic evaluation on, the
+        binding queues the evaluations (`evaluationsQueued`); with it off, run a sweep or
+        evaluate_database_compliance() once the change is applied. Binding
         the schema already bound with the same setting (or an asset to the override it already has)
         changes nothing and answers `changed: false`; changing only `auto_eval` updates the flag.
         Those queued evaluations run the schema's pipeline rules, real workflow executions (AWS
@@ -2928,8 +2948,12 @@ if CONFIG.enable_writes:
         override so it falls back to the database binding.
 
         Unbinding a DATABASE deletes the compliance record (state, last evaluation, quarantine and
-        exception fields) of every asset that inherited the binding, and reports the count as
-        `removedComplianceRecords`; asset overrides are kept. Evaluation history and the audit trail
+        exception fields) of every asset that inherited the binding; asset overrides are kept. It
+        is applied IN THE BACKGROUND, as a database bind is: the call returns once the binding is
+        removed from the database (HTTP 202, `applyStatus` `applying`, `assetCount`, `apply`), and
+        get_compliance_bindings() reports its status and counts (`removedComplianceRecords`,
+        `assetsKeptQuarantined`) once it is `applied`. Say it is being applied until then; a
+        `stalled` removal resumes when it is requested again. Evaluation history and the audit trail
         are not removed. Removing an asset's override reverts it to the database schema (marked
         pending_evaluation), or deletes its record when the database has no binding. Both forms
         succeed when there was nothing to remove. A QUARANTINED asset's record is never deleted or

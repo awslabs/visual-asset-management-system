@@ -2820,3 +2820,185 @@ class TestPathIdsArePercentEncoded:
         client.session.request = lambda method, url, **kwargs: sent.append(url) or _Ok()
         client.get_compliance_state(self.DB, 'a1')
         assert sent and sent[0].endswith('/compliance/state/r23-d%23deleted/a1')
+
+
+def _apply(**overrides):
+    """A database binding change applied in the background, as the API reports it (D161)."""
+    apply = {'applyId': 'apply-1', 'operation': 'change', 'status': 'applying',
+             'schemaName': 'cad-quality', 'previousSchema': 'old', 'assetCount': 2500,
+             'assetsProcessed': 0, 'assetsPendingEvaluation': 0, 'assetsKeptQuarantined': 0,
+             'removedComplianceRecords': 0, 'evaluationsQueued': 0,
+             'startedAt': '2026-11-07T15:00:00+00:00',
+             'lastProgressAt': '2026-11-07T15:00:00+00:00'}
+    apply.update(overrides)
+    return apply
+
+
+def _accepted(apply=None, **extra):
+    apply = apply or _apply()
+    return {'message': "Schema 'cad-quality' bound to database 'my-database'; the binding is "
+                       "being applied to 2500 assets",
+            'databaseId': 'my-database', 'schemaName': 'cad-quality', 'changed': True,
+            'applyStatus': apply['status'], 'applyId': apply['applyId'],
+            'assetCount': apply['assetCount'], 'apply': apply, **extra}
+
+
+def _read(apply):
+    return {'databaseId': 'my-database', 'databaseSchema': 'cad-quality', 'assetOverrides': [],
+            'assetOverrideCount': 0, 'applyStatus': apply['status'] if apply else None,
+            'apply': apply}
+
+
+APPLIED = _apply(status='applied', assetsProcessed=2500, assetsPendingEvaluation=2497,
+                 assetsKeptQuarantined=3, evaluationsQueued=2500,
+                 finishedAt='2026-11-07T15:01:00+00:00')
+
+
+class TestABindingChangeAppliedInTheBackground:
+    """A database bind or removal answers at once (202) with the change being applied; --wait reads
+    the binding until it ends (exit 0 only when applied)."""
+
+    def test_without_wait_it_prints_the_change_and_how_to_follow_it(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'The binding change was accepted and is being applied' in result.output
+            assert 'Binding Change: schema change, applying (0 of 2500 assets)' in result.output
+            assert 'Follow it with: vamscli compliance bindings -d my-database' in result.output
+            mocks['api_client'].get_compliance_bindings.assert_not_called()
+
+    def test_wait_follows_it_to_the_end_backing_off(self, cli_runner, generic_command_mocks,
+                                                    monkeypatch):
+        sleeps = []
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', sleeps.append)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.side_effect = [
+                _read(_apply(assetsProcessed=500)), _read(_apply(assetsProcessed=1500)),
+                _read(APPLIED)]
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 0, result.output
+            assert 'The binding change was applied' in result.output
+            assert 'Binding Change: schema change, applied (2500 of 2500 assets)' in result.output
+            assert 'Assets Pending Evaluation: 2497' in result.output
+            assert 'Assets Kept Quarantined: 3' in result.output
+            assert 'Follow it with' not in result.output
+            assert sleeps == [2, 3]
+            mocks['api_client'].get_compliance_bindings.assert_called_with(
+                'my-database', max_items=1)
+
+    @pytest.mark.parametrize('ended, text', [
+        (_apply(status='failed', reason='The database was deleted while the binding was being '
+                                        'applied'), 'The binding change failed'),
+        (_apply(status='stalled', reason='No progress for 15 minutes; repeat the same change to '
+                                         'resume it'), 'run the same command again to resume it'),
+    ], ids=['failed', 'stalled'])
+    def test_wait_exits_1_when_it_did_not_apply(self, cli_runner, generic_command_mocks,
+                                                monkeypatch, ended, text):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(ended)
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 1
+            assert text in result.output
+            assert f"Reason: {ended['reason']}" in result.output
+
+    def test_wait_times_out_with_a_clear_message_and_json_says_so(self, cli_runner,
+                                                                  generic_command_mocks,
+                                                                  monkeypatch):
+        clock = iter(range(0, 1000, 5))
+        monkeypatch.setattr('vamscli.commands.compliance.time.monotonic', lambda: next(clock))
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(
+                _apply(assetsProcessed=10))
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait',
+                '--wait-timeout', '12'])
+            assert result.exit_code == 1
+            assert 'Stopped waiting after 12 s; the binding change is still being applied' in (
+                result.output)
+            clock = iter(range(0, 1000, 5))
+            monkeypatch.setattr('vamscli.commands.compliance.time.monotonic', lambda: next(clock))
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait',
+                '--wait-timeout', '12', '--json-output'])
+            assert result.exit_code == 1
+            body = json.loads(result.output)
+            assert (body['waitTimedOut'], body['applyStatus'], body['apply']['assetsProcessed']) == (
+                True, 'applying', 10)
+
+    def test_json_output_carries_the_apply_fields(self, cli_runner, generic_command_mocks,
+                                                  monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(APPLIED)
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--json-output'])
+            assert result.exit_code == 0
+            body = json.loads(result.output)
+            assert (body['applyStatus'], body['applyId'], body['assetCount']) == (
+                'applying', 'apply-1', 2500)
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait',
+                '--json-output'])
+            assert result.exit_code == 0
+            body = json.loads(result.output)
+            assert (body['applyStatus'], body['apply']['status'],
+                    body['apply']['assetsPendingEvaluation']) == ('applied', 'applied', 2497)
+            assert 'waitTimedOut' not in body
+
+    def test_unbind_wait(self, cli_runner, generic_command_mocks, monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+        removal = _apply(operation='unbind', schemaName=None, assetCount=4)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].unbind_compliance_schema.return_value = _accepted(
+                removal, previousSchema='cad-quality')
+            mocks['api_client'].get_compliance_bindings.return_value = _read(dict(
+                removal, status='applied', assetsProcessed=4, removedComplianceRecords=3,
+                assetsKeptQuarantined=1))
+            result = cli_runner.invoke(cli, ['compliance', 'unbind', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 0, result.output
+            assert 'Binding Change: removal, applied (4 of 4 assets)' in result.output
+            assert 'Compliance Records Removed: 3' in result.output
+
+    @pytest.mark.parametrize('command', [
+        ['compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '-a', 'my-asset',
+         '--wait'],
+        ['compliance', 'unbind', '-d', 'my-database', '-a', 'my-asset', '--wait'],
+    ], ids=['bind', 'unbind'])
+    def test_wait_is_refused_for_an_asset_override(self, cli_runner, generic_command_mocks,
+                                                   command):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, command)
+            assert result.exit_code != 0
+            assert '--wait applies to a database binding' in result.output
+            mocks['api_client'].bind_compliance_schema.assert_not_called()
+            mocks['api_client'].unbind_compliance_schema.assert_not_called()
+
+    def test_bindings_shows_the_last_change(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_bindings.return_value = _read(_apply(
+                status='stalled', assetsProcessed=1200,
+                reason='No progress for 15 minutes; repeat the same change to resume it'))
+            result = cli_runner.invoke(cli, ['compliance', 'bindings', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'Binding Change: schema change, stalled (1200 of 2500 assets)' in result.output
+            assert 'Reason: No progress for 15 minutes' in result.output
+
+    def test_the_wait_settings_are_constants(self):
+        from vamscli import constants
+        assert constants.COMPLIANCE_BINDING_APPLY_POLL_DELAYS == (2, 3, 5, 8, 10, 15)
+        assert constants.DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT == 900
+        assert (constants.COMPLIANCE_BINDING_APPLY_APPLYING, constants.COMPLIANCE_BINDING_APPLY_APPLIED,
+                constants.COMPLIANCE_BINDING_APPLY_STALLED,
+                constants.COMPLIANCE_BINDING_APPLY_FAILED) == (
+            'applying', 'applied', 'stalled', 'failed')

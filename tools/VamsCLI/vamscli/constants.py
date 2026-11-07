@@ -214,6 +214,18 @@ API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
 # the cap.
 COMPLIANCE_AUDIT_DEFAULT_LIMIT = 100
 MAX_COMPLIANCE_AUDIT_PAGE_SIZE = 200
+# A database binding change (bind, change, removal) is applied to the asset records in the
+# background; the request answers 202 with its `apply`, and the binding read reports its status:
+# `applying`, `stalled` (no progress for a while; the same command resumes it), `applied` or
+# `failed`. `compliance bind/unbind --wait` reads the binding with these delays (seconds, the last
+# one repeating) until the change ends, for at most the wait timeout.
+COMPLIANCE_BINDING_APPLY_APPLYING = "applying"
+COMPLIANCE_BINDING_APPLY_STALLED = "stalled"
+COMPLIANCE_BINDING_APPLY_APPLIED = "applied"
+COMPLIANCE_BINDING_APPLY_FAILED = "failed"
+COMPLIANCE_BINDING_APPLY_POLL_DELAYS = (2, 3, 5, 8, 10, 15)
+DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT = 900
+MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT = 86400
 # The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
 # `NextToken`; the handler applies the default when none is given and clamps larger values to the cap.
 DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 50
