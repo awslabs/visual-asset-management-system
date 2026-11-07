@@ -51,6 +51,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Fixed the GenAI 3D Metadata Labeling pipeline accepting `.usd` and `.dae` files that its Blender image cannot import: it no longer accepts USD (`.usd`) or COLLADA (`.dae`) files, a failed model import fails the run as a Blender error, with the error in the job log, instead of "No output files generated.", and the container image is pinned to Alpine 3.24 and Blender 5.1. ([#1152](https://github.com/awslabs/visual-asset-management-system/issues/1152))
 -   **Web** Fixed the pipeline form requiring an Event Bus ARN for the EventBridge execution type; the field is optional, as in the API, and left empty it publishes to the account's default event bus. ([#1030](https://github.com/awslabs/visual-asset-management-system/issues/1030))
 -   **Web** Fixed the pipeline edit form showing and saving Wait For Callback as Enabled for a pipeline stored without it; such a pipeline runs with the callback disabled, and the form now shows and keeps Disabled. A pipeline that an earlier save already changed to Enabled keeps Enabled; set it back to Disabled if its workflows should not wait for a callback. ([#1032](https://github.com/awslabs/visual-asset-management-system/issues/1032))
+-   **Web** Fixed `.igs` CAD files not opening in the CAD viewer; they open like `.iges` files, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. ([#1199](https://github.com/awslabs/visual-asset-management-system/issues/1199))
 
 ### Chores
 
