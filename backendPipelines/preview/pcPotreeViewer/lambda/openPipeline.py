@@ -8,6 +8,7 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+import lasHeader
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -48,6 +49,43 @@ POTREE_JOB_DEFINITION_NAME = os.environ.get("POTREE_JOB_DEFINITION_NAME", "")
 PDAL_BATCH_STATE_NAME = "PdalConverterBatchJob"
 POTREE_BATCH_STATE_NAME = "PotreeConverterBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+
+# The LAS header read is a single small ranged GET whose failure only keeps the direct path, so it
+# gets short timeouts and few attempts rather than the adaptive retries above: an unreachable
+# endpoint must not hold the launch for minutes. The regional us-east-1 endpoint is used for the same
+# reason the container uses it (an interface endpoint's private DNS covers it).
+_header_read_config = Config(connect_timeout=5, read_timeout=10,
+                             retries={'max_attempts': 2, 'mode': 'standard'},
+                             s3={'us_east_1_regional_endpoint': 'regional'})
+_s3_clients_by_region = {}
+
+# State-machine input field naming the LAS/LAZ input's point data record format, read from its header
+# here; constructPipeline sends a format PotreeConverter cannot read through the PDAL stage. Absent
+# (an E57/PLY input, an unreadable header, or an execution started before the field) keeps the route
+# chosen by extension.
+INPUT_LAS_POINT_FORMAT_KEY = "inputLasPointFormat"
+
+
+def s3_client_for_region(region):
+    """An S3 client for ``region`` (empty is the deployment Region), created once per Region."""
+    region = region or os.environ["AWS_REGION"]
+    client = _s3_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region, config=_header_read_config)
+        _s3_clients_by_region[region] = client
+    return client
+
+
+def input_las_point_format(input_s3_uri, bucket_region="", version_id=""):
+    """The point data record format of a .las/.laz input from its header, or None for another file
+    type or when the header cannot be read."""
+    if os.path.splitext(input_s3_uri)[1].lower() not in lasHeader.LAS_INPUT_EXTENSIONS:
+        return None
+    if not input_s3_uri.startswith("s3://") or "/" not in input_s3_uri[len("s3://"):]:
+        return None
+    bucket_name, object_key = input_s3_uri[len("s3://"):].split("/", 1)
+    return lasHeader.read_point_format(
+        s3_client_for_region(bucket_region), bucket_name, object_key, version_id)
 
 def abort_external_workflow(error, task_token):
     if (task_token != None and task_token != ""):
@@ -206,6 +244,18 @@ def lambda_handler(event, context):
         "inputVersionId": event.get("inputVersionId", ""),
         "externalSfnTaskToken": external_sfn_task_token
     }
+
+    # A LAS/LAZ input's point data record format, from its header. Added only when it was read, so an
+    # input whose header cannot be read starts exactly as it did before the field existed.
+    try:
+        point_format = input_las_point_format(
+            input_s3_asset_files_uri, event.get("inputBucketRegion", ""), event.get("inputVersionId", ""))
+    except Exception as e:  # nosec B110 - advisory read; the run keeps the route chosen by extension
+        logger.warning(f"LAS header read skipped: {e}")
+        point_format = None
+    if point_format is not None:
+        logger.info(f"Input LAS point data record format: {point_format}")
+        sfn_input[INPUT_LAS_POINT_FORMAT_KEY] = point_format
 
     try:
         # Start the Step Functions state machine with the bucket key and name

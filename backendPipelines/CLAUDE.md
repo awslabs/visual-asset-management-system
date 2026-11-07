@@ -1276,8 +1276,16 @@ drifts from the thumbnail Dockerfile.
 built images, so CI does not run them; they are run by hand when a converter or its base image changes.
 `ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
 them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
-row per file (exit codes, LAS format, point count, colour and intensity ranges, octree points); run it on
-the old and new PDAL image and diff the two (#1203).
+row per file (exit codes, input and output LAS format, point count, colour and intensity ranges, the
+route PotreeConverter's input took, octree points, attributes and RGB range); run it on the old and new
+PDAL image and diff the two (#1203). Its LAS/LAZ routing mirrors constructPipeline's header rule (point
+formats 0-7 direct, 8-10 through PDAL, #1215); `LAS_ROUTING=extension` reproduces the routing before it.
+
+**Route on what the file is, not what it is named.** The Potree preview's `openPipeline` reads a LAS/LAZ
+input's point data record format from a ranged GET of its header (`preview/pcPotreeViewer/lambda/lasHeader.py`)
+and `constructPipeline` sends a format the pinned PotreeConverter cannot read through the PDAL stage. The
+read is advisory: any failure leaves the field out and keeps the extension route, so an unreadable header
+never fails a launch and an execution started before the field behaves as before.
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls

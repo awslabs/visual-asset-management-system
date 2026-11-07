@@ -9,15 +9,20 @@
 # stage runs (pipelines/pdal/pipeline.py), then through the Potree image with the PotreeConverter flags
 # the POTREE stage runs (pipelines/potree/pipeline.py), and writes one TSV row per file: PDAL exit
 # status, intermediate LAZ size, LAS version / point format, point count, colour and intensity ranges,
-# PotreeConverter exit status and octree point count. Run it once per PDAL image and diff the TSVs.
+# the route PotreeConverter's input took, its exit status, the octree point count, its attribute names
+# and its RGB range. Run it once per PDAL image (or per routing) and diff the TSVs.
 #
-# LAS/LAZ inputs skip the PDAL stage in a real run; they are also translated here so the two PDAL
-# versions can be compared on them, and the POTREE column for them is the direct (production) path.
+# Every input is translated by PDAL here so the PDAL versions can be compared on it. What PotreeConverter
+# is given follows constructPipeline: the PDAL output for E57/PLY, and for LAS/LAZ the file itself when
+# its header's point data record format is 0-7 (the formats PotreeConverter reads) or the PDAL output
+# when it is not (8-10, #1215). LAS_ROUTING=extension gives every LAS/LAZ to PotreeConverter directly,
+# the routing before #1215.
 #
 # Usage:
 #   pcPotreeViewer-formats.sh fetch <samples-dir>
 #   pcPotreeViewer-formats.sh run <pdal-image> <potree-image> <samples-dir> <out-dir>
 #   PDAL_LAS_OPTIONS="" pcPotreeViewer-formats.sh run ...   # an image built before #1203 (no options)
+#   LAS_ROUTING=extension pcPotreeViewer-formats.sh run ... # the LAS/LAZ routing before #1215
 #
 # Build the images from backendPipelines/preview/pcPotreeViewer/container:
 #   docker build -f Dockerfile_PDAL -t vams-pdal:local .
@@ -27,8 +32,13 @@
 #   E57 - asmaloney/libE57Format-test-data (CC0-1.0). self/ColouredCube*.e57 carry the CompressedVector
 #         index packet current libE57Format writers emit, which PDAL 2.7.0 rejected (#1203).
 #   LAS/LAZ/PLY - PDAL/PDAL test/data at tag 2.10.2 (BSD-3-Clause). autzen_trim is real airborne LiDAR
-#         with RGB and intensity; las_with_several_extra_byte_bloc.laz carries several Extra Bytes VLRs
-#         in point format 8, which PotreeConverter does not read.
+#         with RGB and intensity (format 3; autzen_trim_7 is the same in LAS 1.4 format 7); 4_6.las is
+#         LAS 1.4 format 6; las_with_several_extra_byte_bloc.laz carries several Extra Bytes VLRs in
+#         point format 8, which PotreeConverter does not read (#1215).
+#   autzen_trim_{0,1,2}.las, autzen_trim_8.las - written from autzen_trim.las by the PDAL image under
+#         test as LAS 1.2 formats 0, 1 and 2 and as LAS 1.4 format 8 (RGB + NIR), so every format has a
+#         real-world input. (PDAL's permutations/1.2_*.las hold one point, a zero-size bounding box
+#         PotreeConverter refuses whatever the format.)
 #   potree/lion_takanawa_2-1-1-1.laz - potree/potree at the commit web/customInstalls/potree pins
 #         (BSD-2-Clause): the #783 file, whose OriginId Extra Bytes description fills all 32 bytes.
 #   autzen_trim.ply - written from autzen_trim.las by the PDAL image under test's writers.ply, as a
@@ -51,6 +61,8 @@ POTREE_783_FILE="potree/lion_takanawa_2-1-1-1.laz"
 PDAL_FILES=(
   las/autzen_trim.las
   laz/autzen_trim.laz
+  las/autzen_trim_7.las
+  las/4_6.las
   laz/las_with_several_extra_byte_bloc.laz
   ply/simple_binary.ply
   ply/simple_text.ply
@@ -106,22 +118,67 @@ print(f"{fmt}\t{count}\tR{rng('Red')} G{rng('Green')} B{rng('Blue')}\t{rng('Inte
 PY
 }
 
+# las_point_format <file>: the point data record format in a LAS/LAZ header (byte 104, LAZ compression
+# bits cleared), as openPipeline reads it (lambda/lasHeader.py); "-" for another file type, "?" when the
+# file has no LAS header.
+las_point_format() {
+  case "$1" in
+    *.las|*.laz|*.LAS|*.LAZ) ;;
+    *) echo "-"; return ;;
+  esac
+  python3 - "$1" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as handle:
+    prefix = handle.read(105)
+print(prefix[104] & 0x3F if len(prefix) == 105 and prefix[:4] == b"LASF" else "?")
+PY
+}
+
+# octree_summary <metadata.json>: octree point count, attribute names and RGB range, tab-separated.
+octree_summary() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except Exception:
+    print("-\t-\t-"); sys.exit(0)
+attributes = doc.get("attributes", [])
+names = ",".join(a["name"].replace(" ", "_") for a in attributes)
+rgb = next((a for a in attributes if a["name"] == "rgb"), None)
+colour = f"{min(rgb['min']):g}-{max(rgb['max']):g}" if rgb else "none"
+print(f"{doc.get('points', '-')}\t{names}\t{colour}")
+PY
+}
+
 run() {
   local pdal_image="$1" potree_image="$2"
   SAMPLES="$(cd "$3" && pwd)"; mkdir -p "$4"; OUT="$(cd "$4" && pwd)"
-  local tsv="$OUT/results.tsv" f base laz rc bytes octree prc points source
+  local tsv="$OUT/results.tsv" f base laz rc bytes octree prc points source route input_dir input_fmt
   mkdir -p "$OUT/laz" "$OUT/potree" "$OUT/info" "$OUT/logs"
 
   if [ -f "$SAMPLES/las/autzen_trim.las" ] && [ ! -f "$OUT/autzen_trim.ply" ]; then
     pdal_in "$pdal_image" translate -i /in/las/autzen_trim.las -o /out/autzen_trim.ply > "$OUT/logs/make-ply.log" 2>&1
   fi
+  local pdrf minor
+  for pdrf in 0 1 2 8; do
+    if [ "$pdrf" = 8 ]; then minor=4; else minor=2; fi
+    if [ -f "$SAMPLES/las/autzen_trim.las" ] && [ ! -f "$OUT/autzen_trim_$pdrf.las" ]; then
+      pdal_in "$pdal_image" translate -i /in/las/autzen_trim.las -o "/out/autzen_trim_$pdrf.las" \
+        "--writers.las.minor_version=$minor" "--writers.las.dataformat_id=$pdrf" > "$OUT/logs/make-las$pdrf.log" 2>&1
+    fi
+  done
 
-  printf 'file\tpdal_exit\tlaz_bytes\tlas_format\tpoints\tcolour\tintensity\tpotree_exit\toctree_points\tpdal_last_line\n' > "$tsv"
+  printf 'file\tinput_pdrf\tpdal_exit\tlaz_bytes\tlas_format\tpoints\tcolour\tintensity\troute\tpotree_exit\toctree_points\toctree_attributes\toctree_rgb\tpdal_last_line\n' > "$tsv"
   while IFS= read -r f; do
     base="$(echo "$f" | tr '/.' '__')"
     laz="$OUT/laz/$base.laz"
     rm -f "$laz"
-    if [ "$f" = "autzen_trim.ply" ]; then source="/out/autzen_trim.ply"; else source="/in/$f"; fi
+    # Files this script writes (autzen_trim.ply, autzen_trim_<format>.las) are in the output folder.
+    case "$f" in
+      autzen_trim.ply|autzen_trim_?.las) source="/out/$f"; input_dir="$OUT" ;;
+      *) source="/in/$f"; input_dir="$SAMPLES" ;;
+    esac
+    input_fmt="$(las_point_format "$input_dir/$f")"
     # The PDAL stage's command (pipelines/pdal/pipeline.py: pdal translate -i <in> -o <out>.laz plus
     # its LAS writer options). For an image built before #1203, run with PDAL_LAS_OPTIONS="" to get
     # the command that image's stage ran.
@@ -137,11 +194,21 @@ run() {
     else
       : > "$OUT/info/$base.json"
     fi
-    # What PotreeConverter is given: the PDAL output for E57/PLY, the file itself for LAS/LAZ.
+    # What PotreeConverter is given, as constructPipeline routes it: the PDAL output for E57/PLY; for
+    # LAS/LAZ the file itself when its header's point format is one PotreeConverter reads (0-7) or
+    # cannot be read, the PDAL output otherwise. LAS_ROUTING=extension sends every LAS/LAZ directly.
+    route="pdal"
     case "$f" in
-      *.las|*.laz) octree_src="$SAMPLES/$f"; mount_src="/src/$f"; mount_dir="$SAMPLES" ;;
-      *) octree_src="$laz"; mount_src="/src/laz/$base.laz"; mount_dir="$OUT" ;;
+      *.las|*.laz)
+        if [ "${LAS_ROUTING:-header}" = extension ] || [ "$input_fmt" = "?" ] || [ "$input_fmt" -le 7 ]; then
+          route="direct"
+        fi ;;
     esac
+    if [ "$route" = direct ]; then
+      octree_src="$input_dir/$f"; mount_src="/src/$f"; mount_dir="$input_dir"
+    else
+      octree_src="$laz"; mount_src="/src/laz/$base.laz"; mount_dir="$OUT"
+    fi
     octree="$OUT/potree/$base"
     rm -rf "$octree"; mkdir -p "$octree"
     if [ -s "$octree_src" ]; then
@@ -153,13 +220,14 @@ run() {
         > "$OUT/logs/$base.potree.log" 2>&1
       prc=$?
       set -e
-      points="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['points'])" "$octree/metadata.json" 2>/dev/null || echo -)"
+      points="$(octree_summary "$octree/metadata.json")"
     else
-      prc="skipped"; points="-"
+      prc="skipped"; points=$'-\t-\t-'
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$rc" "$bytes" "$(summarize "$OUT/info/$base.json" "$laz")" \
-      "$prc" "$points" "$(grep -v '^\s*$' "$OUT/logs/$base.pdal.log" | grep -v 'conda.cli.main_run' | tail -1)" >> "$tsv"
-  done < <(printf '%s\n' "${E57_FILES[@]}" "${PDAL_FILES[@]}" "$POTREE_783_FILE" autzen_trim.ply)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$input_fmt" "$rc" "$bytes" "$(summarize "$OUT/info/$base.json" "$laz")" \
+      "$route" "$prc" "$points" "$(grep -v '^\s*$' "$OUT/logs/$base.pdal.log" | grep -v 'conda.cli.main_run' | tail -1)" >> "$tsv"
+  done < <(printf '%s\n' "${E57_FILES[@]}" "${PDAL_FILES[@]}" "$POTREE_783_FILE" autzen_trim.ply \
+    autzen_trim_0.las autzen_trim_1.las autzen_trim_2.las autzen_trim_8.las)
   column -t -s $'\t' "$tsv"
 }
 

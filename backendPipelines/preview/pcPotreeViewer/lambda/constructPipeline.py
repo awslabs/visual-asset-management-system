@@ -7,6 +7,7 @@ import uuid
 import boto3
 from customLogging.logger import safeLogger
 from botocore.config import Config
+import lasHeader
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
@@ -24,6 +25,19 @@ sfn = boto3.client(
 
 PDAL_INPUT_EXTENSIONS = (".e57", ".ply")
 POTREE_INPUT_EXTENSIONS = (".las", ".laz")
+
+# The LAS/LAZ input's point data record format, which openPipeline reads from the file's header.
+INPUT_LAS_POINT_FORMAT_KEY = "inputLasPointFormat"
+
+
+def las_input_needs_pdal(event) -> bool:
+    """True when openPipeline read a point data record format PotreeConverter cannot read (8 to 10).
+    A missing or malformed value (an unreadable header, or an execution started before the field)
+    keeps the direct path to the POTREE stage."""
+    point_format = event.get(INPUT_LAS_POINT_FORMAT_KEY)
+    if isinstance(point_format, bool) or not isinstance(point_format, int):
+        return False
+    return lasHeader.needs_pdal_conversion(point_format)
 
 # The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
 # type>: <version id>}}, never inside the definition. An image built before the field parses the
@@ -50,7 +64,8 @@ RUN_WORKING_FOLDER = "PotreeViewerRuns"
 
 
 def run_working_dir(base_asset_auxiliary_key_path, job_name) -> str:
-    """The aux-bucket folder one E57/PLY run keeps its PDAL intermediate in, with a trailing slash.
+    """The aux-bucket folder one two-stage run (E57, PLY, or a LAS/LAZ in a point format PotreeConverter
+    cannot read) keeps its PDAL intermediate in, with a trailing slash.
 
     Keyed on the run's job name, so two runs on one file never share an intermediate; it stays under
     the input file's preview prefix, so deleting, moving or copying the file's auxiliary data covers it."""
@@ -94,7 +109,14 @@ def lambda_handler(event, context):
         if input_s3_asset_extension in PDAL_INPUT_EXTENSIONS:
             definition = construct_pdal_definition(event)
         elif input_s3_asset_extension in POTREE_INPUT_EXTENSIONS:
-            definition = construct_potree_definition(event)
+            if las_input_needs_pdal(event):
+                # PotreeConverter cannot read this point format: PDAL rewrites it as LAS 1.2 / format 3
+                # first, as it does an E57 or PLY input.
+                logger.info(f"LAS point data record format {event.get(INPUT_LAS_POINT_FORMAT_KEY)} is "
+                            f"not read by PotreeConverter; converting it with PDAL first")
+                definition = construct_pdal_definition(event)
+            else:
+                definition = construct_potree_definition(event)
         else:
             raise ValueError(
                 "Unsupported file type for point cloud potree viewer pipeline conversion. "
