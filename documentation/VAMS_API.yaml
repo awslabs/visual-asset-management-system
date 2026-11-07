@@ -9561,7 +9561,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/bind/{databaseId}:
         get:
             summary: "Get the schema bindings of a database."
-            description: "Returns the schema bound to a database and one page of the assets in the database that carry their own schema override; `assetOverrideCount` counts every override, and `NextToken` continues the page. Requires GET on the database and on its bound schema."
+            description: "Returns the schema bound to a database and one page of the assets in the database that carry their own schema override; `assetOverrideCount` counts every override, and `NextToken` continues the page. `apply` is the database's last binding change, applied to the asset records in the background: its status (`applying`, `stalled`, `applied`, `failed`), its progress and its counts. Requires GET on the database and on its bound schema."
             parameters:
                 - name: databaseId
                   in: path
@@ -9600,7 +9600,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Bind a schema to a database."
-            description: "Binds a GLOBAL or database-scoped schema to a database. Every asset in the database without an asset-level override becomes `pending_evaluation` under the schema. Requires PUT on the database's complianceBinding object, PUT on the schema, and GET on the database."
+            description: "Binds a GLOBAL or database-scoped schema to a database, or replaces the one bound. The request saves the binding and answers 202; the binding is then applied to the asset records in the background, and the binding read (`apply`) reports its progress and its end. Every asset in the database without an asset-level override becomes `pending_evaluation` under the schema (a quarantined one stays quarantined, marked awaiting re-evaluation). While a binding change of the database is being applied, another answers 409; the same request resumes a stalled one (202, `resumed: true`). A bind of the binding in force answers 200; turning automatic evaluation on for it queues the pending assets in the background (202), or answers 200 when none is pending. Requires PUT on the database's complianceBinding object, GET on the schema, and GET on the database."
             parameters:
                 - name: databaseId
                   in: path
@@ -9616,7 +9616,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             $ref: "#/components/schemas/bindComplianceSchemaRequest"
             responses:
                 "200":
-                    description: Schema bound to the database.
+                    description: The schema already bound; nothing changed, or only automatic evaluation (with no asset pending).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/bindDatabaseResponse"
+                "202":
+                    description: The binding is saved and being applied to the asset records in the background.
                     content:
                         application/json:
                             schema:
@@ -9634,7 +9640,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`; a stalled one: `The compliance schema binding of this database stopped while it was being applied; repeat the same change to resume it`)."
                     content:
                         application/json:
                             schema:
@@ -9649,7 +9655,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         delete:
             summary: "Remove the schema binding of a database."
-            description: "Removes the database binding and deletes the compliance records of the assets that inherited it. Asset-level overrides are kept. Requires DELETE on the database's complianceBinding object, GET on the database, and DELETE on the bound schema."
+            description: "Removes the database binding. The request removes it from the database and answers 202; the removal is then applied to the asset records in the background: the compliance records of the assets that inherited the binding are deleted (a quarantined one is kept quarantined, marked). Asset-level overrides are kept. While a binding change of the database is being applied, another answers 409; repeating a stalled removal resumes it. Requires DELETE on the database's complianceBinding object, GET on the database, and GET on the bound schema."
             parameters:
                 - name: databaseId
                   in: path
@@ -9659,7 +9665,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                       type: string
             responses:
                 "200":
-                    description: Binding removed, or the database had no binding.
+                    description: The database had no binding.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/unbindDatabaseResponse"
+                "202":
+                    description: The binding is removed from the database and the removal is being applied to the asset records in the background.
                     content:
                         application/json:
                             schema:
@@ -9677,7 +9689,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`; a stalled one: `The compliance schema binding of this database stopped while it was being applied; repeat the same change to resume it`)."
                     content:
                         application/json:
                             schema:
@@ -9888,7 +9900,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`)."
                     content:
                         application/json:
                             schema:
@@ -17415,11 +17427,26 @@ components:
                 evaluationsQueued:
                     type: integer
                     description: "Number of asset evaluations queued on the compliance trigger's queue; 0 with `complianceAutoEval` off. Best effort: an asset not queued stays pending until a sweep, Evaluate All or its next change."
+                applyStatus:
+                    type: string
+                    enum: [applying, stalled, applied, failed]
+                    description: "Status of the binding change applied in the background (202 only)."
+                applyId:
+                    type: string
+                    format: uuid
+                    description: "The binding change's id (202 only)."
+                assetCount:
+                    type: integer
+                    description: "How many assets (for a removal, inherited records; for automatic evaluation turned on, pending records) the change goes through, counted when it began (202 only)."
+                apply:
+                    $ref: "#/components/schemas/complianceBindingApply"
+                resumed:
+                    type: boolean
+                    description: "true when the request repeated a stalled change, which resumes from where it stopped."
             required:
                 - message
                 - schemaName
                 - databaseId
-                - assetsPendingEvaluation
 
         unbindDatabaseResponse:
             type: object
@@ -17437,6 +17464,24 @@ components:
                 assetsKeptQuarantined:
                     type: integer
                     description: "Number of quarantined database-inherited records kept `quarantined`, marked awaiting re-evaluation with no schema. Absent when the database had no binding."
+                changed:
+                    type: boolean
+                applyStatus:
+                    type: string
+                    enum: [applying, stalled, applied, failed]
+                    description: "Status of the binding change applied in the background (202 only)."
+                applyId:
+                    type: string
+                    format: uuid
+                    description: "The binding change's id (202 only)."
+                assetCount:
+                    type: integer
+                    description: "How many assets (for a removal, inherited records; for automatic evaluation turned on, pending records) the change goes through, counted when it began (202 only)."
+                apply:
+                    $ref: "#/components/schemas/complianceBindingApply"
+                resumed:
+                    type: boolean
+                    description: "true when the request repeated a stalled removal, which resumes from where it stopped."
             required:
                 - message
                 - databaseId
@@ -17528,12 +17573,77 @@ components:
                 NextToken:
                     type: string
                     description: "Continuation token for the next page of `assetOverrides`; absent on the last page."
+                applyStatus:
+                    type: string
+                    nullable: true
+                    enum: [applying, stalled, applied, failed]
+                    description: "Status of the database's last binding change, or null when it had none."
+                apply:
+                    allOf:
+                        - $ref: "#/components/schemas/complianceBindingApply"
+                    nullable: true
+                    description: "The database's last binding change applied in the background, or null when it had none."
             required:
                 - databaseId
                 - databaseSchema
                 - complianceAutoEval
                 - assetOverrides
                 - assetOverrideCount
+
+        complianceBindingApply:
+            type: object
+            description: "A database binding change (bind, schema change, removal, or automatic evaluation turned on with assets pending) applied to the database's asset records in the background."
+            properties:
+                applyId:
+                    type: string
+                    format: uuid
+                operation:
+                    type: string
+                    enum: [bind, change, unbind, evaluatePending]
+                status:
+                    type: string
+                    enum: [applying, stalled, applied, failed]
+                    description: "`applying` while it runs; `stalled` when it made no progress for 15 minutes (the same request resumes it); `applied` once every record was reached; `failed` (see `reason`)."
+                schemaName:
+                    type: string
+                    description: "The schema the change applies; absent for `unbind`."
+                previousSchema:
+                    type: string
+                    description: "The schema bound before; absent for a first binding."
+                assetCount:
+                    type: integer
+                    description: "How many assets (for `unbind`, inherited records; for `evaluatePending`, pending records) the change goes through, counted when it began."
+                assetsProcessed:
+                    type: integer
+                    description: "How many of them it has gone through so far."
+                assetsPendingEvaluation:
+                    type: integer
+                assetsKeptQuarantined:
+                    type: integer
+                removedComplianceRecords:
+                    type: integer
+                evaluationsQueued:
+                    type: integer
+                startedAt:
+                    type: string
+                    format: date-time
+                lastProgressAt:
+                    type: string
+                    format: date-time
+                finishedAt:
+                    type: string
+                    format: date-time
+                    description: "When it ended; absent while it runs."
+                reason:
+                    type: string
+                    description: "Why it failed or is stalled."
+            required:
+                - applyId
+                - operation
+                - status
+                - assetCount
+                - assetsProcessed
+                - startedAt
 
         evaluateAssetRequest:
             type: object

@@ -138,7 +138,9 @@ asymmetry other callers rely on):
    `get_compliance_cascade`) are write-tier and stay out of `autoApprove`, as do
    `bind_compliance_schema` and `unbind_compliance_schema`, since under automatic
    evaluation a binding change queues an evaluation of each asset it reaches
-   (`evaluationsQueued`); `unbind_compliance_schema`
+   (`evaluationsQueued`); a database bind or unbind is applied in the background
+   (202, `apply`), and their docstrings tell the model to read its status with
+   `get_compliance_bindings` before calling it done; `unbind_compliance_schema`
    deletes compliance records but is write-tier because the history it reverses is
    recomputable from a re-evaluation, and its docstring names the removal;
    `revoke_quarantine_exception` is write-tier too, although it can put an asset back

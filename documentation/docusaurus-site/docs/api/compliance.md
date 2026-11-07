@@ -434,11 +434,48 @@ GET /compliance/bind/{databaseId}
             "complianceState": "compliant"
         }
     ],
-    "assetOverrideCount": 1
+    "assetOverrideCount": 1,
+    "applyStatus": "applied",
+    "apply": {
+        "applyId": "5b0e6a52-2f1c-4c8e-9d0a-0d6a3f1e2b44",
+        "operation": "change",
+        "status": "applied",
+        "schemaName": "survey-compliance",
+        "previousSchema": "survey-compliance-v1",
+        "assetCount": 128,
+        "assetsProcessed": 128,
+        "assetsPendingEvaluation": 126,
+        "assetsKeptQuarantined": 2,
+        "removedComplianceRecords": 0,
+        "evaluationsQueued": 128,
+        "startedAt": "2026-03-15T10:30:00+00:00",
+        "lastProgressAt": "2026-03-15T10:30:04+00:00",
+        "finishedAt": "2026-03-15T10:30:04+00:00"
+    }
 }
 ```
 
 `databaseSchema` is `null` when the database has no binding. `assetOverrideCount` counts every asset-level override of the database; `assetOverrides` is one page of them in `assetId` order, and `NextToken` is present while more remain. The request is authorized on `GET` of the database and of the bound schema's name (an empty name when there is none).
+
+`apply` is the database's last binding change, which is applied to the asset records in the background (see [Bind a schema to a database](#bind-a-schema-to-a-database)); `null` when the database has had none. `applyStatus` repeats its `status`:
+
+| `apply` field              | Description                                                                                                                                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applyId`                  | The change's id                                                                                                                                                                     |
+| `operation`                | `bind` (a first binding), `change` (another schema), `unbind` (the binding removed), or `evaluatePending` (automatic evaluation turned on for the schema in force)                  |
+| `status`                   | `applying` while it runs; `stalled` when it made no progress for 15 minutes (repeat the same change to resume it); `applied` once every record was reached; `failed` (see `reason`) |
+| `schemaName`               | The schema the change applies; absent for `unbind`                                                                                                                                  |
+| `previousSchema`           | The schema bound before; absent for a first binding                                                                                                                                 |
+| `assetCount`               | How many assets (for `unbind`, inherited records; for `evaluatePending`, pending records) the change goes through, counted when it began                                            |
+| `assetsProcessed`          | How many of them it has gone through so far                                                                                                                                         |
+| `assetsPendingEvaluation`  | Records now `pending_evaluation` under the schema                                                                                                                                   |
+| `assetsKeptQuarantined`    | Quarantined records kept quarantined and marked awaiting re-evaluation                                                                                                              |
+| `removedComplianceRecords` | Records an `unbind` removed                                                                                                                                                         |
+| `evaluationsQueued`        | Evaluations queued with automatic evaluation on                                                                                                                                     |
+| `startedAt`                | When the change was made                                                                                                                                                            |
+| `lastProgressAt`           | When it last saved progress                                                                                                                                                         |
+| `finishedAt`               | When it ended (`applied` or `failed`)                                                                                                                                               |
+| `reason`                   | Why it `failed` or is `stalled`                                                                                                                                                     |
 
 ### Error responses
 
@@ -452,7 +489,7 @@ GET /compliance/bind/{databaseId}
 
 ## Bind a schema to a database
 
-Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema, except a quarantined one: it stays `quarantined` (its reason and download block with it), marked awaiting re-evaluation under the schema, until an evaluation decides it. Assets with an override are left as they are. Each asset the binding reaches gets a `schema_binding_applied_to_asset` audit entry with its previous and new state. With `complianceAutoEval` on, an evaluation of each of them is queued on the compliance trigger's queue (`evaluationsQueued`); otherwise run a [sweep](#sweep-the-assets-bound-to-a-schema), **Evaluate All** or individual evaluations to produce verdicts. Binding the schema already bound changes nothing when `complianceAutoEval` is unchanged (`changed: false`, no audit entry); when only `complianceAutoEval` changes, the flag is updated without touching the asset records (one `schema_binding_auto_eval_changed` entry), and turning it on queues the assets still pending or awaiting re-evaluation. The request is authorized on `PUT` of the database's `complianceBinding` object, `GET` of the schema in its scope, and `GET` of the database: a database's compliance administrator may bind a `GLOBAL` schema it may read but not edit.
+Binds a `GLOBAL` or database-scoped schema to a database, or replaces the schema bound to it. The request saves the binding on the database, writes one `schema_bound_to_database` audit entry naming the caller, and answers `202` at once; the binding is then **applied to the asset records in the background**, page by page, however many assets the database has. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema, except a quarantined one: it stays `quarantined` (its reason and download block with it), marked awaiting re-evaluation under the schema, until an evaluation decides it. Assets with an override are left as they are. Each asset the binding reaches gets a `schema_binding_applied_to_asset` audit entry with its previous and new state, naming the person who made the change; when every record is reached, one `schema_binding_apply_finished` entry records the totals. With `complianceAutoEval` on, an evaluation of each of them is queued on the compliance trigger's queue (`evaluationsQueued`); otherwise run a [sweep](#sweep-the-assets-bound-to-a-schema), **Evaluate All** or individual evaluations to produce verdicts once the change is applied. Follow the change with [Get the schema bindings of a database](#get-the-schema-bindings-of-a-database) (`apply`). While it is applied, another bind or removal of the database, and **Evaluate All** of it, answer `409`; once it is `stalled`, the same request (same schema and `complianceAutoEval`) resumes it from where it stopped and answers `202` with `resumed: true`. Binding the schema already bound changes nothing when `complianceAutoEval` is unchanged (`changed: false`, no audit entry, `200`); when only `complianceAutoEval` changes, the flag is updated without touching the asset records (one `schema_binding_auto_eval_changed` entry): turning it off answers `200`, and turning it on queues the assets still pending or awaiting re-evaluation in the background (`202`, `operation` `evaluatePending`), or answers `200` when there are none. The request is authorized on `PUT` of the database's `complianceBinding` object, `GET` of the schema in its scope, and `GET` of the database: a database's compliance administrator may bind a `GLOBAL` schema it may read but not edit.
 
 ```
 PUT /compliance/bind/{databaseId}
@@ -471,35 +508,52 @@ PUT /compliance/bind/{databaseId}
 
 ### Response
 
+`202`, the binding saved and being applied:
+
 ```json
 {
-    "message": "Schema 'survey-compliance' bound to database 'survey-project'",
+    "message": "Schema 'survey-compliance' bound to database 'survey-project'; the binding is being applied to 128 assets",
     "schemaName": "survey-compliance",
     "databaseId": "survey-project",
     "complianceAutoEval": true,
     "changed": true,
-    "assetsPendingEvaluation": 126,
-    "assetsKeptQuarantined": 2,
-    "evaluationsQueued": 128
+    "applyStatus": "applying",
+    "applyId": "5b0e6a52-2f1c-4c8e-9d0a-0d6a3f1e2b44",
+    "assetCount": 128,
+    "apply": {
+        "applyId": "5b0e6a52-2f1c-4c8e-9d0a-0d6a3f1e2b44",
+        "operation": "change",
+        "status": "applying",
+        "schemaName": "survey-compliance",
+        "previousSchema": "survey-compliance-v1",
+        "assetCount": 128,
+        "assetsProcessed": 0,
+        "assetsPendingEvaluation": 0,
+        "assetsKeptQuarantined": 0,
+        "removedComplianceRecords": 0,
+        "evaluationsQueued": 0,
+        "startedAt": "2026-03-15T10:30:00+00:00",
+        "lastProgressAt": "2026-03-15T10:30:00+00:00"
+    }
 }
 ```
 
-`assetsPendingEvaluation` counts the assets now `pending_evaluation` and `assetsKeptQuarantined` the quarantined ones awaiting re-evaluation. `evaluationsQueued` is 0 with `complianceAutoEval` off; queuing is best effort, and an asset not queued stays pending until its next change, a sweep or **Evaluate All**.
+`assetCount` is the number of the database's assets the change goes through, counted when it began. The counts grow on the binding read while the change runs (see the `apply` fields there): `assetsPendingEvaluation` counts the assets now `pending_evaluation` and `assetsKeptQuarantined` the quarantined ones awaiting re-evaluation. `evaluationsQueued` is 0 with `complianceAutoEval` off; queuing is best effort, and an asset not queued stays pending until its next change, a sweep or **Evaluate All**. A bind of the binding in force answers `200` with `changed` and the counts at 0, as before.
 
 ### Error responses
 
-| Status | Description                                                                                                                                                                                                                        |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, the schema or database does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`) |
-| `403`  | Not authorized                                                                                                                                                                                                                     |
-| `409`  | The compliance data of a deleted database with this id is still being moved                                                                                                                                                        |
-| `500`  | Internal server error                                                                                                                                                                                                              |
+| Status | Description                                                                                                                                                                                                                                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the schema or database does not exist, the schema is scoped to another database, or the schema is a `legacy` row — its body is not a `vams-rules-v1` document (`Schema body must be a vams-rules-v1 document`)                                                                                                          |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                                                              |
+| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`; a stalled one: `... stopped while it was being applied; repeat the same change to resume it`) |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                       |
 
 ---
 
 ## Remove the schema binding of a database
 
-Removes the database binding and deletes the compliance records of the assets that inherited it, except a quarantined one: it stays `quarantined`, marked awaiting re-evaluation with no schema, until an evaluation under a binding set later or a **Release** decides it. Assets with an asset-level override keep their records. Each asset the change reaches gets a `schema_binding_applied_to_asset` audit entry. The request is authorized on `DELETE` of the database's `complianceBinding` object, `GET` of the database, and `DELETE` of the bound schema's name (an empty name when there is none).
+Removes the database binding. The request removes it from the database, writes one `schema_unbound_from_database` audit entry naming the caller, and answers `202` at once; the removal is then applied to the asset records in the background, as a bind is: it deletes the compliance records of the assets that inherited the binding, except a quarantined one: it stays `quarantined`, marked awaiting re-evaluation with no schema, until an evaluation under a binding set later or a **Release** decides it. Assets with an asset-level override keep their records. Each asset the change reaches gets a `schema_binding_applied_to_asset` audit entry naming the caller, and its end one `schema_binding_apply_finished` entry. While a change of the database is being applied another one answers `409`; a stalled removal resumes when it is requested again. The request is authorized on `DELETE` of the database's `complianceBinding` object, `GET` of the database, and `GET` of the bound schema in its scope (the database stands in when there is none).
 
 ```
 DELETE /compliance/bind/{databaseId}
@@ -507,26 +561,44 @@ DELETE /compliance/bind/{databaseId}
 
 ### Response
 
+`202`, the binding removed from the database and the removal being applied:
+
 ```json
 {
-    "message": "Schema binding removed from database 'survey-project'",
+    "message": "Schema binding removed from database 'survey-project'; the removal is being applied to 128 assets",
     "databaseId": "survey-project",
     "previousSchema": "survey-compliance",
-    "removedComplianceRecords": 126,
-    "assetsKeptQuarantined": 2
+    "changed": true,
+    "applyStatus": "applying",
+    "applyId": "0c7d2e19-7a4b-4f5e-8b6a-1e2d3c4b5a69",
+    "assetCount": 128,
+    "apply": {
+        "applyId": "0c7d2e19-7a4b-4f5e-8b6a-1e2d3c4b5a69",
+        "operation": "unbind",
+        "status": "applying",
+        "previousSchema": "survey-compliance",
+        "assetCount": 128,
+        "assetsProcessed": 0,
+        "assetsPendingEvaluation": 0,
+        "assetsKeptQuarantined": 0,
+        "removedComplianceRecords": 0,
+        "evaluationsQueued": 0,
+        "startedAt": "2026-03-15T10:30:00+00:00",
+        "lastProgressAt": "2026-03-15T10:30:00+00:00"
+    }
 }
 ```
 
-When the database has no binding the response is `200` with only `message` and `databaseId`.
+`assetCount` counts the records that inherit the binding. Once the removal is `applied`, the binding read reports `removedComplianceRecords` and `assetsKeptQuarantined`. When the database has no binding the response is `200` with only `message` and `databaseId`.
 
 ### Error responses
 
-| Status | Description                                                                 |
-| ------ | --------------------------------------------------------------------------- |
-| `400`  | Invalid `databaseId`, or the database does not exist                        |
-| `403`  | Not authorized                                                              |
-| `409`  | The compliance data of a deleted database with this id is still being moved |
-| `500`  | Internal server error                                                       |
+| Status | Description                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId`, or the database does not exist                                                                                    |
+| `403`  | Not authorized                                                                                                                          |
+| `409`  | The compliance data of a deleted database with this id is still being moved, or a binding change of the database is still being applied |
+| `500`  | Internal server error                                                                                                                   |
 
 ---
 
@@ -1397,7 +1469,7 @@ GET /compliance/audit
 | `cascade_timed_out`                | A pending cascade reached its `approvalTimeoutAt` unapproved and was aborted (`abortReason` `approval timed out`); written by the system actor                                                     |
 | `schema_binding_applied_to_asset`  | A binding change (a database binding set or removed) reached one asset: `previousState`, `newState` (a quarantined asset stays `quarantined`, marked awaiting re-evaluation) and the schema        |
 | `schema_binding_auto_eval_changed` | Re-binding the schema in force changed only automatic evaluation (`details.complianceAutoEval`, `details.evaluationsQueued`)                                                                       |
-| `schema_binding_apply_finished`    | A database binding change applied in the background ended (`details.outcome` `applied` or `failed`, `details.reason`, the counts); actor: the person who made the change                         |
+| `schema_binding_apply_finished`    | A database binding change applied in the background ended (`details.outcome` `applied` or `failed`, `details.reason`, the counts); actor: the person who made the change                           |
 | `cascade_database_deleted`         | A cascade awaiting approval was aborted because its database was deleted (`abortReason` `The database was deleted`); written by the system actor                                                   |
 | `database_deleted`                 | A database was deleted: its compliance data moves under `<databaseId>#deleted` (`details` counts the cascades and waiting pipeline rules closed); recorded under `<databaseId>#deleted`            |
 | `database_compliance_moved`        | The move of a deleted database's compliance data under `<databaseId>#deleted` finished (`details.moved` counts the rows per kind); recorded under `<databaseId>#deleted`                           |

@@ -218,15 +218,18 @@ vamscli compliance bind [OPTIONS]
 | `-d`, `--database-id`            | TEXT | Yes      | Database to bind, or the database of `--asset-id`                                                                                                             |
 | `-a`, `--asset-id`               | TEXT | No       | Bind this asset instead, overriding the database binding                                                                                                      |
 | `--auto-eval` / `--no-auto-eval` | FLAG | No       | Re-evaluate the database's assets automatically, or not (database binding only). Omitted: a new binding turns it on and an existing binding keeps its setting |
+| `--wait`                         | FLAG | No       | Database binding: wait until the change is applied to every asset record                                                                                      |
+| `--wait-timeout`                 | INT  | No       | Seconds `--wait` waits at most (default 900)                                                                                                                  |
 | `--json-output`                  | FLAG | No       | Output raw JSON response                                                                                                                                      |
 
 ```bash
 vamscli compliance bind -n cad-quality -d my-database
+vamscli compliance bind -n cad-quality -d my-database --wait
 vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
 vamscli compliance bind -n strict-cad -d my-database -a my-asset
 ```
 
-A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. A quarantined asset stays quarantined until an evaluation under the new schema decides it, counted as `assetsKeptQuarantined`; `compliance state` prints it with an `Awaiting Re-evaluation:` line. With automatic evaluation on, the binding queues an evaluation of each affected asset (`evaluationsQueued`); with it off, run `compliance evaluate -d <database>` or `compliance sweep`. Binding the schema the database already has, with the same automatic-evaluation setting, prints `✓ Nothing changed.` (`changed: false`); changing only `--auto-eval` / `--no-auto-eval` updates the setting without touching the asset records. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
+A database binding is applied to the asset records in the background: the command returns once the binding is saved and prints the change (`Binding Change: bind, applying (0 of 2500 assets)`) and how to follow it, `compliance bindings`. `--wait` reads the binding until the change ends, backing off from 2 to 15 seconds between reads, and prints its counts; the command then exits `0` when the change was applied and `1` when it failed, stopped (`stalled`; run the same command again to resume it) or was still being applied when `--wait-timeout` ran out ("Stopped waiting after N s; the binding change is still being applied"). Without `--wait` it exits `0` once the change is accepted. `--json-output` carries `applyStatus`, `applyId`, `assetCount` and `apply` (with `--wait`, as the change ended, and `waitTimedOut` when the wait ran out). While a change is being applied, another `bind` or `unbind` of the database, and `compliance sweep -d` of it, are refused. `--wait` is refused with `--asset-id`: an override is written at once. The binding marks every asset in the database that has no override `pending_evaluation` (`assetsPendingEvaluation` in the change's counts). A quarantined asset stays quarantined until an evaluation under the new schema decides it, counted as `assetsKeptQuarantined`; `compliance state` prints it with an `Awaiting Re-evaluation:` line. With automatic evaluation on, the binding queues an evaluation of each affected asset (`evaluationsQueued`); with it off, run `compliance evaluate -d <database>` or `compliance sweep`. Binding the schema the database already has, with the same automatic-evaluation setting, prints `✓ Nothing changed.` (`changed: false`); changing only `--auto-eval` / `--no-auto-eval` updates the setting without touching the asset records. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
 
 ---
 
@@ -242,12 +245,17 @@ vamscli compliance unbind [OPTIONS]
 | --------------------- | ---- | -------- | -------------------------------------------------------------------------- |
 | `-d`, `--database-id` | TEXT | Yes      | Database to unbind, or the database of `--asset-id`                        |
 | `-a`, `--asset-id`    | TEXT | No       | Remove this asset's override instead, falling back to the database binding |
+| `--wait`              | FLAG | No       | Database binding: wait until the removal is applied to every asset record  |
+| `--wait-timeout`      | INT  | No       | Seconds `--wait` waits at most (default 900)                               |
 | `--json-output`       | FLAG | No       | Output raw JSON response                                                   |
 
 ```bash
 vamscli compliance unbind -d my-database
+vamscli compliance unbind -d my-database --wait
 vamscli compliance unbind -d my-database -a my-asset
 ```
+
+A database removal is applied in the background as a bind is, and `--wait` follows it the same way.
 
 :::warning[Unbinding a database removes compliance records]
 Unbinding a database deletes the compliance record (state, last evaluation, quarantine and exception fields) of every asset that inherited the binding, and reports the count as `removedComplianceRecords`. A quarantined asset's record is kept instead, still quarantined, until it is released or a schema bound later evaluates it (`assetsKeptQuarantined`). Asset overrides are kept, and the evaluation history and audit trail are not removed. Removing an asset's override reverts it to the database binding and marks it `pending_evaluation` (a quarantined asset stays quarantined until re-evaluated). Both forms succeed when there was nothing to remove.
@@ -276,7 +284,7 @@ vamscli compliance bindings -d my-database --max-items 20 --starting-token "toke
 vamscli compliance bindings -d my-database --json-output
 ```
 
-`assetOverrideCount` is the total number of asset-level overrides; `assetOverrides` is one page of them. The response carries a `NextToken` when more overrides exist; pass it back as `--starting-token`.
+`assetOverrideCount` is the total number of asset-level overrides; `assetOverrides` is one page of them. The response carries a `NextToken` when more overrides exist; pass it back as `--starting-token`. The output ends with the database's last binding change (`Binding Change: schema change, applied (2500 of 2500 assets)` and its counts, or its `Reason` when it failed or stopped); in JSON it is `apply`.
 
 ---
 

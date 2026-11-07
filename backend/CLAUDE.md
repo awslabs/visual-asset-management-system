@@ -219,7 +219,13 @@ backend/
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
 │   │   ├── compliance/                             # Compliance. API handlers (one Lambda each):
 │   │   │                                           #   complianceSchemaService (schemas CRUD incl. DELETE),
-│   │   │                                           #   complianceSchemaBindingService (db/asset bindings),
+│   │   │                                           #   complianceSchemaBindingService (db/asset bindings;
+│   │   │                                           #   a database bind/change/unbind saves the binding,
+│   │   │                                           #   answers 202 and is applied in the background by
+│   │   │                                           #   complianceBindingApply: apply record
+│   │   │                                           #   `bindingApply#<db>` in the evaluation table, message
+│   │   │                                           #   with ids only, run() pages from the trigger, 409
+│   │   │                                           #   while applying, stalled/resume; D161),
 │   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
 │   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
 │   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger

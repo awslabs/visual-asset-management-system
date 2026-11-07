@@ -191,7 +191,12 @@ web/
       # A record action on them or on the asset Compliance tab (release, exception grant/revoke,
       # Evaluate, bind/change/remove, cascade approve/reject) re-reads what the page shows after
       # its outcome, success OR refusal (`finishAction`), and keeps the refusal in its own alert
-      # (`actionError`), apart from the load error each re-read clears (D162).
+      # (`actionError`), apart from the load error each re-read clears (D162). A database binding
+      # change answers 202 and is applied in the background (D161): DatabaseCompliance.tsx shows
+      # the binding read's `apply` (short status label + ProgressBar), re-reads the binding with
+      # `bindingApplyPollDelay` backoff while it is `applying`, disables Bind/Change/Remove and
+      # Evaluate All while it is applying or stalled, and offers Resume (the same request) to a
+      # caller with the route for a stalled one; the API decides each request.
       ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
       ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
