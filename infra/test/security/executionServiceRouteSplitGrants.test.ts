@@ -103,6 +103,9 @@ const EXECUTION_SERVICE_GRANTS = expand({
     // The lock release, in the role's lock policy.
     locks: ["DeleteItem"],
     "locks/index/WorkflowExecutionLocksByHolderGSI": ["Query"],
+    // The abort route resolves an asset bucket's Region for the copy upload it aborts, when the copy
+    // job row carries none (LargeObjectCopyCoordinationPolicy, #1123 D6).
+    "buckets/index/bucketNameGSI": ["Query"],
 });
 
 /** backend: test_execution_service_route_split.py (PERMANENT_DELETE_CALLS). */
