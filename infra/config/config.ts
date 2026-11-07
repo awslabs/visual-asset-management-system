@@ -769,6 +769,165 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
     }
 }
 
+const GIB = 1024 * 1024 * 1024;
+const MIB = 1024 * 1024;
+
+/**
+ * Defaults of app.largeFileIngestion, mirrored by SETTINGS_BOUNDS in
+ * backend/backend/common/largeObjectCopy.py (the backend falls back to the same values).
+ */
+export const LARGE_FILE_INGESTION_DEFAULTS = {
+    apiUploadEngineThresholdBytes: 5 * GIB,
+    minPartSizeBytes: 256 * MIB,
+    partsPerBatch: 16,
+    threadsPerBatch: 8,
+    maxConcurrentBatches: 10,
+    engineReservedConcurrency: 0,
+    maxOutputIngestionWaitHours: 48,
+};
+
+/** Bounds of each app.largeFileIngestion key (inclusive integers). */
+export const LARGE_FILE_INGESTION_BOUNDS: Record<
+    keyof typeof LARGE_FILE_INGESTION_DEFAULTS,
+    { min: number; max: number; unit: string }
+> = {
+    // Above the 1 GiB async threshold, at most the 5 TiB Amazon S3 object limit.
+    apiUploadEngineThresholdBytes: { min: GIB, max: 5 * 1024 * GIB, unit: "bytes" },
+    // Amazon S3 parts are 5 MiB..5 GiB; 64 MiB keeps a 5 TiB object near the 9,000-part plan.
+    minPartSizeBytes: { min: 64 * MIB, max: 5 * GIB, unit: "bytes" },
+    partsPerBatch: { min: 1, max: 64, unit: "parts" },
+    threadsPerBatch: { min: 1, max: 32, unit: "threads" },
+    // Inline Map concurrency of the copy state machine (copy tasks one file runs at once).
+    maxConcurrentBatches: { min: 1, max: 40, unit: "batches" },
+    // Reserved concurrency of the copy-engine function: a deployment-wide cap on copy tasks running
+    // at once, which also keeps the copies from drawing on the pool the API functions use. 0 leaves
+    // the function unreserved (accounts with a low concurrency quota cannot reserve).
+    engineReservedConcurrency: { min: 0, max: 1000, unit: "concurrent executions" },
+    // The AwaitOutputIngestion state's timeout.
+    maxOutputIngestionWaitHours: { min: 1, max: 168, unit: "hours" },
+};
+
+/** Fill each unset app.largeFileIngestion key with its default (an absent block is all defaults). */
+export function applyLargeFileIngestionDefaults(config: ConfigPublic): void {
+    const block = (config.app.largeFileIngestion ?? {}) as Partial<
+        ConfigPublic["app"]["largeFileIngestion"]
+    >;
+    const filled = { ...LARGE_FILE_INGESTION_DEFAULTS };
+    for (const key of Object.keys(LARGE_FILE_INGESTION_DEFAULTS) as Array<
+        keyof typeof LARGE_FILE_INGESTION_DEFAULTS
+    >) {
+        if (block[key] !== undefined && block[key] !== null) {
+            filled[key] = block[key] as number;
+        }
+    }
+    config.app.largeFileIngestion = filled;
+}
+
+/** Reject an app.largeFileIngestion value that is not an integer within its bounds. */
+export function validateLargeFileIngestionConfig(config: ConfigPublic): void {
+    const block = config.app.largeFileIngestion;
+    for (const [key, bound] of Object.entries(LARGE_FILE_INGESTION_BOUNDS)) {
+        const value = (block as Record<string, unknown>)[key];
+        if (
+            typeof value !== "number" ||
+            !Number.isInteger(value) ||
+            value < bound.min ||
+            value > bound.max
+        ) {
+            throw new Error(
+                `Configuration Error: app.largeFileIngestion.${key} must be a whole number of ` +
+                    `${bound.unit} between ${bound.min} and ${bound.max}.`
+            );
+        }
+    }
+}
+
+/**
+ * Defaults of app.zipDownloads (Download as Zip). The backend reads the limits from the zip download
+ * service's environment and falls back to the same values.
+ */
+export const ZIP_DOWNLOADS_DEFAULTS = {
+    enabled: false,
+    retentionDays: 7,
+    maxFilesPerRequest: 100000,
+    // 5 TiB, the largest single Amazon S3 object.
+    maxTotalBytesPerRequest: 5 * 1024 * 1024 * MIB,
+    maxActiveRequestsPerUser: 5,
+    computeVcpu: 16,
+    computeMemoryGiB: 32,
+    // Build the zipArchive container image with AWS CodeBuild instead of local Docker.
+    useCodeBuild: false,
+};
+
+/** Bounds of each numeric app.zipDownloads key (inclusive integers). */
+export const ZIP_DOWNLOADS_BOUNDS: Record<
+    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
+    { min: number; max: number; unit: string }
+> = {
+    retentionDays: { min: 1, max: 30, unit: "days" },
+    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
+    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
+    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
+    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
+    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
+};
+
+/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
+ * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
+ * 8 GiB steps. */
+export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
+
+/** Fill each unset app.zipDownloads key with its default (an absent block is all defaults). */
+export function applyZipDownloadsDefaults(config: ConfigPublic): void {
+    const block = (config.app.zipDownloads ?? {}) as Partial<ConfigPublic["app"]["zipDownloads"]>;
+    const filled = { ...ZIP_DOWNLOADS_DEFAULTS };
+    for (const key of Object.keys(ZIP_DOWNLOADS_DEFAULTS) as Array<
+        keyof typeof ZIP_DOWNLOADS_DEFAULTS
+    >) {
+        if (block[key] !== undefined && block[key] !== null) {
+            (filled as Record<string, unknown>)[key] = block[key];
+        }
+    }
+    config.app.zipDownloads = filled;
+}
+
+/** Reject an app.zipDownloads value outside its type or bounds, and an invalid Fargate size. */
+export function validateZipDownloadsConfig(config: ConfigPublic): void {
+    const block = config.app.zipDownloads;
+    if (typeof block.enabled !== "boolean") {
+        throw new Error("Configuration Error: app.zipDownloads.enabled must be true or false.");
+    }
+    if (typeof block.useCodeBuild !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.zipDownloads.useCodeBuild must be true or false."
+        );
+    }
+    for (const [key, bound] of Object.entries(ZIP_DOWNLOADS_BOUNDS)) {
+        const value = (block as Record<string, unknown>)[key];
+        if (
+            typeof value !== "number" ||
+            !Number.isInteger(value) ||
+            value < bound.min ||
+            value > bound.max
+        ) {
+            throw new Error(
+                `Configuration Error: app.zipDownloads.${key} must be a whole number of ` +
+                    `${bound.unit} between ${bound.min} and ${bound.max}.`
+            );
+        }
+    }
+    if (!ZIP_DOWNLOADS_COMPUTE_VCPUS.includes(block.computeVcpu)) {
+        throw new Error("Configuration Error: app.zipDownloads.computeVcpu must be 4, 8 or 16.");
+    }
+    if (!isFargateCpuMemory(block.computeVcpu, block.computeMemoryGiB)) {
+        throw new Error(
+            `Configuration Error: app.zipDownloads.computeMemoryGiB (${block.computeMemoryGiB}) is ` +
+                `not an AWS Fargate memory size for ${block.computeVcpu} vCPU. 4 vCPU takes 8-30 GiB, ` +
+                `8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.`
+        );
+    }
+}
+
 export function getConfig(app: cdk.App): Config {
     // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
     const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
@@ -1791,6 +1950,12 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // Large object copy engine tuning: fill each unset key with its default, then validate.
+    applyLargeFileIngestionDefaults(config);
+    validateLargeFileIngestionConfig(config);
+    applyZipDownloadsDefaults(config);
+    validateZipDownloadsConfig(config);
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -1968,14 +2133,17 @@ export function getConfig(app: cdk.App): Config {
             "useGenAiVideoSopBom",
             "useImageTo3d",
         ];
-        const enabledOutsideSupport = codeBuildPipelinePaths.filter(
-            (name) => pipelines[name]?.useCodeBuild === true
-        );
+        const enabledOutsideSupport = codeBuildPipelinePaths
+            .filter((name) => pipelines[name]?.useCodeBuild === true)
+            .map((name) => `app.pipelines.${name}`);
+        if (config.app.zipDownloads?.enabled && config.app.zipDownloads.useCodeBuild === true) {
+            enabledOutsideSupport.push("app.zipDownloads");
+        }
         if (enabledOutsideSupport.length > 0) {
             console.warn(
-                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport
-                    .map((name) => `app.pipelines.${name}`)
-                    .join(", ")} while deploying to the '${resolvedPartition}' partition. The ` +
+                `Configuration Warning: useCodeBuild is true for ${enabledOutsideSupport.join(
+                    ", "
+                )} while deploying to the '${resolvedPartition}' partition. The ` +
                     "in-account CodeBuild container build is supported in the aws and aws-us-gov " +
                     "partitions; elsewhere the build host cannot reach the public GPU base images " +
                     "these containers pull. The build trigger does not wait for the build, so a " +
@@ -2102,6 +2270,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
+    // The zipArchive pipeline of Download as Zip runs on AWS Batch Fargate in the isolated pipeline subnets.
+    if (config.app.zipDownloads.enabled) vpcRequiringFeatures.push("zipDownloads");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -4991,6 +5161,32 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
+        };
+        // Tuning of the large object copy engine, which ingests workflow outputs over 1 GiB and API
+        // uploads over apiUploadEngineThresholdBytes into their asset. Every key is optional; the
+        // defaults suit most deployments (see LARGE_FILE_INGESTION_DEFAULTS).
+        largeFileIngestion: {
+            apiUploadEngineThresholdBytes: number;
+            minPartSizeBytes: number;
+            partsPerBatch: number;
+            threadsPerBatch: number;
+            maxConcurrentBatches: number;
+            engineReservedConcurrency: number;
+            maxOutputIngestionWaitHours: number;
+        };
+        // Download as Zip: user zip download jobs and the zipArchive system pipeline. The job table, the
+        // vams.preparedDownloads/ lifecycle rule and the API routes deploy always; `enabled` adds the
+        // zipArchive pipeline and the feature switch (routes answer 404 while it is false). Every key is
+        // optional (see ZIP_DOWNLOADS_DEFAULTS).
+        zipDownloads: {
+            enabled: boolean;
+            retentionDays: number;
+            maxFilesPerRequest: number;
+            maxTotalBytesPerRequest: number;
+            maxActiveRequestsPerUser: number;
+            computeVcpu: number;
+            computeMemoryGiB: number;
+            useCodeBuild: boolean;
         };
     };
 }

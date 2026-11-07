@@ -5,6 +5,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+    apiContext,
     collectPageErrors,
     expectNoPageOverflowX,
     expectTableRendered,
@@ -828,6 +829,120 @@ test.describe("Executions board — partial detail responses", () => {
             rows.filter({ has: cell("metadata") }).filter({ has: cell("mm") })
         ).toHaveCount(1);
     });
+
+    /**
+     * The details of a run copying its large outputs into the asset. Whether this sandbox holds such
+     * a run is not assumed: the first execution's own details are served with the ingestion fields.
+     */
+    const INGESTION = {
+        executionPhase: "INGESTING_OUTPUTS",
+        outputIngestion: {
+            filesTotal: 3,
+            filesDone: 1,
+            bytesTotal: 3 * 1024 ** 3,
+            bytesDone: 1024 ** 3,
+            files: [
+                {
+                    relativeKey: "/e2e/landed.e57",
+                    status: "SUCCEEDED",
+                    bytesTotal: 1024 ** 3,
+                    partsTotal: 4,
+                    partsDone: 4,
+                    error: "",
+                },
+                {
+                    relativeKey: "/e2e/copying.e57",
+                    status: "RUNNING",
+                    bytesTotal: 2 * 1024 ** 3,
+                    partsTotal: 8,
+                    partsDone: 2,
+                    error: "",
+                },
+            ],
+            filesTruncated: true,
+        },
+    };
+
+    async function serveDetails(
+        page: import("@playwright/test").Page,
+        edit: (execution: any) => void
+    ): Promise<void> {
+        await page.route(DETAILS_ROUTE, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            edit(target);
+            await route.fulfill({ response, json: body });
+        });
+    }
+
+    test("the detail page shows a run's output ingestion progress", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await serveDetails(page, (execution) => {
+            execution.executionStatus = "RUNNING";
+            Object.assign(execution, INGESTION);
+        });
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+
+        await expect(page.getByText("Ingesting outputs (1 of 3)")).toBeVisible({ timeout: 20_000 });
+        await expect(
+            page.getByRole("progressbar", { name: "Ingesting outputs (1 of 3)" })
+        ).toHaveAttribute("aria-valuenow", "33");
+        await expect(page.getByText(/1 GiB of 3 GiB copied into the asset/)).toBeVisible();
+        const table = page.getByRole("table", { name: "Output files being copied" });
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/copying.e57" })).toContainText(
+            "25%"
+        );
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/landed.e57" })).toContainText(
+            "Landed"
+        );
+        await expect(page.getByText(/Showing the first 2 files/)).toBeVisible();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("the quick view shows the ingestion summary only", async ({ page }) => {
+        await serveDetails(page, (execution) => {
+            execution.executionStatus = "RUNNING";
+            Object.assign(execution, INGESTION);
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        await tableRows(page).first().click();
+
+        await expect(page.getByText("Ingesting outputs (1 of 3)")).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByRole("table", { name: "Output files being copied" })).toHaveCount(0);
+    });
+
+    test("a finished run shows no ingestion progress and marks its landed large output", async ({
+        page,
+    }) => {
+        await serveDetails(page, (execution) => {
+            delete execution.executionPhase;
+            delete execution.outputIngestion;
+            execution.truncatedCollections = [];
+            execution.outputs = {
+                ...(execution.outputs || {}),
+                files: [
+                    { relativeFilePath: "/e2e/landed.e57", ingestionStatus: "SUCCEEDED" },
+                    { relativeFilePath: "/e2e/small.glb" },
+                ],
+            };
+        });
+        const opened = await openFirstExecutionDetail(page);
+        test.skip(!opened, "No executions in this environment");
+
+        await expect(page.getByTestId("output-ingestion-progress")).toHaveCount(0);
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+        const table = page.getByRole("table", { name: "Output files" });
+        await expect(table.getByText("Ingested by copy engine")).toHaveCount(1, {
+            timeout: 20_000,
+        });
+        await expect(table.getByRole("row").filter({ hasText: "/e2e/landed.e57" })).toContainText(
+            "Ingested by copy engine"
+        );
+    });
 });
 
 /**
@@ -907,6 +1022,269 @@ for (const width of [390, 768, 1280, 1440]) {
         }
     });
 }
+
+/**
+ * "Show system runs" (#1121). The list routes hide system workflow runs unless the request carries
+ * includeSystem, and echo the applied value. These tests read the requests the board sends and, for
+ * the badge, answer the list route with a synthetic page, so they hold on any environment and change
+ * nothing in it.
+ */
+test.describe("Executions board — Show system runs", () => {
+    /** The global list route itself, not an execution's detail routes below it. */
+    const LIST_ROUTE = /\/workflows\/executions(\?|$)/;
+    const isListRequest = (url: string) => LIST_ROUTE.test(new URL(url).pathname + "?");
+
+    test("is off by default and sends no includeSystem", async ({ page }) => {
+        const listUrls: string[] = [];
+        page.on("request", (request) => {
+            if (request.method() === "GET" && isListRequest(request.url())) {
+                listUrls.push(request.url());
+            }
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await expect(box).toBeVisible();
+        await expect(box).not.toBeChecked();
+        expect(listUrls.length, "the board issued no list request").toBeGreaterThan(0);
+        for (const url of listUrls) {
+            expect(new URL(url).searchParams.has("includeSystem"), url).toBe(false);
+        }
+    });
+
+    test("ticking it keeps the choice in the URL and asks the API for system runs", async ({
+        page,
+    }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const listed = page.waitForRequest(
+            (request) =>
+                request.method() === "GET" &&
+                isListRequest(request.url()) &&
+                new URL(request.url()).searchParams.get("includeSystem") === "true"
+        );
+        // The box follows the URL, so its new value lands one render after the click:
+        // click() plus a web-first assertion, not check() (which reads the old value).
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).toBeChecked();
+        await listed;
+        await expect.poll(() => page.url()).toMatch(/[?&]includeSystem=true/);
+
+        // A reload restores it from the URL.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expect(page.getByRole("heading", { name: /Executions/i, level: 1 })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
+    });
+
+    test("badges a system run and ticks the box from the server's echo", async ({ page }) => {
+        const errors = collectPageErrors(page);
+        const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        const rowFor = (id: string, isSystem: boolean) => ({
+            workflowExecutionId: id,
+            workflowId: `e2e-${id}`,
+            workflowDatabaseId: "e2e-db",
+            executionStatus: "SUCCEEDED",
+            executionStartDate: now,
+            executionStopDate: now,
+            triggerType: "Manual",
+            outputTypes: [],
+            isSystem,
+        });
+        await page.route(LIST_ROUTE, (route) =>
+            route.request().method() === "GET"
+                ? route.fulfill({
+                      json: {
+                          message: {
+                              Items: [rowFor("sysrun", true), rowFor("userrun", false)],
+                              filterStartDate: now,
+                              includeSystem: true,
+                          },
+                      },
+                  })
+                : route.continue()
+        );
+        await gotoOrchestration(page, "executions", /Executions/i);
+        const systemRow = tableRows(page).filter({ hasText: "e2e-sysrun" });
+        const userRow = tableRows(page).filter({ hasText: "e2e-userrun" });
+        await expect(systemRow.getByText("System", { exact: true })).toBeVisible({
+            timeout: 30_000,
+        });
+        await expect(userRow.getByText("System", { exact: true })).toHaveCount(0);
+        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+});
+
+/**
+ * "Show system runs" on the scoped views (#1121): the global workflow filter, the workflow-scoped
+ * page, and the asset Executions tab. The server shows a system workflow's runs by default only for a
+ * list scoped to ONE workflow (both halves of its key), so the filter must send both. The scoped
+ * lists are answered with synthetic pages, so these hold on any environment and change nothing.
+ */
+test.describe("Executions board — Show system runs on scoped views", () => {
+    /** The global list route (the workflow-scoped page uses it too), not the asset list below it. */
+    const isGlobalList = (url: string) => {
+        const path = new URL(url).pathname;
+        return /\/workflows\/executions$/.test(path) && !/\/assets\//.test(path);
+    };
+
+    test("the workflow filter sends the workflow's own database with All workflow databases", async ({
+        page,
+    }) => {
+        await gotoOrchestration(page, "executions", /Executions/i);
+        await expect(facet(page, "Filter by workflow database")).toHaveValue("");
+        const workflowSelect = facet(page, "Filter by workflow");
+        const values = await workflowSelect
+            .locator("option")
+            .evaluateAll((options) =>
+                options.map((o) => (o as HTMLOptionElement).value).filter(Boolean)
+            );
+        test.skip(values.length === 0, "the environment lists no workflows to filter by");
+        const value = values[0];
+        const separator = value.indexOf(":");
+        const [databaseId, workflowId] = [value.slice(0, separator), value.slice(separator + 1)];
+        const listed = page.waitForRequest((request) => {
+            if (request.method() !== "GET" || !isGlobalList(request.url())) return false;
+            const params = new URL(request.url()).searchParams;
+            return params.get("workflowId") === workflowId;
+        });
+        await workflowSelect.selectOption(value);
+        const params = new URL((await listed).url()).searchParams;
+        expect(params.get("workflowDatabaseId")).toBe(databaseId);
+        expect(params.has("includeSystem")).toBe(false);
+    });
+
+    test("the workflow-scoped page sends both halves and ticks the box from the server's echo", async ({
+        page,
+    }) => {
+        const errors = collectPageErrors(page);
+        const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        const sent: URLSearchParams[] = [];
+        await page.route(/\/workflows\/executions(\?|$)/, (route) => {
+            if (route.request().method() !== "GET") return route.continue();
+            sent.push(new URL(route.request().url()).searchParams);
+            return route.fulfill({
+                json: {
+                    message: {
+                        Items: [
+                            {
+                                workflowExecutionId: "e2e-sysrun",
+                                workflowId: "e2e-sys-wf",
+                                workflowDatabaseId: "GLOBAL",
+                                executionStatus: "SUCCEEDED",
+                                executionStartDate: now,
+                                executionStopDate: now,
+                                triggerType: "Manual",
+                                outputTypes: [],
+                                isSystem: true,
+                            },
+                        ],
+                        filterStartDate: now,
+                        includeSystem: true,
+                    },
+                },
+            });
+        });
+        await page.goto("/#/executions/?workflowId=e2e-sys-wf&workflowDatabaseId=GLOBAL", {
+            waitUntil: "domcontentloaded",
+        });
+        await expect(tableRows(page).filter({ hasText: "e2e-sys-wf" }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+        expect(sent.length, "the board issued no list request").toBeGreaterThan(0);
+        expect(sent[0].get("workflowId")).toBe("e2e-sys-wf");
+        expect(sent[0].get("workflowDatabaseId")).toBe("GLOBAL");
+        expect(sent[0].has("includeSystem")).toBe(false);
+        await expect(page.getByRole("checkbox", { name: "Show system runs" })).toBeChecked();
+        await expect(tableRows(page).getByText("System", { exact: true })).toBeVisible();
+
+        // Unticking on a list the server showed by default sends an explicit false.
+        const unticked = page.waitForRequest(
+            (request) =>
+                request.method() === "GET" &&
+                isGlobalList(request.url()) &&
+                new URL(request.url()).searchParams.get("includeSystem") === "false"
+        );
+        // URL-controlled box: click() then assert, not uncheck().
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).not.toBeChecked();
+        await unticked;
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("the asset tab says an empty page with more is not an empty history, and ticks through", async ({
+        page,
+    }) => {
+        const errors = collectPageErrors(page);
+        const ctx = await apiContext(page);
+        test.skip(!ctx, "no API context to find an asset with");
+        const headers = { Authorization: `Bearer ${ctx!.token}` };
+        const itemsOf = async (path: string): Promise<any[]> => {
+            const r = await page.request.get(`${ctx!.base}${path}`, { headers });
+            if (!r.ok()) return [];
+            const b = await r.json().catch(() => null);
+            const items = (b?.message ?? b ?? {})?.Items ?? [];
+            return Array.isArray(items) ? items : [];
+        };
+        let asset: { databaseId: string; assetId: string } | null = null;
+        for (const db of (await itemsOf("/database")).slice(0, 8)) {
+            const assets = db?.databaseId ? await itemsOf(`/database/${db.databaseId}/assets`) : [];
+            if (assets[0]?.assetId) {
+                asset = { databaseId: db.databaseId, assetId: assets[0].assetId };
+                break;
+            }
+        }
+        test.skip(!asset, "the environment lists no asset");
+
+        // A system-dense asset: the first page drops every row it inspected and still has more.
+        const sent: URLSearchParams[] = [];
+        await page.route(/\/assets\/[^/]+\/workflows\/executions(\?|$)/, (route) => {
+            if (route.request().method() !== "GET") return route.continue();
+            const params = new URL(route.request().url()).searchParams;
+            sent.push(params);
+            return route.fulfill({
+                json: {
+                    message: {
+                        Items: [],
+                        NextToken: "e2e-more",
+                        filterStartDate: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+                        includeSystem: params.get("includeSystem") === "true",
+                    },
+                },
+            });
+        });
+        await page.goto(
+            `/#/databases/${encodeURIComponent(asset!.databaseId)}/assets/${encodeURIComponent(
+                asset!.assetId
+            )}`,
+            { waitUntil: "domcontentloaded" }
+        );
+        const tab = page.getByRole("tab", { name: "Executions" }).first();
+        await expect(tab).toBeVisible({ timeout: 60_000 });
+        await tab.click();
+
+        await expect(page.getByText(/load more to keep looking/)).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText("No executions found.")).toHaveCount(0);
+        await expect(page.getByText(/System workflow runs are hidden/)).toBeVisible();
+        await expect(page.getByRole("button", { name: /Load more/ })).toBeVisible();
+        expect(sent[0].has("includeSystem")).toBe(false);
+
+        const ticked = page.waitForRequest(
+            (request) =>
+                request.method() === "GET" &&
+                /\/assets\/[^/]+\/workflows\/executions$/.test(new URL(request.url()).pathname) &&
+                new URL(request.url()).searchParams.get("includeSystem") === "true"
+        );
+        // URL-controlled box: click() then assert, not check().
+        const box = page.getByRole("checkbox", { name: "Show system runs" });
+        await box.click();
+        await expect(box).toBeChecked();
+        await ticked;
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+});
 
 // #998: a file-upload trigger launch refused by a concurrency restriction is a SKIPPED record. The
 // list and details responses are served here, so the spec runs in any environment; the live record

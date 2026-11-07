@@ -356,6 +356,13 @@ def is_conditional_check_failure(error):
     return "ConditionalCheckFailed" in str(error)
 
 
+# Main-row attributes of a run whose large outputs are being copied into the asset (the phase and its
+# progress counters). They describe a RUNNING row only, so every write of a terminal status removes
+# them (a no-op on a row that never entered the phase).
+INGESTION_PHASE_ATTRIBUTES = ("executionPhase", "outputIngestion")
+REMOVE_INGESTION_PHASE = " REMOVE " + ", ".join(INGESTION_PHASE_ATTRIBUTES)
+
+
 def not_terminal_condition(values):
     """The status-write guard shared by every terminal status write on an execution row: the row carries
     no status yet, or a status that is not terminal. Adds the terminal-status placeholders to `values`
@@ -434,7 +441,10 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
     same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
     Losing that race is the expected outcome for the second writer, not a failure, so the
-    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces.
+
+    Returns True when this call wrote the terminal status and False when another writer had already
+    finished the row: the system-pipeline terminal callback is sent only by the writer that won."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -444,6 +454,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     if execution_error is not None:
         expr += ", executionError = :er"
         values[":er"] = execution_error or ""
+    expr += REMOVE_INGESTION_PHASE
     condition = not_terminal_condition(values)
     try:
         table.update_item(
@@ -458,6 +469,8 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
+        return False
+    return True
 
 
 def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,

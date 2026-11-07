@@ -501,6 +501,8 @@ Execution progress can be monitored from the **Executions** page or from the ass
 
 The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow, every asset it read — each selected file's asset plus each asset named as a metadata source — and the asset it wrote to. A run that wrote its output into an asset you cannot open is therefore not listed, even when you can open every asset it read; ask an administrator for read access to the destination asset if you expect to see such a run. A run that produced results only, writing no files, has no destination asset, so being able to view its workflow is enough. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
+Runs of system workflows, the workflows shipped with your deployment, are hidden so the list shows the runs people start. Select **Show system runs** on the **Executions** page or an asset's **Executions** tab to include them; each one then carries a **System** badge. The choice is kept in the page address, so a shared or reloaded link keeps it. A view opened for one system workflow shows its runs from the start, and clearing **Show system runs** hides them.
+
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
 Aborting a run from an execution's **⋮** actions menu signals it to stop and records it as **Aborted**. Some
@@ -520,6 +522,13 @@ workflow, trigger, start and stop times and duration — together with where it 
 (an asset, or **Results only** for a run that writes no files), the destination database and asset, and the
 **Output Path Prefix** the run wrote beneath. Knowing the prefix is what lets you find a particular run's
 output in the asset when several runs have written to the same place.
+
+Output files over 1 GiB are copied into the asset after the last pipeline step, and the run stays
+**Running** until they have landed. While that lasts, the header and the quick view show **Ingesting
+outputs (n of m)** with the bytes copied, and the detail page lists each file with its status
+(Queued, Copying, Landed, Failed or Cancelled), its progress and, for a failed file, the reason. On a
+finished run, the **Outputs** tab marks each output file the copy engine landed with **Ingested by
+copy engine**; a file that did not land is named in the execution error.
 
 The header also shows the **Workflow Version** the run started on: the published version of the
 workflow's state machine, the exact definition the run executed. It reads **(latest)** while the

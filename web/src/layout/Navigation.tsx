@@ -12,6 +12,7 @@ import config from "../config";
 import Synonyms from "../synonyms";
 import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
+import { isZipDownloadsEnabled } from "../components/zipDownloads/zipDownloads";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "#/",
@@ -186,7 +187,13 @@ export function Navigation({
         {
             type: "section",
             text: "User",
-            items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
+            items: [
+                // Download as Zip: listed only when the deployment has the feature
+                ...(isZipDownloadsEnabled()
+                    ? [{ type: "link", text: "My zip downloads", href: "#/zipdownloads/" }]
+                    : []),
+                { type: "link", text: "API Key Management", href: "#/auth/api-keys/" },
+            ],
         },
         // Sections the add-ons add (addons/addonNavigation.ts), then a fork's
         // (custom/customNavigation.ts, shipped empty)

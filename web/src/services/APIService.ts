@@ -3494,6 +3494,140 @@ export const fetchLoginProfile = async ({ username }: any) => {
     }
 };
 
+// ===== Download as Zip (prepared archive downloads) =====
+// Every job is owned by the signed-in user: the API keys each call on the authenticated identity, so
+// another user's job reads as not found. Failure tuples are [false, message, status?]; the status
+// lets a caller tell "feature disabled" (404) or "not ready" (409) from a generic failure. A request
+// the AWS WAF web ACL blocked carries no status, so its message is shown as it is.
+
+const zipAssetPath = (databaseId: string, assetId: string) =>
+    `database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(assetId)}/download/zip`;
+
+const zipFailure = (error: any, fallback: string): [false, string, number | undefined] => {
+    console.log(error);
+    return [false, error?.message || fallback, isRequestBlocked(error) ? undefined : error?.status];
+};
+
+const zipListQuery = ({ maxItems, pageSize, startingToken }: any): Record<string, string> => {
+    const query: Record<string, string> = {};
+    if (maxItems) query.maxItems = `${maxItems}`;
+    if (pageSize) query.pageSize = `${pageSize}`;
+    if (startingToken) query.startingToken = startingToken;
+    return query;
+};
+
+/**
+ * Creates a zip download job for a selection of an asset's files, folders or the whole asset.
+ * @param {Object} params.body - CreateZipDownloadRequestModel (selection, format, compression,
+ *   archiveFileName, optional assetVersionId pin)
+ * @returns {Promise<[boolean, any, number?]>} [true, job] or [false, message, status]
+ */
+export const createZipDownload = async ({ databaseId, assetId, body }: any) => {
+    try {
+        const response = await apiClient.post(zipAssetPath(databaseId, assetId), { body });
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to create the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to create the zip download");
+    }
+};
+
+/**
+ * Lists the caller's zip downloads for one asset (one page, newest first).
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchAssetZipDownloads = async ({
+    databaseId,
+    assetId,
+    maxItems,
+    pageSize,
+    startingToken,
+}: any) => {
+    try {
+        const response = await apiClient.get(zipAssetPath(databaseId, assetId), {
+            queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }),
+        });
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load zip downloads"];
+        }
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load zip downloads");
+    }
+};
+
+/**
+ * Lists the caller's zip downloads across every asset (one page, newest first).
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchZipDownloads = async ({ maxItems, pageSize, startingToken }: any = {}) => {
+    try {
+        const response = await apiClient.get("download/zip", {
+            queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }),
+        });
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load zip downloads"];
+        }
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load zip downloads");
+    }
+};
+
+/** Reads one of the caller's zip downloads. */
+export const fetchZipDownload = async ({ databaseId, assetId, requestId }: any) => {
+    try {
+        const response = await apiClient.get(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load the zip download");
+    }
+};
+
+/**
+ * Issues a short-lived download URL for a finished zip download. The URL is a credential for the
+ * archive until it expires: never log it.
+ * @returns {Promise<[boolean, {url, expiresIn, archiveFileName, archiveSizeBytes} | string, number?]>}
+ */
+export const getZipDownloadUrl = async ({ databaseId, assetId, requestId }: any) => {
+    try {
+        const response = await apiClient.post(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}/url`
+        );
+        if (response?.success === false || !response?.url) {
+            return [false, response?.message ?? "Failed to get the download link"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to get the download link");
+    }
+};
+
+/**
+ * Cancels a queued or running zip download, or deletes a finished one and its archive.
+ * @returns {Promise<[boolean, {message, action: "cancelled" | "deleted"} | string, number?]>}
+ */
+export const deleteZipDownload = async ({ databaseId, assetId, requestId }: any) => {
+    try {
+        const response = await apiClient.del(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to remove the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to remove the zip download");
+    }
+};
+
 export const ACTIONS = {
     CREATE: {
         DATABASE: createDatabase,

@@ -114,13 +114,14 @@ The details pane displays the asset's core properties and provides action button
 
 Below the details pane, a tabbed interface provides access to the following sections:
 
-| Tab               | Description                                                                                                                                                                                                                                                                                         |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **File Manager**  | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
-| **Relationships** | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                               |
-| **Executions**    | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
-| **Comments**      | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
-| **Versions**      | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
+| Tab                  | Description                                                                                                                                                                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **File Manager**     | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
+| **Relationships**    | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                               |
+| **Executions**       | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
+| **Comments**         | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
+| **Versions**         | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
+| **My zip downloads** | Your zip downloads for this asset, with status and progress, and **Download**, **Cancel**, and **Delete** actions. Shown when the deployment enables Download as Zip. See [Zip Downloads](zip-downloads.md).                                                                                        |
 
 ### Metadata Section
 
@@ -188,11 +189,15 @@ Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** 
 
 ### Executions Page
 
-The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
+The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Runs of system workflows are hidden until you select **Show system runs**, and shown runs carry a **System** badge. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
 
 A **Skipped** row records file-upload trigger launches that the workflow's concurrency restriction refused while another execution held the asset, file or file version. One row counts every launch that execution refused, shows how many under the badge and gives the reason on hover. Its detail view lists the files and, when you may read it, links the execution that blocked them. Skipped rows have no Abort action. Choose **All except skipped** in the status filter to hide them.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+
+## My Zip Downloads Page
+
+When the deployment enables Download as Zip, the **My zip downloads** page (`#/zipdownloads`) lists your zip downloads across every asset, newest first, with each job's asset, archive name, status, progress, and expiry. A job that has succeeded can be downloaded; a queued or running job can be cancelled; a finished job can be deleted. The page lists only your own downloads. See [Zip Downloads](zip-downloads.md).
 
 ---
 
@@ -225,6 +230,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 | Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
+| My zip downloads      | `https://<VAMS_WEBSITE>/#/zipdownloads`                                                                                 |
 
 ### File Path Encoding
 

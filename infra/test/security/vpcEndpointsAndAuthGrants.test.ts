@@ -184,6 +184,8 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "usePreview3dThumbnail",
         "useGenAiMetadata3dLabeling",
         "useGenAiVideoSopBom",
+        // app.zipDownloads (not under app.pipelines): the zipArchive system pipeline.
+        "zipDownloads",
     ];
 
     // The three blocks, keyed by an anchor unique to each.

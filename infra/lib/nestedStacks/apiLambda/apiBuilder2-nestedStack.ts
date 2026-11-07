@@ -44,6 +44,25 @@ import {
     grantWorkflowServiceInternalInvoke,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
+    attachSystemPipelineCallbacks,
+    SystemPipelineCallbackRegistry,
+} from "../../lambdaBuilder/systemPipelineCallbacks";
+import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
+import {
+    buildZipDownloadCallbackFunction,
+    buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
+    grantZipDownloadLaunch,
+    ZIP_DOWNLOAD_ROUTES,
+    ZIP_DOWNLOAD_SYSTEM_TRIGGER,
+} from "../../lambdaBuilder/zipDownloadFunctions";
+import {
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyHandOffByParameter,
+    largeObjectCopyEnvironment,
+} from "../../lambdaBuilder/largeObjectCopyEngine";
+import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
 } from "../../lambdaBuilder/pipelineFunctions";
@@ -66,6 +85,8 @@ export interface ApiBuilder2NestedStackProps {
     // process-output to write outputs back to the asset).
     metadataServiceFunction: lambda.Function;
     uploadFileFunction: lambda.Function;
+    // Invoked by the large object copy engine built here once a large file has landed.
+    sendEmailFunction: lambda.Function;
 }
 
 /**
@@ -377,6 +398,108 @@ export class ApiBuilder2NestedStack extends NestedStack {
             subnets
         );
 
+        // Terminal callbacks of system pipelines (runs VAMS launches for a feature under a system
+        // trigger value). The three functions that run the five terminal writers (end state, error
+        // handler, and the execution service's abort, group abort and read-path reconcile) get the
+        // registry and an invoke grant on exactly the registered callback functions, as one managed
+        // policy attached to all three roles (kept out of their inline policies, which are near IAM's
+        // quota). A feature that launches system pipelines adds its stored trigger value and callback
+        // function here. Empty until one does, which adds no variable and no policy.
+        const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
+
+        // Download as Zip: the zip download service (six routes) and the zipArchive pipeline's terminal
+        // callback deploy whatever app.zipDownloads.enabled says, so turning the feature off keeps
+        // existing jobs readable and the routes answering 404. Only with it on is the callback
+        // registered (Zip-Download) and the service granted its launch and abort cross-calls (below,
+        // once executeWorkflowV2 exists).
+        const zipDownloadServiceFunction = buildZipDownloadServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        const zipDownloadCallbackFunction = buildZipDownloadCallbackFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const route of ZIP_DOWNLOAD_ROUTES) {
+            attachFunctionToApi(this, zipDownloadServiceFunction, {
+                routePath: route.routePath,
+                method: route.method,
+                registry: registry,
+            });
+        }
+        if (config.app.zipDownloads.enabled) {
+            systemPipelineCallbacks[ZIP_DOWNLOAD_SYSTEM_TRIGGER] = zipDownloadCallbackFunction;
+            // The delayed sweep of a stopped job's archive upload (#1125 D16).
+            buildZipDownloadSweep(
+                this,
+                zipDownloadCallbackFunction,
+                zipDownloadServiceFunction,
+                storageResources,
+                config
+            );
+        }
+
+        attachSystemPipelineCallbacks(
+            this,
+            [
+                processWorkflowExecutionOutputFunction,
+                handleExecutionErrorFunction,
+                executionServiceFunction,
+            ],
+            systemPipelineCallbacks
+        );
+        // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
+        // state machine level) is reconciled when Step Functions reports it, through the execution
+        // service's read-path reconcile, so its terminal callback does not wait for a read.
+        buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
+
+        // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
+        // engine threshold) into their asset as resumable multipart copies. The output step waits
+        // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
+        // of the three gets its grants as one managed policy (their inline policies are near the
+        // IAM quota).
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            props.sendEmailFunction,
+            processWorkflowExecutionOutputFunction,
+            config,
+            vpc,
+            subnets
+        );
+        grantLargeObjectCopyCoordination(
+            processWorkflowExecutionOutputFunction,
+            storageResources,
+            config,
+            { answersTaskToken: true }
+        );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes; the output step through an SSM parameter (the engine references it already).
+        grantLargeObjectCopyHandOffByParameter(
+            this,
+            processWorkflowExecutionOutputFunction,
+            largeObjectCopyEngine.engineFunction,
+            config
+        );
+        grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
+            answersTaskToken: false,
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+        });
+        // The details read also hands the engine a copy whose execution ended unreported.
+        grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
+            answersTaskToken: false,
+            reconcileWith: largeObjectCopyEngine.engineFunction,
+        });
+
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).
         buildRegisterPipelineExecutionFunction(
@@ -486,6 +609,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // The generated definitions wait this long for a run's large outputs (AwaitOutputIngestion).
+        workflowServiceV2.addEnvironment(
+            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
+            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
+        );
         // List all workflows (Casbin-filtered).
         attachFunctionToApi(this, workflowServiceV2, {
             routePath: "/workflows",
@@ -525,6 +653,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // The launch-time deployment check compares the wait a workflow was deployed with to this.
+        executeWorkflowV2.addEnvironment(
+            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
+            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
+        );
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",
             method: apigateway.HttpMethod.POST,
@@ -547,6 +680,14 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 resources: [executeWorkflowV2.functionArn],
             })
         );
+
+        if (config.app.zipDownloads.enabled) {
+            grantZipDownloadLaunch(
+                zipDownloadServiceFunction,
+                executeWorkflowV2,
+                executionServiceFunction
+            );
+        }
 
         // Keep workflow state machines current with their pipelines: a pipeline save schedules an
         // asynchronous redeploy of every referencing workflow, and a launch redeploys a stale workflow

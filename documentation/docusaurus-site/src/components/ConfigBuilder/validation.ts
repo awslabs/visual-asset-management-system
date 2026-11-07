@@ -763,6 +763,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
+    {
+        id: "vpc-required-zip-downloads",
+        label: "zipDownloads",
+        fieldPaths: ["app.zipDownloads.enabled"],
+        appliesWhen: (c) => !!g(c, "app.zipDownloads.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -3420,6 +3426,101 @@ export const RULES: Rule[] = [
         },
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
+
+    // ----- Large file ingestion bounds
+    // (config.ts: "app.largeFileIngestion.<key> must be a whole number of") -----
+    ...(
+        [
+            ["apiUploadEngineThresholdBytes", 1073741824, 5497558138880, "bytes"],
+            ["minPartSizeBytes", 67108864, 5368709120, "bytes"],
+            ["partsPerBatch", 1, 64, "parts"],
+            ["threadsPerBatch", 1, 32, "threads"],
+            ["maxConcurrentBatches", 1, 40, "batches"],
+            ["engineReservedConcurrency", 0, 1000, "concurrent executions"],
+            ["maxOutputIngestionWaitHours", 1, 168, "hours"],
+        ] as Array<[string, number, number, string]>
+    ).map(([key, min, max, unit]) => ({
+        id: `large-file-ingestion-${key}-range`,
+        severity: "error" as const,
+        fieldPaths: [`app.largeFileIngestion.${key}`],
+        appliesWhen: (c: ConfigShape) => {
+            const value = g(c, `app.largeFileIngestion.${key}`);
+            if (value === undefined || value === null || value === "") return false;
+            const n = Number(value);
+            return !Number.isInteger(n) || n < min || n > max;
+        },
+        message: `app.largeFileIngestion.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
+    })),
+
+    // ----- Download as Zip
+    // (config.ts: "app.zipDownloads.<key> must be a whole number of",
+    // "app.zipDownloads.computeVcpu must be 4, 8 or 16", "is not an AWS Fargate memory size") -----
+    {
+        id: "zip-downloads-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.zipDownloads.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.zipDownloads.enabled must be true or false.",
+    },
+    {
+        id: "zip-downloads-use-codebuild-boolean",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.useCodeBuild"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.zipDownloads.useCodeBuild");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.zipDownloads.useCodeBuild must be true or false.",
+    },
+    ...(
+        [
+            ["retentionDays", 1, 30, "days"],
+            ["maxFilesPerRequest", 1, 1000000, "files"],
+            ["maxTotalBytesPerRequest", 1, 5497558138880, "bytes"],
+            ["maxActiveRequestsPerUser", 1, 100, "jobs"],
+            ["computeVcpu", 4, 16, "vCPU"],
+            ["computeMemoryGiB", 8, 120, "GiB"],
+        ] as Array<[string, number, number, string]>
+    ).map(([key, min, max, unit]) => ({
+        id: `zip-downloads-${key}-range`,
+        severity: "error" as const,
+        fieldPaths: [`app.zipDownloads.${key}`],
+        appliesWhen: (c: ConfigShape) => {
+            const value = g(c, `app.zipDownloads.${key}`);
+            if (value === undefined || value === null || value === "") return false;
+            const n = Number(value);
+            return !Number.isInteger(n) || n < min || n > max;
+        },
+        message: `app.zipDownloads.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
+    })),
+    {
+        id: "zip-downloads-compute-vcpu",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.computeVcpu"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.zipDownloads.computeVcpu");
+            if (value === undefined || value === null || value === "") return false;
+            return ![4, 8, 16].includes(Number(value));
+        },
+        message: "app.zipDownloads.computeVcpu must be 4, 8 or 16.",
+    },
+    {
+        id: "zip-downloads-compute-fargate-size",
+        severity: "error",
+        fieldPaths: ["app.zipDownloads.computeVcpu", "app.zipDownloads.computeMemoryGiB"],
+        appliesWhen: (c) => {
+            const vcpu = Number(g(c, "app.zipDownloads.computeVcpu") ?? 16);
+            const memoryGiB = Number(g(c, "app.zipDownloads.computeMemoryGiB") ?? 32);
+            if (![4, 8, 16].includes(vcpu)) return false;
+            return !isFargateCpuMemory(vcpu, memoryGiB);
+        },
+        message:
+            "app.zipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
+            "takes 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.",
+    },
 ];
 
 /** Evaluate every rule against the config and return those that apply. */

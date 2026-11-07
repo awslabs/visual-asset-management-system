@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as Config from "../../config/config";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { PREPARED_DOWNLOADS_PREFIX } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 
 /** Fargate's own bounds, from the prop's doc comment on `batch-fargate-pipeline.ts`. */
 const FARGATE_MIN_GIB = 21;
@@ -206,8 +207,13 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         // Viewer data, other pipelines' working files and the non-versioned auxiliary objects live under
         // other prefixes and are not this pipeline's to expire — current versions, noncurrent versions
         // or delete markers alike.
+        // The Download as Zip archives' own expiry (top-level vams.preparedDownloads/, always deployed) is
+        // the one other expiring prefix, and holds no pipeline working file.
         const unscoped = auxBucketRules(synth).filter(
-            (rule) => expiresSomething(rule) && rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX
+            (rule) =>
+                expiresSomething(rule) &&
+                rule.Prefix !== VIDEO_SOP_BOM_AUX_PREFIX &&
+                rule.Prefix !== PREPARED_DOWNLOADS_PREFIX
         );
         expect(unscoped).toEqual([]);
     });
@@ -254,7 +260,10 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
         });
 
         test("no expiration rule is added", () => {
-            const expirations = auxBucketRules(disabledSynth).filter(expiresSomething);
+            // Only the always-deployed Download as Zip rules (vams.preparedDownloads/) expire anything.
+            const expirations = auxBucketRules(disabledSynth)
+                .filter(expiresSomething)
+                .filter((rule) => rule.Prefix !== PREPARED_DOWNLOADS_PREFIX);
             expect(expirations).toEqual([]);
         });
     });

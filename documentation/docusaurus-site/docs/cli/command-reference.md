@@ -22,6 +22,7 @@ The following options appear on nearly every command and are not repeated in ind
 | `setup`, `auth`, `features`, `profile`                                       | Initial configuration, authentication, feature switches, and profile management                  | [Setup and Authentication](commands/setup-and-auth.md)               |
 | `database`                                                                   | Create, update, delete, and list databases and bucket configurations                             | [Database](commands/database.md)                                     |
 | `assets`, `asset-version`, `asset-links`, `assets export`, `assets download` | Asset CRUD, version management, relationship links, export, and download                         | [Assets](commands/assets.md)                                         |
+| `zip-download`                                                               | Create, list, get, download, cancel, and delete background zip, tar, and tar.gz archives         | [Zip Downloads](commands/zip-downloads.md)                           |
 | `file`                                                                       | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary   | [Files](commands/files.md)                                           |
 | `sync file`                                                                  | Push/pull directory synchronization with an asset, transferring only changed files               | [Sync](commands/sync.md)                                             |
 | `tag`, `tag-type`                                                            | Tag and tag type management for asset categorization                                             | [Tags](commands/tags.md)                                             |
@@ -65,6 +66,15 @@ vamscli assets create -d my-database --name "Bridge Model" --description "3D sca
 vamscli file upload model.gltf -d my-db -a my-asset
 vamscli file list -d my-db -a my-asset --basic --auto-paginate
 vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
+```
+
+### Zip Downloads
+
+```bash
+vamscli zip-download create -d my-db -a my-asset --whole-asset --wait --download-to ./downloads/
+vamscli zip-download create -d my-db -a my-asset --folder /textures/ --format tar.gz
+vamscli zip-download list
+vamscli zip-download download -d my-db -a my-asset -r <requestId> --output ./asset.zip
 ```
 
 ### Directory Synchronization

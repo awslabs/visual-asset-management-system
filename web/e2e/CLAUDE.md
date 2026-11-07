@@ -148,6 +148,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, as the running app cached them (assert the right side) |
+| `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies         |
 
 **Selector facts worth not rediscovering:**
 

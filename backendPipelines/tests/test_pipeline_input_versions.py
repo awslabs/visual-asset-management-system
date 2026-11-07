@@ -44,6 +44,13 @@ PER_ENTRY_VERSION_PIPELINES = (
     "backendPipelines/genAi/videoSopBom/lambda",
 )
 
+# Multi-file pipelines whose CONTAINER re-reads the run manifest (the job command carries only its
+# location, since AWS Batch bounds the command's size) and reads each input file's own versionId there.
+# The check reads the named container module instead of constructPipeline.
+CONTAINER_MANIFEST_PIPELINES = {
+    "backendPipelines/utility/zipArchive/lambda": "backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py",
+}
+
 # Pipelines whose container definition is built by a module other than constructPipeline.py.
 CONSTRUCT_PIPELINE_BUILDERS = {
     "backendPipelines/multi/rapidPipelineEKS/lambda/consolidated_handler.py",
@@ -124,6 +131,7 @@ class TestEveryPipelineCarriesTheVersion:
                    if relative not in NO_INPUT_FILE_VAMS_EXECUTE
                    and not _whole_asset(relative)
                    and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
+                   and relative.rsplit("/", 1)[0] not in CONTAINER_MANIFEST_PIPELINES
                    and not re.search(r"resolved\[['\"]inputVersionId['\"]\]", _read(relative))]
         assert not missing, f"vamsExecute handlers that drop the input version: {missing}"
 
@@ -145,6 +153,7 @@ class TestEveryPipelineCarriesTheVersion:
         missing = [relative for relative in _lambda_files("openPipeline")
                    if not _whole_asset(relative)
                    and relative.rsplit("/", 1)[0] not in PER_ENTRY_VERSION_PIPELINES
+                   and relative.rsplit("/", 1)[0] not in CONTAINER_MANIFEST_PIPELINES
                    and not re.search(r"['\"]inputVersionId['\"]", _read(relative))]
         assert not missing, f"state machine inputs without the input version: {missing}"
 
@@ -153,6 +162,9 @@ class TestEveryPipelineCarriesTheVersion:
             source = _read(relative)
             if relative.rsplit("/", 1)[0] in PER_ENTRY_VERSION_PIPELINES:
                 return re.search(r"entry\.get\(['\"]versionId['\"]\)", source) is not None
+            if relative.rsplit("/", 1)[0] in CONTAINER_MANIFEST_PIPELINES:
+                container = _read(CONTAINER_MANIFEST_PIPELINES[relative.rsplit("/", 1)[0]])
+                return re.search(r"entry\.get\(['\"]versionId['\"]\)", container) is not None
             return "inputVersionId" in source
         builders = _lambda_files("constructPipeline") + sorted(CONSTRUCT_PIPELINE_BUILDERS)
         missing = [relative for relative in builders if not _whole_asset(relative) and not carries(relative)]

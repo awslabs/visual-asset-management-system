@@ -1010,7 +1010,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 | `outputFileBaseExecutionPathExtension` | string | No       | Base path (under the output asset) that output files are written beneath, inserted immediately before each output file's own name. May contain dynamic tag placeholders (e.g. `{{firstAssetFileFileNameNoExt}}`) resolved at launch. **Omit** to inherit the workflow's `defaultOutputFileBaseExecutionPathExtension`; send `""` or `/` to write at the asset root regardless. Must not contain `..` or backslashes. See [Output path prefix](#output-path-prefix).                                                                                                                   |
 | `pipelineExecutionParameters`          | object | No       | Per-pipeline execution parameters, keyed by `pipelineId`. Each value may set `templateId`, `templateTags`, or a `customTemplateOverride`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group: 3-63 characters of letters, numbers, `-` and `_`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`. A system trigger value (such as `zipDownload`) returns `400`: system pipeline runs are started by VAMS itself, never through this request.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 `relativeFileKey` is asset-relative (leading `/`); `/` selects the whole asset and `/folder/` a folder.
 
@@ -1123,9 +1123,12 @@ Each filter is optional and all supplied filters are AND-ed.
 | `workflowDatabaseId` | string | No       | --                 | List only executions of workflows in this database. Accepts `GLOBAL` for the shared workflow catalog.                                                                                       |
 | `status`             | string | No       | --                 | List only executions with this `executionStatus` (for example `RUNNING`, `SUCCEEDED`, `FAILED`).                                                                                            |
 | `excludeStatus`      | string | No       | --                 | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                                        |
-| `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
+| `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual`, `File-Upload`, or the system trigger `Zip-Download`).                                                                                |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
+| `includeSystem`      | string | No       | see below          | `true` to include runs of system workflows, `false` to leave them out. Any other value returns 400.                                                                                         |
 | `startingToken`      | string | No       | --                 | Continuation token from a previous response's `NextToken`. A token that cannot be decoded returns 400 rather than serving the first page again.                                             |
+
+Runs of [system workflows](#system-workflow-runs) are not returned unless `includeSystem=true`. When the list is filtered to one workflow (`workflowId` with `workflowDatabaseId`, or the path form) and that workflow is a system workflow you can read, its runs are returned unless `includeSystem=false`. They are removed after the asset's candidate executions are read, so a page can come back short or empty with a `NextToken`, the same as with the other filters.
 
 ### Response
 
@@ -1152,13 +1155,17 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "assetId": "building-01",
                 "executionError": "",
                 "executionLog": "",
+                "isSystem": false,
                 "outputTypes": ["File"]
             }
         ],
-        "filterStartDate": "2025-12-15T10:30:00Z"
+        "filterStartDate": "2025-12-15T10:30:00Z",
+        "includeSystem": false
     }
 }
 ```
+
+`includeSystem` in the response says whether the page includes system workflow runs, and each row's `isSystem` marks one.
 
 Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced — the
 same field the global list reports, read from the execution's configuration record. It is `[]` for a
@@ -1209,9 +1216,10 @@ GET /workflows/executions
 | `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                                                                                                                                                    |
 | `status`                      | string  | No       | Filter by execution status.                                                                                                                                                        |
 | `excludeStatus`               | string  | No       | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                               |
-| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                                                                  |
+| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`, or the system trigger `Zip-Download`).                                                                                            |
 | `groupId`                     | string  | No       | Filter by execution group id.                                                                                                                                                      |
 | `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                                                                    |
+| `includeSystem`               | string  | No       | `true` to include runs of system workflows, `false` to leave them out. Any other value returns 400. See [System workflow runs](#system-workflow-runs).                             |
 
 ### Response
 
@@ -1229,6 +1237,7 @@ GET /workflows/executions
                 "triggerType": "Manual",
                 "triggeredByUserId": "user@example.com",
                 "executionGroupId": "",
+                "isSystem": false,
                 "outputLocationType": "asset",
                 "outputAssetId": "x1a2b3c4-d5e6-7890",
                 "outputDatabaseId": "my-database",
@@ -1236,10 +1245,21 @@ GET /workflows/executions
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z",
+        "includeSystem": false,
         "NextToken": "…"
     }
 }
 ```
+
+### System workflow runs
+
+A run launched from a system workflow (one registered with `isSystem: true`, see [System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines)) is recorded with `isSystem: true`. Both execution lists leave these runs out by default, so the lists show the runs users start:
+
+-   `includeSystem=true` returns them, each row marked `isSystem: true`.
+-   When the list is filtered to one workflow (`workflowId` with `workflowDatabaseId`) and that workflow is a system workflow you can read, its runs are returned by default; `includeSystem=false` still leaves them out.
+-   The response's `includeSystem` reports which applied.
+
+A run recorded before this field existed reads `isSystem: false` and is always listed. The setting only chooses which rows a page includes: every listed row still passes the same permission check, and the details, logs and abort routes are unchanged. Hidden rows count toward the page's work like rows other filters remove, and a continuation token resumes after the last row read either way.
 
 Each row reports the run's output target: `outputLocationType` (`asset`, or `none` for a results-only
 execution that writes no files), and `outputAssetId` / `outputDatabaseId` naming the destination. These
@@ -1394,6 +1414,8 @@ A re-run reproduces the original request exactly, with input file versions resol
 
 Input file versions: for each input file, a re-run reuses the version recorded as pinned at launch; otherwise it reads the file's current version. A version is pinned only when the caller chose it: a `versionId` named in an execute request through the API or the CLI, or a version picked in the web: an older version chosen in the execute wizard, or a file run from the file manager while an asset version is browsed, even when that version is still the current one. A web launch from the current asset view and a launch by a `fileUpload` trigger are not pinned (the trigger's run still reads the uploaded version), so their re-runs read the current version. Executions recorded before version 2.7.0 carry no pinned record, so their re-runs read the current version. A pinned version that has since been deleted is refused the same way as an execute request naming that version.
 
+A system pipeline run (`triggerType` `Zip-Download`, started by VAMS for a system feature) cannot be re-run: the request returns `400` and launches nothing. Start the operation again from the feature that created it.
+
 ```
 POST /workflows/executions/{executionId}/rerun
 ```
@@ -1420,13 +1442,13 @@ A re-run requires that the caller can view the original execution (`GET` on its 
 
 ### Error responses
 
-| Status | Description                                                                                                                                                |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `executionId` or `executionGroupId`, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
-| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)                                                                      |
-| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone                                                                     |
-| `429`  | Throttling -- too many requests                                                                                                                            |
-| `500`  | Internal server error, or re-run is unavailable in this deployment                                                                                         |
+| Status | Description                                                                                                                                                                       |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `executionId` or `executionGroupId`, a system pipeline run, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
+| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)                                                                                             |
+| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone                                                                                            |
+| `429`  | Throttling -- too many requests                                                                                                                                                   |
+| `500`  | Internal server error, or re-run is unavailable in this deployment                                                                                                                |
 
 ---
 
@@ -1482,6 +1504,21 @@ GET /workflows/executions/{executionId}/details
 ```
 
 The route is keyed on the execution identifier because an execution may span input files across multiple assets.
+
+While output files over 1 GiB are still being copied into the asset, the execution stays `RUNNING` and the response adds `executionPhase: "INGESTING_OUTPUTS"` and `outputIngestion`. Both fields are absent for every other execution.
+
+| `outputIngestion` field | Type    | Description                                                          |
+| ----------------------- | ------- | -------------------------------------------------------------------- |
+| `filesTotal`            | number  | Output files over 1 GiB the execution is copying.                    |
+| `filesDone`             | number  | Of those, the files whose copy has ended (landed or failed).         |
+| `bytesTotal`            | number  | Total size of those files.                                           |
+| `bytesDone`             | number  | Size of the files that have landed.                                  |
+| `files`                 | array   | One entry per copy, sorted by `relativeKey`, at most 100. See below. |
+| `filesTruncated`        | boolean | `true` when the execution has more copies than `files` lists.        |
+
+Each `files` entry has `relativeKey`, `status` (`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` or `CANCELLED`), `bytesTotal`, `partsTotal`, `partsDone` and `error`. `error` is a generic reason, set only for a `FAILED` or `CANCELLED` copy, and empty otherwise. The entries are display progress read from an eventually consistent index, so a copy can show its previous status for a moment.
+
+Once such a file has landed, its `outputs.files` row carries `ingestionStatus: "SUCCEEDED"`. A file whose copy failed is left out of `outputs.files`, and `executionError` names it.
 
 ### Path parameters
 

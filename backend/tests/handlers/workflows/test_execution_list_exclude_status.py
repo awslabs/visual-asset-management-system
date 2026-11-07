@@ -339,11 +339,19 @@ class TestGlobalListExclusion:
         with patch(f"{MOD}.dynamodb") as ddb, \
                 patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()):
             ddb.Table.return_value = table
-            le.get_global_executions({}, {"status": "FAILED"})
+            # includeSystem=true leaves out the system-run term (#1121), so these compare the query
+            # with and without the other filters only.
+            le.get_global_executions({}, {"status": "FAILED", "includeSystem": "true"})
             with_status = table.query.call_args.kwargs
-            le.get_global_executions({}, {})
+            le.get_global_executions({}, {"includeSystem": "true"})
             plain = table.query.call_args.kwargs
+            le.get_global_executions({}, {})
+            default = table.query.call_args.kwargs
         assert "FilterExpression" not in plain
+        # By default the only term is the system-run one, never a status exclusion.
+        from boto3.dynamodb.conditions import ConditionExpressionBuilder
+        built = ConditionExpressionBuilder().build_expression(default["FilterExpression"])
+        assert set(built.attribute_name_placeholders.values()) == {"isSystem"}
         assert with_status["FilterExpression"].get_expression()["operator"] == "="
 
     @mock_aws

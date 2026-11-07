@@ -112,7 +112,9 @@ class TestPartialIngestionIsAFailure:
                             {"relativeKey": "bad.glb", "success": False, "error": "rejected"}],
         })
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == "The asset file write-back failed."
+        # The generic summary heads the error, followed by the file that was not written.
+        assert kw["execution_error"] == (
+            "The asset file write-back failed. Writing output file 'bad.glb' into the asset failed.")
 
     def test_only_the_files_that_landed_get_output_rows(self):
         kw = self._run({

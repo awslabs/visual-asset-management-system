@@ -43,7 +43,8 @@ function functionsWithHandler(synth: SynthResult, handler: string): Resource[] {
 
 /**
  * Every alarmed dead-letter queue, by logical-id prefix, with the alarm-name suffix it carries. The
- * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs are one each.
+ * bucket-sync DLQs are per registered bucket and carry its queue index; the indexer DLQs and the large
+ * object copy reconcile DLQ are one each.
  */
 const ALARMED_DLQS: { prefix: string; alarmName: (t: TemplateName) => RegExp }[] = [
     {
@@ -56,6 +57,12 @@ const ALARMED_DLQS: { prefix: string; alarmName: (t: TemplateName) => RegExp }[]
     },
     { prefix: "FileIndexerSqsDLQ", alarmName: (t) => new RegExp(`-t1-${t}-fileIndexerDLQ$`) },
     { prefix: "AssetIndexerSqsDLQ", alarmName: (t) => new RegExp(`-t1-${t}-assetIndexerDLQ$`) },
+    // The large object copy engine's reconcile requests (#1123): an ended copy whose job may still be
+    // open. Its own pins are in test/workflows/largeObjectCopyEngine.test.ts.
+    {
+        prefix: "LargeObjectCopyReconcileDLQ",
+        alarmName: (t) => new RegExp(`-t1-${t}-largeObjectCopyReconcileDLQ$`),
+    },
 ];
 
 function dlqsWithPrefix(synth: SynthResult, prefix: string): Resource[] {

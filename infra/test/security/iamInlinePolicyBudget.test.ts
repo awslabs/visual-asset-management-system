@@ -24,6 +24,7 @@
 
 import * as fs from "fs";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
+import * as seam from "../../lib/lambdaBuilder/systemPipelineCallbacks";
 import {
     IAM_INLINE_POLICY_LIMIT,
     IAM_MANAGED_POLICY_LIMIT,
@@ -43,6 +44,18 @@ interface Cell {
     name: string;
     template: TemplateName;
     mutate?: (c: any) => void;
+    /**
+     * A cell with Download as Zip on, which registers its terminal callback (Zip-Download) in the
+     * system pipeline registry: the three terminal-writer roles' inline sizes must equal those of the
+     * named twin, whose registry is empty, because the grant is a managed policy.
+     */
+    registeredCallbackOf?: string;
+}
+
+/** Download as Zip on; its zipArchive pipeline requires the global VPC (Lambdas stay outside it). */
+function enableZipDownloads(c: any): void {
+    c.app.zipDownloads.enabled = true;
+    c.app.useGlobalVpc.enabled = true;
 }
 
 /**
@@ -71,6 +84,43 @@ const CELLS: Cell[] = [
             c.app.useGlobalVpc.useForAllLambdas = true;
         },
     },
+    {
+        name: "commercial-zip",
+        template: "commercial",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "commercial",
+    },
+    {
+        name: "govcloud-zip",
+        template: "govcloud",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "govcloud",
+    },
+    {
+        name: "eusovereign-zip",
+        template: "eusovereign",
+        mutate: enableZipDownloads,
+        registeredCallbackOf: "eusovereign",
+    },
+    {
+        name: "commercial-worst-zip",
+        template: "commercial",
+        mutate: (c) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.zipDownloads.enabled = true;
+        },
+        registeredCallbackOf: "commercial-worst",
+    },
+];
+
+/** The roles of the three functions that run the system pipeline terminal writers. */
+const TERMINAL_WRITER_ROLES = [
+    "processWorkflowExecutionOutputServiceRole",
+    "handleExecutionErrorServiceRole",
+    "executionServiceServiceRole",
 ];
 
 /** The nested stacks whose roles this budget covers: every API Lambda. */
@@ -183,6 +233,30 @@ describe.each(CELLS)("API Lambda role inline policy budget ($name)", (cell) => {
         expect(over).toEqual([]);
     });
 });
+
+test.each(CELLS.filter((c) => c.registeredCallbackOf))(
+    "a registered callback adds nothing to the terminal writers' inline policies ($name)",
+    (cell) => {
+        // Runs after the cells above have filled the report.
+        const registered = report[cell.name];
+        const base = report[cell.registeredCallbackOf!];
+        for (const prefix of TERMINAL_WRITER_ROLES) {
+            const re = new RegExp(`^${prefix}[0-9A-F]{8}$`);
+            const roleId = Object.keys(registered).find((k) => re.test(k));
+            expect(roleId).toBeDefined();
+            expect(registered[roleId!]).toBe(base[roleId!]);
+            // The grant is carried by the one managed policy instead, measured by the cell's
+            // managed-policy budget test.
+            expect(
+                Object.keys(registered).some(
+                    (k) =>
+                        k.startsWith(`${roleId}:`) &&
+                        k.includes(seam.SYSTEM_PIPELINE_CALLBACK_POLICY_ID)
+                )
+            ).toBe(true);
+        }
+    }
+);
 
 test("every exception is still above the budget in some cell", () => {
     // Runs after the cells above have filled the report.

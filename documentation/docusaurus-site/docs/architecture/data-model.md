@@ -379,8 +379,10 @@ rather than pointing at definitions that may since have moved.
 
 **Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
 `executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
-`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
-bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+`executionError`, the full `executionLog`, the Step Functions ARNs, `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions), and `isSystem` (the launched workflow's flag,
+copied at launch; the execution lists hide `true` rows by default, and a row written before the flag
+existed has no attribute and is listed as a user run). Deliberately carries no output-target or
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
@@ -490,6 +492,43 @@ Holds one row per lock a running execution took under its workflow's `concurrenc
 
 The holder index lets a release find every row an execution holds, including rows its input rows cannot rebuild: two versions of one file selected together, or a workflow whose restriction was edited while the run was going. No DynamoDB Streams.
 
+### Zip Download Requests Storage Table
+
+Holds one row per Download as Zip job. Every API read and write starts from the authenticated caller's user ID, so a user reaches only their own rows. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
+
+| Attribute                                            | Type   | Key           | Notes                                                                                                  |
+| ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `userId`                                             | String | Partition Key | The requesting user                                                                                    |
+| `requestId`                                          | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order |
+| `userAssetKey`                                       | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                   |
+| `databaseId`                                         | String |               | Database of the asset                                                                                  |
+| `assetId`                                            | String |               | Asset archived                                                                                         |
+| `assetName`                                          | String |               | Asset name when the job was created                                                                    |
+| `status`                                             | String |               | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`                                             |
+| `archiveFormat`                                      | String |               | `zip`, `tar`, or `tar.gz`                                                                              |
+| `compression`                                        | String |               | `store` or `deflate` (`store` for tar formats)                                                         |
+| `archiveFileName`                                    | String |               | Sanitized archive file name, including its extension                                                   |
+| `archiveKey`                                         | String |               | Archive object key in the auxiliary bucket                                                             |
+| `manifestKey`                                        | String |               | Request manifest key in the auxiliary bucket                                                           |
+| `resolvedManifestKey`                                | String |               | Resolved member list the Zip Archive container writes                                                  |
+| `selectionSummary`                                   | Map    |               | `{files, folders, wholeAsset}` as requested                                                            |
+| `selectionPreview`                                   | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                       |
+| `assetVersionId`                                     | String |               | The asset version the job is pinned to, when it is                                                     |
+| `filesTotal`, `bytesTotal`                           | Number |               | Totals of the resolved selection                                                                       |
+| `filesDone`, `bytesDone`                             | Number |               | Progress the Zip Archive container writes                                                              |
+| `archiveSizeBytes`                                   | Number |               | Size of the finished archive                                                                           |
+| `errorMessage`                                       | String |               | User-safe failure reason                                                                               |
+| `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
+| `workflowExecutionId`                                | String |               | The Zip Archive run; never returned by the API                                                         |
+| `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
+| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus `app.zipDownloads.retentionDays`; the table's time-to-live attribute   |
+
+| Index            | Partition Key  | Sort Key    | Projection |
+| ---------------- | -------------- | ----------- | ---------- |
+| `UserAssetIndex` | `userAssetKey` | `requestId` | ALL        |
+
+Reads treat a row whose `expiresAt` has passed as absent, since DynamoDB removes expired items some time after they expire. No DynamoDB Streams.
+
 ### Authorization Tables
 
 #### Constraints Storage Table
@@ -581,6 +620,7 @@ by the input file that the data was derived from and one keyed by the execution 
 ```
 {databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
 pipelines/{pipelineName}/{executionId}/{working_files}
+vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
 ```
 
 Where:
@@ -594,12 +634,18 @@ Where:
     subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
 -   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
     same pipeline cannot collide
+-   `vams.preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
+    resolved member list, under the first 16 hex characters of the SHA-256 of the requesting user's ID
+    (`userHash`) and the job's `requestId`. Lifecycle rules expire the prefix after
+    `app.zipDownloads.retentionDays`. The prefix sits beside the per-database prefixes; a database ID
+    cannot contain a dot, so the rules never reach a database's data
 
 Common uses:
 
 -   Potree octree data for point cloud visualization
 -   Temporary pipeline processing files
 -   Pipeline intermediate outputs
+-   Download as Zip archives
 
 :::note
 Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data

@@ -605,6 +605,18 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+**Download as Zip** is gated twice: the `ZIPDOWNLOADS` feature switch decides whether the controls exist at all,
+and `useAllowedRoutes().can()` on the zip routes (a server decision) decides whether the user sees them. The
+file manager's **Export** menu offers **Download as Zip** for file, folder, root and mixed selections (hidden for
+an asset that is not distributable or is archived). `buildZipSelection` lists archived or deleted selected items in
+`refused`, and the dialog then refuses the whole job (names them, no Create), as the API does; items inside a selected
+folder collapse into it, and more than `ZIP_MAX_SELECTION_ENTRIES` (1,000) entries is refused with a plain message. The asset tab `zipDownloads` (**My zip downloads**) and the
+global page `#/zipdownloads` list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+
+Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
+`ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
+`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the nav entry in `src/layout/Navigation.tsx`.
+
 ---
 
 ## 📐 **Gold Standard Reference Files**

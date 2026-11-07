@@ -98,6 +98,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/api-keys"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/zipdownloads"
                 }
             ],
             "groupPermissions": [
@@ -192,6 +197,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/tag-types"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/uploads"
                 },
                 {
                     "field": "route__path",
@@ -644,6 +654,31 @@
                     "type": "allow"
                 }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads",
+            "description": "Allow Download as Zip on assets the role can read: create a job, list and get the caller's own jobs, request the archive's download URL (a POST), and cancel or delete the caller's own jobs. Each call also requires asset GET permission",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
+                { "field": "route__path", "operator": "contains", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My zip downloads)",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

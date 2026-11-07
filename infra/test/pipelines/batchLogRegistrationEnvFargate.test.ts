@@ -23,6 +23,8 @@ import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/pr
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
@@ -303,6 +305,55 @@ describe("conversion/coordinateTransform executeBatchJob registration environmen
                 "lambda",
                 "executeBatchJob.py"
             )
+        );
+    });
+});
+
+describe("utility/zipArchive executeBatchJob registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("ZipArchiveEnvStack", (c) => {
+            c.app.zipDownloads.enabled = true;
+        });
+        // The zipArchive job writes its status to the zip job table and reads asset file versions.
+        (h.storage as any).dynamo = {
+            zipDownloadRequestsStorageTable: new dynamodb.Table(h.stack, "ZipTable", {
+                partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+            }),
+            assetFileVersionsStorageTable: new dynamodb.Table(h.stack, "FileVersionsTable", {
+                partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+            }),
+        };
+        new ZipArchiveConstruct(h.stack, "ZipArchivePipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "utility", "zipArchive", "lambda", "executeBatchJob.py")
         );
     });
 });

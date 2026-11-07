@@ -80,6 +80,9 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
+                            #   details' executionPhase/outputIngestion; IngestedBadge for output
+                            #   rows with ingestionStatus SUCCEEDED; display only)
                             #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
                             #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
@@ -120,7 +123,8 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs,
+                                #   ZipDownloadsTab ("My zip downloads", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       filemanager/            # Asset file manager (Cloudscape)
@@ -138,9 +142,15 @@ web/
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
+                                #   selection -> request entries, names, polling rule),
+                                #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
+                                #   global page; polls every 5 s only while a job is queued/running,
+                                #   the surface is active and the browser tab is visible)
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
+      ZipDownloadsPage.tsx    # #/zipdownloads "My zip downloads" (nav item only with ZIPDOWNLOADS)
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
@@ -680,6 +690,8 @@ A **navigational surface** is the exception: the execution detail page's Logs ta
 
 **System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
 
+**System workflow runs** are hidden by the execution list APIs unless the request carries `includeSystem`. `ExecutionsBoard` (global page, workflow-scoped page and asset Executions tab) keeps the **Show system runs** choice in the URL query (`INCLUDE_SYSTEM_PARAM`, read and written with `useSearchParams`, other query keys preserved), sends it only when the user chose, and otherwise ticks the box from the response's `includeSystem` echo: the server alone decides the default (shown for a list scoped to one system workflow). Rows with `isSystem: true` carry the same **System** badge as system records.
+
 **Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
@@ -927,6 +939,7 @@ Known feature flags:
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.zipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **My zip downloads** tab and the side navigation no **My zip downloads** link; `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are greyed the same way from the URL and DELETE routes. A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client.
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)

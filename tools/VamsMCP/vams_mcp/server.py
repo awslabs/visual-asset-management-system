@@ -42,6 +42,12 @@ from .client import (  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
+# The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
+from vamscli.utils.zip_downloads import (  # noqa: E402
+    build_create_request as build_zip_create_request,
+    build_selection as build_zip_selection,
+)
+
 _force_logging_to_stderr()
 
 try:  # mcp >= 2.0 renamed FastMCP to MCPServer and dropped the fastmcp module
@@ -67,6 +73,8 @@ mcp = McpServer("vams")
 
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
+# Query parameter the execution lists read to include system workflow runs (hidden by default).
+EXECUTION_LIST_INCLUDE_SYSTEM_PARAM = "includeSystem"
 
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
@@ -184,6 +192,34 @@ def _bounded_message_list(
     return result
 
 
+def _include_system_param(include_system: Optional[bool]) -> Dict[str, str]:
+    """The includeSystem query parameter for an execution list, or nothing when unset so the server's
+    default applies (system workflow runs hidden; shown for a listing scoped to one system workflow).
+    The name is held here rather than imported, so an older installed vamscli keeps working; a test
+    pins it to the CLI constant, which a CLI contract test pins to the backend's."""
+    if include_system is None:
+        return {}
+    return {EXECUTION_LIST_INCLUDE_SYSTEM_PARAM: "true" if include_system else "false"}
+
+
+def _note_unscoped_workflow_filter(
+    result: Dict[str, Any], workflow_id: Optional[str], workflow_database_id: Optional[str]
+) -> Dict[str, Any]:
+    """Add `systemRunsHint` when a workflow_id without its workflow_database_id left system runs hidden.
+
+    The server shows a system workflow's runs by default only for a list scoped to ONE workflow, which
+    takes both halves of its key. A workflow_id alone is not that scope, so an empty result there can
+    mean "a system workflow's hidden runs" rather than "no runs"; the hint names both ways to reach
+    them."""
+    if workflow_id and not workflow_database_id and result.get("includeSystem") is False:
+        result["systemRunsHint"] = (
+            "System workflow runs were hidden. Pass workflow_database_id with workflow_id to scope "
+            "the list to that one workflow (a system workflow's runs then show by default), or set "
+            "include_system=true."
+        )
+    return result
+
+
 def _paginate_with_page_metadata(
     fetch_page: Callable[[Dict[str, Any]], Any],
     passthrough_keys: tuple = (),
@@ -208,8 +244,10 @@ def _paginate_with_page_metadata(
                 if warning not in warnings:
                     warnings.append(warning)
             for key in passthrough_keys:
-                if key not in echoes and payload.get(key):
-                    echoes[key] = payload[key]
+                # A boolean echo (includeSystem) is carried when False too; it is the answer.
+                value = payload.get(key)
+                if key not in echoes and (value or value is False):
+                    echoes[key] = value
         # Returned untouched: paginate() reads the items off the same page itself.
         return page
 
@@ -337,6 +375,18 @@ def list_assets(
 def get_asset(database_id: str, asset_id: str, include_archived: bool = False) -> Dict[str, Any]:
     """Get details for a single asset."""
     return CLIENT.api.get_asset(database_id, asset_id, show_archived=include_archived)
+
+
+@mcp.tool()
+@tool_result
+def get_upload_status(database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
+    """Status of an upload whose files over 1 GiB are ingested into the asset after it completed.
+
+    status is processing_async while any such file is pending, then completed or
+    completed_with_errors; asyncFiles lists each one as PENDING, SUCCEEDED or FAILED (with a generic
+    error). An upload whose files all landed at completion keeps no status, so it answers not
+    found, as does an upload the caller may not see."""
+    return CLIENT.api.get_upload_status(database_id, asset_id, upload_id)
 
 
 @mcp.tool()
@@ -699,6 +749,7 @@ def list_workflow_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -727,6 +778,12 @@ def list_workflow_executions(
     one status or a comma-separated list (e.g. "SKIPPED") on the server, before the page is cut; an
     unknown status, or excluding the status `status` selects, is a 400.
 
+    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
+    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
+    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
+    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    a list without them is not the asset's whole history.
+
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
     already listed. Each entry names which. The result is then also flagged `truncated`. Do not
@@ -750,6 +807,7 @@ def list_workflow_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_workflow_executions(
@@ -760,14 +818,15 @@ def list_workflow_executions(
             params={**params, **extra},
         )
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 @mcp.tool()
@@ -1095,6 +1154,7 @@ def list_executions(
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
+    include_system: Optional[bool] = None,
     filter_start_date: Optional[str] = None,
     filter_end_date: Optional[str] = None,
     max_items: Optional[int] = None,
@@ -1112,6 +1172,12 @@ def list_executions(
     'fileUpload' (the stored spellings 'Manual' and 'File-Upload' are accepted too). group_id is how a
     group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
+
+    Runs of system workflows are HIDDEN unless include_system is true, except that a listing narrowed
+    to one system workflow (workflow_id plus workflow_database_id) shows them unless include_system
+    is false; workflow_id alone is not that scope, and `systemRunsHint` then says so when runs were
+    hidden. `includeSystem` reports which applied, and each row's `isSystem` marks a system run, so
+    a count taken without them excludes system runs by design.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
     the asset it wrote to. A run whose output landed in an asset the user cannot read is therefore
@@ -1151,18 +1217,20 @@ def list_executions(
         )
         if value
     }
+    extra.update(_include_system_param(include_system))
 
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_executions(params={**params, **extra})
 
-    return _paginate_with_page_metadata(
+    result = _paginate_with_page_metadata(
         _call,
-        passthrough_keys=("filterStartDate", "filterEndDate"),
+        passthrough_keys=("filterStartDate", "filterEndDate", "includeSystem"),
         max_items=max_items,
         # Same Step Functions throttling cap the per-asset listing respects.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
         starting_token=starting_token,
     )
+    return _note_unscoped_workflow_filter(result, workflow_id, workflow_database_id)
 
 
 @mcp.tool()
@@ -1726,6 +1794,53 @@ def list_user_api_keys(
         max_items=max_items,
         starting_token=starting_token,
     )
+
+
+@mcp.tool()
+@tool_result
+def list_zip_downloads(
+    database_id: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List the AUTHENTICATED user's zip download jobs, newest first (auto-paginated).
+
+    Give `database_id` and `asset_id` together for one asset's jobs, or neither for every asset.
+    Each row carries requestId, status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED),
+    archiveFileName, archiveFormat, progress, errorMessage and expiresAt. Jobs are private to their
+    creator, expire at expiresAt (the retention period after creation; an expired job is not
+    listed and cannot be downloaded), and rows on assets the caller can no
+    longer read are left out — so an empty list says nothing about other users' jobs.
+
+    The walk is BOUNDED: `truncated` means jobs were not seen and `NextToken` continues it via
+    `starting_token`. Never conclude a job does not exist from a truncated result; use
+    get_zip_download() for one job. A deployment without zip downloads answers with
+    `error_type` ZipDownloadDisabledError.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_zip_downloads(
+            database_id=database_id,
+            asset_id=asset_id,
+            max_items=params["pageSize"],
+            page_size=params["pageSize"],
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
+def get_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+    """Read one of the caller's zip download jobs: status, progress and, on failure, the reason.
+
+    Poll this (every few seconds) after create_zip_download() until `status` is SUCCEEDED, FAILED or
+    CANCELLED; then get_zip_download_url() issues the download link for a SUCCEEDED job. A job of
+    another user, of another asset, or past its expiry reads as ZipDownloadNotFoundError.
+    """
+    return CLIENT.api.get_zip_download(database_id, asset_id, request_id)
 
 
 # =========================================================================
@@ -2305,6 +2420,66 @@ if CONFIG.enable_writes:
             payload["isActive"] = "true" if is_active else "false"
         return CLIENT.api.update_user_api_key(api_key_id, payload)
 
+    @mcp.tool()
+    @tool_result
+    def create_zip_download(
+        database_id: str,
+        asset_id: str,
+        files: Optional[List[str]] = None,
+        folders: Optional[List[str]] = None,
+        whole_asset: bool = False,
+        asset_version_id: Optional[str] = None,
+        asset_version_alias: Optional[str] = None,
+        archive_format: str = "zip",
+        compression: Optional[str] = None,
+        archive_file_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Start a server-side job that archives part or all of one asset into a zip, tar or tar.gz.
+
+        Select with `files` (asset-relative paths; `PATH@VERSIONID` pins one file's version, and a
+        path containing '@' with no version ends in a bare '@'), `folders` (everything under each),
+        or `whole_asset=True` alone. At most 1000 entries. `asset_version_id` or
+        `asset_version_alias` instead archives the selection as recorded in that asset version, and
+        cannot be combined with per-file versions. `compression` is `store` (default) or `deflate`,
+        zip only.
+
+        The WHOLE job is refused when any selected file is archived, deleted, in an archive storage
+        tier or of a blocked type, or the selection exceeds the deployment's file/size limits; the
+        error names the rule. A caller with the maximum number of active jobs gets
+        ZipDownloadLimitError — wait for one to finish rather than retrying.
+
+        Starts real AWS compute (a Batch job) that runs for minutes to hours on large assets, so keep
+        this tool out of `autoApprove`. Returns the job (status QUEUED); poll get_zip_download().
+        """
+        selection = build_zip_selection(files or [], folders or [], whole_asset)
+        body = build_zip_create_request(
+            selection,
+            asset_version_id=asset_version_id,
+            asset_version_alias=asset_version_alias,
+            archive_format=archive_format,
+            compression=compression,
+            archive_file_name=archive_file_name,
+        )
+        return CLIENT.api.create_zip_download(database_id, asset_id, body)
+
+    @mcp.tool()
+    @tool_result
+    def get_zip_download_url(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """Issue a short-lived presigned download URL for a SUCCEEDED zip download.
+
+        Returns `url`, `expiresIn` (seconds), `archiveFileName` and `archiveSizeBytes`. A job that
+        has not succeeded is ZipDownloadNotReadyError; a job past its expiresAt reads as not found
+        (ZipDownloadNotFoundError), and a job whose archive is no longer stored is
+        ZipDownloadExpiredError.
+
+        The URL is a bearer credential: anyone holding it can download the archive — possibly the
+        whole asset — until it expires, with no further authentication. Returning it puts it in the
+        agent transcript and whatever logs the host keeps. Issue one only when a download was
+        actually asked for, keep this tool out of `autoApprove`, and treat any URL issued as
+        disclosed. `vamscli zip-download download` streams the archive without exposing the URL.
+        """
+        return CLIENT.api.get_zip_download_url(database_id, asset_id, request_id)
+
 
 # =========================================================================
 # DESTRUCTIVE TOOLS (require VAMS_ENABLE_DESTRUCTIVE=true AND writes enabled)
@@ -2553,6 +2728,28 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+    @mcp.tool()
+    @tool_result
+    def cancel_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """Cancel one of the caller's QUEUED or RUNNING zip downloads. Not reversible.
+
+        The Zip Archive run is stopped and its partial archive discarded; the job stays listed as
+        CANCELLED. A job that has already finished is refused with ZipDownloadStateError (use
+        delete_zip_download). Should the job finish between the state check and the call, the
+        server deletes it instead: the result's `action` then reads "deleted" — report that.
+        """
+        return CLIENT.api.cancel_zip_download(database_id, asset_id, request_id)
+
+    @mcp.tool()
+    @tool_result
+    def delete_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """PERMANENTLY delete one of the caller's finished zip downloads and its stored archive.
+
+        Only a SUCCEEDED, FAILED or CANCELLED job is deleted; a QUEUED or RUNNING one is refused with
+        ZipDownloadStateError (cancel it first). Any download URL already issued stops working.
+        """
+        return CLIENT.api.delete_zip_download(database_id, asset_id, request_id)
 
 
 # =========================================================================

@@ -14,10 +14,14 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
+from common.workflows.systemPipelines import SYSTEM_TRIGGER_TYPES
 
 logger = safeLogger()
 
-TRIGGER_TYPES = ("Manual", "File-Upload")
+# Stored trigger values. The system values (common.workflows.systemPipelines) are set only by a marked
+# system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below, which does
+# not list them.
+TRIGGER_TYPES = ("Manual", "File-Upload") + SYSTEM_TRIGGER_TYPES
 
 
 class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -53,6 +57,13 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Server-only system execution context (serialized JSON object), written only on a system-trigger
+    # run launched by a marked cross-call. Read by the terminal callback; never projected by the list
+    # or details APIs.
+    systemExecutionContext: Optional[str] = ""
+    # Copied from the launched workflow's isSystem at launch. A row written before the flag existed
+    # has no attribute and reads as a user run; the execution lists hide system runs by default.
+    isSystem: Optional[bool] = False
     # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
     # concurrency restriction refused (one row per blocking run and lock key; see
     # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
@@ -232,6 +243,8 @@ class PipelineExecutionOutputFileRecord(
     fileSize: Optional[int] = 0
     contentType: Optional[str] = ""
     s3VersionId: Optional[str] = ""
+    # Outcome of a large object copy job that ingested this file; absent on every other row.
+    ingestionStatus: Optional[str] = None
 
 
 class PipelineExecutionOutputMetadataRecord(
@@ -352,7 +365,8 @@ class WorkflowExecutionConfigurationRecord(
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
 # "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
-# handler maps them (TRIGGER_TYPE_TO_STORED).
+# handler maps them (TRIGGER_TYPE_TO_STORED). The system trigger values are deliberately absent: a
+# request naming one is refused here, whoever sends it.
 EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
 TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
 

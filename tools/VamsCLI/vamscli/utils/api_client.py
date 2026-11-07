@@ -126,6 +126,17 @@ def _api_error_message(response, fallback: str) -> str:
     return fallback
 
 
+def _is_business_refusal_429(response) -> bool:
+    """True when a 429 is a handler's business refusal rather than throttling; never raises.
+
+    Matched on the exact message, so a throttling 429 from API Gateway, AWS WAF or another handler
+    keeps the backoff."""
+    try:
+        return _api_error_message(response, "") in _BUSINESS_REFUSAL_429_MESSAGES
+    except Exception:
+        return False
+
+
 def _classify_403(response) -> str:
     """Which party answered an HTTP 403, read from the response alone; never raises.
 
@@ -239,7 +250,12 @@ from ..constants import (
     API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_DETAILS_FILES,
     API_WORKFLOW_EXECUTION_DETAILS_RESULTS, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
-    API_AUTH_API_KEYS, API_AUTH_API_KEY
+    API_AUTH_API_KEYS, API_AUTH_API_KEY,
+    API_ZIP_DOWNLOADS_ASSET, API_ZIP_DOWNLOADS_ASSET_REQUEST, API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ZIP_DOWNLOADS_GLOBAL, FEATURE_ZIPDOWNLOADS, ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
+    ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
+    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
+    ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES
 )
 from ..version import get_version
 from .exceptions import (
@@ -260,12 +276,20 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    ZipDownloadError, ZipDownloadDisabledError, ZipDownloadNotFoundError,
+    InvalidZipDownloadRequestError, ZipDownloadLimitError, ZipDownloadNotReadyError,
+    ZipDownloadExpiredError, ZipDownloadStateError, ZipDownloadTransferError,
+    UploadStatusNotFoundError, RouteNotDeployedError
 )
 from .exceptions import GlobalInfrastructureError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
 from .custom_api_client import CustomAPIClientMixin
+
+# The exact 429 bodies that are a handler's business refusal rather than throttling
+# (_is_business_refusal_429): retrying cannot clear them.
+_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,)
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -404,8 +428,10 @@ class APIClient(CustomAPIClientMixin):
                 # Don't fail if logging fails
                 pass
             
-            # Handle 429 rate limiting with exponential backoff
-            if response.status_code == 429:
+            # Handle 429 rate limiting with exponential backoff. A 429 whose body is a known business
+            # refusal (the per-user active zip download cap) is not throttling: backing off cannot
+            # clear it, so it goes straight to the caller's status mapping.
+            if response.status_code == 429 and not _is_business_refusal_429(response):
                 if retry_config.should_retry(throttle_retry_count):
                     # Parse Retry-After header if present
                     retry_after = None
@@ -474,7 +500,7 @@ class APIClient(CustomAPIClientMixin):
                         confirmed=forbidden == FORBIDDEN_WAF,
                     )
                 if forbidden == FORBIDDEN_NO_ROUTE:
-                    raise APIError(
+                    raise RouteNotDeployedError(
                         f"No deployed API route matches {method.upper()} {urlparse(url).path} (HTTP 403). "
                         "The deployment may be older than this CLI, or the add-on that serves the route "
                         "is not deployed."
@@ -1253,6 +1279,49 @@ class APIClient(CustomAPIClientMixin):
 
         except Exception as e:
             raise APIError(f"Failed to list asset files: {e}")
+
+    def get_upload_status(self, database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
+        """Status of an upload and the outcome of each of its files ingested asynchronously
+        (files over 1 GiB). A 404 means no such upload is visible to the caller, or its files all
+        landed at completion (its record is removed then).
+
+        Final answers (UploadStatusNotFoundError for a 404 or a deployment without the route,
+        InvalidAssetDataError for a 400, AuthenticationError for a 401) are told apart from
+        transient failures (APIError: a 5xx, a network error), which a caller may poll again."""
+        from ..constants import API_UPLOAD_STATUS
+
+        try:
+            endpoint = API_UPLOAD_STATUS.format(uploadId=upload_id)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.get(endpoint, include_auth=True,
+                                params={"databaseId": database_id, "assetId": asset_id},
+                                raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise UploadStatusNotFoundError(
+                    f"Upload '{upload_id}' not found for asset '{asset_id}' in database "
+                    f"'{database_id}' (an upload whose files all landed at completion "
+                    f"keeps no status)")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidAssetDataError(f"Invalid upload status request: {error_message}")
+            elif e.response.status_code == 401:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get upload status: {e}")
+
+        except RouteNotDeployedError as e:
+            # The deployment has no upload status route (older than this CLI).
+            raise UploadStatusNotFoundError(str(e))
+
+        except (GlobalInfrastructureError, APIError):
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to get upload status: {e}")
 
     def get_file_info(self, database_id: str, asset_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed information about a specific file."""
@@ -4167,6 +4236,327 @@ class APIClient(CustomAPIClientMixin):
             raise APIError(f"Failed to export asset: {e}")
 
     # ------------------------------------------------------------------
+    # Download as Zip (prepared downloads) API Methods
+    # ------------------------------------------------------------------
+    # A job archives a selection of one asset's files on the server and keeps the archive for the
+    # deployment's retention period. Every job belongs to the user who created it; the API reports a
+    # job of another user, or of another asset than the path names, as "Zip download not found".
+    # The DELETE route CANCELS a job that is still queued or running and DELETES a finished one, so
+    # cancel_zip_download and delete_zip_download read the job first and refuse the wrong state
+    # rather than letting one verb perform the other.
+
+    def _zip_downloads_precheck(self) -> None:
+        """Refuse before any request when the profile's feature switches say zip downloads are off.
+
+        Only a profile whose switches were actually read decides here: every deployment publishes
+        at least its web and auth switches, so an empty or missing record means the switches were
+        never read, and the API's 404 body decides instead.
+        """
+        profile_manager = self.profile_manager
+        if profile_manager is None:
+            return
+        try:
+            info = profile_manager.get_feature_switches_info()
+        except Exception:
+            return
+        if not isinstance(info, dict) or not info.get('has_feature_switches'):
+            return
+        enabled = info.get('enabled')
+        if not isinstance(enabled, (list, tuple, set)) or not enabled:
+            return
+        if FEATURE_ZIPDOWNLOADS not in enabled:
+            raise ZipDownloadDisabledError(ZIP_DOWNLOADS_DISABLED_MESSAGE)
+
+    @staticmethod
+    def _zip_http_error(e: "requests.exceptions.HTTPError", action: str,
+                        database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                        url_request: bool = False) -> Exception:
+        """Map a zip download route's HTTP error onto the CLI's exception for it."""
+        status = e.response.status_code
+        message = _api_error_message(e.response, str(e))
+        if status == 404:
+            if message == ZIP_DOWNLOADS_DISABLED_API_MESSAGE:
+                return ZipDownloadDisabledError(ZIP_DOWNLOADS_DISABLED_MESSAGE)
+            if message == ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE:
+                return ZipDownloadNotFoundError(message)
+            if asset_id and 'asset' in message.lower():
+                return AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            return ZipDownloadNotFoundError(message)
+        if status == 429:
+            return ZipDownloadLimitError(message)
+        if status == 409:
+            return ZipDownloadNotReadyError(message)
+        if status == 410:
+            if url_request:
+                return ZipDownloadExpiredError(message)
+            return InvalidZipDownloadRequestError(f"Zip download request refused: {message}")
+        if status == 400:
+            return InvalidZipDownloadRequestError(f"Zip download request refused: {message}")
+        if status == 401:
+            return AuthenticationError(f"Authentication failed: {e}")
+        return APIError(f"Failed to {action}: {message}")
+
+    def _zip_request(self, method: str, endpoint: str, action: str,
+                     database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                     url_request: bool = False, **kwargs) -> Dict[str, Any]:
+        """Issue one zip download call after the feature precheck and map its errors."""
+        self._zip_downloads_precheck()
+        try:
+            response = self._make_request(method, endpoint, include_auth=True,
+                                          raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            raise self._zip_http_error(e, action, database_id, asset_id, url_request)
+
+        except GlobalInfrastructureError:
+            raise
+
+        except ZipDownloadError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to {action}: {e}")
+
+    def create_zip_download(self, database_id: str, asset_id: str,
+                            request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a zip download job using the POST /database/{databaseId}/assets/{assetId}/download/zip
+        endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            request_data: CreateZipDownloadRequestModel body: `selection` (1..1000 entries of
+                {type: file|folder|asset, relativePath, versionId?}), optional `assetVersionId` or
+                `assetVersionIdAlias` (mutually exclusive with each other and with per-file
+                versionIds), `archiveFormat`, `compression`, `archiveFileName`.
+
+        Returns:
+            The job item (requestId, status, archiveFileName, progress, ...).
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            InvalidZipDownloadRequestError: When the selection, pin or limits are refused (the whole
+                job is refused when any selected file is archived, deleted, in an archive storage
+                tier or of a blocked type)
+            ZipDownloadLimitError: When the caller already has the maximum number of active jobs
+            AssetNotFoundError: When the asset cannot be resolved
+            APIError: When the API call fails, including a launch failure (500) or a transient
+                launch condition to try again (503)
+        """
+        endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        return self._zip_request('POST', endpoint, "create the zip download",
+                                 database_id, asset_id, json=request_data)
+
+    def list_zip_downloads(self, database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                           max_items: Optional[int] = None, page_size: Optional[int] = None,
+                           starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List the caller's zip download jobs, newest first: for one asset
+        (GET /database/{databaseId}/assets/{assetId}/download/zip) when both IDs are given, else
+        across every asset (GET /download/zip).
+
+        Args:
+            database_id: Database ID (together with asset_id, or neither)
+            asset_id: Asset ID (together with database_id, or neither)
+            max_items: Maximum jobs to return (1-1000, optional)
+            page_size: Jobs per page (1-1000, optional)
+            starting_token: Pagination token from a previous page's NextToken (optional)
+
+        Returns:
+            {"Items": [job, ...], "NextToken"?: "..."}. Expired jobs, and jobs on assets the caller
+            can no longer read, are left out.
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            InvalidZipDownloadRequestError: When the paging parameters are refused
+            AssetNotFoundError: When the asset cannot be resolved
+            APIError: When the API call fails
+        """
+        if bool(database_id) != bool(asset_id):
+            raise InvalidZipDownloadRequestError(
+                "Give both the database ID and the asset ID to list one asset's zip downloads, "
+                "or neither to list them across assets")
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        if database_id:
+            endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        else:
+            endpoint = API_ZIP_DOWNLOADS_GLOBAL
+        return self._zip_request('GET', endpoint, "list zip downloads",
+                                 database_id, asset_id, params=params)
+
+    def get_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Get one zip download job using the
+        GET /database/{databaseId}/assets/{assetId}/download/zip/{requestId} endpoint.
+
+        Returns:
+            The job item. Reading a job also finalizes one whose run already ended.
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
+            APIError: When the API call fails
+        """
+        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST.format(
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        return self._zip_request('GET', endpoint, "get the zip download", database_id, asset_id)
+
+    def get_zip_download_url(self, database_id: str, asset_id: str,
+                             request_id: str) -> Dict[str, Any]:
+        """
+        Issue a short-lived presigned URL for a finished archive using the
+        POST /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url endpoint.
+
+        The URL is a bearer credential: anyone holding it can download the archive until it expires.
+        Never print or log it; the CLI streams it to a file instead.
+
+        Returns:
+            {"url", "expiresIn", "archiveFileName", "archiveSizeBytes"}
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
+            ZipDownloadNotReadyError: When the job has not succeeded (409)
+            ZipDownloadExpiredError: When the archive is no longer stored (410)
+            InvalidZipDownloadRequestError: When the asset is no longer distributable
+            APIError: When the API call fails
+        """
+        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.format(
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        return self._zip_request('POST', endpoint, "issue the zip download URL",
+                                 database_id, asset_id, url_request=True, json={})
+
+    def _delete_zip_download_request(self, database_id: str, asset_id: str,
+                                     request_id: str, action: str) -> Dict[str, Any]:
+        endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST.format(
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        return self._zip_request('DELETE', endpoint, action, database_id, asset_id)
+
+    def cancel_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Cancel a queued or running zip download (DELETE on the request route) after checking that
+        it is still active. The run is stopped and its partial archive discarded; the job stays
+        listed as CANCELLED until it expires or is deleted.
+
+        Returns:
+            {"message": "Zip download cancelled", "action": "cancelled"}. Should the job finish
+            between the check and the call, the API deletes it instead and `action` says "deleted".
+
+        Raises:
+            ZipDownloadStateError: When the job has already finished (use delete_zip_download)
+            ZipDownloadNotFoundError / ZipDownloadDisabledError / APIError: as get_zip_download
+        """
+        job = self.get_zip_download(database_id, asset_id, request_id)
+        status = job.get('status') if isinstance(job, dict) else None
+        if status not in ZIP_DOWNLOAD_ACTIVE_STATUSES:
+            raise ZipDownloadStateError(
+                f"Zip download '{request_id}' has already finished ({status}); delete it instead")
+        return self._delete_zip_download_request(
+            database_id, asset_id, request_id, "cancel the zip download")
+
+    def delete_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Delete a finished zip download (SUCCEEDED, FAILED or CANCELLED) and its stored archive,
+        after checking that it has finished. Not reversible.
+
+        Returns:
+            {"message": "Zip download deleted", "action": "deleted"}
+
+        Raises:
+            ZipDownloadStateError: When the job is still queued or running (cancel it first)
+            ZipDownloadNotFoundError / ZipDownloadDisabledError / APIError: as get_zip_download
+        """
+        job = self.get_zip_download(database_id, asset_id, request_id)
+        status = job.get('status') if isinstance(job, dict) else None
+        if status not in ZIP_DOWNLOAD_TERMINAL_STATUSES:
+            raise ZipDownloadStateError(
+                f"Zip download '{request_id}' is still {status or 'active'}; cancel it first")
+        return self._delete_zip_download_request(
+            database_id, asset_id, request_id, "delete the zip download")
+
+    def download_zip_archive(self, url: str, local_path: str, expected_size: Optional[int] = None,
+                             progress_callback=None) -> int:
+        """
+        Stream a finished archive from its presigned URL to `local_path`, without VAMS auth.
+
+        The bytes go to `<local_path>.vamsdownload` and are moved into place only once complete and,
+        when `expected_size` is known, of that size, so a failed transfer never leaves a partial file
+        at the final path. No error text carries the URL (a bearer credential in its query string).
+
+        Args:
+            url: The presigned URL from get_zip_download_url
+            local_path: Destination file path
+            expected_size: The archive's size in bytes, when known
+            progress_callback: Called as progress_callback(bytes_done, total_or_None) per chunk
+
+        Returns:
+            The number of bytes written.
+
+        Raises:
+            ZipDownloadTransferError: When the transfer fails or the size does not match
+        """
+        import os
+
+        temp_path = f"{local_path}.vamsdownload"
+        written = 0
+        completed = False
+        try:
+            # A separate request with no VAMS auth: the presigned URL authorizes itself, and Amazon
+            # S3 rejects a request presenting two authorization mechanisms. The session carries no
+            # default Authorization header (headers are built per request in _make_request).
+            with self.session.get(url, stream=True, timeout=ZIP_DOWNLOAD_STREAM_TIMEOUT) as response:
+                if response.status_code != 200:
+                    hint = (" The download link may have expired; run the download again."
+                            if response.status_code == 403 else "")
+                    raise ZipDownloadTransferError(
+                        f"The archive download was refused (HTTP {response.status_code}).{hint}")
+                total = expected_size
+                if total is None and response.headers.get('Content-Length'):
+                    try:
+                        total = int(response.headers['Content-Length'])
+                    except (TypeError, ValueError):
+                        total = None
+                with open(temp_path, 'wb') as handle:
+                    for chunk in response.iter_content(chunk_size=ZIP_DOWNLOAD_STREAM_CHUNK_BYTES):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        written += len(chunk)
+                        if progress_callback:
+                            progress_callback(written, total)
+            if expected_size is not None and written != expected_size:
+                raise ZipDownloadTransferError(
+                    f"The archive download was incomplete: expected {expected_size} bytes, "
+                    f"received {written}")
+            os.replace(temp_path, local_path)
+            completed = True
+            return written
+
+        except requests.exceptions.RequestException as e:
+            # The exception text of a connection error names the full URL; report its type only.
+            raise ZipDownloadTransferError(
+                f"The archive download failed ({type(e).__name__}) after {written} bytes")
+
+        except OSError as e:
+            raise ZipDownloadTransferError(f"The archive could not be written locally: {e.strerror or e}")
+
+        finally:
+            # Any failure or interruption (Ctrl+C included) leaves no partial file behind.
+            if not completed:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    # ------------------------------------------------------------------
     # Pipeline / Workflow / Execution V2 API Methods
     # ------------------------------------------------------------------
     # Shared helpers keep the per-endpoint methods small: _pwe_request issues the call and
@@ -4726,7 +5116,8 @@ class APIClient(CustomAPIClientMixin):
         """List executions globally (permission-filtered). GET /workflows/executions.
 
         params may include the filter query strings: workflowId, workflowDatabaseId, status,
-        triggerType, groupId, triggeredByUserId, plus pageSize/startingToken.
+        triggerType, groupId, triggeredByUserId, includeSystem ('true'/'false'; system workflow runs
+        are hidden by default), plus pageSize/startingToken.
         """
         try:
             return self._pwe_request('GET', API_WORKFLOW_EXECUTIONS_GLOBAL, params=params or {})

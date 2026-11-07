@@ -313,6 +313,25 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
         expect(warningsFrom(run)).toEqual([]);
     });
 
+    test("warns for app.zipDownloads in the EU Sovereign Cloud when the feature builds with CodeBuild", () => {
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+            c.app.useGlobalVpc = { ...(c.app.useGlobalVpc ?? {}), enabled: true };
+            c.app.zipDownloads.enabled = true;
+            c.app.zipDownloads.useCodeBuild = true;
+        });
+        const warnings = warningsFrom(run);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain("app.zipDownloads");
+    });
+
+    test("does not warn for app.zipDownloads.useCodeBuild while the feature is off", () => {
+        // No zipArchive pipeline, so no build, deploys while app.zipDownloads.enabled is false.
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+            c.app.zipDownloads.useCodeBuild = true;
+        });
+        expect(warningsFrom(run)).toEqual([]);
+    });
+
     test("does not warn on the shipped EU Sovereign config, which sets useCodeBuild false", () => {
         // Control for the six warning cases above: proves the trigger is the flag, not the partition.
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1");

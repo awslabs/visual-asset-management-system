@@ -16,7 +16,7 @@ The valid fields per object type, the criteria operators, the permissions, and t
 
 Full access to a single database including asset CRUD, the database's archived assets (view, unarchive, permanent delete), pipeline and workflow management, metadata schema management, and the ability to create, update, or delete the database itself. It can create only its own database id, which is also how a deleted database is restored.
 
-**Constraint summary (14 constraints):**
+**Constraint summary (15 constraints):**
 
 | #   | Constraint                | Object Type      | Permissions            | Scope                                                               |
 | --- | ------------------------- | ---------------- | ---------------------- | ------------------------------------------------------------------- |
@@ -34,6 +34,7 @@ Full access to a single database including asset CRUD, the database's archived a
 | 12  | Metadata schemas (GLOBAL) | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                              |
 | 13  | Tags                      | `tag`            | GET                    | Global (read-only)                                                  |
 | 14  | Tag types                 | `tagType`        | GET                    | Global (read-only)                                                  |
+| 15  | Zip downloads (list)      | `api`            | GET                    | `/download/zip`: the caller's own zip downloads across assets       |
 
 **Key design decisions:**
 
@@ -121,7 +122,7 @@ GLOBAL pipelines and workflows are shared by every database, so managing them is
 
 Standard working access within a specific database. Can view all data, create and update assets, upload files, archive (soft delete) assets, add, edit, and remove the database's metadata, and execute workflows. Cannot view, unarchive, or permanently delete archived assets, permanently delete assets, create or delete pipelines/workflows/metadata schemas, create the database, edit its details or delete it, or use asset ingestion.
 
-**Constraint summary (18 constraints):**
+**Constraint summary (20 constraints):**
 
 | #   | Constraint                   | Object Type      | Permissions            | Scope                                                                                                                                                                                  |
 | --- | ---------------------------- | ---------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -143,6 +144,8 @@ Standard working access within a specific database. Can view all data, create an
 | 16  | Metadata schemas (GLOBAL)    | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                                                                                                                                                 |
 | 17  | Tags                         | `tag`            | GET                    | Global (read-only)                                                                                                                                                                     |
 | 18  | Tag types                    | `tagType`        | GET                    | Global (read-only)                                                                                                                                                                     |
+| 19  | Zip downloads                | `api`            | GET, POST, DELETE      | Paths under `/database/` containing `/download/zip`: create, list, get, URL, cancel and delete the caller's own zip downloads                                                          |
+| 20  | Zip downloads (list)         | `api`            | GET                    | `/download/zip`: the caller's own zip downloads across assets                                                                                                                          |
 
 **Key design decisions:**
 
@@ -283,11 +286,12 @@ DELETE is granted at Tier 2 because archive operations require it. Permanent del
 
 View-only access scoped to a single database. Can browse assets, view files, and read metadata but cannot modify anything.
 
-**Key constraints (13 constraints):**
+**Key constraints (15 constraints):**
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
 -   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow GET only on `/auth/user/api-keys` (the user can view their own API keys but cannot create, extend, or delete them)
 -   `api` (download) -- Allow POST on paths that start with `/database/` and end with `/download`: the file download request the file viewers and the download action make, a read whose body names the file and version. Both criteria are in `criteriaAnd`, so no write route under `/database` matches the grant
+-   `api` (zip downloads) -- Allow GET, POST and DELETE on paths that start with `/database/` and contain `/download/zip`, and GET on `/download/zip`: Download as Zip jobs, which are a download and which each user reaches only for their own jobs. Every zip download call also requires asset GET permission
 -   `api` (deny) -- Deny GET on paths ending in `/logs`, withholding the detailed execution-logs route that the broad `/workflows` GET allow would otherwise reach
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
@@ -302,7 +306,7 @@ Importing a template creates constraints; it does not modify the constraints of 
 
 ### Global read-only
 
-View-only access across all databases (13 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`. That criterion matches both forms of an archived record's id, so this role also views archived assets and archived database records.
+View-only access across all databases (15 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`. That criterion matches both forms of an archived record's id, so this role also views archived assets and archived database records.
 
 ### Database tag admin
 
@@ -456,11 +460,11 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 | Template                  | File                      | Variables                  | Description                                                                  |
 | ------------------------- | ------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| Database Admin            | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                      |
-| Database User             | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (18 constraints)               |
-| Database Read-Only        | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                     |
+| Database Admin            | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (15 constraints)                      |
+| Database User             | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (20 constraints)               |
+| Database Read-Only        | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (15 constraints)                     |
 | Database Tag Admin        | `database-tag-admin.json` | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints) |
-| Global Read-Only          | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                       |
+| Global Read-Only          | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (15 constraints)                       |
 | Deny Tagged Asset Editing | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)           |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
@@ -527,7 +531,7 @@ The response includes the count and IDs of all created constraints:
 ```json
 {
     "success": true,
-    "message": "Successfully imported 14 constraints from template 'Database Admin' for role 'my-project-admin'",
+    "message": "Successfully imported 15 constraints from template 'Database Admin' for role 'my-project-admin'",
     "constraintsCreated": 14,
     "constraintIds": ["uuid-1", "uuid-2", "..."],
     "timestamp": "2024-01-01T00:00:00.000000"

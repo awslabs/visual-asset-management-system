@@ -320,6 +320,16 @@ Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
 
+### Zip Archive Pipeline
+
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+
+| Name                     | Version | License    | Notes                                                                                                       |
+| :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
+| boto3                    | 1.43.45 | Apache-2.0 | AWS SDK for Python                                                                                          |
+| botocore                 | 1.43.45 | Apache-2.0 | Low-level AWS SDK for Python                                                                                |
+| python (slim base image) | 3.11    | PSF-2.0    | Container base image; the zip, tar and gzip writers use only the Python standard library (`zlib`, `struct`) |
+
 ### GenAI CAD STEP Agent Pipeline
 
 **GenAI CAD STEP Agent Pipeline Dependencies**

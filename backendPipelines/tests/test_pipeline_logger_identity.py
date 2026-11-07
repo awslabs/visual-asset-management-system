@@ -48,6 +48,7 @@ LOGGER_COPIES = (
     "backendPipelines/preview/3dThumbnail/lambda/customLogging/logger.py",
     "backendPipelines/preview/pcPotreeViewer/lambda/customLogging/logger.py",
     "backendPipelines/simulation/isaacLabTraining/lambda/customLogging/logger.py",
+    "backendPipelines/utility/zipArchive/lambda/customLogging/logger.py",
 )
 
 TOKEN_SPELLINGS = (

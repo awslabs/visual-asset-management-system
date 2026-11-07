@@ -27,6 +27,7 @@ jest.mock("../../services/AssetUploadService", () => ({
         initializeUpload: jest.fn(),
         uploadPart: jest.fn(),
         completeUpload: jest.fn(),
+        getUploadStatus: jest.fn(),
     },
 }));
 // The asset already exists in every test, so asset creation, metadata and links are never called.
@@ -42,6 +43,7 @@ const service = AssetUploadService as unknown as {
     initializeUpload: jest.Mock;
     uploadPart: jest.Mock;
     completeUpload: jest.Mock;
+    getUploadStatus: jest.Mock;
 };
 
 const KEY = "/model.glb";
@@ -163,6 +165,42 @@ describe("UploadManager completion", () => {
         });
         expect(screen.queryByText(/Failed/)).not.toBeInTheDocument();
         expect(screen.queryByText("Completed with Errors")).not.toBeInTheDocument();
+    });
+
+    it("reads the outcome of a file accepted for asynchronous processing", async () => {
+        service.uploadPart.mockResolvedValue("etag-1");
+        service.completeUpload.mockResolvedValue({
+            ...completion({ success: true, largeFileAsynchronousHandling: true }),
+            largeFileAsynchronousHandling: true,
+        });
+        service.getUploadStatus.mockResolvedValue({
+            uploadId: "upload-1",
+            databaseId: "db-1",
+            assetId: "asset-1",
+            status: "completed_with_errors",
+            asyncFiles: [{ relativeKey: KEY, status: "FAILED", error: "Could not be copied" }],
+        });
+
+        const onUploadComplete = mount();
+        await waitFor(() => expect(onUploadComplete).toHaveBeenCalledTimes(1));
+
+        await waitFor(() =>
+            expect(service.getUploadStatus).toHaveBeenCalledWith("upload-1", "asset-1", "db-1")
+        );
+        expect(
+            await screen.findByText("Large files that did not reach the asset")
+        ).toBeInTheDocument();
+        expect(screen.getByText(`${KEY}: Could not be copied`)).toBeInTheDocument();
+    });
+
+    it("reads no upload status when no file went to asynchronous processing", async () => {
+        service.uploadPart.mockResolvedValue("etag-1");
+        service.completeUpload.mockResolvedValue(completion({ success: true }));
+
+        const onUploadComplete = mount();
+        await waitFor(() => expect(onUploadComplete).toHaveBeenCalledTimes(1));
+        expect(service.getUploadStatus).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("async-upload-outcome")).not.toBeInTheDocument();
     });
 
     it("shows a file the server refused at completion as Failed, with the reason", async () => {
