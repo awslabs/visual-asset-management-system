@@ -585,8 +585,10 @@ class TestDatabaseBinding:
                  c.args[2]["bindingApplyId"]) for c in writes} == {
             ("pending_evaluation", "database", SCHEMA, record["applyId"])}
         assert [c.kwargs["computed_from"] for c in writes] == [{}, {}]
-        assert [(c.kwargs["event_type"], c.kwargs["actor"]) for c in ran["audit"].call_args_list
-                ] == [("schema_binding_applied_to_asset", USER)] * 2
+        audits = ran["audit"].call_args_list
+        assert len(audits) == 2
+        assert {(c.kwargs["event_type"], c.kwargs["actor"]) for c in audits} == {
+            ("schema_binding_applied_to_asset", USER)}
         assert ran["counts"]["assetsPendingEvaluation"] == 2
 
     @pytest.mark.parametrize("stored,body_flag,expected", [
