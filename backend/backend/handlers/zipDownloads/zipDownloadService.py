@@ -157,6 +157,11 @@ class ZipRefusal(VAMSGeneralErrorResponse):
     """A refused create (400, or the given status)."""
 
 
+class ZipLaunchRefused(Exception):
+    """The execute handler refused the zipArchive launch (a 4xx): no run was started. The message is
+    the refusal's detail, for the service log only."""
+
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -471,10 +476,17 @@ def _launch(row, request_entries, pinned):
     # {"message": "<reason>"} on a refusal (the same envelope the execution service's re-run reads).
     message = inner_body.get("message")
     execution_id = message.get("executionId") if isinstance(message, dict) else None
-    if status_code != 200 or not execution_id:
-        raise RuntimeError(f"zipArchive workflow launch answered {status_code}: "
-                           f"{str(message if isinstance(message, str) else '')[:500]}")
-    return execution_id
+    if status_code == 200 and execution_id:
+        return execution_id
+    # The refusal as the execute handler gave it: a string, or {"executionValidationErrors": [...]}
+    # / {"templateResolutionErrors": ...}. Kept whole for the service log (D10); never returned.
+    detail = message if isinstance(message, str) else json.dumps(message, default=str)
+    detail = f"zipArchive workflow launch answered {status_code}: {str(detail)[:2000]}"
+    if isinstance(status_code, int) and 400 <= status_code < 500:
+        # A 4xx means the execute handler refused before the run's first side effect (validation,
+        # authorization, a lock conflict): no run exists for this job.
+        raise ZipLaunchRefused(detail)
+    raise RuntimeError(detail)
 
 
 def _abort_execution(execution_id):
@@ -505,6 +517,22 @@ def _abort_execution(execution_id):
 
 def _job_prefix(row):
     return zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
+
+
+def _discard_unlaunched_job(row):
+    """Remove a job whose launch was refused: its working objects, then its row (only while it is
+    still QUEUED with no run recorded, so nothing another writer recorded is removed)."""
+    zd.delete_working_objects(s3, aux_bucket_name, row, logger)
+    try:
+        zip_table.delete_item(
+            Key=zd.row_key(row["userId"], row["requestId"]),
+            ConditionExpression=("attribute_exists(requestId) AND #status = :queued AND "
+                                 "attribute_not_exists(workflowExecutionId)"),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":queued": zd.STATUS_QUEUED})
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.warning(f"Could not remove refused zip download {row.get('requestId')}: {e}")
 
 
 def _seconds_since(stamp):
@@ -779,10 +807,23 @@ def create_job(event, database_id, asset_id):
     zip_table.put_item(Item=row, ConditionExpression="attribute_not_exists(requestId)")
     try:
         execution_id = _launch(row, entries, pinned)
+    except ZipLaunchRefused as refused:
+        # The workflow refused the launch, so no run exists: the job is removed (row and working
+        # objects) instead of being left FAILED, and the caller gets a 400 with a generic reason.
+        # The refusal itself goes to this log only (D10): it names workflow configuration.
+        logger.warning(f"Zip download {request_id} refused at launch: {refused}")
+        _discard_unlaunched_job(row)
+        log_actions(event, "zipDownloadRefused", {"databaseId": database_id, "assetId": asset_id,
+                                                  "reason": "launchRefused"})
+        return general_error(status_code=400, body={"message": zd.MSG_LAUNCH_REFUSED}, event=event)
     except Exception as e:
+        # The launch may or may not have started a run (a read timeout, a 5xx), so the row stays,
+        # FAILED with a generic reason: it keeps the job visible to the user and, if a run did
+        # start, the container's writes lose against the terminal row and it stops.
         logger.exception(f"Zip download {request_id} could not be launched: {e}")
-        zd.finalize_row(zip_table, user_id, request_id, zd.STATUS_FAILED,
-                        error_message=zd.MSG_LAUNCH_FAILED)
+        if zd.finalize_row(zip_table, user_id, request_id, zd.STATUS_FAILED,
+                           error_message=zd.MSG_LAUNCH_FAILED):
+            zd.delete_working_objects(s3, aux_bucket_name, row, logger)
         return internal_error(body={"message": zd.MSG_LAUNCH_FAILED}, event=event)
     started = zd.iso(zd.utc_now())
     try:

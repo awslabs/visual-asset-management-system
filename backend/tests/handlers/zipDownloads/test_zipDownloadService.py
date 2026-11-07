@@ -9,6 +9,7 @@ so a test that a second user cannot read a job reads the table the handler wrote
 """
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -190,12 +191,41 @@ class TestCreate:
         assert json.loads(event["body"])["inputFiles"] == [
             {"databaseId": "db1", "assetId": "asset1", "relativeFileKey": "/textures/"}]
 
-    def test_launch_failure_fails_the_job(self, env):
-        env.lam.responses["executeFn"] = (400, {"message": "Workflow is disabled"})
+    def test_a_launch_error_fails_the_job_and_removes_its_working_objects(self, env):
+        # A 5xx may or may not have started a run: the row stays, FAILED (D13: no manifest kept).
+        env.lam.responses["executeFn"] = (500, {"message": "Internal Server Error"})
         response = _create(env, FILE_SELECTION)
         assert response["statusCode"] == 500
         row = next(iter(env.zip.items.values()))
         assert row["status"] == "FAILED" and row["errorMessage"] == env.zd.MSG_LAUNCH_FAILED
+        assert (h.AUX, row["manifestKey"]) not in env.s3.objects
+
+    def test_a_refused_launch_answers_400_and_leaves_no_job(self, env, monkeypatch):
+        """#1125 D9/D10: a 4xx from the execute handler is a refusal (no run exists). The caller gets
+        a 400 with a generic reason, no FAILED row or manifest is left, and the refusal's own text
+        (the executionValidationErrors list) is kept in the service log only."""
+        logger = MagicMock()
+        monkeypatch.setattr(env.svc, "logger", logger)
+        env.lam.responses["executeFn"] = (400, {"message": {"executionValidationErrors": [
+            "Workflow does not allow folder selection."]}})
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == 400
+        assert h.body_of(response)["message"].endswith(env.zd.MSG_LAUNCH_REFUSED)
+        assert "folder selection" not in response["body"]
+        assert env.zip.items == {}
+        assert not [k for (b, k) in env.s3.objects if b == h.AUX]
+        logged = " ".join(str(c.args[0]) for c in logger.warning.call_args_list)
+        assert "Workflow does not allow folder selection." in logged
+        assert "answered 400" in logged
+        assert any(c.args[1] == "zipDownloadRefused" for c in env.audit.call_args_list)
+
+    def test_a_refusal_string_is_logged_too(self, env, monkeypatch):
+        logger = MagicMock()
+        monkeypatch.setattr(env.svc, "logger", logger)
+        env.lam.responses["executeFn"] = (400, {"message": "Workflow is disabled"})
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == 400 and env.zip.items == {}
+        assert "Workflow is disabled" in " ".join(str(c.args[0]) for c in logger.warning.call_args_list)
 
     def test_folder_totals_from_prescan(self, env):
         item = h.body_of(_create(env, {"selection": [{"type": "folder", "relativePath": "/textures/"}]}))

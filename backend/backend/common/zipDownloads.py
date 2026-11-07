@@ -95,6 +95,12 @@ MSG_DISABLED = "Zip downloads are not enabled for this deployment"
 MSG_NOT_FOUND = "Zip download not found"
 MSG_CAP_REACHED = "You already have the maximum number of active zip downloads"
 MSG_LAUNCH_FAILED = "The archive job could not be started"
+# The zipArchive workflow refused the launch (a 4xx from the execute handler). Generic on purpose: the
+# refusal's own text names workflow configuration, so it goes to the service log only.
+MSG_LAUNCH_REFUSED = "The archive job could not be started for this selection"
+# The same words as the web's refusal (CreateZipDownloadModal), without naming the file.
+MSG_ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item. Remove it from the "
+                             "selection, or restore it first.")
 MSG_NOT_PRODUCED = "The archive was not produced"
 MSG_JOB_FAILED = "The archive job failed"
 MSG_JOB_TIMED_OUT = "The archive job timed out"

@@ -79,9 +79,18 @@ class FakeTable:
         self.items[self._k(Item)] = json.loads(json.dumps(Item))
         self.writes.append(("put", Item))
 
-    def delete_item(self, Key, ConditionExpression=None, **_):
-        if ConditionExpression and "attribute_exists" in ConditionExpression \
-                and self._k(Key) not in self.items:
+    def delete_item(self, Key, ConditionExpression=None, ExpressionAttributeNames=None,
+                    ExpressionAttributeValues=None, **_):
+        cond = ConditionExpression or ""
+        row = self.items.get(self._k(Key))
+        names, values = ExpressionAttributeNames or {}, ExpressionAttributeValues or {}
+        ok = not ("attribute_exists" in cond and row is None)
+        m = re.search(r"(#?\w+) = (:\w+)", cond)
+        if ok and row is not None and m:
+            ok = row.get(names.get(m.group(1), m.group(1))) == values[m.group(2)]
+        if ok and row is not None and "attribute_not_exists(workflowExecutionId)" in cond:
+            ok = not row.get("workflowExecutionId")
+        if not ok:
             raise _client_error("ConditionalCheckFailedException", "DeleteItem")
         self.items.pop(self._k(Key), None)
         self.writes.append(("delete", Key))

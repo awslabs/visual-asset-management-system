@@ -34,6 +34,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.workflows import test_system_pipeline_hooks as hooks
+from backend.tests.handlers.zipDownloads import zipBundle as zb
 from backend.tests.handlers.zipDownloads import zipHarness as h
 
 ewv2, le, sp = hooks.ewv2, hooks.le, hooks.sp
@@ -45,27 +46,21 @@ WORKFLOW_ID = "utility-zip-archive"
 SORT_KEY = f"{GLOBAL}:{WORKFLOW_ID}"
 CALLBACK_FN = "vams-zip-callback"
 
-# The zipArchive workflow and pipeline as registered (backendPipelines/utility/zipArchive/vamsSchema,
-# ids from ZipArchiveConstruct's idOverrides): GLOBAL, system, many inputs, folders and the whole
-# asset allowed, one asset.
-_SCOPE = {"crossAssetAllowed": False, "singleAssetOnly": True, "wholeAssetAllowed": True,
-          "folderAllowed": True}
-ZIP_PIPELINE = dict(tew._PIPELINE, databaseId=GLOBAL, pipelineId=WORKFLOW_ID, pipelineName="Zip Archive",
-                    isSystem=True,
-                    systemConfig=dict(tew._PIPELINE["systemConfig"], inputFileArity="multi",
-                                      allowCustomTemplateOverride=True, assetScope=dict(_SCOPE)))
-ZIP_WORKFLOW = dict(tew._WORKFLOW, databaseId=GLOBAL, workflowId=WORKFLOW_ID, workflowName="Zip Archive",
-                    isSystem=True,
-                    specifiedPipelines=[{"pipelineDatabaseId": GLOBAL, "pipelineId": WORKFLOW_ID,
-                                         "jobName": "p1"}],
-                    systemConfig=dict(tew._WORKFLOW["systemConfig"], inputFileArity="multi",
-                                      assetScope=dict(_SCOPE)))
+# The zipArchive workflow and pipeline AS THE DEPLOYMENT REGISTERS THEM: the shipped bundle through
+# the real importer and create request models (zipBundle). Before #1125 D9 these were written here by
+# hand with the systemConfig the zip service needs, so this test passed while the shipped bundle's
+# workflow declared none and every folder, whole-asset and multi-file job was refused live.
+ZIP_PIPELINE, ZIP_WORKFLOW = zb.registered_records()
 ASSET = {"databaseId": "db1", "assetId": "asset1", "assetName": "Engine", "bucketId": "b1",
          "assetLocation": {"Key": "xasset1/"}}
 
 SELECTIONS = {
     "file": {"selection": [{"type": "file", "relativePath": "/a.glb"}]},
+    "files": {"selection": [{"type": "file", "relativePath": "/a.glb"},
+                            {"type": "file", "relativePath": "/textures/t1.png"}]},
     "folder": {"selection": [{"type": "folder", "relativePath": "/textures/"}]},
+    "file-and-folder": {"selection": [{"type": "file", "relativePath": "/a.glb"},
+                                      {"type": "folder", "relativePath": "/textures/"}]},
     "whole-asset": {"selection": [{"type": "asset", "relativePath": "/"}]},
     "pinned-version": {"selection": [{"type": "file", "relativePath": "/a.glb", "versionId": "va1"}]},
 }
@@ -164,13 +159,30 @@ class TestLaunchThroughTheExecuteHandler:
 
 
 @pytest.mark.unit
-def test_a_launch_the_execute_handler_refuses_fails_the_job(env):
+def test_a_launch_the_execute_handler_refuses_answers_400_and_leaves_no_job(env):
+    """#1125 D9: a refusal is a clean 4xx with a generic reason, and the refused job leaves no row or
+    working objects behind (before: 500 and a FAILED row)."""
     env.lam.workflow = dict(ZIP_WORKFLOW, enabled=False)
     response = _create(env, SELECTIONS["file"])
-    assert env.lam.responses[0]["statusCode"] != 200
-    assert response["statusCode"] == 500
-    row = next(iter(env.zip.items.values()))
-    assert row["status"] == "FAILED" and row["errorMessage"] == env.zd.MSG_LAUNCH_FAILED
+    assert 400 <= env.lam.responses[0]["statusCode"] < 500
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["message"] == env.zd.MSG_LAUNCH_REFUSED
+    assert env.zip.items == {}
+    assert not [k for (b, k) in env.s3.objects if b == h.AUX]
+
+
+@pytest.mark.unit
+def test_a_selection_the_registered_workflow_refuses_answers_400(env):
+    """The REAL validation refusal (executionValidationErrors) maps to the same clean 400: the
+    registered workflow with its scope narrowed, as the importer stored it before D9."""
+    narrowed = dict(ZIP_WORKFLOW, systemConfig=dict(ZIP_WORKFLOW["systemConfig"],
+                                                    assetScope=dict(ZIP_WORKFLOW["systemConfig"]["assetScope"],
+                                                                    folderAllowed=False)))
+    env.lam.workflow = narrowed
+    response = _create(env, SELECTIONS["folder"])
+    refusal = json.loads(env.lam.responses[0]["body"])["message"]
+    assert "executionValidationErrors" in json.dumps(refusal)
+    assert response["statusCode"] == 400 and env.zip.items == {}
 
 
 # ------------------------------------------------------------------------------------------------ #

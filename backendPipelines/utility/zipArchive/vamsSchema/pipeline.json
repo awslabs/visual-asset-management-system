@@ -20,7 +20,10 @@
         "metadataInputs": {
             "assetMetadata": false,
             "fileMetadata": false,
-            "fileAttributes": false
+            "fileAttributes": false,
+            "databaseMetadata": false,
+            "assetFileMetadata": false,
+            "metadataSchema": false
         },
         "requireTemplate": false,
         "allowCustomTemplateOverride": true,

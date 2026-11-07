@@ -97,6 +97,18 @@ The pipeline has no configuration block of its own. It is deployed, and its pipe
 
 Run the `utility-zip-archive` workflow on an asset's files, folders, or the whole asset like any workflow, from the asset's **File Manager** (**Automation** > **Execute Workflow**) or with `vamscli workflow execute`. The run archives one asset's files and adds the archive to that asset as a new file. The pipeline accepts multiple input files, folders, and the whole asset, and needs no template; the shipped template `zip-archive-store` writes a zip archive without compression.
 
+The workflow's settings are fixed by the deployment (a system workflow is read-only):
+
+| Setting                 | Value                              | Why                                                                                                                                                                                                                  |
+| ----------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input files             | One or more                        | An archive usually holds several files.                                                                                                                                                                              |
+| Asset scope             | One asset; folders and whole asset | An archive holds one asset's files.                                                                                                                                                                                  |
+| Input file filters      | None                               | Any file type can be archived; blocked file types are refused by the archive checks.                                                                                                                                 |
+| Concurrency restriction | None                               | The pipeline only reads its inputs, and each Download as Zip job writes its own archive key. A per-asset lock would make a user's zip downloads of one asset, and other users' downloads of it, wait for each other. |
+| Output                  | The input asset, no override       | A Zip Archive run adds the archive to the asset it read. Two runs that write the same archive name add two versions of that file.                                                                                    |
+| Metadata inputs         | None                               | The archive does not use metadata.                                                                                                                                                                                   |
+| Trigger chaining        | Off                                | Another workflow's output never starts an archive run.                                                                                                                                                               |
+
 ### Template Configuration Body
 
 | Key               | Type     | Default             | Description                                                                                                                                |
