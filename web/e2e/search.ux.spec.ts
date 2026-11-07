@@ -10,6 +10,8 @@ import {
     gotoSearch,
     modeToolbar,
     readFeaturesEnabled,
+    searchCountBadge,
+    searchCountBadgeText,
     searchModeCase,
     searchQueryBox,
     searchSubmitButton,
@@ -79,6 +81,17 @@ async function runNlpSearch(page: Page, query: string): Promise<{ body: any; req
     await page.waitForTimeout(1_200);
     page.off("request", onRequest);
     return { body, requests };
+}
+
+/**
+ * The total a natural-language answer reports, as the badge shows it: `hits.total`, never fewer
+ * than the hits returned, and a minimum only when the route says so (`relation` "gte").
+ */
+function nlpAnswerTotal(body: any): { value: number; relation: string } {
+    const relation = body?.hits?.total?.relation;
+    expect(["eq", "gte"], "hits.total.relation of the answer").toContain(relation);
+    const value = Math.max(body?.hits?.total?.value ?? 0, (body?.hits?.hits ?? []).length);
+    return { value, relation };
 }
 
 test.describe("Unified search — layout and mode controls", () => {
@@ -235,7 +248,7 @@ test.describe("Unified search — natural-language behaviour", () => {
         ).toBeVisible({ timeout: 30_000 });
         await expect(page.getByText("No matches")).toHaveCount(0);
         await expect(page.getByRole("button", { name: "Clear filter" })).toHaveCount(0);
-        await expect(page.getByText(/^\d[\d,]* results$/)).toHaveCount(0);
+        await expect(searchCountBadge(page)).toHaveCount(0);
         expect(requests, "an empty query has nothing to embed and must not be sent").toBe(0);
     });
 
@@ -257,11 +270,9 @@ test.describe("Unified search — natural-language behaviour", () => {
         const hits: any[] = body?.hits?.hits ?? [];
         test.skip(hits.length === 0, "No vector-indexed content in this environment");
 
-        // Result count badge names the full set; the table shows at most one page of it.
-        const badge = page.getByText(/^\d[\d,]* results$/);
-        await expect(badge).toBeVisible();
-        const badgeCount = Number((await badge.innerText()).replace(/[^\d]/g, ""));
-        expect(badgeCount).toBe(hits.length);
+        // Result count badge names the full set, with "+" exactly when the route's total is a
+        // minimum; the table shows at most one page of it.
+        await expect(searchCountBadge(page)).toHaveText(searchCountBadgeText(nlpAnswerTotal(body)));
         const rows = page.getByRole("row").filter({ has: page.getByRole("cell") });
         await expect.poll(() => rows.count()).toBeGreaterThan(0);
         expect(await rows.count()).toBeLessThanOrEqual(hits.length);
@@ -551,7 +562,7 @@ test.describe("Unified search — query band", () => {
 
     test("the result count appears only after a search has run", async ({ page }) => {
         const mode = await openUnified(page);
-        const badge = page.getByText(/^\d[\d,]* results$/);
+        const badge = searchCountBadge(page);
         if (mode === "keyword-only") {
             // Keyword mode searches on load, so the count is the first thing reported.
             await expect(badge).toBeVisible({ timeout: 60_000 });
@@ -561,8 +572,9 @@ test.describe("Unified search — query band", () => {
         await searchQueryBox(page).fill("");
         await expect(badge).toHaveCount(0);
         const { body } = await runNlpSearch(page, NLP_PROBE_QUERY);
-        const total: number = body?.hits?.total?.value ?? 0;
-        await expect(badge).toHaveText(`${total.toLocaleString()} results`, { timeout: 30_000 });
+        await expect(badge).toHaveText(searchCountBadgeText(nlpAnswerTotal(body)), {
+            timeout: 30_000,
+        });
     });
 
     test("the sidebar's record-type selector is not called Search mode", async ({ page }) => {

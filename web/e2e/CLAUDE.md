@@ -145,6 +145,7 @@ locators — the app's markup is not always guessable, and these were establishe
 | `gotoSearch(page, { databaseId?, tab? })`                     | Navigate to the search page; waits on its h1 + the view's first searchbox                  |
 | `searchViewSwitch(page)`, `searchViewSegment(page, name)`     | The title row's view switch (`toolbar` "Page view") and one view's segment                 |
 | `searchPageHeading(page, databaseId?)`                        | The search page h1 every view shares (`… and Files`, `… for <databaseId>`)                 |
+| `searchCountBadge(page)`, `searchCountBadgeText(total)`       | The h1's result-count badge (any count, `+` or not) and its exact text for a `hits.total`  |
 | `searchSubmitButton(page)`                                    | The Search view's Search button, scoped to the query band (the switch has a `Search` too)  |
 | `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                       |
 | `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                     |
@@ -195,6 +196,12 @@ locators — the app's markup is not always guessable, and these were establishe
     `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states read `No matches` (search
     table) and `No assets to display.` (asset list), neither of which `expectTableRendered`'s regex
     matches — use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`, e.g.
+    `9+ results` from a natural-language search). Compare it with the answer the page received
+    through `searchCountBadgeText`, which adds the `+` only for `gte`; a digits-only pattern fails
+    on every lower-bound count.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment you
+    press by its `data-testid` (the view id) before pressing it, then assert on the pinned locator.
 
 When a page's markup changes, fix the helper once; every spec follows.
 

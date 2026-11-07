@@ -177,6 +177,26 @@ export function searchViewSegment(page: Page, name: string | RegExp): Locator {
 }
 
 /**
+ * The result-count badge beside the search page h1: "23 results", "1 result", or "9+ results" when
+ * the count is a minimum. Matches any count, with or without the "+", so an absence check catches
+ * both; assert what it says with `searchCountBadgeText`.
+ */
+export function searchCountBadge(page: Page): Locator {
+    return page.getByText(/^\d[\d,]*\+? results?$/);
+}
+
+/**
+ * The badge text for a search answer's total: the count, a "+" only when the route reports the
+ * total as a minimum (`hits.total.relation` "gte"), and "result" for exactly one. Anything else is
+ * an exact count and must read as one.
+ */
+export function searchCountBadgeText(total: { value: number; relation?: string }): string {
+    const minimum = total.relation === "gte";
+    const noun = total.value === 1 && !minimum ? "result" : "results";
+    return `${total.value.toLocaleString()}${minimum ? "+" : ""} ${noun}`;
+}
+
+/**
  * The search page h1, shared by every view: `<Assets> and Files`, or `<Assets> for <databaseId>` on
  * a database route. Matched on its tail so a deployment's asset synonym does not matter.
  */

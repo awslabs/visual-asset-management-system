@@ -88,8 +88,13 @@ test.describe("Search page", () => {
     }) => {
         await gotoSearch(page);
         test.skip((await searchViewSwitch(page).count()) === 0, "One view only; nothing to choose");
-        // Choose whichever view is not selected, so the click is a real change.
-        const target = searchViewSwitch(page).getByRole("button", { pressed: false }).first();
+        // Choose whichever view is not selected, so the click is a real change. Pin it by its id
+        // first: once pressed it no longer matches `pressed: false`, which would re-resolve to the
+        // other segment.
+        const unselected = searchViewSwitch(page).getByRole("button", { pressed: false }).first();
+        const targetId = await unselected.getAttribute("data-testid");
+        expect(targetId, "the unselected segment has an id").toBeTruthy();
+        const target = searchViewSwitch(page).locator(`[data-testid="${targetId}"]`);
         const isList = /list$/i.test(await target.innerText());
         await target.click();
         await expect(page).toHaveURL(isList ? /[?&]tab=asset-list/ : /[?&]tab=unified-search/);
