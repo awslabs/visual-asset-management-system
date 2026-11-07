@@ -131,4 +131,30 @@ describe("Navigation", () => {
         });
         expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(2);
     });
+
+    // TEMPORARY-TEST: pins the removal of the COMPLIANCE feature-flag gate on the Compliance
+    // nav section; the section is now filtered by web-route permission like every other section.
+    it("shows Compliance links when their routes are allowed", async () => {
+        allowRoutes("/compliance/schemas", "/compliance/quarantine");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/compliance/schemas/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/compliance/quarantine/")).toBeTruthy();
+        expect(findNavLink(container, "#/compliance/cascades/")).toBeFalsy();
+    });
+
+    // Durable guard: a user without the compliance routes never sees the section; the route
+    // filter alone decides whether it renders.
+    it("hides the Compliance section when no compliance routes are allowed", async () => {
+        allowRoutes("/databases");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/compliance/schemas/")).toBeFalsy();
+        expect(screen.queryByText("Compliance")).not.toBeInTheDocument();
+    });
 });

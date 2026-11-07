@@ -17,23 +17,24 @@ The following options appear on nearly every command and are not repeated in ind
 
 ## Command Groups
 
-| Command Group                                                                | Description                                                                                      | Detailed Reference                                                   |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `setup`, `auth`, `features`, `profile`                                       | Initial configuration, authentication, feature switches, and profile management                  | [Setup and Authentication](commands/setup-and-auth.md)               |
-| `database`                                                                   | Create, update, delete, and list databases and bucket configurations                             | [Database](commands/database.md)                                     |
-| `assets`, `asset-version`, `asset-links`, `assets export`, `assets download` | Asset CRUD, version management, relationship links, export, and download                         | [Assets](commands/assets.md)                                         |
-| `file`                                                                       | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary   | [Files](commands/files.md)                                           |
-| `sync file`                                                                  | Push/pull directory synchronization with an asset, transferring only changed files               | [Sync](commands/sync.md)                                             |
-| `tag`, `tag-type`                                                            | Tag and tag type management for asset categorization                                             | [Tags](commands/tags.md)                                             |
-| `metadata`, `metadata-schema`                                                | Metadata CRUD for assets, files, links, and databases; schema inspection                         | [Metadata](commands/metadata.md)                                     |
-| `comment`, `subscription`                                                    | Review comments on an asset version, and asset event subscriptions                               | [Comments and Subscriptions](commands/comments-and-subscriptions.md) |
-| `search`                                                                     | Search assets and files using Amazon OpenSearch Service                                          | [Search](commands/search.md)                                         |
-| `pipeline`, `pipeline template`, `pipeline tag-schema`                       | Pipeline definitions, configuration templates, and template tag schemas                          | [Pipelines](commands/pipelines.md)                                   |
-| `workflow`, `workflow trigger`, `workflow execute`                           | Workflow CRUD, file-upload triggers, and asset-less multi-file execution                         | [Workflows](commands/workflows.md)                                   |
-| `execution`                                                                  | Global execution list, details, paged detail metadata, logs, abort, re-run, and permanent delete | [Executions](commands/executions.md)                                 |
-| `role`, `role constraint`, `role user`                                       | Role management, permission constraints, user-role assignments, and template import              | [Permissions](commands/permissions.md)                               |
-| `user cognito`, `api-key`                                                    | Amazon Cognito user management and API key management                                            | [Users and API Keys](commands/users-and-keys.md)                     |
-| `industry engineering bom`, `industry engineering plm`, `industry spatial`   | BOM assembly, PLM XML import, and spatial GLB combination                                        | [Industry](commands/industry.md)                                     |
+| Command Group                                                                    | Description                                                                                      | Detailed Reference                                                   |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `setup`, `auth`, `features`, `profile`                                           | Initial configuration, authentication, feature switches, and profile management                  | [Setup and Authentication](commands/setup-and-auth.md)               |
+| `database`                                                                       | Create, update, delete, and list databases and bucket configurations                             | [Database](commands/database.md)                                     |
+| `assets`, `asset-version`, `asset-links`, `assets export`, `assets download`     | Asset CRUD, version management, relationship links, export, and download                         | [Assets](commands/assets.md)                                         |
+| `file`                                                                           | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary   | [Files](commands/files.md)                                           |
+| `sync file`                                                                      | Push/pull directory synchronization with an asset, transferring only changed files               | [Sync](commands/sync.md)                                             |
+| `tag`, `tag-type`                                                                | Tag and tag type management for asset categorization                                             | [Tags](commands/tags.md)                                             |
+| `metadata`, `metadata-schema`                                                    | Metadata CRUD for assets, files, links, and databases; schema inspection                         | [Metadata](commands/metadata.md)                                     |
+| `comment`, `subscription`                                                        | Review comments on an asset version, and asset event subscriptions                               | [Comments and Subscriptions](commands/comments-and-subscriptions.md) |
+| `search`                                                                         | Search assets and files using Amazon OpenSearch Service                                          | [Search](commands/search.md)                                         |
+| `pipeline`, `pipeline template`, `pipeline tag-schema`                           | Pipeline definitions, configuration templates, and template tag schemas                          | [Pipelines](commands/pipelines.md)                                   |
+| `workflow`, `workflow trigger`, `workflow execute`                               | Workflow CRUD, file-upload triggers, and asset-less multi-file execution                         | [Workflows](commands/workflows.md)                                   |
+| `execution`                                                                      | Global execution list, details, paged detail metadata, logs, abort, re-run, and permanent delete | [Executions](commands/executions.md)                                 |
+| `role`, `role constraint`, `role user`                                           | Role management, permission constraints, user-role assignments, and template import              | [Permissions](commands/permissions.md)                               |
+| `user cognito`, `api-key`                                                        | Amazon Cognito user management and API key management                                            | [Users and API Keys](commands/users-and-keys.md)                     |
+| `compliance`, `compliance schema`, `compliance quarantine`, `compliance cascade` | Compliance schemas, bindings, evaluation, quarantine, cascades, and the audit trail              | [Compliance](commands/compliance.md)                                 |
+| `industry engineering bom`, `industry engineering plm`, `industry spatial`       | BOM assembly, PLM XML import, and spatial GLB combination                                        | [Industry](commands/industry.md)                                     |
 
 ---
 
@@ -101,6 +102,17 @@ vamscli role constraint template import -j ./database-admin.json
 ```bash
 vamscli user cognito list
 vamscli api-key create --name "CI Pipeline" --user-id bot@example.com --description "Build pipeline"
+```
+
+### Compliance
+
+```bash
+vamscli compliance schema create -n cad-quality --schema-file cad-quality.json
+vamscli compliance bind -n cad-quality -d my-database
+vamscli compliance evaluate -d my-database -a my-asset
+vamscli compliance state -d my-database
+vamscli compliance quarantine list
+vamscli compliance audit --event-type quarantine_released --limit 100
 ```
 
 ### Industry Commands

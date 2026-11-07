@@ -443,6 +443,10 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
+        },
+        "compliance": {
+            "autoLoadDefaultSchema": true,
+            "quarantineBlocksDownload": false
         }
     }
 }

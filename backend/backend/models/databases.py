@@ -115,6 +115,10 @@ class GetDatabaseResponseModel(BaseModel, extra='ignore'):
     baseAssetsPrefix: Optional[str] = None  # Base prefix from S3 asset buckets table
     restrictMetadataOutsideSchemas: Optional[bool] = False
     restrictFileUploadsToExtensions: Optional[str] = ""
+    # The database's compliance schema binding (written by the compliance binding service); both
+    # are absent on a database with no binding.
+    complianceSchemaName: Optional[str] = None
+    complianceAutoEval: Optional[bool] = None
 
 class GetDatabasesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing databases"""

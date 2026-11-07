@@ -362,6 +362,7 @@ export default function ViewAsset() {
                                     <AssetDetailsPane
                                         asset={asset}
                                         databaseId={databaseId || ""}
+                                        assetId={assetId || ""}
                                         onOpenUpdateAsset={handleOpenUpdateAsset}
                                         onOpenDeleteModal={handleOpenDeleteModal}
                                         deleteDisabledReason={

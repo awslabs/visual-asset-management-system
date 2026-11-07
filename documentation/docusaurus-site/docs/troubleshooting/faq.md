@@ -38,7 +38,7 @@ vamscli user cognito create --email user@example.com
 POST /user/cognito
 ```
 
-After creating the user, assign them to a role under **Admin - Auth > User Roles** to grant appropriate permissions.
+After creating the user, assign them to a role under **Admin - Auth > Users in Roles** to grant appropriate permissions.
 
 ### Why can I not see certain navigation pages?
 

@@ -238,7 +238,7 @@ if not casbin_enforcer.enforce(item, "GET"):
 Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
-You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow` and `metadataSchema`, plus any type a deployment registers as an extension object type (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
+You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade` and `complianceBinding`, plus any type a deployment registers as an extension object type (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
 :::
 
 ### Key Authorization Concepts

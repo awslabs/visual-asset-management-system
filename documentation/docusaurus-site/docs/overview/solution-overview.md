@@ -41,10 +41,11 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 21 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 22 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
+-   **Compliance Enforcement** -- Bind versioned compliance schemas to databases or assets, evaluate assets automatically, on demand, or in sweeps, and quarantine assets that fail `quarantine`-level rules, with approval-gated cascades and an audit trail
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
 
 ---
@@ -56,9 +57,9 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 23 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 25 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
-| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **3D Viewing**        | 22 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
 | **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
 | **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
@@ -71,7 +72,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 23 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 25 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 

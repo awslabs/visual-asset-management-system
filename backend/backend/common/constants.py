@@ -227,7 +227,11 @@ CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'userRole',
     'pipeline',
     'workflow',
-    'metadataSchema'
+    'metadataSchema',
+    'complianceSchema',
+    'complianceEvaluation',
+    'complianceCascade',
+    'complianceBinding',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -265,6 +269,10 @@ CORE_PERMISSION_CONSTRAINT_FIELDS = {
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
             #"field": "", //deprecated, old metadata schema
+
+            "complianceSchemaName": "",
+            "complianceState": "",
+            "cascadeId": "",
 
             "object__type": "",
             "route__path": "",
@@ -330,6 +338,21 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    # databaseId is the schema's scope: a database id, or GLOBAL for a schema every database may
+    # bind. A stored constraint without it matches every scope.
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    # databaseId is the database of the cascade's parent (trigger) asset. A stored constraint
+    # without it matches every database.
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Cascade ID", "value": "cascadeId"}]},
+    "complianceBinding": {"label": "Compliance Binding", "fields": [
+        {"label": "Database ID", "value": "databaseId"}]},
 }
 
 _MERGED_CONSTRAINT_CONSTANTS = merge_constraint_extensions(

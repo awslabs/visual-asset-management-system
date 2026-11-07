@@ -66,7 +66,8 @@ export type SectionId =
     | "pipelines-gpu"
     | "addons"
     | "api-webui"
-    | "metadata";
+    | "metadata"
+    | "compliance";
 
 export interface Section {
     id: SectionId;
