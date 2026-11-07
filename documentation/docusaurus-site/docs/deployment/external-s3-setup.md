@@ -541,7 +541,7 @@ For external buckets, the CDK deployment imports the bucket by ARN, creates Amaz
 
 ### Step 6: Configure lifecycle rules for upload staging
 
-VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage.
+VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage. The large object copy engine removes the partial upload of a copy that is cancelled, stopped or fails itself, including parts that were still being copied when it stopped, so these rules cover the uploads a client abandons.
 
 Add two lifecycle rules to the external bucket, for each `baseAssetsPrefix` that VAMS uses in it:
 

@@ -63,6 +63,8 @@ import {
 
 /** Backend-generated workflow state machine names (workflowAsl._generate_state_machine_name). */
 const WORKFLOW_STATE_MACHINE_NAME_PATTERN = "vams-*";
+/** The asset buckets table's index by bucket name (storageBuilder-nestedStack.ts). */
+export const S3_ASSET_BUCKETS_NAME_INDEX = "bucketNameGSI";
 
 /** Fixed name of the copy state machine (<= 80 characters). */
 export function largeObjectCopyStateMachineName(config: Config.Config): string {
@@ -196,6 +198,18 @@ export function grantLargeObjectCopyCoordination(
             })
         );
     }
+    // The abort is signed for the asset bucket's Region. A job row carries destRegion; a row written
+    // without it resolves the Region through the asset buckets table's bucketNameGSI (backend
+    // common/s3.py _lookup_bucket_region), so every stopper may query that index (#1123 D6).
+    statements.push(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storage.dynamo.s3AssetBucketsStorageTable.tableArn}/index/${S3_ASSET_BUCKETS_NAME_INDEX}`,
+            ],
+        })
+    );
     if (options.answersTaskToken) {
         statements.push(
             new iam.PolicyStatement({

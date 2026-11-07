@@ -37,6 +37,7 @@ import {
     MAP_ITERATION_EVENTS,
     MAX_BATCHES,
     NOTIFY_LAST_ATTEMPT_RETRY,
+    S3_ASSET_BUCKETS_NAME_INDEX,
     THROTTLE_RETRY,
     worstCaseTaskEvents,
 } from "../../lib/lambdaBuilder/largeObjectCopyEngine";
@@ -403,6 +404,28 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             ([, r]: [string, any]) => r.Properties.PolicyDocument
         );
         expect(docs.some(invokesEngine)).toBe(true);
+    });
+
+    // #1123 D6: every function that runs the cancel path signs its abort for the asset bucket's
+    // Region, resolving a name through the asset buckets table's bucket-name index when the job row
+    // carries no Region; before, the abort route's role could not read it (AccessDenied per cancel).
+    test.each([
+        ["executionService.lambda_handler", "the abort route and the status change handler"],
+        ["sfn.handleExecutionError.lambda_handler", "the error handler"],
+        ["sfn.processWorkflowExecutionOutput.lambda_handler", "the output step"],
+    ])("%s (%s) may query the asset buckets table's bucket-name index", (handler) => {
+        const [, fn] = functionByHandler(handler);
+        const docs = managedPoliciesOf(roleIdOf(fn)).map(
+            ([, r]: [string, any]) => r.Properties.PolicyDocument
+        );
+        const queriesBucketIndex = (doc: any) =>
+            (doc.Statement as any[]).some(
+                (s) =>
+                    (s.Action === "dynamodb:Query" ||
+                        (Array.isArray(s.Action) && s.Action.includes("dynamodb:Query"))) &&
+                    JSON.stringify(s.Resource).includes(`/index/${S3_ASSET_BUCKETS_NAME_INDEX}`)
+            );
+        expect(docs.some(queriesBucketIndex)).toBe(true);
     });
 
     test("the output step reads the engine name from SSM and may invoke it, with no cycle", () => {

@@ -403,6 +403,9 @@ def start_copy_job(table, sfn_client, machine_arn, job):
         "createdAt": _iso_now(),
         "expiresAt": _expires_at(days=ROW_RETENTION_DAYS + 7),
     }
+    if job["dest"].get("region"):
+        # The cancel path signs its abort for this Region without a buckets table read (#1123 D6).
+        row["destRegion"] = job["dest"]["region"]
     if job.get("workflowExecutionId"):
         row["workflowExecutionId"] = job["workflowExecutionId"]
     if job.get("batchId"):
@@ -834,6 +837,15 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
             # Not a job row (every job row carries its key); nothing to stop or mark.
             continue
         execution_arn = job.get("executionArn", "")
+        # Recorded before the stop and the abort, so a CopyBatch task still running copies no further
+        # part and aborts the upload again after its own last copy (#1123 D5).
+        request_stop(table, job_id)
+        # The abort and the landed check are signed for the destination bucket's Region from the job
+        # row, without a buckets table read (#1123 D6). A row written before destRegion existed
+        # resolves through the buckets table (the routing client's lookup).
+        if job.get("destRegion") and job.get("destBucket"):
+            from common.s3 import register_bucket_region
+            register_bucket_region(job["destBucket"], job["destRegion"])
         # Whether this call stopped the execution. Only a stop made here leaves a cancelled stop the
         # engine's reconcile can act on (handed over below, and from its status change event).
         stopped = False
@@ -889,6 +901,71 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     if handoff:
         request_reconcile(lambda_client, engine_function, handoff)
     return warnings
+
+
+def request_stop(table, job_id):
+    """Record on an open job that its copy is being stopped (stopRequestedAt), BEFORE the stopper
+    aborts the multipart upload (#1123 D5). StopExecution does not stop a running CopyBatch task, and
+    S3 keeps a part whose UploadPartCopy was in flight during an abort (an upload "may need aborting
+    more than once"). Every CopyBatch task reads the job before and after each part and, once it sees
+    this marker or a finalized job, copies no further part and aborts the upload when its own copies
+    have ended; with the stopper's abort after this write, the last copy to end is followed by an
+    abort, so no part is left. Changes no status: the outcome is still decided by the landed object.
+    Best-effort (False when the job is not open or the write failed)."""
+    try:
+        return update_job_row(table, job_id, {"stopRequestedAt": _iso_now()},
+                              condition=OPEN_JOB_CONDITION, condition_values=dict(OPEN_JOB_VALUES))
+    except Exception as e:
+        logger.warning(f"Could not record the stop of copy job {job_id}: {e}")
+        return False
+
+
+def copy_should_stop(row):
+    """True when a CopyBatch task must copy no further part: the job is finalized, or a stopper
+    recorded its stop (request_stop)."""
+    return bool(row) and (not is_open_job(row) or bool(row.get("stopRequestedAt")))
+
+
+# Bounded abort sweep (#1123 D5): after an abort, a part still being copied can land; ListParts then
+# still answers for the upload, and the abort is repeated once those copies have ended.
+ABORT_SWEEP_ATTEMPTS = 4
+ABORT_SWEEP_WAIT_SECONDS = 5
+
+
+def _sleep(seconds):
+    import time
+    time.sleep(seconds)
+
+
+def abort_until_gone(s3_client, bucket, key, upload_id, attempts=ABORT_SWEEP_ATTEMPTS,
+                     wait_seconds=ABORT_SWEEP_WAIT_SECONDS, sleep=None):
+    """Abort a multipart upload until S3 no longer knows it (ListParts answers NoSuchUpload), at most
+    ``attempts`` aborts, waiting ``wait_seconds`` before each repeat (only when parts are still
+    listed). Returns True when the upload is gone, False when it is still listed after the last
+    attempt (logged; the copy tasks' own abort after their last part, and the bucket's lifecycle
+    rule where it has one, still apply). Raises on an abort error other than NoSuchUpload.
+
+    Removes no object: an upload that a Complete completed is gone as an upload (ListParts answers
+    NoSuchUpload) and its object stays, so a landed file is never touched."""
+    sleep = sleep or _sleep
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            sleep(wait_seconds)
+        try:
+            s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                return True
+            raise
+        try:
+            s3_client.list_parts(Bucket=bucket, Key=key, UploadId=upload_id, MaxParts=1)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                return True
+            raise
+    logger.warning(f"Multipart upload {upload_id} is still listed after {max(1, attempts)} aborts; "
+                   f"a part copy still running aborts it again when it ends")
+    return False
 
 
 def mark_cancelled(table, job_id):
