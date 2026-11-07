@@ -49,9 +49,16 @@ def fake_popen(returncode, writes=()):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write("point cloud bytes")
+            self.returncode = None
 
         def wait(self):
+            self.returncode = returncode
             return returncode
+
+        def communicate(self, *args, **kwargs):
+            # The stage captures the converter's output to report it on a failure.
+            self.returncode = returncode
+            return "", None
 
     return _Popen
 
