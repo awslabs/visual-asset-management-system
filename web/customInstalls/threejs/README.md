@@ -14,7 +14,14 @@ The ThreeJS viewer provides support for viewing 3D models in various formats inc
 -   COLLADA (.dae)
 -   3DS (3D Studio)
 -   3MF (3D Manufacturing Format)
+-   USD (.usd, .usda, .usdc, .usdz), ASCII or binary, with three.js's `USDLoader`; no `unsafe-eval` needed
 -   **CAD Formats** (optional, requires OCCT): STEP (.stp, .step), IGES (.iges), BREP (.brep)
+
+The viewer loads the files a model references (textures, `.mtl` libraries, USD layers) from the same asset; see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+
+## Version and install
+
+`package.json` pins `three` to an exact version (0.187.0), and `package-lock.json` is generated with npm 11. This directory carries its own `.npmrc` with `min-release-age = 7`, because the nested `npm install` that `install.js` runs here does not read `web/.npmrc`. The bundle (`threejsInstall.js`) exports the core, the loaders (glTF, OBJ, MTL, FBX, STL, PLY, COLLADA, 3DS, 3MF, USD), `USDCParser`, `fflate` (`zipSync`, `unzipSync`) and the controls on `window.THREEBundle`.
 
 ## ⚠️ Browser Requirements for CAD Files
 

@@ -60,7 +60,8 @@ vamscli execution list --triggered-by user@example.com --json-output
 | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
 | `--workflow-database-id`          | Filter by workflow database ID                                                                         |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)                                     |
+| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
+| `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
 | `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
 | `--group-id`                      | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
@@ -95,6 +96,13 @@ read live and can change without a redeploy, so they may differ from what the ru
 marker says. A number with no marker means the workflow no longer records a current version (for
 example, the workflow was deleted), and a run started before versions were recorded shows
 `not recorded`.
+
+A `SKIPPED` execution records file-upload trigger launches the workflow's concurrency restriction
+refused. `execution list` and `workflow list-executions` print its `Skipped launches` count and
+`Skip reason`, and `execution details` prints a `Skipped launches` section with the reason, the
+first and last refusal, the first files and, only when you may read it, `Blocked by` with the
+blocking execution's id. `--json-output` carries the API fields unchanged (`skippedLaunchCount`,
+`skipScope`, `skipReason`, and the `skip` block).
 
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run

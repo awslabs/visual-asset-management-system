@@ -44,7 +44,7 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
 | `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
+| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .usd, .usda, .usdc, .usdz, .stp, .step, .iges, .igs, .brep                        | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
@@ -331,6 +331,18 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 
 ---
 
+## Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
+
+Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; do not fetch a referenced file anywhere else.
+
+-   `assetDependencyResolver.ts` — path rules (relative to the naming file; nothing above the asset root, absolute, or with a scheme is fetched), named limits (`DEPENDENCY_LIMITS`), one download per key, stream-route URLs, and the `LoadingManager` URL modifier: resolved names map to blob URLs, `blob:`/`data:` pass through, anything else gets a transparent placeholder and is recorded for the viewer's notice. `revokeAll()` runs in viewer cleanup.
+-   `dependencyLoading.ts` — `loadWithDependencies()` per format: glTF URI rewrite (`gltfDependencyLoader.ts`), OBJ `mtllib` + `MTLLoader`, COLLADA `<init_from>` pre-scan, 3DS/FBX probe parse (record requests, resolve, re-parse only when a texture loaded). A USD load with no mesh, point or line throws `USD_NO_GEOMETRY_MESSAGE`, which the component shows instead of an empty canvas.
+-   `usdDependencies.ts` — collects USD asset paths (USDA `@…@` scan; USDC: only asset-path-typed fields, read with the bundled `USDCParser`); `subLayers` entries are listed as `sublayer` (not shown) instead of downloaded while `USD_FETCH_SUBLAYERS` is `false` (`buildUsdPackage` option `fetchSubLayers`), stores each file under the exact key three's `USDComposer` looks up (un-normalized join), and repacks an in-memory `.usdz` (root first) for `USDLoader.parse`. `checkUsdzSize()` (`USDZ_LIMITS`) runs before any `.usdz` is extracted.
+-   `fileLoaders.ts` — `loadFile()` passes a `LoadingManager` to every loader; without one it uses an isolating manager, so no loader fetches by URL on its own. `USD_FORMATS` and `OCCT_FORMATS` are checked against `viewerConfig.json` by `config/viewerConfig.test.ts`.
+-   The bundle (`web/customInstalls/threejs/threejsInstall.js`) exports `USDLoader`, `USDCParser`, `MTLLoader` and `fflate` (`zipSync`, `unzipSync`) for these modules.
+
+---
+
 ## Stacking Over the Scene
 
 `core/viewerLayers.ts` holds the one stacking scale for what a viewer draws over its scene,
@@ -384,7 +396,7 @@ Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (W
 -   Robotics Data Viewer (Lichtblick, also iframe-embedded)
 -   Online 3D Viewer (Rhinoceros 3D, rhino3dm)
 
-The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) and USD (.usd/.usda/.usdc/.usdz, parsed by three.js's pure-JavaScript `USDLoader`) need no `eval`, and gating the whole plugin would remove them too. So a deployment without `allowUnsafeEvalFeatures` still opens USD; with it, Needle and Three.js both match USD at priority 1 and the user picks. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
 
 `cesium-viewer` is not gated either. The viewer builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
 
