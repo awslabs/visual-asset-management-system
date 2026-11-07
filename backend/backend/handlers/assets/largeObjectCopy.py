@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Task Lambda of the large object copy state machines (one function, six actions).
+"""Task Lambda of the large object copy state machines (one function, seven actions).
 
 The state machines (infra: lambdaBuilder/largeObjectCopyEngine.ts) run, per job:
 
@@ -33,6 +33,9 @@ once on the job row, and the upload outcome is an idempotent write that raises s
              definition that does not wait) an asynchronous finalize of its output step.
 - reconcile: finalize the job of a copy execution that ended outside its states (a status change
              event from the copy state machine, or the execution details read).
+- sweep:     the delayed sweep of a stopped or failed job (the copy state machine's sweep branch,
+             about 5 and 15 minutes after the stop): abort the upload the job row recorded if it is
+             still listed at the job's key, unless the job's own object landed (#1123 D5).
 
 Invoked only by the state machines, the status change rule and the copy engine's own reconcile
 callers; there is no API route. Every input is the job document the
@@ -510,8 +513,10 @@ def _finish(job, row):
     upload_id = row.get("uploadIdS3") or job.get("uploadIdS3", "")
     if upload_id:
         # Failed copies discard their partial upload at once, aborting again while a part copy that
-        # was in flight still lands one (#1123 D5).
+        # was in flight still lands one (#1123 D5), and again later (the delayed sweep), since an
+        # immediate NoSuchUpload is not final.
         _sweep_upload(job["dest"]["bucket"], job["dest"]["key"], upload_id)
+        loc.schedule_delayed_sweep(sfn_client, job["jobId"])
     if job.get("kind") == loc.KIND_UPLOAD:
         # An upload's staged object is not kept (the queue consumer's cleanup behaves the same way);
         # a workflow output's stays under the run's pipelines/ folder for inspection or a re-run.
@@ -732,9 +737,15 @@ def reconcile(execution_arn):
     if not cancelled_stop and not loc.is_unreported_end(described):
         return {"reconciled": False}
     try:
-        job = (json.loads(described.get("input") or "{}") or {}).get("job") or {}
+        execution_input = json.loads(described.get("input") or "{}") or {}
     except ValueError:
-        job = {}
+        execution_input = {}
+    if isinstance(execution_input, dict) and "sweep" in execution_input:
+        # A delayed sweep execution (best-effort cleanup) that ended outside its states: no job to
+        # finalize; the immediate aborts and the bucket's lifecycle rule still apply.
+        logger.warning("Reconcile skipped: a delayed sweep execution ended unfinished")
+        return {"reconciled": False}
+    job = (execution_input.get("job") if isinstance(execution_input, dict) else None) or {}
     if not job.get("jobId"):
         logger.warning("Reconcile skipped: the copy execution carries no job")
         return {"reconciled": False}
@@ -817,6 +828,29 @@ def _sweep_cancelled_upload(job, row):
     if not upload_id or (row or {}).get("status") != loc.STATUS_CANCELLED:
         return
     _sweep_upload(job["dest"]["bucket"], job["dest"]["key"], upload_id)
+    loc.schedule_delayed_sweep(sfn_client, job["jobId"])
+
+
+# --------------------------------------------------------------------------------------------- #
+# sweep (delayed)
+# --------------------------------------------------------------------------------------------- #
+
+def sweep(request, final=False):
+    """One pass of a job's delayed sweep (the copy state machine's sweep branch, started by
+    loc.schedule_delayed_sweep). The bucket, key and upload id come from the job row, never from the
+    input; the job's Region is registered from the row so the calls are signed for it."""
+    job_id = (request or {}).get("jobId")
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("The delayed sweep needs a job id")
+    row = loc.get_job_row(jobs_table, job_id)
+    if not row:
+        return {"swept": False, "reason": "no job row"}
+    if row.get("destRegion") and row.get("destBucket"):
+        register_bucket_region(row["destBucket"], row["destRegion"])
+    result = loc.sweep_recorded_upload(jobs_table, _client_for_bucket(row.get("destBucket", "")),
+                                       job_id, final=final)
+    logger.info(f"Delayed sweep of copy job {job_id} ({'final' if final else 'first'} pass): {result}")
+    return result
 
 
 def _landed_after_abort(job, row):
@@ -905,6 +939,9 @@ def lambda_handler(event, context):
     if event.get("action") == "reconcile":
         # The execution details read found an unfinished job whose execution ended.
         return reconcile(event.get("executionArn", ""))
+    if event.get("action") == "sweep":
+        # The copy state machine's delayed sweep branch (#1123 D5).
+        return sweep(event.get("sweep") or {}, final=bool(event.get("final")))
     action = event.get("action")
     job = (event or {}).get("job") or {}
     if action not in ACTIONS or not job.get("jobId"):
