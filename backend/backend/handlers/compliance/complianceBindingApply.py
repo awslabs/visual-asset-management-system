@@ -1044,12 +1044,14 @@ def _run_evaluations(database_id: str, record: Dict[str, Any], deadline: float,
         response = store.asset_state_table.query(**_page_kwargs(database_id, cursor, page_size))
         asset_ids.extend(item["assetId"] for item in response.get("Items", [])
                          if item.get("assetId") and _to_evaluate(record, item))
-        cursor = response.get("LastEvaluatedKey")
-        if cursor is None or len(asset_ids) >= per_run or clock() >= deadline:
+        # The phase goes on while the read says more pages remain (the key's presence).
+        more = "LastEvaluatedKey" in response
+        cursor = response["LastEvaluatedKey"] if more else None
+        if not more or len(asset_ids) >= per_run or clock() >= deadline:
             break
     counts["evaluationsQueued"] += queue_evaluations(database_id, asset_ids, sqs, queue_url,
                                                      apply_id=record["applyId"])
-    if cursor is None:
+    if not more:
         end_evaluations(record, EVALUATIONS_QUEUED, counts)
         return True
     return not _save_progress(record, cursor, counts, continuing=True)
