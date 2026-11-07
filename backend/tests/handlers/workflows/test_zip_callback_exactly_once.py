@@ -48,7 +48,9 @@ def _job(env):
 
 
 def _finalize_writes(env):
-    return [w for w in env.zip.writes if w[0] == "update"]
+    # Status writes only: the stop marker each finalizer records before its abort changes no status
+    # (common/zipDownloads.request_stop, #1125 D16).
+    return [w for w in env.zip.writes if w[0] == "update" and "#status" in w[2]]
 
 
 class _ForwardingLambda:
