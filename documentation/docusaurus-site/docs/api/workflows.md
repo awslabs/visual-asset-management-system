@@ -858,7 +858,19 @@ aws dynamodb delete-item --table-name <lock-table-name> \
     --expression-attribute-values '{":e": {"S": "<holder-workflowExecutionId>"}}'
 ```
 
-A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`; the trigger dispatcher logs the refused second launch as skipped. A trigger launch refused by a lock creates no execution: it appears only as that INFO line in the dispatcher's log, not in the asset's executions. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+A `fileUpload` trigger that fires twice for the same file version therefore launches once under `perInputFileVersion`. Unlike `perAsset`, that restriction places no limit on how many triggers of a type the workflow may carry.
+
+#### Skipped trigger launches
+
+A `fileUpload` trigger launch refused by a lock is recorded as an execution with status `SKIPPED`, so the refusal shows in the asset's and the global executions lists. A manual or API launch is not recorded: its caller gets the `400` itself. The trigger dispatcher still receives the same `400`.
+
+-   **One record per blocking execution and lock.** Every launch one running execution refuses on one lock key lands on the same `SKIPPED` record, which counts them. For example, 50 uploads into a `perAsset` workflow's asset give one `RUNNING` execution and one `SKIPPED` record with `skippedLaunchCount: 49`.
+-   **List fields.** A `SKIPPED` row adds `skippedLaunchCount`, `skipScope` (`asset`, `assetFile` or `assetFileVersion`) and `skipReason` (the fixed message of the refused launch). Its start and stop date are the first refused launch. Other rows are unchanged.
+-   **Details.** `GET /workflows/executions/{executionId}/details` adds a `skip` block: `reason`, `scope`, `count`, `firstSkippedDate`, `lastSkippedDate`, the first 20 `files` and `filesTruncated`. `inputFiles` and the details files route (`collection=input`) list every file recorded; files are recorded for the first 100 refused launches, and later ones are only counted. `blockingExecutionId` is present only when you may read the blocking execution; it is omitted alike when you may not and when that execution no longer exists.
+-   **Access.** A `SKIPPED` record is read under the same rule as any trigger-launched execution: `GET` on its workflow and on the assets of its files.
+-   **Actions.** A `SKIPPED` record has no logs (the logs route says so), no pipelines and nothing to stop. **Re-run** launches its recorded files as a new execution, as you, through the normal checks, with the trigger's templates and output target. **Permanent delete** removes it. **Abort** answers `400` (`This execution was skipped and has nothing to abort.`) and writes nothing; a group abort leaves it alone and reports it as `skipped-terminal`.
+-   **Filtering.** Lists include `SKIPPED` records by default; `status=SKIPPED` lists only them, and `excludeStatus=SKIPPED` leaves them out. `excludeStatus` takes one status or a comma-separated list and is applied before the page is cut, so pages stay full; an unknown status, or excluding the status `status` selects, answers `400`. On an asset's list an execution is left out only once it has passed the same read check as the listing, so an execution you may not read is treated exactly as without the parameter; at most 200 executions are left out per page; a page that reaches that limit stops with a `NextToken` and a warning. The web app's **All except skipped** sends `excludeStatus=SKIPPED`.
+-   **Retention.** Records are kept like other executions, with no expiry. Their number is bounded by the number of blocking executions.
 
 :::note[Executions running during the update hold no lock]
 Locks are taken by the launch. An execution that started before the update that introduced them holds none, so a launch on the same scope is not refused until that execution ends.
@@ -1110,6 +1122,7 @@ Each filter is optional and all supplied filters are AND-ed.
 | `workflowId`         | string | No       | --                 | List only executions of this workflow. An ID that does not match the ID pattern returns 400 rather than an empty list, so a typo is distinguishable from no matching history.               |
 | `workflowDatabaseId` | string | No       | --                 | List only executions of workflows in this database. Accepts `GLOBAL` for the shared workflow catalog.                                                                                       |
 | `status`             | string | No       | --                 | List only executions with this `executionStatus` (for example `RUNNING`, `SUCCEEDED`, `FAILED`).                                                                                            |
+| `excludeStatus`      | string | No       | --                 | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                                        |
 | `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
 | `includeSystem`      | string | No       | see below          | `true` to include runs of system workflows, `false` to leave them out. Any other value returns 400.                                                                                         |
@@ -1202,6 +1215,7 @@ GET /workflows/executions
 | `workflowId`                  | string  | No       | Filter by workflow id.                                                                                                                                                             |
 | `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                                                                                                                                                    |
 | `status`                      | string  | No       | Filter by execution status.                                                                                                                                                        |
+| `excludeStatus`               | string  | No       | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                               |
 | `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                                                                  |
 | `groupId`                     | string  | No       | Filter by execution group id.                                                                                                                                                      |
 | `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                                                                    |
@@ -1382,13 +1396,13 @@ Aborting an execution requires `GET` permission on the execution's workflow, `PO
 
 ### Error responses
 
-| Status | Description                                                                                      |
-| ------ | ------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid or missing `executionId`                                                                 |
-| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database) |
-| `404`  | Execution not found, or no executions found for the supplied `groupId`                           |
-| `429`  | Throttling -- too many requests                                                                  |
-| `500`  | Internal server error                                                                            |
+| Status | Description                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, or the execution is `SKIPPED` (nothing to abort; after authorization) |
+| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database)        |
+| `404`  | Execution not found, or no executions found for the supplied `groupId`                                  |
+| `429`  | Throttling -- too many requests                                                                         |
+| `500`  | Internal server error                                                                                   |
 
 ---
 

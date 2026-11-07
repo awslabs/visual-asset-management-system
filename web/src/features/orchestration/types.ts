@@ -17,6 +17,10 @@ export type ExecutionStatus =
     | "FAILED"
     | "ABORTED"
     | "TIMED_OUT"
+    // A fileUpload trigger launch the workflow's concurrency restriction refused. One record per
+    // blocking run and lock counts every launch that run refused; it never ran, so it has no logs,
+    // no pipeline steps and nothing to abort.
+    | "SKIPPED"
     // Legacy terminal value. No row this module reads carries it — the v2.5 upgrade rewrites a stored
     // COMPLETE to SUCCEEDED before the row is written — so it is accepted and rendered as a success
     // only so an unmapped value from an older record cannot fall through as a blank status.
@@ -252,6 +256,35 @@ export interface Execution {
     // True for a run of a system workflow (copied from the workflow at launch). The lists leave these
     // out unless includeSystem applies; a run recorded before the flag existed reads false.
     isSystem?: boolean;
+    // Present only on a SKIPPED record: how many trigger launches the blocking run refused, the lock
+    // scope ("asset" | "assetFile" | "assetFileVersion") and the fixed reason the API returned.
+    skippedLaunchCount?: number;
+    skipScope?: string;
+    skipReason?: string;
+}
+
+/** One file a refused trigger launch named, in the details `skip` block. */
+export interface ExecutionSkipFile {
+    databaseId: string;
+    assetId: string;
+    inputAssetFileKey: string;
+    versionId?: string;
+}
+
+/**
+ * The details view's `skip` block, sent only for a SKIPPED execution. `blockingExecutionId` is set
+ * only when the API decided the caller may read that run; the page shows it as given and never infers
+ * it.
+ */
+export interface ExecutionSkip {
+    reason: string;
+    scope: string;
+    count: number;
+    firstSkippedDate: string;
+    lastSkippedDate: string;
+    files: ExecutionSkipFile[];
+    filesTruncated: boolean;
+    blockingExecutionId?: string;
 }
 
 /** Status of a registered sub-process or of one of its stages, as resolved by the details API. */
@@ -420,6 +453,8 @@ export interface ExecutionDetail extends Execution {
     truncatedCollections?: string[];
     // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.
     outputFileBaseExecutionPathExtension?: string;
+    /** Why, how often and for which files a SKIPPED record's launches were refused. */
+    skip?: ExecutionSkip;
 }
 
 export interface ExecuteResponse {

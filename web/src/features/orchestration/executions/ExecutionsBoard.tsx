@@ -55,6 +55,37 @@ const SEARCH_LABEL = "Search";
 export const INCLUDE_SYSTEM_PARAM = "includeSystem";
 
 /**
+ * Status-filter choice that keeps every status but SKIPPED. Sent as the list API's
+ * `excludeStatus=SKIPPED`, which drops those rows before the page is cut, so pages stay full.
+ */
+export const EXCLUDE_SKIPPED_FILTER = "__ALL_EXCEPT_SKIPPED__";
+
+/**
+ * The Status cell. A SKIPPED record also shows how many trigger launches it counts and, on hover and
+ * for screen readers, the reason the API gave.
+ */
+export const ExecutionStatusCell: React.FC<{ execution: Execution }> = ({ execution }) => {
+    if (execution.executionStatus !== "SKIPPED") {
+        return <StatusBadge status={execution.executionStatus} />;
+    }
+    const count = execution.skippedLaunchCount ?? 0;
+    const launches = count === 1 ? "1 launch" : `${count} launches`;
+    return (
+        <span
+            className="inline-flex flex-col gap-0.5"
+            title={execution.skipReason || undefined}
+            data-testid="skipped-status"
+        >
+            <StatusBadge status="SKIPPED" />
+            <span className="text-xs text-text-secondary">
+                {launches} skipped
+                {execution.skipReason && <span className="sr-only">: {execution.skipReason}</span>}
+            </span>
+        </span>
+    );
+};
+
+/**
  * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
  * type: "2 sub-processes were left running because VAMS cannot stop their type: Mock Slurm job
  * (slurmJob, in MockTrain); ...". A group abort's entries carry the member `executionId`, which
@@ -142,7 +173,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
     // The backend already defaults to 90 days, so the "90" preset sends no explicit start date.
     const filters = useMemo(() => {
         const f: Record<string, string> = {};
-        if (statusFilter) f.status = statusFilter;
+        if (statusFilter === EXCLUDE_SKIPPED_FILTER) f.excludeStatus = "SKIPPED";
+        else if (statusFilter) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
         if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
         // The global workflow filter holds the composite "databaseId:workflowId" of the chosen
@@ -530,7 +562,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
             {
                 accessorKey: "executionStatus",
                 header: "Status",
-                cell: ({ row }) => <StatusBadge status={row.original.executionStatus} />,
+                cell: ({ row }) => <ExecutionStatusCell execution={row.original} />,
             },
             {
                 accessorKey: "workflowExecutionId",
@@ -772,11 +804,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute =
                         className={control}
                     >
                         <option value="">All statuses</option>
+                        <option value={EXCLUDE_SKIPPED_FILTER}>All except skipped</option>
                         <option value="RUNNING">Running</option>
                         <option value="SUCCEEDED">Succeeded</option>
                         <option value="FAILED">Failed</option>
                         <option value="ABORTED">Aborted</option>
                         <option value="TIMED_OUT">Timed out</option>
+                        <option value="SKIPPED">Skipped</option>
                     </select>
                     <select
                         aria-label="Filter by trigger"

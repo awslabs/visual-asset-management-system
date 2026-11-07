@@ -50,6 +50,8 @@ from models.common import (
     _json_default
 )
 from models.executions import (
+    ExecutionSkipDetailsModel,
+    parse_list_status_filter,
     DetailMetadataPageRequestModel,
     DetailFilesPageRequestModel,
     ExecutionResultsPageRequestModel,
@@ -407,11 +409,20 @@ SFN_SYNC_MIN_INTERVAL_SECONDS = 30
 NON_SUCCESS_TERMINAL_STATUSES = ("FAILED", "ABORTED", "TIMED_OUT")
 
 # All Step Functions / VAMS terminal statuses. A pipeline or workflow row already in one
-# of these is finished and is left untouched by an abort (only in-flight rows are aborted).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# of these is finished and is left untouched by an abort (only in-flight rows are aborted). SKIPPED is
+# a refused trigger launch's record (er.EXECUTION_STATUS_SKIPPED), terminal from its first write.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
+
+# What the logs route answers for a SKIPPED record, which never ran and so has no log.
+SKIPPED_EXECUTION_LOG_MESSAGE = (
+    "This launch was skipped by the workflow's concurrency restriction and did not run, so it has no "
+    "logs.")
+
+# What the abort route answers (400) for a SKIPPED record, which has nothing to stop.
+SKIPPED_EXECUTION_ABORT_MESSAGE = "This execution was skipped and has nothing to abort."
 
 # Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
 # sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
@@ -878,6 +889,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].
             'outputTypes': _row_output_types((config_rows or {}).get(execution_id)),
+            # A SKIPPED record (a trigger launch a concurrency restriction refused) adds its count,
+            # lock scope and fixed reason; every other row lists exactly as before.
+            **er.skip_list_fields(main_item),
         })
     return result_items
 
@@ -992,6 +1006,78 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Each direction carries its own resume point, and the input side records whether it ran to
         # exhaustion: the budget is spent across both queries, so a page that fills up on either one
         # has to say where BOTH stand or the unread direction becomes unreachable.
+        # Memoized for the whole listing, so the excludeStatus check during the walk, the authorization
+        # pass and the response builder below share one read of each execution's main row.
+        main_row_memo = {}
+
+        def _fetch_main_row(execution_id):
+            if execution_id not in main_row_memo:
+                r = main_table.query(
+                    KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
+                    ScanIndexForward=False,
+                )
+                rows = r.get('Items', [])
+                main_row_memo[execution_id] = rows[0] if rows else None
+            return main_row_memo[execution_id]
+
+        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
+        # outputTypes projection share one read per execution. Output-only executions seed it for free
+        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
+        # lazily through the config_row_loader threaded into the auth check.
+        config_row_memo = {}
+        # One enforcer for the whole listing, and one Tier-2 decision per candidate, shared by the
+        # excludeStatus check during the walk and the authorization pass after it.
+        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+        access_decisions = {}
+
+        def _authorize_candidate(candidate_id, input_item):
+            """(allowed, reason) for one candidate, by the same _execution_access_check rule the
+            details/logs paths use, memoized for the request."""
+            if candidate_id not in access_decisions:
+                if casbin_enforcer is None:
+                    access_decisions[candidate_id] = (False, "no tokens")
+                else:
+                    # The workflow ids come from the input row when it carries them — written at launch
+                    # from the same workflow as the main row — and otherwise from the main row, which
+                    # the output-direction placeholder rows need because they carry no workflow ids.
+                    authorization_item = input_item
+                    if not input_item.get('workflowId', ''):
+                        authorization_item = _fetch_main_row(candidate_id) or input_item
+
+                    def _config_row_loader(eid=candidate_id):
+                        # The one config-row read the auth pass pays for this candidate lands in the
+                        # memo, so the outputTypes projection reuses it rather than re-reading.
+                        if eid not in config_row_memo:
+                            config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
+                        return config_row_memo[eid]
+
+                    access_decisions[candidate_id] = _execution_access_check(
+                        candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
+                        config_row_loader=_config_row_loader)
+            return access_decisions[candidate_id]
+
+        # excludeStatus (validated by the route handler). It is applied only to a candidate that has
+        # passed the read check: such a candidate whose stored status it names is dropped DURING the
+        # walk, before the page is cut, so the page is filled from the rows that remain and the cursor
+        # moves past the dropped ones. A candidate the caller may not read is never dropped here — it
+        # is handled exactly as it is without the parameter (it takes its place in the walk and the
+        # authorization pass withholds it), so the page and its cursor do not depend on the status of
+        # an execution the caller cannot read. Each status check is the memoized main-row read every
+        # listed row already costs. At most MAX_EXECUTIONS_INSPECTED rows are dropped per page; a page
+        # that reaches that bound stops at the last row it decided, with a continuation and a warning.
+        # Empty: the walk is exactly as before.
+        excluded_statuses, _message = parse_list_status_filter(query_params)
+        excluded_ids = set()
+        exclusion_drops = 0
+        exclusion_budget_spent = False
+
+        def _is_excluded(execution_id, input_item):
+            allowed, _reason = _authorize_candidate(execution_id, input_item)
+            if not allowed:
+                return False
+            row = _fetch_main_row(execution_id) or {}
+            return row.get('executionStatus', '') in excluded_statuses
+
         deduped_inputs = {}
         # The caller's pageSize bounds the page, and MAX_EXECUTIONS_INSPECTED bounds the work; the
         # walk stops at whichever comes first. Capping HERE rather than slicing the finished list is
@@ -1025,8 +1111,26 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         while True:
             for input_item in resp.get('Items', []):
                 execution_id = input_item.get('workflowExecutionId', '')
-                if not execution_id or execution_id in deduped_inputs:
+                if not execution_id or execution_id in deduped_inputs or execution_id in excluded_ids:
                     continue
+                if excluded_statuses:
+                    if exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
+                        # The check budget is spent, so this row cannot be decided: resume at the last
+                        # row this page decided (kept or dropped), deferring this one.
+                        bounded = True
+                        exclusion_budget_spent = True
+                        last_evaluated_key = last_input_row_key or resp.get('LastEvaluatedKey')
+                        if last_input_row_key:
+                            served_through = (last_input_row_key.get('executionStartDate', '')
+                                              or served_through)
+                            served_through_id = (last_input_row_key.get('workflowExecutionId', '')
+                                                 or served_through_id)
+                        break
+                    if _is_excluded(execution_id, input_item):
+                        exclusion_drops += 1
+                        excluded_ids.add(execution_id)
+                        last_input_row_key = _asset_list_input_row_key(input_item)
+                        continue
                 deduped_inputs[execution_id] = input_item
                 last_input_row_key = _asset_list_input_row_key(input_item)
                 if len(deduped_inputs) >= inspect_cap:
@@ -1064,12 +1168,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Queried second and merged, so an execution that is BOTH an input and the output target keeps
         # its input row (first-seen wins) and is listed once. Bounded by the same
         # MAX_EXECUTIONS_INSPECTED budget across both directions.
-        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
-        # outputTypes projection share one read per execution. Output-only executions seed it for free
-        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
-        # lazily through the config_row_loader threaded into the auth check.
-        config_row_memo = {}
-        if len(deduped_inputs) < inspect_cap:
+        # A page that spent its excludeStatus check budget on the input side stops there, with the input
+        # cursor, rather than starting the output walk.
+        if len(deduped_inputs) < inspect_cap and not exclusion_budget_spent:
             cfg_table = dynamodb.Table(workflow_execution_configuration_table)
             output_key_condition = Key('outputDatabaseId:outputAssetId').eq(
                 er.output_asset_partition_key(database_id, asset_id))
@@ -1124,10 +1225,18 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             output_last_evaluated_key = (
                                 last_output_row_key or out_resp.get('LastEvaluatedKey'))
                             break
+                        if excluded_statuses and exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
+                            # Same deferral for the excludeStatus check budget.
+                            bounded = True
+                            exclusion_budget_spent = True
+                            output_last_evaluated_key = (
+                                last_output_row_key or out_resp.get('LastEvaluatedKey'))
+                            break
                         execution_id = cfg_item.get('workflowExecutionId', '')
                         last_output_row_key = (_asset_list_output_row_key(cfg_item)
                                               or last_output_row_key)
-                        if not execution_id or execution_id in deduped_inputs:
+                        if (not execution_id or execution_id in deduped_inputs
+                                or execution_id in excluded_ids):
                             continue
                         row_date = cfg_item.get('executionStartDate', '')
                         if inputs_drained and served_through:
@@ -1154,6 +1263,14 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             # executions can share a start date, so dropping the whole date would lose
                             # a sibling never returned.
                             continue
+                        if excluded_statuses:
+                            # The configuration row is this GSI item, so the read check reuses it.
+                            config_row_memo.setdefault(execution_id, cfg_item)
+                            placeholder = {'workflowExecutionId': execution_id}
+                            if _is_excluded(execution_id, placeholder):
+                                exclusion_drops += 1
+                                excluded_ids.add(execution_id)
+                                continue
                         # A placeholder input row: this execution has no input file for the asset (it
                         # only wrote here), so the per-row input fields the response builder reads are
                         # absent by design rather than missing.
@@ -1184,20 +1301,6 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 # Best-effort: the input-matched executions are still returned. A missing index on an
                 # un-migrated deployment must degrade the listing, not fail it.
                 logger.warning(f"Could not list executions by output asset (non-fatal): {e}")
-
-        # Memoized for the whole listing, so the authorization pass and the response builder below
-        # share one read of each execution's main row rather than issuing two.
-        main_row_memo = {}
-
-        def _fetch_main_row(execution_id):
-            if execution_id not in main_row_memo:
-                r = main_table.query(
-                    KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
-                    ScanIndexForward=False,
-                )
-                rows = r.get('Items', [])
-                main_row_memo[execution_id] = rows[0] if rows else None
-            return main_row_memo[execution_id]
 
         def _describe(arn):
             if not arn:
@@ -1243,26 +1346,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # response builder also uses. One enforcer for the whole listing, and the configuration row is
         # read lazily per candidate, only after its workflow GET passes.
         authorized_inputs = []
-        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
         for input_item in deduped_inputs.values():
             if casbin_enforcer is None:
                 continue
             candidate_id = input_item.get('workflowExecutionId', '')
-            authorization_item = input_item
-            if not input_item.get('workflowId', ''):
-                authorization_item = _fetch_main_row(candidate_id) or input_item
-
-            def _config_row_loader(eid=candidate_id):
-                # The one config-row read the auth pass pays for this candidate lands in the memo, so
-                # the outputTypes projection in build_execution_items reuses it rather than re-reading.
-                # An output-only execution was already seeded above, so this never runs for one.
-                if eid not in config_row_memo:
-                    config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
-                return config_row_memo[eid]
-
-            allowed, reason = _execution_access_check(
-                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
-                config_row_loader=_config_row_loader)
+            allowed, reason = _authorize_candidate(candidate_id, input_item)
             if allowed:
                 authorized_inputs.append(input_item)
             else:
@@ -1324,6 +1412,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             scoped_workflow_database_id or '', scoped_workflow_id or '')
         if not include_system:
             extra_filters["excludeSystem"] = True
+        # The walk excluded on the STORED status; a row this request's reconcile moved into an
+        # excluded status is dropped here too.
+        if excluded_statuses:
+            extra_filters["excludeStatus"] = excluded_statuses
         if any(extra_filters.values()):
             items = [it for it in items if _global_list_matches_filters(it, extra_filters)]
 
@@ -1392,6 +1484,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                     f"This page reached the limit of {MAX_ASSET_LIST_INPUT_ROW_PROBES} checks for "
                     f"executions an earlier page already listed, so older executions are not listed. "
                     f"Narrow the filters or {continuation}."]
+            elif exclusion_budget_spent:
+                result["warnings"] = [
+                    f"This page reached the limit of {MAX_EXECUTIONS_INSPECTED} executions checked "
+                    f"against excludeStatus, so older executions are not listed. Narrow the filters "
+                    f"or {continuation}."]
             elif inspect_cap >= MAX_EXECUTIONS_INSPECTED:
                 result["warnings"] = [
                     f"This page reached the limit of {MAX_EXECUTIONS_INSPECTED} executions inspected "
@@ -1916,6 +2013,13 @@ def abort_execution(event, execution_id):
     if not allowed:
         logger.info(f"Abort not authorized for execution {execution_id}: {reason}")
         return authorization_error()
+
+    # A SKIPPED record never ran: there is no state machine, pipeline or lock of its own to stop, so
+    # the abort is refused (after the same authorization as any abort, so a caller who may not reach
+    # the execution still gets the refusal above) and nothing is written. Every other terminal status
+    # keeps the idempotent re-sweep below.
+    if er.is_skip_record(main_item):
+        return validation_error(body={'message': SKIPPED_EXECUTION_ABORT_MESSAGE}, event=event)
 
     now = er.iso_now()
     main_table = dynamodb.Table(workflow_execution_database_v2)
@@ -3375,6 +3479,50 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     }
 
 
+def _caller_may_read_execution(execution_id):
+    """Whether the caller passes the details read check on another execution: True only when its main
+    row exists and the same Tier-2 rule the details route enforces allows GET. A missing row, a denial
+    and a failed read all answer False, so the answer never tells a caller that a run it cannot read
+    exists. Costs one main-row read plus that run's own access check."""
+    if not execution_id:
+        return False
+    try:
+        blocking_item = get_execution_main_row(execution_id)
+        if not blocking_item:
+            return False
+        allowed, reason = authorize_execution_access(execution_id, blocking_item, "GET")
+        if not allowed:
+            logger.info(f"Blocking execution withheld from a skip record's details: {reason}")
+        return allowed
+    except Exception as error:
+        logger.warning(f"Could not check access to blocking execution {execution_id}: {error}")
+        return False
+
+
+def skip_details_block(main_item, input_files):
+    """The details view's `skip` block for a SKIPPED record: the fixed reason, the lock scope, how many
+    launches were refused, the first and last refusal, the first MAX_SKIP_DETAIL_FILES files they named
+    (the rest page through the details files route, collection=input) and, only for a caller who may
+    read it, the run that held the lock."""
+    count = er.stored_int(main_item.get("skippedLaunchCount"))
+    files = list(input_files)[:er.MAX_SKIP_DETAIL_FILES]
+    # Files are listed for the first MAX_SKIP_RECORD_INPUT_ROWS refusals only, so a larger count means
+    # some refusals' files were never written.
+    truncated = (len(input_files) > len(files) or count > er.MAX_SKIP_RECORD_INPUT_ROWS)
+    blocking_id = main_item.get("blockingExecutionId", "") or ""
+    block = ExecutionSkipDetailsModel(
+        reason=main_item.get("skipReason", "") or "",
+        scope=main_item.get("skipScope", "") or "",
+        count=count,
+        firstSkippedDate=main_item.get("executionStartDate", "") or "",
+        lastSkippedDate=main_item.get("lastSkippedDate", "") or "",
+        files=files,
+        filesTruncated=truncated,
+        blockingExecutionId=blocking_id if _caller_may_read_execution(blocking_id) else None,
+    ).dict(exclude_none=True)
+    return block
+
+
 def get_execution_details(event, execution_id, include_sub_executions=False):
     """Return the full detail/traceability view for an execution (404 if unknown).
 
@@ -3398,6 +3546,10 @@ def get_execution_details(event, execution_id, include_sub_executions=False):
 
     details = assemble_execution_details(execution_id, main_item, config_row=config_row,
                                          include_sub_executions=include_sub_executions)
+    # A SKIPPED record (a trigger launch a concurrency restriction refused) also says why, how often and
+    # for which files; every other execution's view is unchanged.
+    if er.is_skip_record(main_item):
+        details["skip"] = skip_details_block(main_item, details.get("inputFiles") or [])
     # The assembly's budgets are per-collection estimates; this measures the payload that will actually
     # be sent and trims until it fits, so a response cannot exceed the Lambda limit (a 502 with no body,
     # and none of the truncation flags) on structure no collection was charged for.
@@ -5066,6 +5218,25 @@ def get_execution_logs(event, execution_id, query_params):
     if (log_id or stage_name) and (mode != LOG_MODE_FULL or pipeline_row is None):
         return validation_error(body={'message': LOG_SOURCE_PARAMS_RULE}, event=event)
 
+    # A SKIPPED record never ran, so there is no log to read: the answer says so in the same response
+    # shape, without a CloudWatch search or a Step Functions history read. (A pipelineExecutionId was
+    # already answered 404 above, since the record has no pipeline rows.)
+    if er.is_skip_record(main_item):
+        if mode == LOG_MODE_TRUNCATED:
+            return success(body={'message': {
+                "mode": LOG_MODE_TRUNCATED,
+                "executionLog": SKIPPED_EXECUTION_LOG_MESSAGE,
+                "executionError": "",
+                "logsSource": "stored",
+            }})
+        return success(body={'message': {
+            "mode": LOG_MODE_FULL,
+            "pipelineExecutionId": "",
+            "events": [],
+            "nextToken": None,
+            "warnings": [SKIPPED_EXECUTION_LOG_MESSAGE],
+        }})
+
     if mode == LOG_MODE_TRUNCATED:
         if pipeline_execution_id:
             log_rows = _query_all(pipeline_execution_logs_table,
@@ -5515,6 +5686,11 @@ def handle_get_request(event):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
+    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
+    _excluded, message = parse_list_status_filter(queryParameters)
+    if message:
+        return validation_error(body={'message': message}, event=event)
+
     # Body field validation (workflowDatabaseId) via the request model.
     request_model = parse(body, model=ListExecutionsRequestModel)
     workflow_database_id = request_model.workflowDatabaseId
@@ -5606,8 +5782,9 @@ def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, wor
 
 def _global_list_matches_filters(main_item, filters):
     """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
-    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, plus
-    excludeSystem (set when system runs are hidden: drops a row whose isSystem is exactly True)."""
+    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, excludeStatus
+    (a list of statuses a row must not carry; absent or empty excludes nothing), plus excludeSystem
+    (set when system runs are hidden: drops a row whose isSystem is exactly True)."""
     if filters.get("excludeSystem") and er.execution_row_is_system(main_item):
         return False
     if filters.get("workflowId") and main_item.get("workflowId", "") != filters["workflowId"]:
@@ -5615,6 +5792,8 @@ def _global_list_matches_filters(main_item, filters):
     if filters.get("workflowDatabaseId") and main_item.get("workflowDatabaseId", "") != filters["workflowDatabaseId"]:
         return False
     if filters.get("status") and main_item.get("executionStatus", "") != filters["status"]:
+        return False
+    if filters.get("excludeStatus") and main_item.get("executionStatus", "") in filters["excludeStatus"]:
         return False
     if filters.get("triggerType") and main_item.get("triggerType", "") != filters["triggerType"]:
         return False
@@ -5708,6 +5887,8 @@ def _global_list_row(main_item, config_row=None):
         # The output kinds the run produced (File/Metadata/Result subset). Read from the same
         # already-threaded config row, so it is zero extra reads; legacy rows have no attribute -> [].
         "outputTypes": _row_output_types(config_row),
+        # Count, lock scope and reason of a SKIPPED record; absent on every other row.
+        **er.skip_list_fields(main_item),
     }
 
 
@@ -5736,6 +5917,12 @@ def get_global_executions(event, query_params):
     include_system_valid, include_system_explicit = _parse_include_system(query_params)
     if not include_system_valid:
         return validation_error(body={"message": INCLUDE_SYSTEM_INVALID_MESSAGE}, event=event)
+    # excludeStatus (validated by the route handler): rows of these statuses drop in the query's
+    # FilterExpression, before the page is cut, so a page stays full and the cursor stays exact. Only
+    # added to the filters when given, so a request without it builds the same query as before.
+    excluded_statuses, _message = parse_list_status_filter(query_params)
+    if excluded_statuses:
+        filters["excludeStatus"] = excluded_statuses
     # Recency window (default 90 days) / custom range, applied as the GSI sort-key condition.
     filter_start_date = _resolve_filter_start_date(query_params)
     filter_end_date = _resolve_date_filter(query_params, "filterEndDate") or ""
@@ -5774,6 +5961,9 @@ def get_global_executions(event, query_params):
         if filters.get(fkey) and fkey not in keyed_filters:
             cond = Attr(attr_name).eq(filters[fkey])
             filter_expr = cond if filter_expr is None else (filter_expr & cond)
+    if excluded_statuses:
+        cond = ~Attr("executionStatus").is_in(excluded_statuses)
+        filter_expr = cond if filter_expr is None else (filter_expr & cond)
     query_kwargs = {
         "IndexName": list_index["IndexName"],
         "KeyConditionExpression": key_cond,
@@ -6067,6 +6257,16 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
         if params:
             pipeline_execution_parameters[pipeline_id] = params
 
+    # A SKIPPED record never ran, so it has no pipeline rows to read the parameters from: its
+    # configuration row carries the template parameters the refused trigger launch named, and a re-run
+    # replays those rather than falling back to the workflow's defaults.
+    if er.is_skip_record(main_item) and not pipeline_execution_parameters:
+        stored = config_row.get("pipelineExecutionParameters") or {}
+        if isinstance(stored, dict):
+            pipeline_execution_parameters = {
+                str(pipeline_id): dict(params) for pipeline_id, params in stored.items()
+                if isinstance(params, dict)}
+
     # The metadata sources travel in their own fields, never as inputFiles: they are entities, not
     # files, so re-emitting them as inputFiles would fail an arity-'none' workflow's own no-input-files
     # rule. They are recorded on the configuration row only (there is no workflow-input row for a
@@ -6357,7 +6557,9 @@ def abort_group(event, group_id):
         if not allowed:
             skipped_inaccessible += 1
             continue
-        # Authorized: terminal members are reported (the caller can already see them via details).
+        # Authorized: terminal members are reported (the caller can already see them via details). A
+        # SKIPPED member is terminal, so it is reported as skipped-terminal and never aborted, and the
+        # group call does not fail on it.
         if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
             results.append({"executionId": execution_id, "status": "skipped-terminal"})
             continue
@@ -6412,6 +6614,10 @@ def handle_global_list_request(event):
     validate_pagination_info(query_params, 50)
     if not _enforce_api(event):
         return authorization_error()
+    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
+    _excluded, message = parse_list_status_filter(query_params)
+    if message:
+        return validation_error(body={'message': message}, event=event)
     return get_global_executions(event, query_params)
 
 

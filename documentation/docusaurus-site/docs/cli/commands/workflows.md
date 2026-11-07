@@ -312,6 +312,7 @@ vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-pagi
 | `-w, --workflow-id`                        | Filter to one workflow; works on its own                                                             |
 | `--workflow-database-id`                   | Filter to workflows in one database; accepts `GLOBAL`. Works on its own too                          |
 | `--include-system` / `--no-include-system` | Include runs of system workflows (hidden by default), or leave them out even for one system workflow |
+| `--exclude-status`                         | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`)                                    |
 | `--auto-paginate`                          | Fetch every page rather than the first                                                               |
 | `--page-size`                              | Items per page (max 50)                                                                              |
 | `--max-items`                              | Cap on total items fetched; only meaningful with `--auto-paginate`                                   |

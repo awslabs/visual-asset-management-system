@@ -96,12 +96,12 @@ Robotics and Physical AI teams need to manage simulation environments, training 
 
 ### How VAMS Solves It
 
-VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Needle Engine viewer, and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
+VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Three.js viewer (and the Needle Engine viewer where `allowUnsafeEvalFeatures` is enabled), and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
 
 **Key features used:**
 
 -   NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
--   Needle USD Viewer for Universal Scene Description file visualization
+-   Three.js and Needle USD viewers for Universal Scene Description file visualization
 -   Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
 -   Workflow system for chaining asset processing steps
 -   API and CLI access for CI/CD integration with robotics development pipelines
