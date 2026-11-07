@@ -11,14 +11,21 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import * as cdk from "aws-cdk-lib";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
+import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import { IAMArn } from "../helper/service-helper";
 import {
     PREPARED_DOWNLOADS_PREFIX,
     ZIP_DOWNLOAD_USER_ASSET_INDEX,
     storageResources,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import {
+    generateUniqueNameHash,
     globalLambdaEnvironmentsAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -312,4 +319,138 @@ export function grantZipDownloadLaunch(
             resources: [executeWorkflowV2.functionArn, executionService.functionArn],
         })
     );
+}
+
+/**
+ * Waits of the zip download delayed sweep (#1125 D16, the #1123 D5 rule): the first pass about 5
+ * minutes after the stop, the last one 10 minutes later. Same values as backend
+ * common/zipDownloads.py SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
+ */
+export const ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };
+
+/** Fixed name of the zip download sweep state machine (<= 80 characters). */
+export function zipDownloadSweepStateMachineName(config: Config.Config): string {
+    return `ZipDownloadSweep-${config.env.coreStackName}`.substring(0, 80);
+}
+
+/** Its ARN, built from the fixed name (the functions it invokes cannot reference it: a cycle). */
+export function zipDownloadSweepStateMachineArn(config: Config.Config): string {
+    return IAMArn(zipDownloadSweepStateMachineName(config)).statemachine;
+}
+
+/** Retrier of a sweep pass (a Lambda fault or a failed S3 check), then the pass is given up. */
+export const ZIP_DOWNLOAD_SWEEP_RETRY = {
+    intervalSeconds: 10,
+    backoffRate: 2,
+    maxAttempts: 5,
+    maxDelaySeconds: 120,
+};
+
+/**
+ * With app.zipDownloads on: the delayed sweep of a stopped zip download job (#1125 D16). An abort's
+ * immediate answer is not final (on demo21 an upload whose abort had answered, and whose ListParts
+ * then answered NoSuchUpload, was listed again minutes later with a part accepted before the stop),
+ * so every stopper also starts this Standard state machine, once per job (backend
+ * common/zipDownloads.schedule_delayed_sweep): Wait, a sweep pass, Wait, a last pass. Each pass is the
+ * terminal callback's `sweep` action (common/zipDownloads.sweep_recorded_uploads), which aborts only
+ * the archive uploads the job row recorded at its exact archive key, unless its archive landed. A
+ * failed first pass still runs the second. Bounded history: two waits and two tasks of at most
+ * 5 + 3 x 5 events each.
+ *
+ * The service and the callback get the ARN (built from the fixed name) and StartExecution on it;
+ * the state machine invokes the callback. Not built with the feature off.
+ */
+export function buildZipDownloadSweep(
+    scope: Construct,
+    zipDownloadCallback: lambda.Function,
+    zipDownloadService: lambda.Function,
+    storageResources: storageResources,
+    config: Config.Config
+): sfn.StateMachine {
+    const pass = (id: string, final: boolean) => {
+        const task = new tasks.LambdaInvoke(scope, id, {
+            lambdaFunction: zipDownloadCallback,
+            payload: sfn.TaskInput.fromObject({
+                action: "sweep",
+                zipSweep: sfn.JsonPath.objectAt("$.zipSweep"),
+                final,
+            }),
+            resultPath: sfn.JsonPath.DISCARD,
+            retryOnServiceExceptions: false,
+            taskTimeout: sfn.Timeout.duration(Duration.minutes(5)),
+        });
+        task.addRetry({
+            errors: [sfn.Errors.ALL],
+            interval: Duration.seconds(ZIP_DOWNLOAD_SWEEP_RETRY.intervalSeconds),
+            backoffRate: ZIP_DOWNLOAD_SWEEP_RETRY.backoffRate,
+            maxAttempts: ZIP_DOWNLOAD_SWEEP_RETRY.maxAttempts,
+            maxDelay: Duration.seconds(ZIP_DOWNLOAD_SWEEP_RETRY.maxDelaySeconds),
+            jitterStrategy: sfn.JitterType.FULL,
+        });
+        return task;
+    };
+    const firstWait = new sfn.Wait(scope, "ZipDownloadSweepFirstWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.first)),
+    });
+    const first = pass("ZipDownloadSweepFirst", false);
+    const secondWait = new sfn.Wait(scope, "ZipDownloadSweepSecondWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.second)),
+    });
+    const final = pass("ZipDownloadSweepFinal", true);
+    first.addCatch(secondWait, { errors: [sfn.Errors.ALL], resultPath: "$.sweepError" });
+    const swept = new sfn.Succeed(scope, "ZipDownloadSwept", {
+        comment: "The delayed sweep of a stopped zip download ended.",
+    });
+
+    const logGroup = new logs.LogGroup(scope, "ZipDownloadSweepStateMachineLogGroup", {
+        logGroupName:
+            "/aws/vendedlogs/VAMSStateMachine-ZipDownloadSweep" +
+            generateUniqueNameHash(
+                config.env.coreStackName,
+                config.env.account,
+                "ZipDownloadSweepStateMachineLogGroup",
+                10
+            ),
+        encryptionKey: storageResources.encryption.kmsKey,
+        retention: logs.RetentionDays.ONE_YEAR,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const stateMachine = new sfn.StateMachine(scope, "ZipDownloadSweepStateMachine", {
+        stateMachineName: zipDownloadSweepStateMachineName(config),
+        stateMachineType: sfn.StateMachineType.STANDARD,
+        definitionBody: sfn.DefinitionBody.fromChainable(
+            firstWait.next(first).next(secondWait).next(final).next(swept)
+        ),
+        timeout: Duration.hours(2),
+        logs: {
+            destination: logGroup,
+            // The input carries ids and an object key only; level ALL satisfies AwsSolutions-SF1.
+            includeExecutionData: false,
+            level: sfn.LogLevel.ALL,
+        },
+        tracingEnabled: true,
+    });
+    NagSuppressions.addResourceSuppressions(
+        stateMachine,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Invokes the zip download callback function and its versions; writes its own log group.",
+            },
+        ],
+        true
+    );
+
+    const arn = zipDownloadSweepStateMachineArn(config);
+    for (const fun of [zipDownloadService, zipDownloadCallback]) {
+        fun.addEnvironment("ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN", arn);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:StartExecution"],
+                resources: [arn],
+            })
+        );
+    }
+    return stateMachine;
 }

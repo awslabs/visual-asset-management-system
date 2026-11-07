@@ -51,9 +51,16 @@ class SharedTable:
     def get_item(self, Key, ConsistentRead=False):
         return {"Item": dict(self.row)} if self.row is not None else {}
 
-    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeNames,
-                    ExpressionAttributeValues):
+    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeValues,
+                    ExpressionAttributeNames=None):
         values, row = ExpressionAttributeValues, self.row
+        if UpdateExpression.startswith("ADD archiveUploadIds"):
+            # StatusWriter.record_upload (#1125 D16): this run's row, whatever its status.
+            if row is None or row.get("workflowExecutionId", values[":eid"]) != values[":eid"]:
+                raise _err("ConditionalCheckFailedException")
+            row.setdefault("archiveUploadIds", set()).update(values[":ids"])
+            return
+        ExpressionAttributeNames = ExpressionAttributeNames or {}
         ok = row is not None and row["status"] in (values[":queued"], values[":running"])
         if ok and "workflowExecutionId = :eid" in ConditionExpression:
             if "attribute_not_exists(workflowExecutionId) OR" in ConditionExpression:

@@ -57,7 +57,7 @@ def part_size_bytes(estimated_total_bytes):
 class MultipartSink:
     def __init__(self, s3_client, bucket, key, part_size, max_in_flight=4, content_type="",
                  extra_args=None, logger=None, should_stop=None, sleep=None,
-                 in_flight_wait_seconds=IN_FLIGHT_WAIT_SECONDS):
+                 in_flight_wait_seconds=IN_FLIGHT_WAIT_SECONDS, on_created=None):
         if part_size < 5 * MIB or part_size > MAX_PART_SIZE:
             raise ValueError("part size outside S3's limits")
         self._s3, self.bucket, self.key = s3_client, bucket, key
@@ -68,6 +68,18 @@ class MultipartSink:
             args["ContentType"] = content_type
         response = self._s3.create_multipart_upload(Bucket=bucket, Key=key, **args)
         self.upload_id = response["UploadId"]
+        if on_created is not None:
+            # The job records the upload id before any part is uploaded, so a stopper's delayed sweep
+            # can abort exactly this upload later (#1125 D16, the #1123 D5 rule: an abort's immediate
+            # answer is not final). An upload that could not be recorded is aborted at once.
+            try:
+                on_created(self.upload_id)
+            except BaseException:
+                try:
+                    self._s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=self.upload_id)
+                except Exception as e:  # nosec B110 - the lifecycle rule is the backstop
+                    self._warn(f"Could not abort an unrecorded multipart upload: {e!r}")
+                raise
         self._buffer = bytearray()
         self._parts = {}
         self._next_part = 1

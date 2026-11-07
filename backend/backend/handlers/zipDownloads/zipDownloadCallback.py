@@ -90,6 +90,8 @@ def handle_callback(payload) -> dict:
         if payload.get("executionStatus") != "SUCCEEDED" and row.get("status") != zd.STATUS_SUCCEEDED:
             prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
+            # Not final either: the delayed sweep aborts the recorded upload again later.
+            zd.schedule_delayed_sweep(row, logger)
         # A job that ended without an archive (the container's FAILED, the user's cancel) keeps no
         # working objects: this also removes a resolved manifest the container wrote after a cancel.
         if row.get("status") in (zd.STATUS_FAILED, zd.STATUS_CANCELLED):
@@ -100,7 +102,20 @@ def handle_callback(payload) -> dict:
     return {"status": "finalized" if changed else "unchanged", "jobStatus": status}
 
 
+def handle_sweep(event) -> dict:
+    """One pass of a job's delayed sweep (the zip download sweep state machine, #1125 D16): abort
+    the archive uploads the job recorded that are still listed, unless its archive landed."""
+    result = zd.sweep_recorded_uploads(zip_table, s3, aux_bucket_name, event.get("zipSweep") or {},
+                                       final=bool(event.get("final")), logger=logger)
+    logger.info(f"Zip download delayed sweep ({'final' if event.get('final') else 'first'} pass): "
+                f"{result}")
+    return result
+
+
 def lambda_handler(event, context):
+    if isinstance(event, dict) and event.get("action") == "sweep":
+        # Raises on a failed check or listing, so the state machine retries the pass.
+        return handle_sweep(event)
     try:
         return handle_callback(event)
     except Exception as e:

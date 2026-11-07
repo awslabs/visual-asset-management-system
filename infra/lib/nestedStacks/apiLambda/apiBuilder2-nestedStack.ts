@@ -51,6 +51,7 @@ import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatu
 import {
     buildZipDownloadCallbackFunction,
     buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
     grantZipDownloadLaunch,
     ZIP_DOWNLOAD_ROUTES,
     ZIP_DOWNLOAD_SYSTEM_TRIGGER,
@@ -436,6 +437,14 @@ export class ApiBuilder2NestedStack extends NestedStack {
         }
         if (config.app.zipDownloads.enabled) {
             systemPipelineCallbacks[ZIP_DOWNLOAD_SYSTEM_TRIGGER] = zipDownloadCallbackFunction;
+            // The delayed sweep of a stopped job's archive upload (#1125 D16).
+            buildZipDownloadSweep(
+                this,
+                zipDownloadCallbackFunction,
+                zipDownloadServiceFunction,
+                storageResources,
+                config
+            );
         }
 
         attachSystemPipelineCallbacks(

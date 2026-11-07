@@ -152,8 +152,17 @@ class FakeTable:
         self.row = row
         self.updates = []
 
-    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeNames,
-                    ExpressionAttributeValues):
+    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeValues,
+                    ExpressionAttributeNames=None):
+        if UpdateExpression.startswith("ADD archiveUploadIds"):
+            # StatusWriter.record_upload (#1125 D16): this run's row, whatever its status.
+            row = self.row
+            if row is None or row.get("workflowExecutionId", ExpressionAttributeValues[":eid"]) \
+                    != ExpressionAttributeValues[":eid"]:
+                raise _err("ConditionalCheckFailedException")
+            row.setdefault("archiveUploadIds", set()).update(ExpressionAttributeValues[":ids"])
+            return
+        ExpressionAttributeNames = ExpressionAttributeNames or {}
         self.updates.append((UpdateExpression, ConditionExpression, dict(ExpressionAttributeValues)))
         row = self.row
         ok = row is not None and row["status"] in ("QUEUED", "RUNNING") and (

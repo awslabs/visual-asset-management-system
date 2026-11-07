@@ -363,7 +363,8 @@ class Job:
                                   content_type=CONTENT_TYPES[manifest["archiveFormat"]],
                                   extra_args={"Metadata": {ARCHIVE_UPLOAD_TOKEN_METADATA: token}},
                                   logger=self._sink_logger(),
-                                  should_stop=lambda: self._stopped or self.status.must_stop())
+                                  should_stop=lambda: self._stopped or self.status.must_stop(),
+                                  on_created=self.status.record_upload)
 
         def on_progress(files, size):
             if not self.status.progress(files, size):

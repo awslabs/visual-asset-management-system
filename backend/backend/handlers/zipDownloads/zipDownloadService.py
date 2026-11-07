@@ -1048,6 +1048,10 @@ def delete_job(event, database_id, asset_id, request_id):
         row = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
                                  ConsistentRead=True).get("Item") or row
     zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
+    # The row is removed below, so the delayed sweep carries its archive key and recorded upload ids
+    # (a sweep the cancel already started keeps its own; ExecutionAlreadyExists counts as scheduled).
+    if row.get("status") != zd.STATUS_SUCCEEDED:
+        zd.schedule_delayed_sweep(row, logger)
     zd.delete_prefix(s3, aux_bucket_name, prefix)
     try:
         zip_table.delete_item(Key=zd.row_key(row["userId"], request_id),

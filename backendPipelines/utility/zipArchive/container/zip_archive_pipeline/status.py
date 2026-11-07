@@ -63,6 +63,19 @@ class StatusWriter:
             {":s": "RUNNING", ":ft": int(files_total), ":bt": int(bytes_total), ":z": 0,
              ":rk": resolved_manifest_key, ":tok": upload_token})
 
+    def record_upload(self, upload_id):
+        """Record the archive's multipart upload id on the job row (``archiveUploadIds``, a string
+        set), right after the upload is created and before any part, so a stopper's delayed sweep
+        can abort exactly this upload (#1125 D16; backend common/zipDownloads.sweep_recorded_uploads).
+        Written whatever the job's status (a stop that came first still needs the id), only for this
+        run's row. Raises when it cannot be written: the sink then aborts the upload."""
+        self._table.update_item(
+            Key=self._key, UpdateExpression="ADD archiveUploadIds :ids",
+            ConditionExpression=("attribute_exists(requestId) AND "
+                                 "(attribute_not_exists(workflowExecutionId) OR "
+                                 "workflowExecutionId = :eid)"),
+            ExpressionAttributeValues={":ids": {upload_id}, ":eid": self._execution_id})
+
     def progress(self, files_done, bytes_done, force=False):
         now = self._clock()
         if not force and self._last_progress is not None and now - self._last_progress < self._interval:

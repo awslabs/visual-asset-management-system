@@ -33,7 +33,9 @@ This module has NO import-time AWS or environment dependency.
 """
 
 import hashlib
+import json
 import math
+import os
 import re
 import time
 import uuid
@@ -354,8 +356,12 @@ def _abort_then_reread(table, s3_client, bucket: str, row: dict, logger=None) ->
     request_stop(table, row, logger)
     abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
                                                          row["userId"], row["requestId"]), logger)
-    return table.get_item(Key=row_key(row["userId"], row["requestId"]),
-                          ConsistentRead=True).get("Item")
+    fresh = table.get_item(Key=row_key(row["userId"], row["requestId"]),
+                           ConsistentRead=True).get("Item")
+    # The aborts' answers are not final (a part accepted before the stop can be listed again minutes
+    # later): the delayed sweep aborts the recorded upload again, unless the archive landed.
+    schedule_delayed_sweep(fresh or row, logger)
+    return fresh
 
 
 def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_status: str,
@@ -655,3 +661,157 @@ def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]
         if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
             return False, None
         raise
+
+
+# ---------------------------------------------------------------------------
+# Delayed sweep (#1125 D16, the #1123 D5 rule after the demo21 recheck)
+# ---------------------------------------------------------------------------
+#
+# An abort's immediate answer is not final: on demo21 S3 answered an abort, ListParts right after it
+# answered NoSuchUpload, and the upload was listed again 2 to 8 minutes later with a part accepted
+# before the stop. So every stopper of a zip job (the user's cancel, the terminal callback, the
+# read-time reconcile, the delete of a job) also starts the job's delayed sweep: an execution of the
+# zip download sweep state machine (infra lambdaBuilder/zipDownloadFunctions.ts: Wait
+# SWEEP_FIRST_WAIT_SECONDS, sweep, Wait SWEEP_SECOND_WAIT_SECONDS, sweep), whose passes run the
+# terminal callback's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.zipDownloads on.
+
+SWEEP_STATE_MACHINE_ARN_ENV = "ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN"
+SWEEP_EXECUTION_PREFIX = "zipsweep-"
+SWEEP_FIRST_WAIT_SECONDS = 300
+SWEEP_SECOND_WAIT_SECONDS = 600
+# Upload pages read per pass for one archive key (the prefix is the exact key: normally one page).
+SWEEP_MAX_LIST_PAGES = 10
+# Upload ids carried in a sweep input (a job records one per archive attempt; normally one).
+SWEEP_MAX_UPLOAD_IDS = 20
+
+_sweep_sfn_client = None
+
+
+def _sweep_client():
+    global _sweep_sfn_client
+    if _sweep_sfn_client is None:
+        import boto3
+        from botocore.config import Config
+        _sweep_sfn_client = boto3.client("stepfunctions",
+                                         config=Config(retries={"max_attempts": 5, "mode": "adaptive"}))
+    return _sweep_sfn_client
+
+
+def recorded_upload_ids(row: dict) -> list:
+    """The archive multipart upload ids the container recorded on the job row (archiveUploadIds, a
+    string set; a list in some test doubles), sorted, at most SWEEP_MAX_UPLOAD_IDS."""
+    ids = (row or {}).get("archiveUploadIds") or []
+    return sorted(str(i) for i in ids if isinstance(i, str) and i)[:SWEEP_MAX_UPLOAD_IDS]
+
+
+def sweep_execution_name_for(user_id: str, request_id: str) -> str:
+    """Step Functions execution name of a job's delayed sweep (<= 80 chars of [A-Za-z0-9-_])."""
+    digest = hashlib.sha256(f"{user_id}#{request_id}".encode("utf-8")).hexdigest()[:48]
+    return SWEEP_EXECUTION_PREFIX + digest
+
+
+def sweep_request(row: dict) -> dict:
+    """The sweep execution's input: the job's identity, and a snapshot of its archive key and recorded
+    upload ids for a job deleted before the sweep runs. A pass reads the row when it still exists and
+    trusts the snapshot only when it does not (sweep_recorded_uploads)."""
+    return {"userId": row["userId"], "requestId": row["requestId"], "databaseId": row["databaseId"],
+            "assetId": row["assetId"], "archiveKey": row.get("archiveKey", ""),
+            "uploadIds": recorded_upload_ids(row)}
+
+
+def schedule_delayed_sweep(row: Optional[dict], logger=None, sfn_client=None,
+                           machine_arn: Optional[str] = None) -> bool:
+    """Start the delayed sweep of a job's archive upload, once per job (a fixed execution name: an
+    execution already started under it answers ExecutionAlreadyExists, which counts as scheduled).
+    Best-effort: False when the feature's sweep is not deployed or the start failed (logged); the
+    immediate aborts already ran and the prepared-downloads lifecycle rule is the backstop."""
+    machine_arn = machine_arn if machine_arn is not None else os.environ.get(SWEEP_STATE_MACHINE_ARN_ENV, "")
+    if not machine_arn or not row or not row.get("userId") or not is_request_id(row.get("requestId")):
+        return False
+    try:
+        client = sfn_client or _sweep_client()
+        client.start_execution(stateMachineArn=machine_arn,
+                               name=sweep_execution_name_for(row["userId"], row["requestId"]),
+                               input=json.dumps({"zipSweep": sweep_request(row)}))
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ExecutionAlreadyExists":
+            return True
+        if logger:
+            logger.warning(f"Could not schedule the delayed sweep of a zip download: {e}")
+        return False
+    except Exception as e:
+        if logger:
+            logger.warning(f"Could not schedule the delayed sweep of a zip download: {e!r}")
+        return False
+
+
+def _upload_ids_listed(s3_client, bucket: str, key: str, upload_ids, max_pages=SWEEP_MAX_LIST_PAGES) -> list:
+    """The given upload ids that ListMultipartUploads (prefix = the exact key) lists at that key.
+    Uploads of other writers, or at keys that only start with it, never match."""
+    wanted, listed = set(upload_ids), []
+    kwargs = {"Bucket": bucket, "Prefix": key}
+    for _ in range(max(1, max_pages)):
+        response = s3_client.list_multipart_uploads(**kwargs)
+        for upload in response.get("Uploads", []) or []:
+            if upload.get("Key") == key and upload.get("UploadId") in wanted:
+                listed.append(upload["UploadId"])
+        if not response.get("IsTruncated"):
+            return listed
+        kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
+        kwargs["UploadIdMarker"] = response.get("NextUploadIdMarker", "")
+    return listed
+
+
+def _sweep_target(table, request: dict):
+    """(row, archive_key, upload_ids, reason): what one pass may abort. The row when it still exists
+    (its archive key and recorded ids; ``reason`` names why nothing may be aborted), else the input's
+    snapshot, confined to the job's own prefix. Raises ValueError on an input that names no job."""
+    user_id, request_id = (request or {}).get("userId"), (request or {}).get("requestId")
+    if not isinstance(user_id, str) or not user_id or not is_request_id(request_id):
+        raise ValueError("The delayed sweep needs a zip download's identity")
+    row = table.get_item(Key=row_key(user_id, request_id), ConsistentRead=True).get("Item")
+    if row:
+        status = row.get("status")
+        if status == STATUS_SUCCEEDED:
+            return row, "", [], "the job succeeded"
+        if status in ACTIVE_STATUSES and not row.get("stopRequestedAt"):
+            return row, "", [], "the job is still running"
+        return row, row.get("archiveKey", ""), recorded_upload_ids(row), ""
+    prefix = request_prefix(request.get("databaseId", ""), request.get("assetId", ""), user_id, request_id)
+    _require_job_prefix(prefix)
+    key = request.get("archiveKey", "")
+    if not isinstance(key, str) or not key.startswith(prefix) or "/" in key[len(prefix):]:
+        return None, "", [], "no archive key within the job's prefix"
+    ids = [i for i in (request.get("uploadIds") or []) if isinstance(i, str) and i][:SWEEP_MAX_UPLOAD_IDS]
+    return None, key, ids, ""
+
+
+def sweep_recorded_uploads(table, s3_client, bucket: str, request: dict, final: bool = False,
+                           logger=None) -> dict:
+    """One pass of a zip job's delayed sweep. Decides by the landed archive first (a job whose own
+    archive is at the key is left alone), then lists the uploads at the job's exact archive key and
+    aborts only the ones the job row recorded (archiveUploadIds). Aborts nothing else and removes no
+    object. Raises when the landed check or a listing fails (the state machine retries the pass)."""
+    row, key, upload_ids, reason = _sweep_target(table, request)
+    if reason:
+        return {"swept": False, "reason": reason}
+    if not key or not upload_ids:
+        return {"swept": False, "reason": "no recorded upload"}
+    if row is not None:
+        landed, _size = landed_archive(s3_client, bucket, row)
+        if landed:
+            return {"swept": False, "reason": "the job's archive landed"}
+    listed = _upload_ids_listed(s3_client, bucket, key, upload_ids)
+    for upload_id in listed:
+        try:
+            s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "NoSuchUpload":
+                raise
+    remaining = _upload_ids_listed(s3_client, bucket, key, listed) if listed else []
+    if remaining and logger:
+        message = "A zip download's archive upload is still listed after the delayed sweep's abort"
+        (logger.error if final else logger.warning)(
+            message + ("; the prepared-downloads lifecycle rule removes it" if final else ""))
+    return {"swept": True, "aborted": len(listed), "remaining": len(remaining)}

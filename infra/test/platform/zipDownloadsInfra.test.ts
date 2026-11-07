@@ -21,7 +21,13 @@ import {
     synthTemplate,
 } from "../support/templateSynth";
 import { SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV } from "../../lib/lambdaBuilder/systemPipelineCallbacks";
-import { ZIP_DOWNLOAD_ROUTES } from "../../lib/lambdaBuilder/zipDownloadFunctions";
+import * as fs from "fs";
+import * as path from "path";
+import {
+    ZIP_DOWNLOAD_ROUTES,
+    ZIP_DOWNLOAD_SWEEP_RETRY,
+    ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS,
+} from "../../lib/lambdaBuilder/zipDownloadFunctions";
 
 jest.setTimeout(900_000);
 
@@ -249,6 +255,23 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         }
     });
 
+    test("no delayed sweep with the feature off: no state machine, no ARN, no grant (#1125 D16)", () => {
+        expect(
+            synth.where("AWS::StepFunctions::StateMachine", (r) =>
+                r.logicalId.startsWith("ZipDownloadSweepStateMachine")
+            )
+        ).toEqual([]);
+        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
+            const fn = functionByHandler(synth, handler);
+            expect(envOf(fn).ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN).toBeUndefined();
+            expect(
+                roleStatements(synth, fn).filter((s) =>
+                    actionsOf(s).includes("states:StartExecution")
+                )
+            ).toEqual([]);
+        }
+    });
+
     test("the callback reads no asset buckets table: its auxiliary bucket Region is registered (#1125 D17)", () => {
         const statements = roleStatements(synth, functionByHandler(synth, CALLBACK_HANDLER));
         const dynamoResources = statements
@@ -291,6 +314,106 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(flattened.some((r) => r.includes(executeId))).toBe(true);
         for (const r of flattened) {
             expect(r).not.toContain("*");
+        }
+    });
+
+    // #1125 D16 round 2 (the #1123 D5 rule after the demo21 recheck): an abort's immediate answer is
+    // not final, so every stopper starts the job's delayed sweep.
+    test("the delayed sweep waits, sweeps, waits past the container's last part and sweeps again", () => {
+        const machines = synth.where("AWS::StepFunctions::StateMachine", (r) =>
+            r.logicalId.startsWith("ZipDownloadSweepStateMachine")
+        );
+        expect(machines).toHaveLength(1);
+        const machine = machines[0];
+        const definition = JSON.parse(SynthResult.flatten(machine.properties.DefinitionString));
+        const states = definition.States;
+        expect(definition.StartAt).toBe("ZipDownloadSweepFirstWait");
+        expect(states.ZipDownloadSweepFirstWait).toEqual(
+            expect.objectContaining({
+                Type: "Wait",
+                Seconds: ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.first,
+                Next: "ZipDownloadSweepFirst",
+            })
+        );
+        expect(states.ZipDownloadSweepSecondWait).toEqual(
+            expect.objectContaining({
+                Type: "Wait",
+                Seconds: ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.second,
+                Next: "ZipDownloadSweepFinal",
+            })
+        );
+        expect(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS).toEqual({ first: 300, second: 600 });
+        const callbackId = functionByHandler(synth, CALLBACK_HANDLER).logicalId;
+        for (const [id, final] of [
+            ["ZipDownloadSweepFirst", false],
+            ["ZipDownloadSweepFinal", true],
+        ] as [string, boolean][]) {
+            const task = states[id];
+            expect(JSON.stringify(task.Resource)).toContain(":lambda:invoke");
+            expect(JSON.stringify(task.Parameters.FunctionName)).toContain(callbackId);
+            expect(task.Parameters.Payload).toEqual({
+                action: "sweep",
+                "zipSweep.$": "$.zipSweep",
+                final,
+            });
+            expect(task.ResultPath).toBeNull();
+            // Bounded: one fault retrier, then the pass is given up.
+            expect(task.Retry).toEqual([
+                expect.objectContaining({
+                    ErrorEquals: ["States.ALL"],
+                    MaxAttempts: ZIP_DOWNLOAD_SWEEP_RETRY.maxAttempts,
+                }),
+            ]);
+        }
+        // A failed first pass still runs the last one.
+        expect(states.ZipDownloadSweepFirst.Next).toBe("ZipDownloadSweepSecondWait");
+        expect(states.ZipDownloadSweepFirst.Catch).toEqual([
+            expect.objectContaining({
+                ErrorEquals: ["States.ALL"],
+                Next: "ZipDownloadSweepSecondWait",
+            }),
+        ]);
+        expect(states.ZipDownloadSweepFinal.Next).toBe("ZipDownloadSwept");
+        expect(states.ZipDownloadSwept.Type).toBe("Succeed");
+        expect(Object.keys(states)).toHaveLength(5);
+        // Bounded history: two waits and two tasks of at most 5 + 3 x maxAttempts events.
+        expect(2 * 3 + 2 * (5 + 3 * ZIP_DOWNLOAD_SWEEP_RETRY.maxAttempts) + 4).toBeLessThan(100);
+        expect(machine.properties.StateMachineType).toBe("STANDARD");
+        expect(machine.properties.LoggingConfiguration.Level).toBe("ALL");
+        expect(machine.properties.TracingConfiguration).toEqual({ Enabled: true });
+        expect(machine.properties.StateMachineName).toMatch(/^ZipDownloadSweep-/);
+        const backend = fs.readFileSync(
+            path.join(__dirname, "../../../backend/backend/common/zipDownloads.py"),
+            "utf8"
+        );
+        expect(backend).toMatch(
+            new RegExp(`^SWEEP_FIRST_WAIT_SECONDS = ${ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.first}$`, "m")
+        );
+        expect(backend).toMatch(
+            new RegExp(
+                `^SWEEP_SECOND_WAIT_SECONDS = ${ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS.second}$`,
+                "m"
+            )
+        );
+    });
+
+    test("the service and the callback may start the sweep, on its exact ARN only", () => {
+        const machine = synth.where("AWS::StepFunctions::StateMachine", (r) =>
+            r.logicalId.startsWith("ZipDownloadSweepStateMachine")
+        )[0];
+        const name = machine.properties.StateMachineName;
+        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
+            const fn = functionByHandler(synth, handler);
+            const arn = SynthResult.flatten(envOf(fn).ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN);
+            expect(arn).toMatch(new RegExp(`:states:[^:]+:[^:]+:stateMachine:${name}$`));
+            // Built from the fixed name: the function does not reference the state machine.
+            expect(JSON.stringify(envOf(fn))).not.toContain(machine.logicalId);
+            const starts = roleStatements(synth, fn).filter((s) =>
+                actionsOf(s).includes("states:StartExecution")
+            );
+            expect(starts).toHaveLength(1);
+            expect(actionsOf(starts[0])).toEqual(["states:StartExecution"]);
+            expect([].concat(starts[0].Resource).map((r) => SynthResult.flatten(r))).toEqual([arn]);
         }
     });
 
