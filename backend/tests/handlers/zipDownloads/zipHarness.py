@@ -232,6 +232,12 @@ class FakeS3:
         self.aborted.append((Bucket, Key, UploadId))
         self.uploads = [u for u in self.uploads if u["UploadId"] != UploadId]
 
+    def list_parts(self, Bucket, Key, UploadId, **_):
+        # The abort sweep's check (common/zipDownloads.abort_until_gone, #1125 D16).
+        if not any(u["UploadId"] == UploadId and u["Key"] == Key for u in self.uploads):
+            raise _client_error("NoSuchUpload", "ListParts")
+        return {"Parts": []}
+
     def generate_presigned_url(self, op, Params, ExpiresIn):
         self.presigned.append((op, Params, ExpiresIn))
         return f"https://signed.example/{Params['Key']}?X-Amz-Signature=secret"
@@ -357,6 +363,9 @@ def load_handlers(enabled=True, env=None):
     svc.log_actions = env_obj.audit
     svc.validateUnallowedFileExtensionAndContentType = blocklist
     env_obj.zd = svc.zd
+    # The abort sweep (abort_until_gone, #1125 D16) waits between repeats while a double keeps an
+    # upload listed (a 204 answer); the doubles do not need the wait.
+    env_obj.zd._sleep = lambda seconds: None
     return env_obj
 
 

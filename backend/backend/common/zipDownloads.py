@@ -324,9 +324,34 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     return None
 
 
+def request_stop(table, row: dict, logger=None) -> bool:
+    """Record on an open job that a stopper is ending it (``stopRequestedAt``), BEFORE its abort
+    (the #1123 D5 rule, #1125 D16). S3 keeps a part whose UploadPart was in flight during an abort,
+    and the container's sink reads the job before every part (zipArchive status.must_stop): once it
+    sees this marker it uploads no further part and aborts again after its own last one. No status
+    change, so a landed archive still wins. Best-effort: False when the job is not open or the write
+    failed."""
+    try:
+        table.update_item(
+            Key=row_key(row["userId"], row["requestId"]),
+            UpdateExpression="SET stopRequestedAt = :stopRequestedAt",
+            ConditionExpression="attribute_exists(requestId) AND #status IN (:queued, :running)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":stopRequestedAt": iso(utc_now()), ":queued": STATUS_QUEUED,
+                                       ":running": STATUS_RUNNING},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException" and logger:
+            logger.warning(f"Could not record the stop of a zip download: {e}")
+        return False
+
+
 def _abort_then_reread(table, s3_client, bucket: str, row: dict, logger=None) -> Optional[dict]:
-    """Abort the job's open uploads, then read the row again (consistent): the decision must see
-    the archiveUploadToken the container may have recorded after the caller read the row."""
+    """Record the stop, abort the job's open uploads until they are gone, then read the row again
+    (consistent): the decision must see the archiveUploadToken the container may have recorded after
+    the caller read the row."""
+    request_stop(table, row, logger)
     abort_open_uploads(s3_client, bucket, request_prefix(row["databaseId"], row["assetId"],
                                                          row["userId"], row["requestId"]), logger)
     return table.get_item(Key=row_key(row["userId"], row["requestId"]),
@@ -464,8 +489,47 @@ def _require_job_prefix(prefix: str) -> None:
         raise ValueError("cleanup is limited to one zip download's prefix")
 
 
-def abort_open_uploads(s3_client, bucket: str, prefix: str, logger=None) -> int:
-    """Abort every incomplete multipart upload under one job's prefix. Returns the count aborted.
+# Bounded abort sweep (#1125 D16, the #1123 D5 rule; common/largeObjectCopy.abort_until_gone): after an
+# abort, a part the container was still uploading can land and keep the upload listed, so the abort is
+# repeated until ListParts answers NoSuchUpload. Short, because the cancel and the read-time reconcile
+# run inside an API call; the container's sink aborts again after its own last part.
+ABORT_SWEEP_ATTEMPTS = 3
+ABORT_SWEEP_WAIT_SECONDS = 2
+
+
+def _sleep(seconds):
+    time.sleep(seconds)
+
+
+def abort_until_gone(s3_client, bucket: str, key: str, upload_id: str, attempts=ABORT_SWEEP_ATTEMPTS,
+                     wait_seconds=ABORT_SWEEP_WAIT_SECONDS, sleep: Optional[Callable] = None) -> bool:
+    """Abort one multipart upload until S3 no longer knows it (ListParts answers NoSuchUpload), at
+    most ``attempts`` aborts, waiting ``wait_seconds`` before each repeat (only while it is still
+    listed). True when the upload is gone, False when it is still listed after the last attempt.
+    Raises on an S3 error other than NoSuchUpload. Removes no object: a completed upload is gone as an
+    upload and its archive stays."""
+    sleep = sleep or _sleep
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            sleep(wait_seconds)
+        try:
+            s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                return True
+            raise
+        try:
+            s3_client.list_parts(Bucket=bucket, Key=key, UploadId=upload_id, MaxParts=1)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                return True
+            raise
+    return False
+
+
+def abort_open_uploads(s3_client, bucket: str, prefix: str, logger=None, sleep=None) -> int:
+    """Abort every incomplete multipart upload under one job's prefix until it is gone
+    (abort_until_gone). Returns the count aborted.
 
     Best-effort: a failure is logged and the bucket's abort-incomplete-multipart lifecycle rule is
     the backstop. The answer never decides anything: a 204 does not mean nothing landed (S3 answers
@@ -482,8 +546,11 @@ def abort_open_uploads(s3_client, bucket: str, prefix: str, logger=None) -> int:
                 if not key.startswith(prefix):
                     continue
                 try:
-                    s3_client.abort_multipart_upload(Bucket=bucket, Key=key,
-                                                     UploadId=upload.get("UploadId"))
+                    if not abort_until_gone(s3_client, bucket, key, upload.get("UploadId"), sleep=sleep):
+                        if logger:
+                            logger.warning("A multipart upload of a zip download is still listed after "
+                                           f"{ABORT_SWEEP_ATTEMPTS} aborts; the container aborts it "
+                                           "again after its last part")
                     aborted += 1
                 except ClientError as e:
                     if logger:

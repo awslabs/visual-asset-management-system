@@ -745,7 +745,9 @@ class TestCancelLandedArchive:
 
         def recording(**kw):
             result = update(**kw)
-            statuses.append(env.zip.items[(kw["Key"]["userId"], kw["Key"]["requestId"])]["status"])
+            # Status writes only: the stop marker before the abort changes no status (#1125 D16).
+            if "#status" in kw["UpdateExpression"]:
+                statuses.append(env.zip.items[(kw["Key"]["userId"], kw["Key"]["requestId"])]["status"])
             return result
         env.zip.update_item = recording
         response = _job_route(env, "DELETE", request_id)

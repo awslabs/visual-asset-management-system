@@ -116,6 +116,11 @@ class FakeS3:
         self.aborted.append(Key)
         self.uploads.pop((Bucket, Key), None)
 
+    def list_parts(self, Bucket, Key, UploadId, **_):
+        if (Bucket, Key) not in self.uploads:
+            raise _err("NoSuchUpload")
+        return {"Parts": [{"PartNumber": n} for n in sorted(self.uploads[(Bucket, Key)])]}
+
     def list_multipart_uploads(self, Bucket, Prefix, **_):
         return {"Uploads": [{"Key": k, "UploadId": "u1"} for (b, k) in self.uploads
                             if b == Bucket and k.startswith(Prefix)], "IsTruncated": False}

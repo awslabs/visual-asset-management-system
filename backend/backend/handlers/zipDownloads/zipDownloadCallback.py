@@ -25,7 +25,7 @@ from botocore.config import Config
 
 from common import zipDownloads as zd
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
-from common.s3 import region_routing_s3_client
+from common.s3 import deployment_region, region_routing_s3_client, register_bucket_region
 from common.workflows import systemPipelines as sp
 from customLogging.logger import safeLogger
 
@@ -41,6 +41,10 @@ except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
 
+# The auxiliary bucket is the stack's own, in this deployment's Region: every abort, list and delete
+# here is signed for that Region without an asset buckets table read, which this function's role does
+# not hold and which would log AccessDenied on every call (#1125 D17).
+register_bucket_region(aux_bucket_name, deployment_region())
 zip_table = dynamodb.Table(zip_table_name)
 
 

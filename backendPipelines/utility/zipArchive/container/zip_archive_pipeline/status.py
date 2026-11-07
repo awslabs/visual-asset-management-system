@@ -82,6 +82,18 @@ class StatusWriter:
         """The job row as it is now (consistent read), or None when it is gone."""
         return self._table.get_item(Key=self._key, ConsistentRead=True).get("Item")
 
+    def must_stop(self):
+        """Whether the archive must upload no further part, read before each part (#1123 D5 rule):
+        the row is gone, no longer QUEUED or RUNNING, owned by another run, or carries a stopper's
+        ``stopRequestedAt`` (backend common/zipDownloads.request_stop, written before its abort).
+        Raises on a read error (the sink then keeps going and logs it)."""
+        row = self.read()
+        if not row or row.get("status") not in ("QUEUED", "RUNNING"):
+            return True
+        if row.get("workflowExecutionId") and row["workflowExecutionId"] != self._execution_id:
+            return True
+        return bool(row.get("stopRequestedAt"))
+
     def failed(self, reason):
         return self._update(["#status = :s", "errorMessage = :e", "completedAt = :c"],
                             {":s": "FAILED", ":e": (reason or "The archive job failed")[:MAX_REASON_CHARS],

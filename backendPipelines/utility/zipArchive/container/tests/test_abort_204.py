@@ -30,6 +30,12 @@ from test_terminal_races import (AUX, ARCHIVE_KEY, _assert_one_outcome, _cancel,
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def _no_sweep_wait(monkeypatch):
+    """The finalizers' abort sweep (zd.abort_until_gone, #1125 D16) waits between its repeats."""
+    monkeypatch.setattr(zd, "_sleep", lambda seconds: None)
+
 STOP_STATUSES = ["FAILED", "TIMED_OUT", "ABORTED"]
 
 
@@ -93,7 +99,10 @@ class TestDeciderDuringTheComplete:
         _answer_aborts_like_s3(s3, during_complete=_cancel(s3, table, results))
         assert _run(job)["status"] == "stopped"   # the container's SUCCEEDED write lost
         assert results == [zd.CANCEL_CANCELLED]
-        assert s3.aborts_answered_204 == [ARCHIVE_KEY], "the abort was answered 204"
+        # The upload stays listed while its Complete is in flight, so the decider's bounded sweep
+        # repeats the abort, each answered 204 (#1125 D16); none stops the Complete.
+        assert s3.aborts_answered_204 == [ARCHIVE_KEY] * zd.ABORT_SWEEP_ATTEMPTS, \
+            "the abort was answered 204"
         _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
         assert s3.deleted == [(ARCHIVE_KEY, "m1")], "only this upload's version is removed"
 
@@ -102,7 +111,7 @@ class TestDeciderDuringTheComplete:
         s3, table, job = _setup()
         _answer_aborts_like_s3(s3, during_complete=_reconcile(s3, table, execution_status))
         assert _run(job)["status"] == "stopped"
-        assert s3.aborts_answered_204 == [ARCHIVE_KEY]
+        assert s3.aborts_answered_204 == [ARCHIVE_KEY] * zd.ABORT_SWEEP_ATTEMPTS
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert s3.deleted == [(ARCHIVE_KEY, "m1")]
 

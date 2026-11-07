@@ -29,7 +29,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
 from .engine.reader import PrefetchReader
-from .engine.sink import MultipartSink, part_size_bytes
+from .engine.sink import MultipartSink, StopRequested, part_size_bytes
 from .engine.tarstream import TarStreamWriter
 from .engine.zipstream import ZipStreamWriter
 from .resolve import check_members, enforce_limits, expand_selection, filter_patterns, list_current
@@ -285,6 +285,15 @@ class Job:
         except Exception:
             return True
 
+    def _sink_logger(self):
+        """The sink logs warnings (an abort it could not make); this job logs through ``self.log``."""
+        log = self.log
+
+        class _Warn:
+            def warning(self, message):
+                log(message)
+        return _Warn()
+
     def _record_failure(self, reason):
         if self.status is None:
             return
@@ -352,7 +361,9 @@ class Job:
         self.sink = MultipartSink(aux, manifest["archiveBucket"], manifest["archiveKey"],
                                   part_size_bytes(estimate_archive_bytes(members, empty_dirs)),
                                   content_type=CONTENT_TYPES[manifest["archiveFormat"]],
-                                  extra_args={"Metadata": {ARCHIVE_UPLOAD_TOKEN_METADATA: token}})
+                                  extra_args={"Metadata": {ARCHIVE_UPLOAD_TOKEN_METADATA: token}},
+                                  logger=self._sink_logger(),
+                                  should_stop=lambda: self._stopped or self.status.must_stop())
 
         def on_progress(files, size):
             if not self.status.progress(files, size):
@@ -366,6 +377,12 @@ class Job:
             if self._stopped:
                 raise ArchiveFailure(STOPPED)
             self.sink.close()
+        except StopRequested:
+            # The job was cancelled or finalized (or a stopper recorded its stop) while the archive
+            # streamed. The stopper decides the outcome, so nothing is written here.
+            self.sink.abort()
+            self.log("The job was stopped while the archive streamed; its upload was aborted")
+            return {"status": "stopped"}
         except BaseException:
             self.sink.abort()
             raise
@@ -468,13 +485,17 @@ class Job:
                                 archive_format)
         self.sink = MultipartSink(self.clients.for_bucket(out_bucket), out_bucket, out_dir + name,
                                   part_size_bytes(estimate_archive_bytes(members, empty_dirs)),
-                                  content_type=CONTENT_TYPES[archive_format])
+                                  content_type=CONTENT_TYPES[archive_format],
+                                  logger=self._sink_logger(), should_stop=lambda: self._stopped)
         try:
             archive_size, files, _ = write_archive(self.clients, members, empty_dirs, self.sink,
                                                    archive_format, compression)
             if self._stopped:
                 raise ArchiveFailure(STOPPED)
             self.sink.close()
+        except StopRequested:
+            self.sink.abort()
+            raise ArchiveFailure(STOPPED)
         except BaseException:
             self.sink.abort()
             raise

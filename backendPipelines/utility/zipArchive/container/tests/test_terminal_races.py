@@ -165,7 +165,8 @@ class TestCancelVersusArchiveCompletion:
         s3, table, job = _setup()
         results = []
         _hook(monkeypatch, "upload_open", _cancel(s3, table, results))
-        assert _run(job)["status"] == "raised"   # S3 refused to complete the aborted upload
+        # The last part reads the job first, finds it CANCELLED and is never uploaded (#1125 D16).
+        assert _run(job)["status"] == "stopped"
         assert results == [zd.CANCEL_CANCELLED]
         _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
         assert table.row["cancelledBy"] == zd.CANCELLED_BY_USER
@@ -181,7 +182,7 @@ class TestCancelVersusArchiveCompletion:
         assert table.row["archiveSizeBytes"] == len(s3.completed[(AUX, ARCHIVE_KEY)])
         assert not getattr(s3, "deleted", []), "the landed archive is kept"
 
-    def test_cancel_before_the_upload_exists_deletes_a_late_archive(self, monkeypatch):
+    def test_cancel_before_the_upload_exists_uploads_no_part(self, monkeypatch):
         s3, table, job = _setup()
         results = []
         _hook(monkeypatch, "before_upload", _cancel(s3, table, results))
@@ -202,7 +203,7 @@ class TestReconcileFailedVersusLateContainerSuccess:
     def test_reconcile_while_the_upload_is_open_wins_and_nothing_lands(self, monkeypatch, execution_status):
         s3, table, job = _setup()
         _hook(monkeypatch, "upload_open", _reconcile(s3, table, execution_status))
-        assert _run(job)["status"] == "raised"
+        assert _run(job)["status"] == "stopped"   # the last part found the job FAILED (#1125 D16)
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert not getattr(s3, "deleted", []), "the archive never landed"
 
@@ -213,7 +214,7 @@ class TestReconcileFailedVersusLateContainerSuccess:
         _assert_one_outcome(s3, table, zd.STATUS_SUCCEEDED)
         assert not getattr(s3, "deleted", [])
 
-    def test_reconcile_before_the_upload_exists_deletes_a_late_archive(self, monkeypatch, execution_status):
+    def test_reconcile_before_the_upload_exists_uploads_no_part(self, monkeypatch, execution_status):
         s3, table, job = _setup()
         _hook(monkeypatch, "before_upload", _reconcile(s3, table, execution_status))
         _run(job)
@@ -272,11 +273,17 @@ class TestContainerNeverFailsALandedArchive:
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert table.row["errorMessage"] == runner.STOPPED
 
-    def test_late_archive_delete_removes_only_this_uploads_version(self, monkeypatch):
+    def test_a_job_ended_before_the_upload_lands_no_archive(self, monkeypatch):
+        # Before #1125 D16 the container uploaded every part, completed, lost its SUCCEEDED write and
+        # deleted the late archive. The first part now reads the job, finds it FAILED and uploads
+        # nothing. A Complete already in flight when the job ends still lands and is deleted by
+        # version (test_abort_204.TestDeciderDuringTheComplete).
         s3, table, job = _setup()
         _hook(monkeypatch, "before_upload", _reconcile(s3, table, "FAILED"))
-        _run(job)
-        assert s3.deleted == [(ARCHIVE_KEY, "m1")]
+        assert _run(job)["status"] == "stopped"
+        assert (AUX, ARCHIVE_KEY) not in s3.completed
+        assert not getattr(s3, "deleted", [])
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
 
     def test_decider_holding_a_row_read_before_the_token_still_sees_the_landing(self, monkeypatch):
         # The reconcile read the row (QUEUED, no token) before the container started; the archive
@@ -303,7 +310,7 @@ class TestEarlierSameSizeObjectAtTheKey:
         s3, table, job = _setup()
         _add_earlier_same_size_object(s3)
         _hook(monkeypatch, "upload_open", _reconcile(s3, table, "FAILED"))
-        assert _run(job)["status"] == "raised"
+        assert _run(job)["status"] == "stopped"
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)["VersionId"] == "old"
 

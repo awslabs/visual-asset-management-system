@@ -60,7 +60,8 @@ from common.downloadEligibility import (
 )
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
-from common.s3 import region_routing_s3_client, validateUnallowedFileExtensionAndContentType
+from common.s3 import (deployment_region, region_routing_s3_client, register_bucket_region,
+                       validateUnallowedFileExtensionAndContentType)
 from common.validators import validate
 from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
@@ -150,6 +151,10 @@ zip_table = dynamodb.Table(zip_table_name)
 asset_table = dynamodb.Table(asset_table_name)
 buckets_table = dynamodb.Table(buckets_table_name)
 executions_table = dynamodb.Table(executions_table_name)
+# The auxiliary bucket is the stack's own, in this deployment's Region: its manifest writes, aborts,
+# lists, deletes and presigns are signed for that Region without an asset buckets table read
+# (#1125 D17, as in zipDownloadCallback).
+register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
 

@@ -225,6 +225,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
                 "s3:DeleteObject",
                 "s3:DeleteObjectVersion",
                 "s3:GetObject",
+                "s3:ListMultipartUploadParts",
             ].sort()
         );
         expect(SynthResult.flatten(deletes[0].Resource)).toMatch(/\/vams\.preparedDownloads\/\*$/);
@@ -232,6 +233,28 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(list.Condition).toEqual({
             StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
         });
+    });
+
+    test("both zip functions confirm an abort with ListParts, only under vams.preparedDownloads/ (#1125 D16)", () => {
+        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
+            const statements = roleStatements(synth, functionByHandler(synth, handler));
+            const listParts = statements.filter((s) =>
+                actionsOf(s).includes("s3:ListMultipartUploadParts")
+            );
+            expect(listParts).toHaveLength(1);
+            expect(actionsOf(listParts[0])).toContain("s3:AbortMultipartUpload");
+            expect(SynthResult.flatten(listParts[0].Resource)).toMatch(
+                /\/vams\.preparedDownloads\/\*$/
+            );
+        }
+    });
+
+    test("the callback reads no asset buckets table: its auxiliary bucket Region is registered (#1125 D17)", () => {
+        const statements = roleStatements(synth, functionByHandler(synth, CALLBACK_HANDLER));
+        const dynamoResources = statements
+            .filter((s) => actionsOf(s).some((a) => a.startsWith("dynamodb:")))
+            .flatMap((s) => [].concat(s.Resource).map((r) => SynthResult.flatten(r)));
+        expect(dynamoResources.some((r) => /S3AssetBuckets|bucketNameGSI/i.test(r))).toBe(false);
     });
 });
 

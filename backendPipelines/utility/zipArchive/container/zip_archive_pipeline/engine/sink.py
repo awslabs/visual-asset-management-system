@@ -11,10 +11,20 @@ part from it makes one copy of the part. So the sink's own peak memory is about
 part size (about 584 MiB for a 5 TiB archive) and four in flight, about 3.5 GiB, to which the HTTP
 client's buffers and the reader's prefetch add. The upload is aborted on any error
 (and by ``abort()``, which the SIGTERM handler calls), so a failed archive leaves no billable parts.
+
+No part is left behind after a stop (the #1123 D5 rule, applied to this sink). S3 keeps a part whose
+UploadPart was in flight during an abort, and the upload then stays listed with that part (an upload
+"may need aborting more than once"). So each part first asks ``should_stop`` (the job's state: the
+user's cancel, another writer's finalization, the SIGTERM) and uploads nothing once it answers True;
+``abort()`` cancels the queued parts, aborts, waits a bounded time for the parts in flight, then aborts
+until ListParts answers NoSuchUpload (bounded); and a part that ends after an abort aborts again
+itself. A completed upload is gone as an upload (NoSuchUpload) and its object stays, so a landed
+archive is never touched by the sweep.
 """
 
 import math
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from botocore.exceptions import ClientError
@@ -24,6 +34,16 @@ MIN_PART_SIZE = 16 * MIB
 MAX_PART_SIZE = 5 * 1024 * MIB
 MAX_PARTS = 10000
 TARGET_PARTS = 9500
+# Bounded abort sweep after a stop (mirrors backend common/largeObjectCopy.abort_until_gone). Kept short
+# because the SIGTERM handler runs it before AWS Batch's SIGKILL; a part still in flight past the
+# bound aborts again when it ends (_upload), and the prepared-downloads lifecycle rule is the backstop.
+ABORT_SWEEP_ATTEMPTS = 4
+ABORT_SWEEP_WAIT_SECONDS = 2
+IN_FLIGHT_WAIT_SECONDS = 10
+
+
+class StopRequested(IOError):
+    """A part was not uploaded because ``should_stop`` answered True (the job was stopped or ended)."""
 
 
 def part_size_bytes(estimated_total_bytes):
@@ -36,7 +56,8 @@ def part_size_bytes(estimated_total_bytes):
 
 class MultipartSink:
     def __init__(self, s3_client, bucket, key, part_size, max_in_flight=4, content_type="",
-                 extra_args=None, logger=None):
+                 extra_args=None, logger=None, should_stop=None, sleep=None,
+                 in_flight_wait_seconds=IN_FLIGHT_WAIT_SECONDS):
         if part_size < 5 * MIB or part_size > MAX_PART_SIZE:
             raise ValueError("part size outside S3's limits")
         self._s3, self.bucket, self.key = s3_client, bucket, key
@@ -54,7 +75,14 @@ class MultipartSink:
         self._slots = threading.BoundedSemaphore(max_in_flight)
         self._futures = []
         self._error = None
-        self._lock = threading.Lock()
+        # Re-entrant: the SIGTERM handler can call abort() on the main thread while it is in abort().
+        self._lock = threading.RLock()
+        self._idle = threading.Condition(self._lock)
+        self._in_flight = 0
+        self._aborted = False
+        self._should_stop = should_stop
+        self._sleep = sleep or time.sleep
+        self._in_flight_wait = in_flight_wait_seconds
         self._done = False
         self.bytes_written = 0
         self.version_id = None
@@ -63,10 +91,44 @@ class MultipartSink:
         # own abort as "nothing will land" (runner.Job.stop).
         self.completing = False
 
+    def _warn(self, message):
+        if self._logger:
+            self._logger.warning(message)
+
+    def _stop_requested(self):
+        """Whether no further part may be uploaded: this sink was aborted, or ``should_stop`` answers
+        True. A failed state check does not stop the archive (logged); the finalizers' abort sweep
+        and the job row's conditional writes still decide the outcome."""
+        if self._aborted:
+            return True
+        if self._should_stop is None:
+            return False
+        try:
+            return bool(self._should_stop())
+        except Exception as e:
+            self._warn(f"Could not check the job's state before a part: {e!r}")
+            return False
+
     def _upload(self, number, data):
         try:
-            response = self._s3.upload_part(Bucket=self.bucket, Key=self.key, UploadId=self.upload_id,
-                                            PartNumber=number, Body=bytes(data))
+            if self._stop_requested():
+                raise StopRequested("The archive job was stopped")
+            with self._lock:
+                self._in_flight += 1
+            try:
+                response = self._s3.upload_part(Bucket=self.bucket, Key=self.key,
+                                                UploadId=self.upload_id, PartNumber=number,
+                                                Body=bytes(data))
+            finally:
+                with self._lock:
+                    self._in_flight -= 1
+                    late = self._aborted
+                    self._idle.notify_all()
+            if late:
+                # This part may have landed after the abort and keeps the upload listed: abort again
+                # now that its own upload ended.
+                self._abort_until_gone()
+                raise StopRequested("The archive job was stopped")
             with self._lock:
                 self._parts[number] = response["ETag"]
         except Exception as e:  # recorded and re-raised on the writer thread
@@ -139,17 +201,70 @@ class MultipartSink:
         """Delete exactly one object version of the key."""
         self._s3.delete_object(Bucket=self.bucket, Key=self.key, VersionId=version_id)
 
+    def _abort_until_gone(self, aborted=False):
+        """Abort until ListParts answers NoSuchUpload, at most ABORT_SWEEP_ATTEMPTS aborts, waiting
+        only while the upload is still listed. ``aborted``: the caller has just aborted, so the sweep
+        checks first. Returns True when the upload is gone. Never raises (logged; the
+        prepared-downloads lifecycle rule is the backstop)."""
+        for attempt in range(ABORT_SWEEP_ATTEMPTS):
+            if attempt or not aborted:
+                if attempt:
+                    self._sleep(ABORT_SWEEP_WAIT_SECONDS)
+                try:
+                    self._s3.abort_multipart_upload(Bucket=self.bucket, Key=self.key,
+                                                    UploadId=self.upload_id)
+                except ClientError as e:
+                    if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                        return True
+                    self._warn(f"Could not abort the multipart upload: {e}")
+                    return False
+                except Exception as e:
+                    self._warn(f"Could not abort the multipart upload: {e!r}")
+                    return False
+            try:
+                self._s3.list_parts(Bucket=self.bucket, Key=self.key, UploadId=self.upload_id,
+                                    MaxParts=1)
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                    return True
+                self._warn(f"Could not check that the multipart upload is gone: {e}")
+                return False
+            except Exception as e:
+                self._warn(f"Could not check that the multipart upload is gone: {e!r}")
+                return False
+        self._warn(f"The multipart upload is still listed after {ABORT_SWEEP_ATTEMPTS} aborts; a part "
+                   f"still in flight aborts it again when it ends")
+        return False
+
     def abort(self):
-        """Abort the upload (idempotent, never raises)."""
-        if self._done:
-            return
-        self._done = True
+        """Abort the upload so that no part stays (idempotent, never raises): cancel the queued
+        parts, abort, wait up to ``in_flight_wait_seconds`` for the parts in flight, then abort until
+        the upload is gone. A completed upload is left alone (its archive is the job's decision)."""
+        with self._lock:
+            if self._done:
+                return
+            self._done = True
+            self._aborted = True
         try:
             self._pool.shutdown(wait=False, cancel_futures=True)
         except Exception:  # nosec B110 - abort is best-effort; the lifecycle rule is the backstop
             pass
+        aborted = False
         try:
             self._s3.abort_multipart_upload(Bucket=self.bucket, Key=self.key, UploadId=self.upload_id)
+            aborted = True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                aborted = True
+            else:
+                self._warn(f"Could not abort the multipart upload: {e}")
         except Exception as e:  # nosec B110 - abort is best-effort; the lifecycle rule is the backstop
-            if self._logger:
-                self._logger.warning(f"Could not abort the multipart upload: {e}")
+            self._warn(f"Could not abort the multipart upload: {e!r}")
+        deadline = time.monotonic() + max(0.0, float(self._in_flight_wait))
+        with self._lock:
+            while self._in_flight > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._idle.wait(remaining)
+        self._abort_until_gone(aborted=aborted)

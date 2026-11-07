@@ -187,6 +187,11 @@ class FakeMultipart:
     def abort_multipart_upload(self, Bucket, Key, UploadId):
         self.aborted = True
 
+    def list_parts(self, Bucket, Key, UploadId, **_):
+        if self.aborted:
+            raise ClientError({"Error": {"Code": "NoSuchUpload"}}, "ListParts")
+        return {"Parts": []}
+
 
 class TestSink:
     @pytest.mark.parametrize("total,mib", [(0, 16), (GIB, 16), (TIB, 111), (5 * TIB, 552)])

@@ -174,6 +174,8 @@ export function buildZipDownloadServiceFunction(
                 "s3:DeleteObject",
                 "s3:DeleteObjectVersion",
                 "s3:AbortMultipartUpload",
+                // ListParts confirms an aborted upload is gone (#1125 D16, abort_until_gone).
+                "s3:ListMultipartUploadParts",
             ],
             resources: [preparedDownloadsObjectArn(storageResources)],
         })
@@ -252,6 +254,8 @@ export function buildZipDownloadCallbackFunction(
                 "s3:AbortMultipartUpload",
                 "s3:DeleteObject",
                 "s3:DeleteObjectVersion",
+                // ListParts confirms an aborted upload is gone (#1125 D16, abort_until_gone).
+                "s3:ListMultipartUploadParts",
             ],
             resources: [preparedDownloadsObjectArn(storageResources)],
         })
