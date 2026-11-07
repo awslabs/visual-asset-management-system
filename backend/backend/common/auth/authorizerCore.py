@@ -65,8 +65,17 @@ class TokenVerificationUnavailableError(Exception):
     """
 
 
+class ApiKeyLookupUnavailableError(Exception):
+    """The API key table could not be read and no cached record exists for the key.
+
+    Kept distinct from a "not found" result (None) so a DynamoDB outage is answered with a
+    403 Deny rather than the 401 an unknown key gets (issue #1212).
+    """
+
+
 def _denied(reason: str, failure: str) -> dict:
     return {"authorized": False, "context": None, "reason": reason, "failure": failure}
+
 
 # Environment Variables - Retrieved at module load time
 AWS_REGION = os.environ.get('AWS_REGION')
@@ -174,13 +183,6 @@ def _cache_store(cache: OrderedDict, key: str, value: dict, max_entries: int) ->
     while len(cache) >= max_entries:
         cache.popitem(last=False)
     cache[key] = value
-
-class ApiKeyLookupUnavailableError(Exception):
-    """The API key table could not be read and no cached record exists for the key.
-
-    Kept distinct from a "not found" result (None) so a DynamoDB outage is answered with a
-    403 Deny rather than the 401 an unknown key gets (issue #1212).
-    """
 
 
 def _get_api_key_table():
