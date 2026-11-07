@@ -260,3 +260,15 @@ class TestCancelDelete:
             result = _invoke(cli_runner, "delete", *SCOPE, "-r", "r1", "--confirm")
             assert result.exit_code == 0, result.output
             assert "Zip download deleted" in result.output
+
+
+class TestProgressText:
+    def test_bytes_show_while_the_first_file_still_streams(self):
+        """#1125 D11: the container reports bytes inside a member, so a one-file job shows bytes done
+        before its file is finished."""
+        from vamscli.utils.zip_downloads import progress_text
+        text = progress_text({"status": "RUNNING", "progress": {
+            "filesDone": 0, "filesTotal": 1, "bytesDone": 512 * 1024 * 1024,
+            "bytesTotal": 1024 * 1024 * 1024 * 1024}})
+        assert text.startswith("RUNNING, 0/1 files, ")
+        assert "512" in text and " of " in text

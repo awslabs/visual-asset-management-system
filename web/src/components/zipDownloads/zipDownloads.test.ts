@@ -187,6 +187,17 @@ describe("display helpers", () => {
         expect(progressPercent(job("1", "RUNNING", { progress: {} }))).toBeNull();
     });
 
+    it("moves while the first, only file still streams (#1125 D11)", () => {
+        // The container now reports bytes inside a member, before any file is done.
+        expect(
+            progressPercent(
+                job("1", "RUNNING", {
+                    progress: { filesDone: 0, filesTotal: 1, bytesDone: 412, bytesTotal: 1000 },
+                })
+            )
+        ).toBe(41);
+    });
+
     it("formats sizes and expiry", () => {
         expect(formatBytes(undefined)).toBe("-");
         expect(formatBytes(0)).toBe("0 B");

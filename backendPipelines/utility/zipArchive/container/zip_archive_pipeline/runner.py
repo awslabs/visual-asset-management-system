@@ -48,6 +48,7 @@ CONTENT_TYPES = {"zip": "application/zip", "tar": "application/x-tar", "tar.gz":
 EXTENSIONS = {"zip": ".zip", "tar": ".tar", "tar.gz": ".tar.gz"}
 PROGRESS_EVERY_BYTES = 64 * 1024 * 1024
 PROGRESS_EVERY_FILES = 100
+PROGRESS_EVERY_SECONDS = 30
 HEARTBEAT_SECONDS = 300
 _NAME_ALLOWED = re.compile(r"[^A-Za-z0-9 ._()\-]")
 # The largest object Amazon S3 stores (CompleteMultipartUpload refuses a larger one).
@@ -123,7 +124,8 @@ def safe_output_name(name, archive_format):
     return name[:200 - len(extension)] + extension
 
 
-def write_archive(clients, members, empty_dirs, sink, archive_format, compression, on_progress=None):
+def write_archive(clients, members, empty_dirs, sink, archive_format, compression, on_progress=None,
+                  clock=time.monotonic):
     """Stream every member into ``sink``. Returns (archive size, files, bytes)."""
     if archive_format == "zip":
         writer = ZipStreamWriter(sink, compression=compression)
@@ -132,24 +134,62 @@ def write_archive(clients, members, empty_dirs, sink, archive_format, compressio
     else:
         raise ArchiveFailure(f"Unsupported archive format {archive_format}")
     reader = PrefetchReader(clients.for_bucket, members)
+    progress = ProgressReporter(on_progress, clock)
     files_done = bytes_done = 0
-    last_bytes = last_files = 0
     try:
         for rel in empty_dirs:
             writer.add_directory(rel.lstrip("/"))
         for index, member in enumerate(members):
-            writer.add_file(member["relativePath"].lstrip("/"), reader.chunks(index), member["size"],
-                            member.get("mtime") or 0)
+            writer.add_file(member["relativePath"].lstrip("/"),
+                            progress.track(reader.chunks(index), files_done, bytes_done),
+                            member["size"], member.get("mtime") or 0)
             files_done += 1
             bytes_done += int(member["size"])
-            if on_progress and (bytes_done - last_bytes >= PROGRESS_EVERY_BYTES
-                                or files_done - last_files >= PROGRESS_EVERY_FILES):
-                on_progress(files_done, bytes_done)
-                last_bytes, last_files = bytes_done, files_done
+            progress.member_done(files_done, bytes_done)
         size = writer.close()
     finally:
         reader.close()
     return size, files_done, bytes_done
+
+
+class ProgressReporter:
+    """Progress reports while the archive streams: after every PROGRESS_EVERY_FILES members, and
+    every PROGRESS_EVERY_BYTES bytes or PROGRESS_EVERY_SECONDS seconds, whichever comes first, counted
+    INSIDE a member as well as across members. A large member therefore moves bytesDone while it
+    streams (a 1 TiB member reported 0% for its whole 89 minutes before, #1125 D11). filesDone counts
+    finished members only. The status writer throttles the row writes further (StatusWriter)."""
+
+    def __init__(self, on_progress, clock=time.monotonic):
+        self._on_progress = on_progress
+        self._clock = clock
+        self._last_bytes = 0
+        self._last_files = 0
+        self._last_time = clock()
+
+    def _report(self, files, size):
+        self._on_progress(files, size)
+        self._last_bytes, self._last_files, self._last_time = size, files, self._clock()
+
+    def _due_by_bytes_or_time(self, size):
+        return (size - self._last_bytes >= PROGRESS_EVERY_BYTES
+                or self._clock() - self._last_time >= PROGRESS_EVERY_SECONDS)
+
+    def track(self, chunks, files_done, bytes_before):
+        """Yield a member's chunks, reporting the bytes streamed so far within it."""
+        if not self._on_progress:
+            yield from chunks
+            return
+        streamed = bytes_before
+        for chunk in chunks:
+            yield chunk
+            streamed += len(chunk)
+            if self._due_by_bytes_or_time(streamed):
+                self._report(files_done, streamed)
+
+    def member_done(self, files_done, bytes_done):
+        if self._on_progress and (files_done - self._last_files >= PROGRESS_EVERY_FILES
+                                  or self._due_by_bytes_or_time(bytes_done)):
+            self._report(files_done, bytes_done)
 
 
 class Heartbeat:
