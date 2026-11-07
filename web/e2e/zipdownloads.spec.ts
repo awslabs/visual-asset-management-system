@@ -179,10 +179,12 @@ test.describe("Download as Zip", () => {
             ).toBeVisible({
                 timeout: 45_000,
             });
-            // Rows or the empty state: both are valid in any environment.
+            // Rows or the empty state: both are valid in any environment. The empty state is
+            // rendered inside a table row, so with no jobs both sides match; .first() keeps the
+            // locator strict-mode safe (D15).
             const rows = page.locator("table tbody tr");
             const empty = page.getByText("No zip downloads");
-            await expect(rows.first().or(empty)).toBeVisible({ timeout: 45_000 });
+            await expect(rows.first().or(empty).first()).toBeVisible({ timeout: 45_000 });
             await expect(
                 page.getByRole("link", { name: "My zip downloads" }).first()
             ).toBeVisible();
@@ -251,6 +253,7 @@ test.describe("Download as Zip", () => {
                 .first()
                 .or(page.getByText("No zip downloads"))
                 .or(page.getByText("Your role does not allow listing zip downloads."))
+                .first() // the empty state sits inside a table row (D15)
         ).toBeVisible({ timeout: 45_000 });
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
