@@ -1120,6 +1120,15 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
         logger.exception(f"Error updating S3 metadata: {e}")
         return False
 
+def is_init_marker(object_key: str) -> bool:
+    """
+    Whether the key is an import marker: an object named exactly `init`, or a folder
+    marker named `init/`, at any depth. Matching is case-sensitive.
+    """
+    return (object_key in ('init', 'init/')
+            or object_key.endswith('/init')
+            or object_key.endswith('/init/'))
+
 def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool) -> bool:
     """
     Delete S3 object and all its versions if versioning is enabled
@@ -1134,26 +1143,26 @@ def delete_s3_object(bucket_name: str, object_key: str, versioning_enabled: bool
     """
     try:
         if versioning_enabled:
-            # List all versions of the object
-            versions = s3_client.list_object_versions(
-                Bucket=bucket_name,
-                Prefix=object_key
-            )
-            
-            # Delete all versions
-            for version in versions.get('Versions', []):
+            # The listing for Prefix=object_key also returns longer keys (`init.txt`, `init/...`).
+            # Keys come back in ascending order and the exact key sorts first, so the object's own
+            # versions and delete markers end at the first entry for another key. All of them are
+            # collected before any is deleted, so the continuation markers stay valid.
+            own_version_ids = []
+            list_kwargs = {'Bucket': bucket_name, 'Prefix': object_key}
+            while True:
+                page = s3_client.list_object_versions(**list_kwargs)
+                entries = (page.get('Versions') or []) + (page.get('DeleteMarkers') or [])
+                own_version_ids.extend(e['VersionId'] for e in entries if e.get('Key') == object_key)
+                if any(e.get('Key') != object_key for e in entries) or page.get('IsTruncated') is not True:
+                    break
+                list_kwargs['KeyMarker'] = page.get('NextKeyMarker')
+                list_kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+
+            for version_id in own_version_ids:
                 s3_client.delete_object(
                     Bucket=bucket_name,
                     Key=object_key,
-                    VersionId=version['VersionId']
-                )
-                
-            # Delete any delete markers
-            for marker in versions.get('DeleteMarkers', []):
-                s3_client.delete_object(
-                    Bucket=bucket_name,
-                    Key=object_key,
-                    VersionId=marker['VersionId']
+                    VersionId=version_id
                 )
         else:
             # Delete the object
@@ -1805,8 +1814,8 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
-        # 3. Check if the object key ends with "init" - If so delete and skip indexing
-        if object_key.endswith('init') or object_key.endswith('init/'):
+        # 3. Check if the object is an "init" import marker - If so delete and skip indexing
+        if is_init_marker(object_key):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
             
@@ -2180,8 +2189,8 @@ def lambda_handler_deleted(event, context):
                 raw_object_key = record['s3']['object']['key']
                 object_key = decode_s3_event_key(raw_object_key)
 
-                # Skip init files entirely (both processing and indexing)
-                if object_key.endswith('init') or object_key.endswith('init/'):
+                # Skip init import markers entirely (both processing and indexing)
+                if is_init_marker(object_key):
                     logger.info(f"Skipping init file: {object_key}")
                     continue
 
