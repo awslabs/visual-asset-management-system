@@ -17985,7 +17985,11 @@ components:
                     description: "`internalVersion` of that schema when the exception was granted. An evaluation against another schema name or a newer version supersedes the exception."
                 assetName:
                     type: string
-                    description: "Display name of the asset. Present on the database overview and the quarantine listing."
+                    description: "Display name of the asset, kept on the compliance record. The asset-state read returns it when the record has one; the database overview and the quarantine listing always return it (empty for a record written before names were kept)."
+                registeredAt:
+                    type: string
+                    format: date-time
+                    description: "When an asset change or an evaluation first recorded the asset under its database's binding. Not every record has it (a record a binding wrote has none). Informational: clients should not depend on it."
             required:
                 - databaseId
                 - assetId

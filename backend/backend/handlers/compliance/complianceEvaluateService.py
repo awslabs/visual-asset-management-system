@@ -835,7 +835,9 @@ def get_compliance_state(event, database_id, asset_id):
     if archived.is_archived(database_id, asset_id):
         item = dict(item, complianceState=engine.STATE_ARCHIVED,
                     recordedComplianceState=item["complianceState"])
-    return success(body=failure_access.state_record_for_caller(_execution_reads(), item))
+    # Without the attributes the listings keep for their name sort and text filter (D163).
+    return success(body=failure_access.state_record_for_caller(
+        _execution_reads(), listing.state_record_answer(item)))
 
 
 # Filters of the database overview (GET /compliance/state/{databaseId}).
@@ -1124,10 +1126,9 @@ def get_database_compliance_overview(event, database_id, query_params):
         rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
     for row in rows:
         row.setdefault("assetName", "")
-        row.pop("assetNameSort", None)
-        row.pop("assetSearchText", None)
     reads = _execution_reads()
-    rows = [failure_access.state_record_for_caller(reads, row) for row in rows]
+    rows = [failure_access.state_record_for_caller(reads, listing.state_record_answer(row))
+            for row in rows]
 
     if readable_summary is not None:
         summary, total = readable_summary[0], readable_summary[1]

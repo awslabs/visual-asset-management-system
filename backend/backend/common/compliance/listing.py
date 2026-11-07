@@ -25,6 +25,8 @@ Text filters match `assetSearchText` (state rows) or `searchText` (audit entries
 copy of the fields a person searches by, written with the row (`asset_name_attributes`,
 `audit_search_text`). The `assetNameSort` attribute is the key of the asset-state table's
 `DatabaseAssetNameIndex` (databaseId, assetNameSort), which lists a database's assets by name.
+Both state-row attributes serve the listings alone: every answer that returns asset-state records
+builds them with `state_record_answer`, which leaves them out (PRIVATE_STATE_ATTRIBUTES).
 """
 
 import base64
@@ -72,6 +74,17 @@ def once_per_key(decide: Callable[[Hashable], Any]) -> Callable[[Hashable], bool
             answers[key] = bool(decide(key))
         return answers[key]
     return decided
+
+
+# The asset-state attributes kept for the listings only: the name index's sort key and what the
+# `text` filter matches (`asset_name_attributes`). No API answer returns them (D163).
+PRIVATE_STATE_ATTRIBUTES = ("assetNameSort", "assetSearchText")
+
+
+def state_record_answer(record: Dict[str, Any]) -> Dict[str, Any]:
+    """An asset-state record as an API answer returns it: a copy without the attributes kept for
+    the listings (PRIVATE_STATE_ATTRIBUTES)."""
+    return {name: value for name, value in record.items() if name not in PRIVATE_STATE_ATTRIBUTES}
 
 
 def asset_name_attributes(asset_id: str, asset_name: Optional[str]) -> Dict[str, str]:

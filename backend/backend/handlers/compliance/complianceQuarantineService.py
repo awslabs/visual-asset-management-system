@@ -335,17 +335,17 @@ def list_quarantined(event, query_params):
 
     for row in rows:
         row.setdefault("assetName", "")
-        row.pop("assetNameSort", None)
-        row.pop("assetSearchText", None)
         # The caller's allowed actions on the row, computed server-side: releasing and granting an
         # exception are both a POST on the quarantined evaluation object of the row's database
         # (its stored id, for an archived asset).
         act = archived.decide(row.get("databaseId"), row.get("assetId"), may_post, listing=True)
         row["permissions"] = {"release": act, "exception": act}
-    # Each row's execution failure reasons, as far as the caller may read those executions.
+    # Each row's execution failure reasons, as far as the caller may read those executions, and
+    # none of the attributes the listings keep for their name sort and text filter (D163).
     reads = failure_access.new_scope(casbin_enforcer)
-    result = {"quarantinedAssets": [failure_access.state_record_for_caller(reads, row)
-                                    for row in rows]}
+    result = {"quarantinedAssets": [
+        failure_access.state_record_for_caller(reads, listing.state_record_answer(row))
+        for row in rows]}
     if next_key:
         result["NextToken"] = listing.encode_token(next_key)
     return success(body=result)

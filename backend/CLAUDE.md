@@ -53,7 +53,11 @@ backend/
 │   │   │                                           #   once per database id, never once per row),
 │   │   │                                           #   count_items() (Select=COUNT), query_ids() (the
 │   │   │                                           #   same reads, returning the ids), name attributes,
-│   │   │                                           #   asset_text_filter() (no key attr in a filter)
+│   │   │                                           #   asset_text_filter() (no key attr in a filter),
+│   │   │                                           #   state_record_answer(): EVERY answer returning
+│   │   │                                           #   asset-state records drops the listing-only
+│   │   │                                           #   PRIVATE_STATE_ATTRIBUTES (assetNameSort,
+│   │   │                                           #   assetSearchText) through it (D163)
 │   │   ├── compliance/assetAccess.py               # THE asset rule for compliance records, live
 │   │   │                                           #   and archived (every compliance read, action
 │   │   │                                           #   and sweep uses it): the compliance object,
