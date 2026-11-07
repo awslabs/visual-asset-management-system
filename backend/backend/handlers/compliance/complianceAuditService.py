@@ -36,7 +36,7 @@ from common.compliance import databaseRetirement, knownDatabase, listing
 from common.compliance.assetAccess import (
     ACCESS_ARCHIVED_HIDDEN, ACCESS_VISIBLE, AssetAccess, flush_denials,
 )
-from common.compliance.auditRecord import AUDIT_LIST_PARTITION
+from common.compliance.auditRecord import AUDIT_LIST_PARTITION, PRIVATE_AUDIT_ATTRIBUTES
 from common.compliance.cascadeAuditSummary import (
     LIVE_HIDDEN, LIVE_SHOWN, LIVE_UNAUTHORIZED, details_for_reader, live_node_keys,
 )
@@ -286,6 +286,13 @@ def _index_key(decoded, key_attributes):
     return {name: decoded[name] for name in key_attributes}
 
 
+def entry_answer(entry):
+    """An audit row as the listings return it: a copy without the attributes kept for the listing
+    only (`auditRecord.PRIVATE_AUDIT_ATTRIBUTES`: the date index's partition and what the `text`
+    filter matches), which stay stored."""
+    return {name: value for name, value in entry.items() if name not in PRIVATE_AUDIT_ATTRIBUTES}
+
+
 def _timestamp_condition(key_condition, start_date, end_date):
     """Narrow a GSI key condition to a timestamp window when bounds are supplied."""
     if start_date and end_date:
@@ -361,7 +368,8 @@ def get_asset_audit(event, database_id, asset_id, params):
     readable = _descendant_readability(evaluation_read, archived)
     _expect_descendants(archived, items)
     live = _live_descendant_outcome(casbin_enforcer, archived, evaluation_read)
-    result = {"entries": [details_for_reader(entry, visible, readable, live) for entry in items]}
+    result = {"entries": [entry_answer(details_for_reader(entry, visible, readable, live))
+                          for entry in items]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
     return success(body=result)
@@ -529,9 +537,8 @@ def query_audit(event, params):
     descendants = _descendant_readability(readable, archived)
     _expect_descendants(archived, entries)
     live = _live_descendant_outcome(casbin_enforcer, archived, readable)
-    entries = [details_for_reader(entry, visible, descendants, live) for entry in entries]
-    for entry in entries:
-        entry.pop("searchText", None)
+    entries = [entry_answer(details_for_reader(entry, visible, descendants, live))
+               for entry in entries]
     result = {"entries": entries}
     if next_key:
         result["NextToken"] = _encode_token(

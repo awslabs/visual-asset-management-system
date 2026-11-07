@@ -26,6 +26,9 @@ from typing import Any, Dict, Optional
 # The value every audit row carries in `allListPartition`; the audit service queries
 # AuditByDateGSI on it.
 AUDIT_LIST_PARTITION = "audit"
+# The attributes an audit row keeps for its listing only (the AuditByDateGSI partition and what the
+# `text` filter matches): stored, and never returned by the audit listing.
+PRIVATE_AUDIT_ATTRIBUTES = ("allListPartition", "searchText")
 
 
 def audit_search_text(asset_name: Optional[str], asset_id: Optional[str], actor: Optional[str]) -> str:

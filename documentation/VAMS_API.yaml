@@ -18306,6 +18306,9 @@ components:
                 entryId:
                     type: string
                     format: uuid
+                "databaseId:assetId":
+                    type: string
+                    description: "`<databaseId>:<assetId>` of the entry, the key the per-asset history reads."
                 timestamp:
                     type: string
                     format: date-time
