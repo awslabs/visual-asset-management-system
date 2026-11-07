@@ -86,6 +86,10 @@ def handle_callback(payload) -> dict:
         if payload.get("executionStatus") != "SUCCEEDED" and row.get("status") != zd.STATUS_SUCCEEDED:
             prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
+        # A job that ended without an archive (the container's FAILED, the user's cancel) keeps no
+        # working objects: this also removes a resolved manifest the container wrote after a cancel.
+        if row.get("status") in (zd.STATUS_FAILED, zd.STATUS_CANCELLED):
+            zd.delete_working_objects(s3, aux_bucket_name, row, logger)
         return {"status": "unchanged", "jobStatus": row.get("status", "")}
     logger.info(f"Zip download {request_id}: run {execution_id} ended "
                 f"{payload.get('executionStatus')}; job {'set to ' + status if changed else 'unchanged'}")

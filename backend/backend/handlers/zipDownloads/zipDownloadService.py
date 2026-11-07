@@ -614,6 +614,7 @@ def _reconcile(row, run_check_budget=None):
         if age > zd.LAUNCH_GRACE_SECONDS:
             if zd.finalize_row(zip_table, row["userId"], row["requestId"], zd.STATUS_FAILED,
                                error_message=zd.MSG_LAUNCH_FAILED):
+                zd.delete_working_objects(s3, aux_bucket_name, row, logger)
                 row = dict(row, status=zd.STATUS_FAILED, errorMessage=zd.MSG_LAUNCH_FAILED)
         return row
     main = _main_row(execution_id)
@@ -900,10 +901,8 @@ def delete_job(event, database_id, asset_id, request_id):
             _abort_execution(row.get("workflowExecutionId"))
             # An upload the container created since the first abort.
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
-            try:
-                s3.delete_object(Bucket=aux_bucket_name, Key=row["manifestKey"])
-            except ClientError as e:
-                logger.warning(f"Could not delete a cancelled zip download's manifest: {e}")
+            # cancel_job removed the working objects; again, for any the container wrote since.
+            zd.delete_working_objects(s3, aux_bucket_name, row, logger)
             log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
                                                      "requestId": request_id})
             return success(body={"message": "Zip download cancelled", "action": "cancelled"})

@@ -245,8 +245,23 @@ export function buildZipDownloadCallbackFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["s3:GetObject", "s3:AbortMultipartUpload"],
+            // Delete* removes an ended job's working objects (request and resolved manifests,
+            // common/zipDownloads.delete_working_objects); the handler confines it to those two keys.
+            actions: [
+                "s3:GetObject",
+                "s3:AbortMultipartUpload",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion",
+            ],
             resources: [preparedDownloadsObjectArn(storageResources)],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:ListBucketVersions"],
+            resources: [storageResources.s3.assetAuxiliaryBucket.bucketArn],
+            conditions: { StringLike: { "s3:prefix": [`${PREPARED_DOWNLOADS_PREFIX}*`] } },
         })
     );
     fun.addToRolePolicy(

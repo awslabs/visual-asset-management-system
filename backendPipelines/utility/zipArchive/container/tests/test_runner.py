@@ -115,6 +115,17 @@ class FakeS3:
         return {"Uploads": [{"Key": k, "UploadId": "u1"} for (b, k) in self.uploads
                             if b == Bucket and k.startswith(Prefix)], "IsTruncated": False}
 
+    def delete_objects(self, Bucket, Delete):
+        # The backend's working-object cleanup (common/zipDownloads.delete_working_objects).
+        # Recorded apart from ``deleted`` (the container's own archive deletes the races pin).
+        self.batch_deleted = getattr(self, "batch_deleted", [])
+        for obj in Delete["Objects"]:
+            self.batch_deleted.append((obj["Key"], obj.get("VersionId")))
+            versions = self.objects.get((Bucket, obj["Key"])) or []
+            self.objects[(Bucket, obj["Key"])] = [v for v in versions
+                                                  if v["VersionId"] != obj.get("VersionId")]
+        return {}
+
     def delete_object(self, Bucket, Key, VersionId=None):
         self.deleted = getattr(self, "deleted", []) + [(Key, VersionId)]
         versions = self.objects.get((Bucket, Key)) or []

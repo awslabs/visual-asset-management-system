@@ -51,6 +51,35 @@ class TestCallback:
         assert _row(env)["cancelledBy"] == "execution"
         assert env.s3.aborted == [(h.AUX, env.prefix + "x.zip", "u1")]
 
+    @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT", "SUCCEEDED"])
+    def test_a_job_ended_without_archive_keeps_no_working_objects(self, env, status):
+        """#1125 D13: an abort from the executions views (or any end without an archive) deletes the
+        request and resolved manifests at once."""
+        manifest_key, resolved_key = env.zd.working_object_keys(_row(env))
+        env.s3.add(manifest_key, bucket=h.AUX)
+        env.s3.add(resolved_key, bucket=h.AUX)
+        env.cb.lambda_handler(_payload(status), None)
+        assert _row(env)["status"] == "FAILED"
+        assert (h.AUX, manifest_key) not in env.s3.objects
+        assert (h.AUX, resolved_key) not in env.s3.objects
+
+    @pytest.mark.parametrize("ended", ["FAILED", "CANCELLED"])
+    def test_an_already_ended_job_loses_working_objects_written_after_it_ended(self, env, ended):
+        # The container wrote its resolved manifest after the user's cancel (or wrote FAILED itself).
+        _row(env)["status"] = ended
+        manifest_key, resolved_key = env.zd.working_object_keys(_row(env))
+        env.s3.add(resolved_key, bucket=h.AUX)
+        assert env.cb.lambda_handler(_payload("ABORTED"), None)["status"] == "unchanged"
+        assert (h.AUX, resolved_key) not in env.s3.objects
+
+    def test_a_succeeded_job_keeps_its_objects(self, env):
+        h.land_archive(env, _row(env), size=77)
+        manifest_key, resolved_key = env.zd.working_object_keys(_row(env))
+        env.s3.add(resolved_key, bucket=h.AUX)
+        env.cb.lambda_handler(_payload("SUCCEEDED"), None)
+        assert _row(env)["status"] == "SUCCEEDED"
+        assert (h.AUX, resolved_key) in env.s3.objects
+
     def test_replay_is_a_no_op(self, env):
         env.cb.lambda_handler(_payload("ABORTED"), None)
         before = dict(_row(env))

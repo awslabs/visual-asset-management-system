@@ -349,6 +349,8 @@ def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_statu
     status, fields = decision
     changed = finalize_row(table, row["userId"], row["requestId"], status,
                            expected_execution_id=row.get("workflowExecutionId") or "", **fields)
+    if changed and status != STATUS_SUCCEEDED:
+        delete_working_objects(s3_client, bucket, row, logger)
     return status, changed
 
 
@@ -373,6 +375,9 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
                      expected_execution_id=row.get("workflowExecutionId") or "")
         return CANCEL_LANDED
     if finalize_row(table, row["userId"], row["requestId"], STATUS_CANCELLED, cancelled_by=cancelled_by):
+        # A resolved manifest the container writes after this is removed by the terminal callback of
+        # the aborted run (zipDownloadCallback), which deletes them again for an ended job.
+        delete_working_objects(s3_client, bucket, row, logger)
         return CANCEL_CANCELLED
     return CANCEL_ENDED
 
@@ -502,6 +507,44 @@ def delete_prefix(s3_client, bucket: str, prefix: str) -> int:
             break
         kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
         kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
+    return deleted
+
+
+def working_object_keys(row: dict) -> Tuple[str, str]:
+    """The job's working objects: the request manifest and the resolved manifest. Neither is needed
+    once the job ended without an archive."""
+    args = (row["databaseId"], row["assetId"], row["userId"], row["requestId"])
+    return manifest_key(*args), resolved_manifest_key(*args)
+
+
+def delete_working_objects(s3_client, bucket: str, row: dict, logger=None) -> int:
+    """Delete every version (and delete marker) of a job's working objects right away, rather than
+    leaving them to the prepared-downloads lifecycle rule. For a job that ended without an archive
+    (cancelled, failed, refused); idempotent. Returns the count deleted. Best-effort: a failure is
+    logged and the lifecycle rule is the backstop."""
+    keys = working_object_keys(row)
+    prefix = request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
+    _require_job_prefix(prefix)
+    deleted = 0
+    try:
+        for key in keys:
+            kwargs = {"Bucket": bucket, "Prefix": key}
+            while True:
+                response = s3_client.list_object_versions(**kwargs)
+                targets = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                           for v in (response.get("Versions", []) or [])
+                           + (response.get("DeleteMarkers", []) or [])
+                           if v.get("Key") == key]
+                if targets:
+                    s3_client.delete_objects(Bucket=bucket, Delete={"Objects": targets, "Quiet": True})
+                    deleted += len(targets)
+                if not response.get("IsTruncated"):
+                    break
+                kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
+                kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
+    except ClientError as e:
+        if logger:
+            logger.warning(f"Could not delete a zip download's working objects: {e}")
     return deleted
 
 

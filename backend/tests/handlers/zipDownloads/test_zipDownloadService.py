@@ -467,6 +467,27 @@ class TestCancelDelete:
             "method": "DELETE", "path": "/workflows/executions/exec-1"}
         assert env.s3.aborted == [(h.AUX, row["archiveKey"], "u1")]
 
+    def test_cancel_removes_the_working_objects_at_once(self, env):
+        """#1125 D13: the cancel deletes the request manifest AND the resolved manifest the container
+        wrote, every version, instead of leaving them to the 7-day lifecycle rule."""
+        request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        row = next(iter(env.zip.items.values()))
+        manifest_key, resolved_key = env.zd.working_object_keys(row)
+        env.s3.add(resolved_key, bucket=h.AUX, version="r1")
+        env.s3.add(resolved_key, bucket=h.AUX, version="r2")
+        assert (h.AUX, manifest_key) in env.s3.objects
+        response = _job_route(env, "DELETE", request_id)
+        assert h.body_of(response)["action"] == "cancelled"
+        assert (h.AUX, manifest_key) not in env.s3.objects
+        assert (h.AUX, resolved_key) not in env.s3.objects
+
+    def test_working_object_cleanup_touches_only_the_two_keys(self, env):
+        h.body_of(_create(env, FILE_SELECTION))
+        row = next(iter(env.zip.items.values()))
+        env.s3.add(row["archiveKey"], bucket=h.AUX)
+        env.zd.delete_working_objects(env.s3, h.AUX, row)
+        assert [k for (b, k) in env.s3.objects if b == h.AUX] == [row["archiveKey"]]
+
     def test_delete_finished_job_removes_objects_and_row(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         row = next(iter(env.zip.items.values()))
