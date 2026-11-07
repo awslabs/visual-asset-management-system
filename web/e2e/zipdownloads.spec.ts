@@ -33,6 +33,20 @@ async function zipEnabled(page: Page): Promise<boolean> {
     return (await featureSwitches(page)).includes(ZIP_SWITCH);
 }
 
+/**
+ * Open a hash route as its own document load, then wait for the app shell. Changing the hash of a
+ * page that is still booting (featureSwitches loads "/" first) lets the app's start-up land on Home
+ * instead (#1125 D1); a fresh load of the deep link is what a user's bookmark or new tab does.
+ */
+async function openDeepLink(page: Page, hashRoute: string): Promise<void> {
+    await page.goto("about:blank");
+    await page.goto(`/#${hashRoute}`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+    await expect(page).toHaveURL(new RegExp(`#${hashRoute.replace(/\//g, "\\/")}`), {
+        timeout: 45_000,
+    });
+}
+
 interface ApiCaller {
     get: (path: string) => Promise<{ status: number; body: any }>;
     post: (path: string, data?: any) => Promise<{ status: number; body: any }>;
@@ -157,7 +171,7 @@ test.describe("Download as Zip", () => {
     }) => {
         const errors = collectPageErrors(page);
         const enabled = await zipEnabled(page);
-        await page.goto("/#/zipdownloads", { waitUntil: "domcontentloaded" });
+        await openDeepLink(page, "/zipdownloads");
 
         if (enabled) {
             await expect(
@@ -363,7 +377,7 @@ test.describe("Download as Zip (second user)", () => {
             expect(ids).not.toContain(job.requestId);
 
             // The page does not show it either.
-            await otherPage.goto("/#/zipdownloads", { waitUntil: "domcontentloaded" });
+            await openDeepLink(otherPage, "/zipdownloads");
             await expect(
                 otherPage
                     .getByRole("heading", { level: 1, name: /My zip downloads/ })
