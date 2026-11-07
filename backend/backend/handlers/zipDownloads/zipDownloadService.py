@@ -62,6 +62,7 @@ from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import region_routing_s3_client, validateUnallowedFileExtensionAndContentType
 from common.validators import validate
+from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
 from customLogging.auditLogging import log_actions
 from customLogging.logger import safeLogger
@@ -158,8 +159,56 @@ class ZipRefusal(VAMSGeneralErrorResponse):
 
 
 class ZipLaunchRefused(Exception):
-    """The execute handler refused the zipArchive launch (a 4xx): no run was started. The message is
-    the refusal's detail, for the service log only."""
+    """The execute handler refused the zipArchive launch with a refusal it only gives before any run
+    starts (see _classify_launch_answer): no run exists. The message is the refusal's detail, for the
+    service log only."""
+
+
+class ZipLaunchRetryable(Exception):
+    """The execute handler refused the launch for a transient reason it only gives before any run
+    starts (a stale deployment it is redeploying, the state machine's execution limit): no run exists,
+    and the same launch can be tried again."""
+
+
+class ZipLaunchMayHaveStarted(Exception):
+    """The launch failed in a way that may come after the run started (a 5xx, a timeout, or a 4xx the
+    execute handler also gives after start_execution, such as a throttle or the item-size refusal).
+    ``retryable`` marks a transient cause (a throttle), answered 503 instead of 500."""
+
+    def __init__(self, detail, retryable=False):
+        super().__init__(detail)
+        self.retryable = retryable
+
+
+# The execute handler's 4xx answers that it only gives BEFORE start_execution, so no run exists for
+# them: its early returns in execute_workflow (fixed texts), the lock conflict, and its structured
+# validation envelopes. Every other 4xx text can also come out of lambda_handler's exception mapping
+# after a run started (a ValidationError, a VAMSGeneralErrorResponse, a throttling ClientError, the
+# item-size refusal), so it is treated as "a run may exist". Pinned to executeWorkflow.py by
+# tests/handlers/zipDownloads/test_zip_launch_answers.py.
+PRE_START_REFUSAL_MESSAGES = frozenset({
+    sp.SYSTEM_EXECUTION_INVALID_MESSAGE,
+    "Workflow is archived and cannot be executed.",
+    "Workflow is disabled and cannot be executed.",
+    "Workflow has no deployed state machine.",
+    "Workflow has no pipelines to execute.",
+    "A referenced pipeline could not be found.",
+    ("Workflow's deployed state machine is out of sync with its record. Update the workflow "
+     "to redeploy its state machine before executing it."),
+    el.LOCK_CONFLICT_MESSAGE,
+    *el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values(),
+})
+PRE_START_REFUSAL_ENVELOPES = ("executionValidationErrors", "templateResolutionErrors")
+# 403 (authorization) and 404 (a missing workflow, asset or input file) are only early returns.
+PRE_START_REFUSAL_STATUSES = frozenset({403, 404})
+# 409: a stale deployment (refused before the start, or Step Functions refused a pruned version).
+PRE_START_RETRYABLE_STATUSES = frozenset({409})
+# start_execution itself refused it: nothing started.
+PRE_START_RETRYABLE_PREFIXES = ("ExecutionLimitExceeded:",)
+# A throttle can hit the record writes after start_execution: a run may exist, but a retry later works.
+MAY_HAVE_STARTED_RETRYABLE_PREFIXES = ("ThrottlingException:",)
+
+LAUNCH_RETRY_DELAY_SECONDS = 1
 
 
 # ---------------------------------------------------------------------------
@@ -490,11 +539,38 @@ def _launch(row, request_entries, pinned):
     # / {"templateResolutionErrors": ...}. Kept whole for the service log (D10); never returned.
     detail = message if isinstance(message, str) else json.dumps(message, default=str)
     detail = f"zipArchive workflow launch answered {status_code}: {str(detail)[:2000]}"
-    if isinstance(status_code, int) and 400 <= status_code < 500:
-        # A 4xx means the execute handler refused before the run's first side effect (validation,
-        # authorization, a lock conflict): no run exists for this job.
-        raise ZipLaunchRefused(detail)
-    raise RuntimeError(detail)
+    raise _classify_launch_answer(status_code, message, detail)
+
+
+def _classify_launch_answer(status_code, message, detail):
+    """The exception for an execute handler answer that started no recorded run. Only answers the
+    handler gives before start_execution say "no run exists"; any other 4xx may come after a run
+    started (lambda_handler maps exceptions from the record writes to 4xx too), so it is treated like
+    a 5xx: the job row is kept FAILED, and a run that did start loses against it."""
+    if not isinstance(status_code, int) or not 400 <= status_code < 500:
+        return ZipLaunchMayHaveStarted(detail)
+    text = message if isinstance(message, str) else ""
+    if status_code in PRE_START_RETRYABLE_STATUSES or text.startswith(PRE_START_RETRYABLE_PREFIXES):
+        return ZipLaunchRetryable(detail)
+    if status_code in PRE_START_REFUSAL_STATUSES:
+        return ZipLaunchRefused(detail)
+    if status_code == 400 and (
+            text in PRE_START_REFUSAL_MESSAGES
+            or (isinstance(message, dict) and any(k in message for k in PRE_START_REFUSAL_ENVELOPES))):
+        return ZipLaunchRefused(detail)
+    return ZipLaunchMayHaveStarted(detail, retryable=text.startswith(MAY_HAVE_STARTED_RETRYABLE_PREFIXES))
+
+
+def _launch_retrying_once(row, request_entries, pinned):
+    """_launch, tried a second time only when the first answer said no run exists and the cause is
+    transient (a stale deployment the handler redeploys, the execution limit). Never retried when a
+    run may exist: a repeated launch would start a second run the job row never records (#1205)."""
+    try:
+        return _launch(row, request_entries, pinned)
+    except ZipLaunchRetryable as first:
+        logger.warning(f"Zip download {row['requestId']} launch retried once: {first}")
+        time.sleep(LAUNCH_RETRY_DELAY_SECONDS)
+        return _launch(row, request_entries, pinned)
 
 
 def _abort_execution(execution_id):
@@ -814,24 +890,32 @@ def create_job(event, database_id, asset_id):
                   Body=json.dumps(manifest).encode("utf-8"), ContentType="application/json")
     zip_table.put_item(Item=row, ConditionExpression="attribute_not_exists(requestId)")
     try:
-        execution_id = _launch(row, entries, pinned)
-    except ZipLaunchRefused as refused:
-        # The workflow refused the launch, so no run exists: the job is removed (row and working
-        # objects) instead of being left FAILED, and the caller gets a 400 with a generic reason.
+        execution_id = _launch_retrying_once(row, entries, pinned)
+    except (ZipLaunchRefused, ZipLaunchRetryable) as refused:
+        # The execute handler answered with a refusal it only gives before a run starts, so no run
+        # exists: the job is removed (row and working objects) instead of being left FAILED. A
+        # refusal of the selection answers 400; a transient one that failed its retry answers 503.
         # The refusal itself goes to this log only (D10): it names workflow configuration.
+        retryable = isinstance(refused, ZipLaunchRetryable)
         logger.warning(f"Zip download {request_id} refused at launch: {refused}")
         _discard_unlaunched_job(row)
-        log_actions(event, "zipDownloadRefused", {"databaseId": database_id, "assetId": asset_id,
-                                                  "reason": "launchRefused"})
+        log_actions(event, "zipDownloadRefused", {
+            "databaseId": database_id, "assetId": asset_id,
+            "reason": "launchRetryable" if retryable else "launchRefused"})
+        if retryable:
+            return general_error(status_code=503, body={"message": zd.MSG_LAUNCH_BUSY}, event=event)
         return general_error(status_code=400, body={"message": zd.MSG_LAUNCH_REFUSED}, event=event)
     except Exception as e:
-        # The launch may or may not have started a run (a read timeout, a 5xx), so the row stays,
-        # FAILED with a generic reason: it keeps the job visible to the user and, if a run did
-        # start, the container's writes lose against the terminal row and it stops.
+        # The launch may or may not have started a run (a read timeout, a 5xx, or a 4xx the execute
+        # handler also gives after the start), so the row stays, FAILED with a generic reason: it
+        # keeps the job visible to the user and, if a run did start, the container's writes lose
+        # against the terminal row and it stops. A throttle answers 503 so the caller tries again.
         logger.exception(f"Zip download {request_id} could not be launched: {e}")
         if zd.finalize_row(zip_table, user_id, request_id, zd.STATUS_FAILED,
                            error_message=zd.MSG_LAUNCH_FAILED):
             zd.delete_working_objects(s3, aux_bucket_name, row, logger)
+        if isinstance(e, ZipLaunchMayHaveStarted) and e.retryable:
+            return general_error(status_code=503, body={"message": zd.MSG_LAUNCH_BUSY}, event=event)
         return internal_error(body={"message": zd.MSG_LAUNCH_FAILED}, event=event)
     started = zd.iso(zd.utc_now())
     try:

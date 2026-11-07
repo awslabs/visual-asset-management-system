@@ -4342,7 +4342,8 @@ class APIClient(CustomAPIClientMixin):
                 tier or of a blocked type)
             ZipDownloadLimitError: When the caller already has the maximum number of active jobs
             AssetNotFoundError: When the asset cannot be resolved
-            APIError: When the API call fails, including a launch failure (500)
+            APIError: When the API call fails, including a launch failure (500) or a transient
+                launch condition to try again (503)
         """
         endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
         return self._zip_request('POST', endpoint, "create the zip download",

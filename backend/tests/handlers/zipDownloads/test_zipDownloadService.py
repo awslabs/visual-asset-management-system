@@ -222,10 +222,69 @@ class TestCreate:
     def test_a_refusal_string_is_logged_too(self, env, monkeypatch):
         logger = MagicMock()
         monkeypatch.setattr(env.svc, "logger", logger)
-        env.lam.responses["executeFn"] = (400, {"message": "Workflow is disabled"})
+        env.lam.responses["executeFn"] = (400, {"message": "Workflow is disabled and cannot be executed."})
         response = _create(env, FILE_SELECTION)
         assert response["statusCode"] == 400 and env.zip.items == {}
         assert "Workflow is disabled" in " ".join(str(c.args[0]) for c in logger.warning.call_args_list)
+
+    # Each execute handler answer -> (create status, job row left, launch calls). Only answers the
+    # handler gives before start_execution remove the job; a 4xx that can follow the start keeps it
+    # FAILED; a transient pre-start answer is retried once.
+    @pytest.mark.parametrize("answer, status, row_status, calls", [
+        pytest.param((403, {"message": "Not Authorized"}), 400, None, 1, id="403-refused"),
+        pytest.param((404, {"message": "One or more selected input files do not exist."}), 400, None, 1,
+                     id="404-refused"),
+        pytest.param((400, {"message": "A conflicting execution of this workflow is already running."}),
+                     400, None, 1, id="lock-conflict-refused"),
+        pytest.param((400, {"message": {"templateResolutionErrors": ["x"]}}), 400, None, 1,
+                     id="template-envelope-refused"),
+        pytest.param((409, {"message": "The workflow's state machine could not be brought up to date"}),
+                     503, None, 2, id="409-stale-twice-503-no-row"),
+        pytest.param((400, {"message": "ExecutionLimitExceeded: Reached the maximum state machine "
+                                       "execution limit."}), 503, None, 2, id="execution-limit-503-no-row"),
+        pytest.param((400, {"message": "ThrottlingException: Too many requests within a given period."}),
+                     503, "FAILED", 1, id="throttle-after-start-503-failed-row"),
+        pytest.param((400, {"message": "This execution's recorded inputs are too large to store. Reduce "
+                                       "the number ..."}), 500, "FAILED", 1, id="item-size-after-start-failed-row"),
+        pytest.param((400, {"message": "VAMS General Error"}), 500, "FAILED", 1, id="unknown-400-failed-row"),
+        pytest.param((429, {"message": "Too Many Requests"}), 500, "FAILED", 1, id="other-4xx-failed-row"),
+    ])
+    def test_each_launch_answer_maps_to_its_outcome(self, env, monkeypatch, answer, status, row_status,
+                                                    calls):
+        monkeypatch.setattr(env.svc, "LAUNCH_RETRY_DELAY_SECONDS", 0)
+        env.lam.responses["executeFn"] = answer
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == status
+        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == calls
+        if row_status is None:
+            assert env.zip.items == {}
+            assert not [k for (b, k) in env.s3.objects if b == h.AUX]
+        else:
+            row = next(iter(env.zip.items.values()))
+            assert row["status"] == row_status and row["errorMessage"] == env.zd.MSG_LAUNCH_FAILED
+            assert (h.AUX, row["manifestKey"]) not in env.s3.objects
+        expected = {400: env.zd.MSG_LAUNCH_REFUSED, 503: env.zd.MSG_LAUNCH_BUSY,
+                    500: env.zd.MSG_LAUNCH_FAILED}[status]
+        assert h.body_of(response)["message"].endswith(expected)
+
+    def test_a_stale_deployment_launches_on_the_retry(self, env, monkeypatch):
+        """A 409 means no run started and the handler is redeploying: one retry starts the job."""
+        monkeypatch.setattr(env.svc, "LAUNCH_RETRY_DELAY_SECONDS", 0)
+        env.lam.responses["executeFn"] = [(409, {"message": "stale"}),
+                                          (200, {"message": {"executionId": "exec-2"}})]
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == 200
+        row = next(iter(env.zip.items.values()))
+        assert row["workflowExecutionId"] == "exec-2" and row["status"] == "QUEUED"
+        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == 2
+
+    def test_a_launch_that_may_have_started_is_never_retried(self, env, monkeypatch):
+        monkeypatch.setattr(env.svc, "LAUNCH_RETRY_DELAY_SECONDS", 0)
+        env.lam.responses["executeFn"] = [(400, {"message": "ThrottlingException: Too many requests"}),
+                                          (200, {"message": {"executionId": "exec-2"}})]
+        response = _create(env, FILE_SELECTION)
+        assert response["statusCode"] == 503
+        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == 1
 
     def test_folder_totals_from_prescan(self, env):
         item = h.body_of(_create(env, {"selection": [{"type": "folder", "relativePath": "/textures/"}]}))

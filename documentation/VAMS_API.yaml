@@ -2159,7 +2159,7 @@ paths:
                         - Asset not distributable or archived.
                         - A selected file or folder does not exist, has a blocked extension or media type, or the selection exceeds the file count or total size limit.
                         - A selected file is archived ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.').
-                        - The Zip Archive workflow refused the run ('The archive job could not be started for this selection'); no job is recorded.
+                        - The Zip Archive workflow refused the run before starting it, for example because it is disabled or the selection fails its checks ('The archive job could not be started for this selection'); no job is recorded.
                     content:
                         application/json:
                             schema:
@@ -2189,7 +2189,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "500":
-                    description: "Error processing request, or the archive job could not be started for another reason (the job is recorded as FAILED)."
+                    description: "Error processing request, or the archive job could not be started for another reason ('The archive job could not be started'; a run may exist, so the job is recorded as FAILED)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "The archive job could not be started right now ('The archive job could not be started right now. Try again in a moment.'): a transient condition such as a workflow deployment being brought up to date, the execution limit, or a throttle. Send the request again. When the launch was throttled the job is also recorded as FAILED; otherwise no job is recorded."
                     content:
                         application/json:
                             schema:

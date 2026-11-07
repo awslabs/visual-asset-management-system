@@ -251,7 +251,11 @@ class FakeLambda:
             self.effects[FunctionName](event)
         # The execute handler's success envelope ({"message": ExecuteWorkflowResponseModel}); the
         # execution service's abort and details routes are read for their status code only.
-        status, body = self.responses.get(FunctionName, (200, {"message": {"executionId": "exec-1"}}))
+        answer = self.responses.get(FunctionName, (200, {"message": {"executionId": "exec-1"}}))
+        # A list answers its entries in turn, repeating the last one.
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
+        status, body = answer
         return {"Payload": io.BytesIO(json.dumps({"statusCode": status,
                                                   "body": json.dumps(body)}).encode("utf-8"))}
 

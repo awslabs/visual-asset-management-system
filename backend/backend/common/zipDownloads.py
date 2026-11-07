@@ -98,6 +98,9 @@ MSG_LAUNCH_FAILED = "The archive job could not be started"
 # The zipArchive workflow refused the launch (a 4xx from the execute handler). Generic on purpose: the
 # refusal's own text names workflow configuration, so it goes to the service log only.
 MSG_LAUNCH_REFUSED = "The archive job could not be started for this selection"
+# A transient launch condition (a stale workflow deployment, the state machine's execution limit, a
+# throttle): answered 503. The selection itself is fine.
+MSG_LAUNCH_BUSY = "The archive job could not be started right now. Try again in a moment."
 # The same words as the web's refusal (CreateZipDownloadModal), without naming the file.
 MSG_ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item. Remove it from the "
                              "selection, or restore it first.")
