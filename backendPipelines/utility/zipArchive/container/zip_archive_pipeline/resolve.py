@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from botocore.exceptions import ClientError
 
-from .rules import Refusal, is_archived, is_blocked
+from .rules import ARCHIVED_IN_SELECTION, Refusal, is_archived, is_blocked
 
 
 def relative_path(key, base_key):
@@ -107,6 +107,12 @@ def filter_patterns(members, include_patterns=None, exclude_patterns=None):
     return kept
 
 
+def _is_delete_marker(error):
+    """Whether a HeadObject error answered for a delete marker (x-amz-delete-marker: true)."""
+    headers = (error.response.get("ResponseMetadata") or {}).get("HTTPHeaders") or {}
+    return str(headers.get("x-amz-delete-marker", "")).lower() == "true"
+
+
 def _head(s3_client, member):
     params = {"Bucket": member["bucket"], "Key": member["key"]}
     if member.get("versionId"):
@@ -118,6 +124,9 @@ def _head(s3_client, member):
         if code in ("405", "MethodNotAllowed"):
             raise Refusal(f"{member['relativePath']} is a deleted version")
         if code in ("404", "NoSuchKey", "NotFound", "NoSuchVersion", "400"):
+            # A file archived (or deleted) after the create: its current version is a delete marker.
+            if _is_delete_marker(e):
+                raise Refusal(ARCHIVED_IN_SELECTION)
             raise Refusal(f"{member['relativePath']} was not found")
         raise
 
@@ -128,7 +137,7 @@ def check_members(get_client, members, blocked_extensions, blocked_content_types
     def check(member):
         head = _head(get_client(member["bucket"]), member)
         if is_archived(head):
-            raise Refusal(f"{member['relativePath']} is archived; archived files cannot be included")
+            raise Refusal(ARCHIVED_IN_SELECTION)
         if is_blocked(member["key"], head.get("ContentType", ""), blocked_extensions,
                       blocked_content_types):
             raise Refusal(f"{member['relativePath']} has a file type that cannot be downloaded")

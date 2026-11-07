@@ -38,6 +38,14 @@ class Refusal(Exception):
     """A user-safe reason the whole archive is refused."""
 
 
+# A member that is archived (vams-status, an archive storage class) or whose current version is a
+# delete marker: the same words, without naming the file, as the create's refusal (backend
+# common/zipDownloads.MSG_ARCHIVED_IN_SELECTION), so a file archived between create and run reads
+# the same as one archived before. Pinned by tests/test_runner.py.
+ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item. Remove it from the "
+                         "selection, or restore it first.")
+
+
 def is_blocked(key, content_type, blocked_extensions, blocked_content_types):
     """True when the key's extension or the object's media type is on a blocklist."""
     media_type = (content_type or "").split(";", 1)[0].strip().lower()

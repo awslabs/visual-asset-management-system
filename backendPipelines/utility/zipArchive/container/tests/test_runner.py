@@ -18,7 +18,8 @@ from botocore.exceptions import ClientError
 
 from zip_archive_pipeline import runner
 from zip_archive_pipeline.resolve import expand_selection
-from zip_archive_pipeline.rules import CORE_BLOCKED_CONTENT_TYPES, CORE_BLOCKED_EXTENSIONS, is_blocked
+from zip_archive_pipeline.rules import (ARCHIVED_IN_SELECTION, CORE_BLOCKED_CONTENT_TYPES,
+                                        CORE_BLOCKED_EXTENSIONS, is_blocked)
 from zip_archive_pipeline.status import StatusWriter
 
 pytestmark = pytest.mark.unit
@@ -27,8 +28,12 @@ AUX, ASSETS = "aux", "assets"
 BASE = "xasset1/"
 
 
-def _err(code):
-    return ClientError({"Error": {"Code": code}}, "Op")
+def _err(code, delete_marker=False):
+    response = {"Error": {"Code": code}}
+    if delete_marker:
+        # S3 marks a HeadObject 404 on a current delete marker with this header.
+        response["ResponseMetadata"] = {"HTTPHeaders": {"x-amz-delete-marker": "true"}}
+    return ClientError(response, "Op")
 
 
 class FakeS3:
@@ -52,7 +57,7 @@ class FakeS3:
         if v is None:
             raise _err("404")
         if v["DeleteMarker"]:
-            raise _err("405" if version_id else "404")
+            raise _err("405") if version_id else _err("404", delete_marker=True)
         return v
 
     def head_object(self, Bucket, Key, VersionId=None):
@@ -246,6 +251,34 @@ class TestZipDownloadMode:
             job.run()
         assert "deleted version" in table.row["errorMessage"]
 
+    def test_a_file_archived_after_create_reads_as_the_create_refusal(self, s3):
+        """An explicit file whose current version became a delete marker between the create and the
+        run fails the job with the create's wording, not '<path> was not found', and without naming
+        the file."""
+        s3.add(BASE + "r2-fail.txt", b"", version="dm", delete_marker=True)
+        job, table = _zip_job(s3, _manifest(entries=[
+            {"type": "file", "key": BASE + "r2-fail.txt", "relativePath": "/r2-fail.txt"}]))
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal
+        assert table.row["errorMessage"] == ARCHIVED_IN_SELECTION
+        assert "r2-fail" not in table.row["errorMessage"] and "not found" not in table.row["errorMessage"]
+
+    def test_a_file_marked_archived_after_create_reads_as_the_create_refusal(self, s3):
+        s3.add(BASE + "old.png", b"1", metadata={"vams-status": "archived"})
+        job, table = _zip_job(s3, _manifest(entries=[
+            {"type": "file", "key": BASE + "old.png", "relativePath": "/old.png"}]))
+        with pytest.raises(runner.ArchiveFailure):
+            job.run()
+        assert table.row["errorMessage"] == ARCHIVED_IN_SELECTION
+
+    def test_a_missing_file_still_reads_as_not_found(self, s3):
+        job, table = _zip_job(s3, _manifest(entries=[
+            {"type": "file", "key": BASE + "never.glb", "relativePath": "/never.glb"}]))
+        with pytest.raises(runner.ArchiveFailure):
+            job.run()
+        assert "was not found" in table.row["errorMessage"]
+
     def test_limits(self, s3):
         manifest = _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}],
                              limits={"maxFiles": 2, "maxTotalBytes": 10 ** 9})
@@ -415,6 +448,15 @@ def test_core_blocklists_match_backend():
               and n.targets[0].id in ("CORE_UNALLOWED_FILE_EXTENSION_LIST", "CORE_UNALLOWED_MIME_LIST")}
     assert set(CORE_BLOCKED_EXTENSIONS) == set(values["CORE_UNALLOWED_FILE_EXTENSION_LIST"])
     assert set(CORE_BLOCKED_CONTENT_TYPES) == set(values["CORE_UNALLOWED_MIME_LIST"])
+
+
+def test_archived_refusal_matches_backend():
+    """The container's archived refusal uses the create's words (backend MSG_ARCHIVED_IN_SELECTION)."""
+    path = os.path.join(REPO, "backend", "backend", "common", "zipDownloads.py")
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    value = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                 and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "MSG_ARCHIVED_IN_SELECTION")
+    assert ARCHIVED_IN_SELECTION == value
 
 
 def test_part_size_matches_backend():
