@@ -41,7 +41,7 @@ VAMS includes 22 built-in viewer plugins that allow users to visualize a wide ra
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
 -   Visualize Gaussian splats with BabylonJS or PlayCanvas viewers, including WebXR support
 -   Render CAD files (STEP, IGES, BREP) via Three.js with WebAssembly-based loaders
--   Open USD scenes (USD, USDA, USDC, USDZ) through the Needle Engine WASM viewer
+-   Open USD scenes (USD, USDA, USDC, USDZ), including their referenced layers and textures, in the Three.js viewer, or in the Needle Engine WASM viewer where `allowUnsafeEvalFeatures` is enabled
 -   Play video, audio, and view images, PDFs, columnar data, and text files with dedicated viewers
 -   Plugin-based architecture allows adding custom viewers for proprietary or emerging formats
 
