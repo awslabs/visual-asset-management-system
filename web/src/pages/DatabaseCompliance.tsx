@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "react-router-dom";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -19,6 +19,7 @@ import ColumnLayout from "@cloudscape-design/components/column-layout";
 import FormField from "@cloudscape-design/components/form-field";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import Modal from "@cloudscape-design/components/modal";
+import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Synonyms from "../synonyms";
 import {
     fetchDatabaseComplianceOverview,
@@ -28,10 +29,19 @@ import {
     bindableSchemas,
     bindSchemaToDatabase,
     bindingResultText,
+    bindingApplyOutcomeText,
+    bindingApplyPollDelay,
+    bindingApplyProgressText,
     unbindSchemaFromDatabase,
     revokeException,
+    ComplianceBindingApply,
+    ComplianceBindingResult,
     DatabaseComplianceOverview,
     EvaluateDatabaseResponse,
+    BINDING_APPLY_APPLIED,
+    BINDING_APPLY_APPLYING,
+    BINDING_APPLY_FAILED,
+    BINDING_APPLY_STALLED,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import {
@@ -116,6 +126,24 @@ const optionFor = (options: SelectProps.Option[], value: string): SelectProps.Op
  * label as text.
  */
 export const BINDING_NOT_LOADED_LABEL = "Not loaded";
+
+/**
+ * The status labels of a binding change applied in the background (D161), short like
+ * BINDING_NOT_LOADED_LABEL so a status indicator never wraps at 390 px; the sentence and the counts
+ * follow as text and in the progress bar.
+ */
+export const bindingApplyLabel = (apply: ComplianceBindingApply): string => {
+    if (apply.status === BINDING_APPLY_STALLED) return "Stopped";
+    if (apply.status === BINDING_APPLY_FAILED) return "Not finished";
+    if (apply.operation === "unbind") return "Removing the binding";
+    if (apply.operation === "evaluatePending") return "Queueing evaluations";
+    return "Applying the binding";
+};
+
+/** Whether a binding change of the database is under way (running or stalled): the API answers
+ * 409 to another change and to Evaluate All until it ends, so the page does not offer them. */
+export const bindingApplyBusy = (apply: ComplianceBindingApply | null | undefined): boolean =>
+    !!apply && (apply.status === BINDING_APPLY_APPLYING || apply.status === BINDING_APPLY_STALLED);
 
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
@@ -226,6 +254,12 @@ const DatabaseCompliancePage: React.FC = () => {
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [bindingInProgress, setBindingInProgress] = useState(false);
     const [confirmRemove, setConfirmRemove] = useState(false);
+    // The database's last binding change applied in the background, as the binding read reports it
+    // (D161). While it runs, the binding is read again with backoff (`applyPolls` counts the reads)
+    // until it ends; `followedApply` is the change this page saw running, whose end it reports.
+    const [bindingApply, setBindingApply] = useState<ComplianceBindingApply | null>(null);
+    const [applyPolls, setApplyPolls] = useState(0);
+    const followedApply = useRef<string | null>(null);
     const [filters, setFilters] = useUrlFilters(OVERVIEW_FILTER_KEYS);
     const filtersActive = OVERVIEW_FILTER_KEYS.some((key) => key !== "sort" && !!filters[key]);
 
@@ -326,29 +360,67 @@ const DatabaseCompliancePage: React.FC = () => {
         await loadPage(0, undefined);
     }, [databaseId, loadPage]);
 
-    const loadBinding = useCallback(async () => {
-        if (!databaseId) return;
-        const isCurrent = beginBindingLoad();
-        const routeDatabaseId = overviewRouteDatabaseId();
-        if (routeDatabaseId !== null && routeDatabaseId !== databaseId) return;
-        setBindingStatus("loading");
-        setBindingError(null);
-        const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
-        if (!isCurrent()) return;
-        if (bindingSuccess && typeof bindingResult !== "string") {
-            const bound = bindingResult.databaseSchema || null;
-            setDatabaseSchema(bound);
-            setSelectedSchema(bound ? { label: bound, value: bound } : null);
-            setBindingStatus("loaded");
-        } else {
-            setBindingStatus("failed");
-            setBindingError(
-                typeof bindingResult === "string" && bindingResult
-                    ? bindingResult
-                    : "Failed to load the schema binding"
-            );
-        }
-    }, [beginBindingLoad, databaseId]);
+    // Reads the binding. `quiet` is a read that follows a change being applied: the page keeps
+    // showing what it shows (no loading state), and a failed read is left to the next one.
+    const loadBinding = useCallback(
+        async (options?: { quiet?: boolean }) => {
+            if (!databaseId) return;
+            const quiet = !!options?.quiet;
+            const isCurrent = beginBindingLoad();
+            const routeDatabaseId = overviewRouteDatabaseId();
+            if (routeDatabaseId !== null && routeDatabaseId !== databaseId) return;
+            if (!quiet) {
+                setBindingStatus("loading");
+                setBindingError(null);
+            }
+            const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
+            if (!isCurrent()) return;
+            if (bindingSuccess && typeof bindingResult !== "string") {
+                const bound = bindingResult.databaseSchema || null;
+                setDatabaseSchema(bound);
+                setSelectedSchema(bound ? { label: bound, value: bound } : null);
+                setBindingStatus("loaded");
+                const apply = bindingResult.apply || null;
+                setBindingApply(apply);
+                if (apply?.status === BINDING_APPLY_APPLYING) {
+                    followedApply.current = apply.applyId;
+                } else if (apply && followedApply.current === apply.applyId) {
+                    // The change this page saw running ended (or stopped): its outcome, then the
+                    // overview as the records now are.
+                    followedApply.current = null;
+                    if (apply.status === BINDING_APPLY_APPLIED) {
+                        setActionMessage(bindingApplyOutcomeText(apply));
+                    } else if (apply.status === BINDING_APPLY_FAILED) {
+                        setActionError(bindingApplyOutcomeText(apply));
+                    }
+                    await restartWalk();
+                }
+            } else if (!quiet) {
+                setBindingStatus("failed");
+                setBindingError(
+                    typeof bindingResult === "string" && bindingResult
+                        ? bindingResult
+                        : "Failed to load the schema binding"
+                );
+            }
+        },
+        [beginBindingLoad, databaseId, restartWalk]
+    );
+
+    // While a binding change is applied, the binding is read again with backoff until it ends.
+    const applyRunning = bindingApply?.status === BINDING_APPLY_APPLYING;
+    const runningApplyId = applyRunning ? bindingApply?.applyId : undefined;
+    useEffect(() => {
+        setApplyPolls(0);
+    }, [runningApplyId]);
+    useEffect(() => {
+        if (!runningApplyId) return;
+        const timer = setTimeout(async () => {
+            await loadBinding({ quiet: true });
+            setApplyPolls((count) => count + 1);
+        }, bindingApplyPollDelay(applyPolls));
+        return () => clearTimeout(timer);
+    }, [runningApplyId, applyPolls, loadBinding]);
 
     // A reload restarts the walk from the first page and re-reads the binding.
     const loadData = useCallback(async () => {
@@ -420,7 +492,16 @@ const DatabaseCompliancePage: React.FC = () => {
         setBindingInProgress(true);
         beginAction();
         const [success, message, result] = await bindSchemaToDatabase(databaseId, schemaName);
-        if (success) {
+        if (success && result?.apply) {
+            // Saved, and applied to the asset records in the background (D161): the binding read
+            // that follows shows its progress, and its end reports the counts.
+            followedApply.current = result.apply.applyId;
+            await finishAction({
+                message: `Compliance schema ${schemaName} bound to this ${
+                    Synonyms.database
+                }. ${bindingApplyProgressText(result.apply)}.`,
+            });
+        } else if (success) {
             const detail = bindingResultText(result);
             await finishAction({
                 message:
@@ -446,8 +527,17 @@ const DatabaseCompliancePage: React.FC = () => {
         setBindingInProgress(true);
         beginAction();
         const [success, message, result] = await unbindSchemaFromDatabase(databaseId);
+        if (success && result?.apply) {
+            followedApply.current = result.apply.applyId;
+        }
         await finishAction(
-            success
+            success && result?.apply
+                ? {
+                      message: `Compliance schema ${removed} removed from this ${
+                          Synonyms.database
+                      }. ${bindingApplyProgressText(result.apply)}.`,
+                  }
+                : success
                 ? {
                       message: [
                           `Compliance schema ${removed} removed from this ${Synonyms.database}.`,
@@ -457,6 +547,28 @@ const DatabaseCompliancePage: React.FC = () => {
                           .join(" "),
                   }
                 : { refusal: `Removing the compliance schema binding failed: ${message}` }
+        );
+        setBindingInProgress(false);
+    };
+
+    // Repeats a stalled change, which resumes it where it stopped (the API decides; another change
+    // answers 409 while it is under way).
+    const handleResume = async () => {
+        if (!databaseId || !bindingApply) return;
+        const stalled = bindingApply;
+        setBindingInProgress(true);
+        beginAction();
+        const [success, message, result]: [boolean, string, ComplianceBindingResult?] =
+            stalled.operation === "unbind"
+                ? await unbindSchemaFromDatabase(databaseId)
+                : await bindSchemaToDatabase(databaseId, stalled.schemaName || "");
+        if (success && result?.apply) {
+            followedApply.current = result.apply.applyId;
+        }
+        await finishAction(
+            success
+                ? { message: result?.apply ? `${bindingApplyProgressText(result.apply)}.` : message }
+                : { refusal: `The binding change did not resume: ${message}` }
         );
         setBindingInProgress(false);
     };
@@ -519,6 +631,52 @@ const DatabaseCompliancePage: React.FC = () => {
     const isPaging = hasMore || currentPageIndex > 1;
     // The binding as the last read answered it; nothing is said about it before that.
     const bindingKnown = bindingStatus === "loaded";
+    // While a change is under way the page offers no other change and no Evaluate All (the API
+    // answers 409 to them); a stalled change offers Resume to a caller who may make it.
+    const applyBusy = bindingApplyBusy(bindingApply);
+    const canResume =
+        bindingApply?.status === BINDING_APPLY_STALLED &&
+        (bindingApply.operation === "unbind" ? canUnbind : canBind);
+    const applyDescription =
+        !bindingKnown || !bindingApply ? null : bindingApply.status === BINDING_APPLY_APPLYING ? (
+            <SpaceBetween size="xxs">
+                <StatusIndicator type="in-progress">{bindingApplyLabel(bindingApply)}</StatusIndicator>
+                <ProgressBar
+                    value={
+                        bindingApply.assetCount > 0
+                            ? Math.min(
+                                  100,
+                                  Math.round(
+                                      (bindingApply.assetsProcessed / bindingApply.assetCount) * 100
+                                  )
+                              )
+                            : 0
+                    }
+                    description={bindingApplyProgressText(bindingApply)}
+                    additionalInfo={`${bindingApply.assetsProcessed.toLocaleString(
+                        "en-US"
+                    )} of ${bindingApply.assetCount.toLocaleString("en-US")} done`}
+                    ariaLabel="Binding change progress"
+                />
+            </SpaceBetween>
+        ) : bindingApply.status === BINDING_APPLY_STALLED ||
+          bindingApply.status === BINDING_APPLY_FAILED ? (
+            <SpaceBetween size="xxs">
+                <StatusIndicator
+                    type={bindingApply.status === BINDING_APPLY_STALLED ? "warning" : "error"}
+                >
+                    {bindingApplyLabel(bindingApply)}
+                </StatusIndicator>
+                <Box variant="span" color="inherit">
+                    {bindingApplyOutcomeText(bindingApply)}
+                </Box>
+                {canResume && (
+                    <Button onClick={handleResume} loading={bindingInProgress}>
+                        Resume
+                    </Button>
+                )}
+            </SpaceBetween>
+        ) : null;
     const bindingDescription =
         bindingStatus === "loading" ? (
             <StatusIndicator type="loading">Loading the schema binding</StatusIndicator>
@@ -533,10 +691,13 @@ const DatabaseCompliancePage: React.FC = () => {
                 </Box>
                 <Button onClick={() => loadBinding()}>Retry</Button>
             </SpaceBetween>
-        ) : databaseSchema ? (
-            `Schema: ${databaseSchema}`
         ) : (
-            "No compliance schema bound"
+            <SpaceBetween size="xxs">
+                <span>
+                    {databaseSchema ? `Schema: ${databaseSchema}` : "No compliance schema bound"}
+                </span>
+                {applyDescription}
+            </SpaceBetween>
         );
 
     return (
@@ -607,7 +768,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                         loadingText="Loading schemas"
                                         statusType={loadingSchemas ? "loading" : "finished"}
                                         filteringType="auto"
-                                        disabled={bindingInProgress || !bindingKnown}
+                                        disabled={bindingInProgress || !bindingKnown || applyBusy}
                                         data-testid="database-compliance-bound-schema"
                                     />
                                 </FormField>
@@ -618,6 +779,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     loading={bindingInProgress}
                                     disabled={
                                         !bindingKnown ||
+                                        applyBusy ||
                                         !selectedSchema?.value ||
                                         selectedSchema.value === databaseSchema
                                     }
@@ -628,7 +790,7 @@ const DatabaseCompliancePage: React.FC = () => {
                             {canUnbind && bindingKnown && databaseSchema && (
                                 <Button
                                     onClick={() => setConfirmRemove(true)}
-                                    disabled={bindingInProgress}
+                                    disabled={bindingInProgress || applyBusy}
                                 >
                                     Remove
                                 </Button>
@@ -669,7 +831,9 @@ const DatabaseCompliancePage: React.FC = () => {
                                         variant="primary"
                                         loading={sweeping}
                                         onClick={handleEvaluateAll}
-                                        disabled={!databaseSchema && totalTracked === 0}
+                                        disabled={
+                                            applyBusy || (!databaseSchema && totalTracked === 0)
+                                        }
                                     >
                                         Evaluate All {Synonyms.Assets}
                                     </Button>

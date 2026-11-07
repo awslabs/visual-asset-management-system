@@ -373,7 +373,42 @@ export const awaitingReevaluationText = (state?: ComplianceState | null): string
     return "Awaiting re-evaluation: the schema binding was removed, and the quarantine holds until it is released or a schema is bound and evaluates it.";
 };
 
-/** The answer of a schema bind or unbind. `changed` is false for a bind of the binding in force. */
+/**
+ * A database binding change applied to the database's asset records in the background (D161): a
+ * bind, a schema change, a removal, or automatic evaluation turned on with assets still pending.
+ * `status` is the API's: `applying` while it runs, `stalled` when it made no progress for a while
+ * (the same change resumes it), `applied` or `failed` once it ended (`reason` says why it failed or
+ * stalled). The counts grow while it runs.
+ */
+export interface ComplianceBindingApply {
+    applyId: string;
+    operation: "bind" | "change" | "unbind" | "evaluatePending";
+    status: "applying" | "stalled" | "applied" | "failed";
+    schemaName?: string | null;
+    previousSchema?: string | null;
+    assetCount: number;
+    assetsProcessed: number;
+    assetsPendingEvaluation: number;
+    assetsKeptQuarantined: number;
+    removedComplianceRecords: number;
+    evaluationsQueued: number;
+    startedAt?: string;
+    lastProgressAt?: string;
+    finishedAt?: string;
+    reason?: string;
+}
+
+export const BINDING_APPLY_APPLYING = "applying";
+export const BINDING_APPLY_STALLED = "stalled";
+export const BINDING_APPLY_APPLIED = "applied";
+export const BINDING_APPLY_FAILED = "failed";
+
+/**
+ * The answer of a schema bind or unbind. `changed` is false for a bind of the binding in force. A
+ * change applied in the background (HTTP 202) carries `applyStatus`, `applyId`, `assetCount` and
+ * `apply`; its counts come with the binding read once it ends. A request that repeated a stalled
+ * change carries `resumed: true`.
+ */
 export interface ComplianceBindingResult {
     message?: string;
     changed?: boolean;
@@ -381,7 +416,75 @@ export interface ComplianceBindingResult {
     assetsKeptQuarantined?: number;
     evaluationsQueued?: number;
     removedComplianceRecords?: number;
+    applyStatus?: ComplianceBindingApply["status"];
+    applyId?: string;
+    assetCount?: number;
+    apply?: ComplianceBindingApply;
+    resumed?: boolean;
 }
+
+/** Delays (ms) between the binding reads that follow a change being applied: backing off to 15 s. */
+export const BINDING_APPLY_POLL_DELAYS_MS = [2000, 3000, 5000, 8000, 10000, 15000];
+
+export const bindingApplyPollDelay = (attempt: number): number =>
+    BINDING_APPLY_POLL_DELAYS_MS[Math.min(attempt, BINDING_APPLY_POLL_DELAYS_MS.length - 1)];
+
+const assetsText = (count: number): string =>
+    `${count.toLocaleString("en-US")} ${count === 1 ? "asset" : "assets"}`;
+
+/** What a change being applied says while it runs: "Applying the binding to 2,500 assets". */
+export const bindingApplyProgressText = (apply: ComplianceBindingApply): string => {
+    const total = assetsText(apply.assetCount);
+    if (apply.operation === "unbind") return `Removing the binding from ${total}`;
+    if (apply.operation === "evaluatePending") return `Queueing the evaluations of ${total}`;
+    return `Applying the binding to ${total}`;
+};
+
+/** What an ended (or stalled) change did, in one sentence for the page's messages. */
+export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string => {
+    if (apply.status === BINDING_APPLY_FAILED) {
+        return `The binding change did not finish: ${apply.reason || "it failed"}.`;
+    }
+    if (apply.status === BINDING_APPLY_STALLED) {
+        return `The binding change stopped while it was being applied: ${
+            apply.reason || "repeat the same change to resume it"
+        }.`;
+    }
+    const parts: string[] = [];
+    if (apply.operation === "evaluatePending") {
+        parts.push(`The evaluations of ${assetsText(apply.evaluationsQueued)} were queued.`);
+        return parts.join(" ");
+    }
+    if (apply.operation === "unbind") {
+        parts.push(
+            `The binding was removed from ${assetsText(apply.assetsProcessed)}: ${
+                apply.removedComplianceRecords
+            } compliance ${apply.removedComplianceRecords === 1 ? "record" : "records"} removed.`
+        );
+    } else {
+        parts.push(
+            `The binding was applied to ${assetsText(apply.assetsProcessed)}: ${
+                apply.assetsPendingEvaluation
+            } pending evaluation.`
+        );
+    }
+    const kept = apply.assetsKeptQuarantined;
+    if (kept > 0) {
+        parts.push(
+            `${kept} quarantined ${
+                kept === 1 ? "asset stays" : "assets stay"
+            } quarantined until re-evaluated.`
+        );
+    }
+    if (apply.evaluationsQueued > 0) {
+        parts.push(
+            `${apply.evaluationsQueued} ${
+                apply.evaluationsQueued === 1 ? "evaluation was" : "evaluations were"
+            } queued.`
+        );
+    }
+    return parts.join(" ");
+};
 
 export type ComplianceEvaluationVerdict =
     | "compliant"
@@ -1444,7 +1547,11 @@ export interface AssetSchemaOverride {
     [key: string]: any;
 }
 
-/** `assetOverrideCount` counts every override; `assetOverrides` is one page of them. */
+/**
+ * `assetOverrideCount` counts every override; `assetOverrides` is one page of them. `apply` is the
+ * database's last binding change applied in the background (null when it had none), and
+ * `applyStatus` its status.
+ */
 export interface DatabaseBindings {
     databaseId: string;
     databaseSchema?: string | null;
@@ -1452,6 +1559,8 @@ export interface DatabaseBindings {
     assetOverrides: AssetSchemaOverride[];
     assetOverrideCount: number;
     nextToken?: string;
+    applyStatus?: ComplianceBindingApply["status"] | null;
+    apply?: ComplianceBindingApply | null;
 }
 
 export const getDatabaseBindings = async (
