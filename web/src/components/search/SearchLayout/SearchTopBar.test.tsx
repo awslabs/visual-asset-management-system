@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SearchTopBar, { searchModeDescription } from "./SearchTopBar";
 
@@ -187,6 +187,70 @@ describe("SearchTopBar query band", () => {
         expect(screen.queryByRole("button", { name: "Clear all filters" })).toBeNull();
         rerender(<SearchTopBar {...baseProps} onClearAll={onClearAll} hasActiveFilters />);
         expect(screen.getByRole("button", { name: "Clear all filters" })).toBeInTheDocument();
+    });
+});
+
+describe("SearchTopBar on the search page's title row", () => {
+    // The search page renders the h1 and the view switch; the bar fills the row's two slots.
+    const created: HTMLElement[] = [];
+    function slots() {
+        const info = document.createElement("span");
+        const actions = document.createElement("div");
+        document.body.append(info, actions);
+        created.push(info, actions);
+        return { info, actions };
+    }
+
+    afterEach(() => {
+        created.splice(0).forEach((element) => element.remove());
+    });
+
+    it("renders no heading of its own and puts its count and Clear all filters in the slots", async () => {
+        const titleSlots = slots();
+        const onClearAll = jest.fn();
+        render(
+            <SearchTopBar
+                {...baseProps}
+                onClearAll={onClearAll}
+                resultCount={4}
+                hasActiveFilters
+                titleSlots={titleSlots}
+            />
+        );
+        expect(screen.queryAllByRole("heading")).toHaveLength(0);
+        expect(screen.queryByText("Assets and Files - Search")).toBeNull();
+        expect(titleSlots.info).toHaveTextContent(/^4 results$/);
+        const clear = within(titleSlots.actions).getByRole("button", {
+            name: "Clear all filters",
+        });
+        await userEvent.click(clear);
+        expect(onClearAll).toHaveBeenCalledTimes(1);
+        // The query band stays in the bar.
+        expect(screen.getByRole("searchbox", { name: "Keyword search query" })).toBeInTheDocument();
+    });
+
+    it("leaves the slots empty until there is a count or a filter to clear", () => {
+        const titleSlots = slots();
+        const { rerender } = render(<SearchTopBar {...baseProps} titleSlots={titleSlots} />);
+        expect(titleSlots.info).toBeEmptyDOMElement();
+        expect(titleSlots.actions).toBeEmptyDOMElement();
+        rerender(<SearchTopBar {...baseProps} titleSlots={titleSlots} resultCount={1} />);
+        expect(titleSlots.info).toHaveTextContent(/^1 result$/);
+        expect(titleSlots.actions).toBeEmptyDOMElement();
+    });
+
+    it("renders nothing into the row before the row has mounted", () => {
+        render(
+            <SearchTopBar
+                {...baseProps}
+                resultCount={4}
+                hasActiveFilters
+                titleSlots={{ info: null, actions: null }}
+            />
+        );
+        expect(screen.queryAllByRole("heading")).toHaveLength(0);
+        expect(screen.queryByText("4 results")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Clear all filters" })).toBeNull();
     });
 });
 

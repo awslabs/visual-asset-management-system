@@ -1357,10 +1357,10 @@ describe("concepts, troubleshooting, developer, and custom-pipelines additions",
 });
 
 describe("user guide", () => {
-    test("search-and-discovery.md is structured around tabs and the natural-language mode", () => {
+    test("search-and-discovery.md is structured around views and the natural-language mode", () => {
         const text = readDoc("user-guide/search-and-discovery.md");
         for (const h of [
-            "## Search tabs",
+            "## Search views",
             "## Keyword search",
             "## Natural language search",
             "## Limited search mode",
@@ -1378,10 +1378,21 @@ describe("user guide", () => {
         expect(nlp).toContain("**Search inside files**"); // the whole-file-only toggle, on by default
         expect(nlp).toContain("50 MiB"); // the content-embedding size bound: a larger file has no chunks
         expect(section(text, "## Limited search mode")).toContain("vector search");
-        const tabs = section(text, "## Search tabs");
-        expect(tabs).toContain("`?tab=asset-list`");
-        expect(tabs).toContain("`?tab=unified-search`");
-        expect(tabs).not.toContain("?tab=search`");
+        const views = section(text, "## Search views");
+        expect(views).toContain("`?tab=asset-list`");
+        expect(views).toContain("`?tab=unified-search`");
+        expect(views).not.toContain("?tab=search`");
+        // D68: the page switches views from its title row; it has no tab strip. The `?tab=` query
+        // key keeps its name, so a lookbehind skips it.
+        const intro = text.slice(0, text.indexOf("## Search views"));
+        for (const part of [intro, views]) {
+            expect(part).toContain("**Search**");
+            expect(part).toContain("**Asset list**");
+            expect(part).toMatch(/switch/);
+            expect(part).not.toMatch(/(?<!\?)\btabs?\b/i);
+        }
+        expect(text).not.toContain("Primary Search");
+        expect(text).not.toContain("Basic Asset List");
     });
 
     test("the tab ids on the user-guide pages are the search provider ids the web catalog declares", () => {
@@ -1393,11 +1404,14 @@ describe("user guide", () => {
         }
     });
 
-    test("web-interface.md describes the tabs, the toggle, the System badge, and the tab URL", () => {
+    test("web-interface.md describes the view switch, the toggle, the System badge, and the view URL", () => {
         const text = readDoc("user-guide/web-interface.md");
         const search = section(text, "## Asset Search Page");
-        expect(search).toContain("**Basic Asset List**");
-        expect(search).toContain("**Primary Search**");
+        expect(search).toContain("**Asset list**");
+        expect(search).toContain("**Search**");
+        expect(search).toMatch(/switch in the page title row/);
+        expect(search).not.toMatch(/(?<!\?)\btabs?\b/i);
+        expect(search).not.toContain("Primary Search");
         expect(search).toContain("**Natural language**");
         expect(section(text, "### Pipelines Page")).toContain("**System**");
         expect(section(text, "### Workflows Page")).toContain("**System**");

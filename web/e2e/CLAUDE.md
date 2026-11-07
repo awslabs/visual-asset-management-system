@@ -142,8 +142,10 @@ locators — the app's markup is not always guessable, and these were establishe
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
 | `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
 | `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
-| `gotoSearch(page, { databaseId?, tab? })`                     | Navigate to the search page; waits on its tab strip + h1                                   |
-| `searchTabs(page)`                                            | The search page's provider tab strip (`role=tablist`)                                      |
+| `gotoSearch(page, { databaseId?, tab? })`                     | Navigate to the search page; waits on its h1 + the view's first searchbox                  |
+| `searchViewSwitch(page)`, `searchViewSegment(page, name)`     | The title row's view switch (`toolbar` "Page view") and one view's segment                 |
+| `searchPageHeading(page, databaseId?)`                        | The search page h1 every view shares (`… and Files`, `… for <databaseId>`)                 |
+| `searchSubmitButton(page)`                                    | The Search view's Search button, scoped to the query band (the switch has a `Search` too)  |
 | `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                       |
 | `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                     |
 | `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`          |
@@ -184,12 +186,15 @@ locators — the app's markup is not always guessable, and these were establishe
 -   Detail and quick-view panels render a field as a label span plus its value span, so a field's value
     is the label's next sibling. Use `rowValue(page, label)`; a page-wide `getByText` for a value's
     shape (a path, a slash, an id) matches dozens of unrelated elements.
--   **The search page is a Cloudscape tab strip** (`role=tablist`): the asset-list tab is always there
-    and the `Search` tab only when OpenSearch or vector search is on — derive the expectation from
-    `readFeaturesEnabled(page)` (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a
-    fixture. The active tab is the `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states
-    read `No matches` (search table) and `No assets to display.` (asset list), neither of which
-    `expectTableRendered`'s regex matches — use `expectSearchRendered(page)`.
+-   **The search page switches views from its title row**: one h1 every view shares, and a
+    SegmentedControl (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below
+    688 px) when more than one view is available. There is no `role=tablist`. The asset list view
+    is always there and the `Search` view only when OpenSearch or vector search is on, so with the
+    asset list alone there is no switch — derive the expectation from `readFeaturesEnabled(page)`
+    (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture. The active view is the
+    `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states read `No matches` (search
+    table) and `No assets to display.` (asset list), neither of which `expectTableRendered`'s regex
+    matches — use `expectSearchRendered(page)`.
 
 When a page's markup changes, fix the helper once; every spec follows.
 
@@ -253,7 +258,7 @@ challenge manually.
 
 1. Add the page's route to the `gotoOrchestration` union in `support/fixtures.ts` if it is a new
    orchestration route. A page outside the orchestration module gets its own `goto*` helper that
-   waits on its own structure — `gotoSearch` (tab strip + h1) is the model.
+   waits on its own structure — `gotoSearch` (h1 + the view's first searchbox) is the model.
 2. Create `orchestration.{page}.spec.ts` — or `{page}.spec.ts` for a page outside the module, as
    `search.spec.ts` is — and assert, in this order: the page renders without a crash; its controls
    exist; its filters offer the expected values; and one interaction per row action.

@@ -14,7 +14,7 @@ import type { SearchProviderConfig } from "./types";
 
 const assetList: SearchProviderConfig = {
     id: "asset-list",
-    name: "Basic Asset List",
+    name: "Asset list",
     componentPath: "AssetListProvider/AssetListProviderComponent",
     priority: 100,
     enabled: true,
@@ -22,7 +22,7 @@ const assetList: SearchProviderConfig = {
 };
 const unified: SearchProviderConfig = {
     id: "unified-search",
-    name: "Primary Search",
+    name: "Search",
     componentPath: "UnifiedSearchProvider/UnifiedSearchProviderComponent",
     priority: 10,
     enabled: true,
@@ -80,10 +80,10 @@ describe("availableProviders / defaultProviderId", () => {
 describe("providerLabel", () => {
     it("substitutes the Asset synonym tokens and leaves other names alone", () => {
         // Synonyms default to "Asset"/"Assets"; the substitution is what makes a renamed
-        // deployment show its own word in the tab strip.
-        expect(providerLabel(assetList)).toBe("Basic Asset List");
+        // deployment show its own word in the view switch.
+        expect(providerLabel(assetList)).toBe("Asset list");
         expect(providerLabel({ ...assetList, name: "All Assets" })).toBe("All Assets");
-        expect(providerLabel(unified)).toBe("Primary Search");
+        expect(providerLabel(unified)).toBe("Search");
         expect(providerLabel({ ...unified, name: "Assetization" })).toBe("Assetization");
     });
 });

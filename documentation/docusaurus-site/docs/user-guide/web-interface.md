@@ -50,13 +50,13 @@ Each database record displays the following information:
 
 ## Asset Search Page
 
-The **Assets and Files** page is the primary interface for discovering and browsing assets. It hosts two tabs: **Basic Asset List**, always available, lists the assets you are authorized to see with archive, permanent-delete, and unarchive actions; **Primary Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes. The active tab is carried in the URL (`?tab=`).
+The **Assets and Files** page is the primary interface for discovering and browsing assets. A switch in the page title row chooses between two views: **Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes; **Asset list**, always available, lists the assets you are authorized to see with archive, permanent-delete, and unarchive actions. With only the asset list available, the page shows no switch. The active view is carried in the URL (`?tab=`).
 
 ![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
 
 ### View Modes
 
-VAMS provides three ways to browse assets on the Primary Search tab:
+VAMS provides three ways to browse assets in the Search view:
 
 | View Mode      | Description                                                                                               |
 | -------------- | --------------------------------------------------------------------------------------------------------- |
@@ -66,7 +66,7 @@ VAMS provides three ways to browse assets on the Primary Search tab:
 
 ### Search and Filtering
 
-The Primary Search tab provides several mechanisms for finding assets:
+The Search view provides several mechanisms for finding assets:
 
 -   **Keyword** / **Natural language** -- When both engines are enabled, choose how the query is read: keyword matching across indexed fields, or a natural-language description ranked by semantic similarity of each file's generated metadata, text, and renders. With only one engine enabled the control is fixed to that engine.
 -   **Text search** -- Enter keywords to search across asset names and properties.
@@ -220,7 +220,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Database list             | `https://<VAMS_WEBSITE>/#/databases/`                                                                                   |
 | Specific database         | `https://<VAMS_WEBSITE>/#/databases/<databaseId>`                                                                       |
-| Search page, specific tab | `https://<VAMS_WEBSITE>/#/search?tab=asset-list` or `?tab=unified-search`                                               |
+| Search page, a given view | `https://<VAMS_WEBSITE>/#/search?tab=asset-list` or `?tab=unified-search`                                               |
 | Asset detail              | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>`                                                      |
 | File viewer               | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>`                               |
 | File at version           | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |

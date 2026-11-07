@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { createPortal } from "react-dom";
 import Badge from "@cloudscape-design/components/badge";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -14,6 +15,7 @@ import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { SEARCH_RUNNING, searchRunningReason } from "./searchRunning";
 import type { SearchMode } from "../types";
+import type { SearchTitleSlots } from "../SearchPageTypes";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "../hooks/searchRequestBuilders";
 import Synonyms from "../../../synonyms";
 
@@ -42,6 +44,12 @@ interface SearchTopBarProps {
     /** The mode the query is interpreted in; selects the query box placeholder and the mode line. */
     searchMode?: SearchMode;
     searchModeControl?: SearchModeControl;
+    /**
+     * The search page's title row. When given, the page renders the h1 and this bar renders no
+     * heading: the count goes into `info` and Clear all filters into `actions`, and `title` and
+     * `description` are unused.
+     */
+    titleSlots?: SearchTitleSlots;
 }
 
 /** What each mode does, stated where the query is typed so the two engines' different defaults read as intended. */
@@ -82,6 +90,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     description,
     searchMode = "keyword",
     searchModeControl,
+    titleSlots,
 }) => {
     // Natural-language mode only: the route refuses a longer query, so Search waits until it fits.
     const queryLimitError = searchMode === "nlp" ? nlpQueryLimitError(query) : undefined;
@@ -96,38 +105,41 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     const placeholder =
         searchMode === "nlp" ? "Describe what you are looking for..." : "Search by keywords...";
 
+    // The last search's count and the one secondary action: beside the h1, wherever it is.
+    const countBadge = resultCount !== undefined && (
+        <Badge color="blue">
+            {resultCount.toLocaleString()}
+            {resultCountIsLowerBound ? "+" : ""}{" "}
+            {resultCount === 1 && !resultCountIsLowerBound ? "result" : "results"}
+        </Badge>
+    );
+    const clearAll = hasActiveFilters && (
+        <Button
+            onClick={onClearAll}
+            disabled={loading}
+            disabledReason={searchRunningReason(loading)}
+        >
+            Clear all filters
+        </Button>
+    );
+
     return (
-        <Box padding={{ vertical: "m", horizontal: "l" }}>
+        <Box padding={{ top: titleSlots ? "s" : "m", bottom: "m", horizontal: "l" }}>
+            {/* On the search page the page's title row holds the h1; this bar fills its slots. */}
+            {titleSlots?.info && countBadge && createPortal(countBadge, titleSlots.info)}
+            {titleSlots?.actions && clearAll && createPortal(clearAll, titleSlots.actions)}
             <SpaceBetween direction="vertical" size="s">
                 {/* Page header: title, the last search's count, and the one secondary action */}
-                <Header
-                    variant="h1"
-                    description={description}
-                    actions={
-                        hasActiveFilters && (
-                            <Button
-                                onClick={onClearAll}
-                                disabled={loading}
-                                disabledReason={searchRunningReason(loading)}
-                            >
-                                Clear all filters
-                            </Button>
-                        )
-                    }
-                    info={
-                        resultCount !== undefined && (
-                            <Badge color="blue">
-                                {resultCount.toLocaleString()}
-                                {resultCountIsLowerBound ? "+" : ""}{" "}
-                                {resultCount === 1 && !resultCountIsLowerBound
-                                    ? "result"
-                                    : "results"}
-                            </Badge>
-                        )
-                    }
-                >
-                    {title}
-                </Header>
+                {!titleSlots && (
+                    <Header
+                        variant="h1"
+                        description={description}
+                        actions={clearAll}
+                        info={countBadge}
+                    >
+                        {title}
+                    </Header>
+                )}
 
                 {/* Query band: mode switch (both engines only), full-width query box, mode line */}
                 <div className="search-query-band">

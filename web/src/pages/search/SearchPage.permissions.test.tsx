@@ -4,7 +4,7 @@
  */
 
 /**
- * The search page gives its provider tabs the reasons Create Asset and Delete Selected are unavailable
+ * The search page gives its provider views the reasons Create Asset and Delete Selected are unavailable
  * to the signed-in role. Roles come from the shipped database-readonly and database-user templates
  * (their allowed-routes listings are in templateRoleRoutes.testdata.ts) and the administrator.
  */
@@ -29,8 +29,8 @@ import Synonyms from "../../synonyms";
 
 jest.mock("../../services/APIService", () => ({ fetchAllowedApiRoutes: jest.fn() }));
 
-// The tab host passes the reasons to every provider body (SearchTabsHost.test.tsx); here it only
-// reports what the page hands it.
+// The provider host passes the reasons to every provider body (SearchTabsHost.test.tsx); here it
+// only reports what the page hands it.
 const mockContainerProps: any[] = [];
 jest.mock("../../searchPlugin", () => ({
     SearchTabsHost: (props: any) => {

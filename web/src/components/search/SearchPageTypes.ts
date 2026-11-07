@@ -16,6 +16,16 @@ export interface AssetActionDisabledReasons {
 }
 
 /**
+ * Elements in the search page's title row that a view renders its own title-row content into with
+ * `createPortal`: `info` beside the h1 (the result count) and `actions` before the view switch
+ * (Clear all filters). Each is null until the row has mounted.
+ */
+export interface SearchTitleSlots {
+    info: HTMLElement | null;
+    actions: HTMLElement | null;
+}
+
+/**
  * Props interface for search page view components
  */
 export interface SearchPageViewProps {

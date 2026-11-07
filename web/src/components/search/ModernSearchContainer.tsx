@@ -34,7 +34,7 @@ import type { SearchModeControl } from "./SearchLayout/SearchTopBar";
 import CardView from "./SearchResults/CardView";
 import ToastManager from "./SearchNotifications/ToastManager";
 import SearchPageListView from "./SearchPageListView";
-import { AssetActionDisabledReasons } from "./SearchPageTypes";
+import { AssetActionDisabledReasons, SearchTitleSlots } from "./SearchPageTypes";
 import SearchPageMapView from "./SearchPageMapView";
 import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
 import "./SearchLayout/searchSplitter.css";
@@ -73,7 +73,11 @@ const resultCountMessage = (result: SearchResponse) => {
 };
 
 const ModernSearchContainer: React.FC<
-    SearchContainerProps & { assetActionDisabledReasons?: AssetActionDisabledReasons }
+    SearchContainerProps & {
+        assetActionDisabledReasons?: AssetActionDisabledReasons;
+        /** The search page's title row; the top bar then renders no heading (see SearchTopBar). */
+        titleSlots?: SearchTitleSlots;
+    }
 > = ({
     mode = "full",
     initialFilters,
@@ -86,6 +90,7 @@ const ModernSearchContainer: React.FC<
     databaseId: propDatabaseId,
     embedded,
     assetActionDisabledReasons,
+    titleSlots,
 }) => {
     const config = appCache.getItem("config");
     const navigate = useNavigate();
@@ -810,6 +815,7 @@ const ModernSearchContainer: React.FC<
                 }
                 searchMode={searchMode}
                 searchModeControl={searchModeControl}
+                titleSlots={titleSlots}
             />
 
             {/* Main Layout: Sidebar + Content with Resizable Splitter */}

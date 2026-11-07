@@ -15,7 +15,10 @@ import { routeDisabledReason } from "../../features/orchestration/permissions/ro
 
 interface NewSearchPageProps {}
 
-/** Breadcrumbs plus the search provider tab strip. Which tabs appear is the providers' decision. */
+/**
+ * Breadcrumbs, then the search provider host: the title row with its view switch and the active
+ * view's body. Which views appear is the providers' decision.
+ */
 const NewSearchPage: React.FC<NewSearchPageProps> = () => {
     const { databaseId } = useParams();
     usePageTitle(databaseId || null, `${Synonyms.Asset} and File Search`);

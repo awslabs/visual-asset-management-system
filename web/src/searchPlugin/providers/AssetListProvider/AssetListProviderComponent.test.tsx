@@ -6,12 +6,12 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import AssetListProviderComponent, {
     isArchivedAsset,
     normalizeListedAsset,
 } from "./AssetListProviderComponent";
-import { fetchAllAssets } from "../../../services/APIService";
+import { fetchAllAssets, fetchDatabaseAssets } from "../../../services/APIService";
 
 jest.mock("../../../services/APIService", () => ({
     fetchAllAssets: jest.fn(),
@@ -161,6 +161,36 @@ describe("AssetListProviderComponent bulk actions", () => {
         );
         await userEvent.click(del);
         expect(screen.queryByTestId("asset-delete-modal")).toBeNull();
+    });
+
+    it("renders no page heading of its own; the table's header names the list", async () => {
+        // The search page's title row carries the page h1 (SearchTabsHost); a second one here would
+        // repeat it above a table already headed "Assets (n)".
+        renderProvider();
+        await screen.findByText("Live asset");
+        expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
+        expect(screen.getByRole("heading", { level: 2, name: /^Assets/ })).toBeInTheDocument();
+    });
+
+    it("on a database route repeats neither the page's breadcrumbs nor its heading", async () => {
+        (fetchDatabaseAssets as jest.Mock).mockResolvedValue([active]);
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets"]}>
+                <Routes>
+                    <Route
+                        path="/databases/:databaseId/assets"
+                        element={<AssetListProviderComponent isActive databaseId="db1" />}
+                    />
+                </Routes>
+            </MemoryRouter>
+        );
+        await screen.findByText("Live asset");
+        expect(fetchDatabaseAssets).toHaveBeenLastCalledWith({
+            databaseId: "db1",
+            showArchived: false,
+        });
+        expect(screen.queryByRole("navigation", { name: "Breadcrumbs" })).toBeNull();
+        expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
     });
 
     it("hides Unarchive Selected when more than one row is selected", async () => {

@@ -34,8 +34,10 @@ export function normalizeListedAsset(item: any): any {
 /**
  * The asset list: every accessible asset from the asset API, paged and filtered client-side. Needs
  * no search engine, so it is offered on every deployment. ListPage reads the database from the route.
- * Bulk archive / permanent delete and unarchive use the same modals as the Primary Search tab, so the
- * two surfaces behave identically and the actions stay reachable when no engine is enabled.
+ * The search page renders the breadcrumbs and the h1, so ListPage's own are hidden; the table keeps
+ * its "Assets (n/m)" header. Bulk archive / permanent delete and unarchive use the same modals as the
+ * Search view, so the two surfaces behave identically and the actions stay reachable when no engine
+ * is enabled.
  */
 const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
     databaseId,
@@ -140,6 +142,7 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
                 customFilterControls={filterControls}
                 onSelectionChange={setSelectedItems}
                 onReloadReady={handleReloadReady}
+                hidePageHeading={true}
             />
 
             <AssetDeleteModal

@@ -12,11 +12,17 @@ export {
     isProviderAvailable,
     providerLabel,
 } from "./core/providerAvailability";
-export { SearchTabsHost, SEARCH_TAB_QUERY_PARAM } from "./components/SearchTabsHost";
+export {
+    SearchTabsHost,
+    SEARCH_TAB_QUERY_PARAM,
+    SEARCH_VIEW_SWITCH_LABEL,
+    searchPageTitle,
+} from "./components/SearchTabsHost";
 export type {
     SearchFeatureCondition,
     SearchProviderAvailability,
     SearchProviderCatalog,
     SearchProviderConfig,
     SearchProviderProps,
+    SearchTitleSlots,
 } from "./core/types";

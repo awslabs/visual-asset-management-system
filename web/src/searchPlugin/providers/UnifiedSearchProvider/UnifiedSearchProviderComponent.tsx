@@ -7,10 +7,14 @@ import React from "react";
 import ModernSearchContainer from "../../../components/search/ModernSearchContainer";
 import type { SearchProviderProps } from "../../core/types";
 
-/** Keyword (OpenSearch) and natural-language (vector) search in one container. */
+/**
+ * Keyword (OpenSearch) and natural-language (vector) search in one container. The page's title row
+ * carries the h1; the container adds its result count and Clear all filters to that row.
+ */
 const UnifiedSearchProviderComponent: React.FC<SearchProviderProps> = ({
     databaseId,
     assetActionDisabledReasons,
+    titleSlots,
 }) => {
     return (
         <ModernSearchContainer
@@ -20,6 +24,7 @@ const UnifiedSearchProviderComponent: React.FC<SearchProviderProps> = ({
             showPreferences={true}
             showBulkActions={true}
             assetActionDisabledReasons={assetActionDisabledReasons}
+            titleSlots={titleSlots}
         />
     );
 };

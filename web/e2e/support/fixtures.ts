@@ -159,16 +159,39 @@ export async function readFeaturesEnabled(page: Page): Promise<string[] | null> 
     });
 }
 
-/** The search page's provider tab strip. */
-export function searchTabs(page: Page): Locator {
-    return page.getByRole("tablist").first();
+/**
+ * The search page's view switch in its title row: a Cloudscape SegmentedControl, so a `toolbar`
+ * named by its label holding one `aria-pressed` button per view. Exact, because the results'
+ * "Result view" toolbar contains the same word. Absent when only one view is available.
+ */
+export function searchViewSwitch(page: Page): Locator {
+    return page.getByRole("toolbar", { name: "Page view", exact: true });
+}
+
+/** One view's segment in the view switch, by its label (`Search`, or `/list$/i` for the asset list). */
+export function searchViewSegment(page: Page, name: string | RegExp): Locator {
+    return searchViewSwitch(page).getByRole("button", {
+        name,
+        ...(typeof name === "string" ? { exact: true } : {}),
+    });
 }
 
 /**
- * Navigate to the search page — optionally database-locked and optionally straight to a provider
- * tab (`?tab=`) — and wait for its tab strip and an h1. Waits on structure, never on data: the
- * unified tab's h1 comes from SearchTopBar and the asset-list tab's from ListPage, and either
- * satisfies the wait.
+ * The search page h1, shared by every view: `<Assets> and Files`, or `<Assets> for <databaseId>` on
+ * a database route. Matched on its tail so a deployment's asset synonym does not matter.
+ */
+export function searchPageHeading(page: Page, databaseId?: string): Locator {
+    const tail = databaseId
+        ? ` for ${databaseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`
+        : " and Files$";
+    return page.getByRole("heading", { level: 1, name: new RegExp(tail) });
+}
+
+/**
+ * Navigate to the search page — optionally database-locked and optionally straight to a view
+ * (`?tab=`) — and wait for its h1 and the active view's body. Waits on structure, never on data:
+ * the title row renders before the view's chunk loads, so the wait ends on the body's first
+ * searchbox (the Search view's query box, or the asset list table's filter).
  */
 export async function gotoSearch(
     page: Page,
@@ -177,15 +200,13 @@ export async function gotoSearch(
     const path = options.databaseId ? `/#/databases/${options.databaseId}/assets/` : "/#/assets/";
     const query = options.tab ? `?tab=${encodeURIComponent(options.tab)}` : "";
     await page.goto(`${path}${query}`, { waitUntil: "domcontentloaded" });
-    await expect(searchTabs(page)).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
-        timeout: 60_000,
-    });
+    await expect(searchPageHeading(page, options.databaseId)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("searchbox").first()).toBeVisible({ timeout: 60_000 });
     await page.waitForLoadState("networkidle").catch(() => undefined);
 }
 
 /**
- * Assert the active search tab rendered rows or one of its empty states — the search table's
+ * Assert the active search view rendered rows or one of its empty states — the search table's
  * "No matches", its idle natural-language state ("Describe what you are looking for"), or the asset
  * list's "No assets to display." — never that specific data exists. `expectTableRendered`'s
  * `/no .*found/i` matches none of them, which is why this exists.
@@ -620,9 +641,17 @@ export function modeToolbar(page: Page): Locator {
     return page.getByRole("toolbar", { name: "Search mode" });
 }
 
-/** The unified tab's query box: an `Input type="search"`, so a `searchbox`, never a `textbox`. */
+/** The Search view's query box: an `Input type="search"`, so a `searchbox`, never a `textbox`. */
 export function searchQueryBox(page: Page): Locator {
     return page.getByRole("searchbox").first();
+}
+
+/**
+ * The Search view's Search button, in the query band. Scoped there because the view switch in the
+ * title row has a `Search` segment, which is a button of the same name.
+ */
+export function searchSubmitButton(page: Page): Locator {
+    return page.locator(".search-query-band").getByRole("button", { name: "Search", exact: true });
 }
 
 /** Press the mode segment and wait for the placeholder to confirm the container switched. */

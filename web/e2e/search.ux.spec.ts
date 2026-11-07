@@ -12,7 +12,9 @@ import {
     readFeaturesEnabled,
     searchModeCase,
     searchQueryBox,
-    searchTabs,
+    searchSubmitButton,
+    searchViewSegment,
+    searchViewSwitch,
     selectSearchMode,
     textContrastRatio,
     SearchModeCase,
@@ -34,7 +36,7 @@ import {
 
 const NLP_PROBE_QUERY = "a part of a machine";
 
-/** Open the unified tab and resolve which engines the deployment advertises; skip when none. */
+/** Open the Search view and resolve which engines the deployment advertises; skip when none. */
 async function openUnified(page: Page): Promise<SearchModeCase> {
     await gotoSearch(page);
     const features = await readFeaturesEnabled(page);
@@ -80,35 +82,38 @@ async function runNlpSearch(page: Page, query: string): Promise<{ body: any; req
 }
 
 test.describe("Unified search — layout and mode controls", () => {
-    test("the provider tab strip is keyboard-operable and reports selection", async ({ page }) => {
+    test("the view switch is keyboard-operable, reports selection and keeps focus", async ({
+        page,
+    }) => {
         const errors = collectPageErrors(page);
         await gotoSearch(page);
-        const tabs = searchTabs(page).getByRole("tab");
-        const count = await tabs.count();
-        expect(count).toBeGreaterThanOrEqual(1);
+        await expect(page.getByRole("tablist")).toHaveCount(0);
+        const segments = searchViewSwitch(page).getByRole("button");
+        const count = await segments.count();
+        test.skip(count === 0, "One view only in this environment; no switch");
+        expect(count).toBeGreaterThanOrEqual(2);
         for (let i = 0; i < count; i++) {
-            await expect(tabs.nth(i)).toHaveAccessibleName(/\S/);
-            await expect(tabs.nth(i)).toHaveAttribute("aria-selected", /true|false/);
+            await expect(segments.nth(i)).toHaveAccessibleName(/\S/);
+            await expect(segments.nth(i)).toHaveAttribute("aria-pressed", /true|false/);
         }
-        test.skip(count < 2, "Only one provider tab in this environment");
+        await expect(searchViewSwitch(page).getByRole("button", { pressed: true })).toHaveCount(1);
 
-        // Arrow keys move the selection along the strip and the hash follows it.
-        const selected = searchTabs(page).getByRole("tab", { selected: true });
-        const before = await selected.getAttribute("data-testid").catch(() => null);
+        // The arrow moves focus along the switch, Enter selects, and the hash follows. The view's
+        // body is replaced; the switch is not, so focus stays where the user left it.
+        const selected = searchViewSwitch(page).getByRole("button", { pressed: true });
+        const before = await selected.getAttribute("data-testid");
         await selected.focus();
         await page.keyboard.press("ArrowRight");
+        const target = searchViewSwitch(page).locator(":focus");
+        const targetId = await target.getAttribute("data-testid");
+        expect(targetId, "the arrow moved focus to another view").not.toBe(before);
         await page.keyboard.press("Enter");
-        await expect
-            .poll(async () => {
-                const now = searchTabs(page).getByRole("tab", { selected: true });
-                return (
-                    (await now.getAttribute("data-testid").catch(() => null)) !== before ||
-                    (await now.innerText()) !== (await selected.innerText().catch(() => ""))
-                );
-            })
-            .toBe(true);
-        await expect(page).toHaveURL(/[?&]tab=/);
+        const chosen = searchViewSwitch(page).locator(`[data-testid="${targetId}"]`);
+        await expect(chosen).toHaveAttribute("aria-pressed", "true");
+        await expect(page).toHaveURL(new RegExp(`[?&]tab=${targetId}`));
+        await expect(chosen).toBeFocused();
         await expectSearchRendered(page);
+        await expect(chosen).toBeFocused();
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 
@@ -222,7 +227,7 @@ test.describe("Unified search — natural-language behaviour", () => {
         });
         await searchQueryBox(page).fill("");
         await searchQueryBox(page).press("Enter");
-        await page.getByRole("button", { name: "Search", exact: true }).click();
+        await searchSubmitButton(page).click();
         // The idle state says what to type; it neither reports "No matches" (nothing was searched)
         // nor offers to clear filters that are not the cause, and no count badge claims 0 results.
         await expect(
@@ -239,7 +244,7 @@ test.describe("Unified search — natural-language behaviour", () => {
     }) => {
         const mode = await openUnified(page);
         await enterNlpMode(page, mode);
-        const searchButton = page.getByRole("button", { name: "Search", exact: true });
+        const searchButton = searchSubmitButton(page);
 
         const { body, requests } = await runNlpSearch(page, NLP_PROBE_QUERY);
         // One submit is one request: a mode switch just before it must not add a second through
@@ -355,7 +360,8 @@ test.describe("Unified search — accessibility and layout", () => {
             await databaseFilter.click();
             await expect(page.getByRole("listbox").first()).toBeVisible();
         }
-        const panel = page.getByRole("tabpanel").first();
+        // The whole page content: the title row (view switch, Clear all filters) and the view.
+        const panel = page.getByRole("main").first();
         const unnamed: string[] = await panel.evaluate((root) => {
             const roles = new Set([
                 "button",
@@ -431,7 +437,7 @@ test.describe("Unified search — accessibility and layout", () => {
         const mode = await openUnified(page);
         await searchQueryBox(page).focus();
         await page.keyboard.press("Tab");
-        await expect(page.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+        await expect(searchSubmitButton(page)).toBeFocused();
         if (mode === "both") {
             await searchQueryBox(page).focus();
             await page.keyboard.press("Shift+Tab");
@@ -451,10 +457,11 @@ test.describe("Unified search — accessibility and layout", () => {
             );
             expect(overflow, "document wider than the viewport").toBeLessThanOrEqual(0);
             await expect(searchQueryBox(page)).toBeInViewport();
-            await expect(
-                page.getByRole("button", { name: "Search", exact: true })
-            ).toBeInViewport();
+            await expect(searchSubmitButton(page)).toBeInViewport();
             if (mode === "both") await expect(modeToolbar(page)).toBeInViewport();
+            if (await searchViewSwitch(page).count()) {
+                await expect(searchViewSwitch(page)).toBeInViewport();
+            }
         });
     }
 
@@ -567,15 +574,14 @@ test.describe("Unified search — query band", () => {
     });
 });
 
-test.describe("Basic Asset List — bulk actions", () => {
+test.describe("Asset list view — bulk actions", () => {
     test("offers the shared Delete/Unarchive actions and a Show archived toggle, and the delete confirm can be dismissed", async ({
         page,
     }) => {
         await gotoSearch(page, { tab: "asset-list" });
-        await expect(searchTabs(page).getByRole("tab", { name: /Basic .* List$/ })).toHaveAttribute(
-            "aria-selected",
-            "true"
-        );
+        if (await searchViewSwitch(page).count()) {
+            await expect(searchViewSegment(page, /list$/i)).toHaveAttribute("aria-pressed", "true");
+        }
         await expectSearchRendered(page);
         const del = page.getByRole("button", { name: "Delete Selected" });
         await expect(del).toBeVisible();
@@ -591,7 +597,7 @@ test.describe("Basic Asset List — bulk actions", () => {
         await del.click();
         const dialog = page.getByRole("dialog");
         await expect(dialog).toBeVisible();
-        // The same modal as the Primary Search tab: archive is the default, permanent delete a choice.
+        // The same modal as the Search view: archive is the default, permanent delete a choice.
         await expect(dialog.getByText(/archive/i).first()).toBeVisible();
         await dialog.getByRole("button", { name: /^Cancel$/ }).click();
         await expect(dialog).toHaveCount(0);

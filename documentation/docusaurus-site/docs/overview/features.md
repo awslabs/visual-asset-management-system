@@ -33,7 +33,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Full-text search** -- Search across asset names, descriptions, metadata fields, and file attributes
 -   **Natural-language search** -- Describe what a file shows or contains and rank files by semantic similarity of their generated metadata, extracted text, and renders; works with or without Amazon OpenSearch (`VECTORSEARCH`)
 -   **Asset and file search** -- Separate search scopes for assets and files with column-specific filters
--   **Search providers as tabs** -- The Assets and Files page hosts an asset list tab and, when a search engine is enabled, a search tab with a keyword / natural-language toggle
+-   **Search page views** -- A switch in the Assets and Files page title chooses an asset list or, when a search engine is enabled, a search view with a keyword / natural-language toggle
 -   **Preview thumbnails in results** -- Visual asset identification directly in search result listings
 -   **Result paging** -- Full result counts with proper pagination
 

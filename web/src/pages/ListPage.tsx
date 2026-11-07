@@ -44,6 +44,9 @@ export default function ListPage(props: any) {
         // Receives the reload trigger so a caller's own modals can refresh the list.
         onReloadReady,
         createDisabledReason,
+        // For a host page that renders the breadcrumbs and the h1 itself (the search page's asset
+        // list view): the list then starts with its table, whose own header names it.
+        hidePageHeading = false,
     } = props;
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
@@ -118,8 +121,8 @@ export default function ListPage(props: any) {
 
     return (
         <>
-            <Box padding={{ top: databaseId ? "s" : "m", horizontal: "l" }}>
-                {databaseId && (
+            <Box padding={{ top: databaseId || hidePageHeading ? "s" : "m", horizontal: "l" }}>
+                {databaseId && !hidePageHeading && (
                     <BreadcrumbGroup
                         items={[
                             { text: Synonyms.Databases, href: "#/databases/" },
@@ -132,16 +135,18 @@ export default function ListPage(props: any) {
                         ariaLabel="Breadcrumbs"
                     />
                 )}
-                <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
-                    <div>
-                        <TextContent>
-                            <h1>
-                                {pluralNameTitleCase}
-                                {databaseId && ` for ${databaseId}`}
-                            </h1>
-                        </TextContent>
-                    </div>
-                </Grid>
+                {!hidePageHeading && (
+                    <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
+                        <div>
+                            <TextContent>
+                                <h1>
+                                    {pluralNameTitleCase}
+                                    {databaseId && ` for ${databaseId}`}
+                                </h1>
+                            </TextContent>
+                        </div>
+                    </Grid>
+                )}
                 {error && (
                     <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
                         <Alert
@@ -222,4 +227,5 @@ ListPage.propTypes = {
     includeArchived: PropTypes.bool,
     onReloadReady: PropTypes.func,
     createDisabledReason: PropTypes.string,
+    hidePageHeading: PropTypes.bool,
 };

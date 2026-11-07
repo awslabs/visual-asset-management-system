@@ -133,7 +133,7 @@ web/
                                 #   detail route + the Tier-1 route the link is gated on
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - unified keyword / natural-language search
-                              #   (the body of the search page's "Search" tab; see 8.1)
+                              #   (the body of the search page's "Search" view; see 8.1)
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
@@ -142,7 +142,7 @@ web/
       AssetDownload.tsx AssetUpload/
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/                 # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost
+      search/                 # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
 
       # Orchestration route shells — each reads route params and renders the matching
@@ -161,12 +161,12 @@ web/
       viewers/                  # Individual viewer plugins + manifest.ts, addonManifest.ts,
                                 #   custom/customManifest.ts
 
-    searchPlugin/           # Search page provider host (tab strip) — see 8.1
+    searchPlugin/           # Search page provider host (title row + view switch) — see 8.1
       index.ts
       config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
       core/                     # SearchProviderRegistry.ts, providerAvailability.ts,
                                 #   useSearchProvidersReady.ts, types.ts
-      components/SearchTabsHost.tsx
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
       providers/                # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities and helpers
@@ -886,12 +886,12 @@ For the current viewer catalog, plugin config field reference, and the step-by-s
 
 ### 8.1 Search Provider Registry
 
-The search page is a tab strip of **search providers** under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx` (Cloudscape `Tabs`, the active tab in the `?tab=` hash query, bodies loaded through `lazyWithRetry` like route pages that receive `databaseId` and `isActive`). Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default tab. There is no runtime registration API — adding a provider is a source change in the three places `manifest.ts` lists, plus a row here.
+The search page is a set of **search provider** views under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx`. The host renders the page title row, then the active provider's body, loaded through `lazyWithRetry` like a route page. The title row holds the one h1 ("Assets and Files", or "Assets for <databaseId>" on a database route, in the deployment's asset synonym; `searchPageTitle`) and, when more than one provider is available, the view switch on its right: a Cloudscape `SegmentedControl` labelled `Page view` (Cloudscape shows it as a select below 688 px). The active view is the `?tab=` hash query, written with `replace`; an unknown or absent value selects the default view. Only the active body is mounted, and it receives `databaseId`, `isActive`, `assetActionDisabledReasons` and `titleSlots`. A body renders no page heading of its own: it portals its title-row content into `titleSlots.info` (beside the h1, the Search view's result count) and `titleSlots.actions` (before the switch, **Clear all filters**), and the asset list passes `hidePageHeading` to `ListPage`. The switch sits outside the body, so the control the user pressed stays mounted and keeps focus across a switch. Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default view. There is no runtime registration API and no add-on or fork lane for providers: adding a provider is a source change in the three places `manifest.ts` lists, plus a row here. The catalog holds the core providers only, so the switch is always a segmented control.
 
-| ID               | Name             | Priority | Availability                                |
-| ---------------- | ---------------- | -------- | ------------------------------------------- |
-| `asset-list`     | Basic Asset List | 100      | always                                      |
-| `unified-search` | Primary Search   | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
+| ID               | Name       | Priority | Availability                                |
+| ---------------- | ---------- | -------- | ------------------------------------------- |
+| `asset-list`     | Asset list | 100      | always                                      |
+| `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
 
 `config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
 
@@ -944,7 +944,7 @@ Known feature flags:
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
--   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the unified search tab and `POST /search/nlp`; with `NOOPENSEARCH` also present the tab runs in its reduced (NLP-only) form
+-   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the search page's Search view and `POST /search/nlp`; with `NOOPENSEARCH` also present the view runs in its reduced (NLP-only) form
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1309,7 +1309,7 @@ When in doubt about patterns, reference these well-structured files:
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
-| Search provider host | `src/searchPlugin/components/SearchTabsHost.tsx`  |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |

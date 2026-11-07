@@ -37,8 +37,8 @@ export class SearchProviderRegistry {
     }
 
     /**
-     * The providers the current `appCache` config allows, in tab order. Read on every call, so a
-     * host that mounts after the secure-config fetch sees the switches that fetch delivered.
+     * The providers the current `appCache` config allows, in view switch order. Read on every call,
+     * so a host that mounts after the secure-config fetch sees the switches that fetch delivered.
      */
     getAvailableProviders(): SearchProviderConfig[] {
         const features = normalizeFeaturesEnabled(appCache.getItem("config")?.featuresEnabled);

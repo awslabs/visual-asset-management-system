@@ -1,32 +1,32 @@
 # Search and Discovery
 
-The **Assets and Files** page is where you locate assets and files across every database you can access. It hosts search providers as tabs: a **Basic Asset List** that is always available, and a **Primary Search** tab — available when your deployment has Amazon OpenSearch Service, natural-language search, or both — that offers keyword search with full-text queries, metadata filtering, and geospatial map visualization, and natural-language search that ranks files by what they show or contain.
+The **Assets and Files** page is where you locate assets and files across every database you can access. A switch in the page title row chooses between two views: an **Asset list** that is always available, and a **Search** view — available when your deployment has Amazon OpenSearch Service, natural-language search, or both — that offers keyword search with full-text queries, metadata filtering, and geospatial map visualization, and natural-language search that ranks files by what they show or contain.
 
 ![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
 
-<!-- TODO(owner): screenshot: asset_search_table_2026MMDD_v2.7.png — the Assets and Files page with the Basic Asset List / Primary Search tab strip and the query band with its Keyword / Natural language switch (replaces the v2.5 capture above) -->
+<!-- TODO(owner): screenshot: asset_search_table_2026MMDD_v2.7.png — the Assets and Files page with the Search / Asset list view switch in the title row and the query band with its Keyword / Natural language switch (replaces the v2.5 capture above) -->
 
-## Search tabs
+## Search views
 
-| Tab                  | Available when                                          | What it offers                                                                                                                                                                                                        |
-| -------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Basic Asset List** | Always                                                  | A paginated table of the assets you are authorized to see, with database locking, column preferences, a **Show archived** toggle, and the same **Delete Selected** / **Unarchive Selected** actions as Primary Search |
-| **Primary Search**   | Amazon OpenSearch or natural-language search is enabled | Keyword search over assets and files, natural-language search over files, filters, and table, card, and map views                                                                                                     |
+| View           | Available when                                          | What it offers                                                                                                                                                                                                         |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Search**     | Amazon OpenSearch or natural-language search is enabled | Keyword search over assets and files, natural-language search over files, filters, and table, card, and map views                                                                                                      |
+| **Asset list** | Always                                                  | A paginated table of the assets you are authorized to see, with database locking, column preferences, a **Show archived** toggle, and the same **Delete Selected** / **Unarchive Selected** actions as the Search view |
 
-The page opens on the **Primary Search** tab when it is available and on **Basic Asset List** otherwise. The active tab is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same tab. A database-scoped link (`/#/search/{databaseId}/assets`) locks both tabs to that database.
+Choose a view with the switch at the right of the page title; the page has one title, **Assets and Files**, whichever view is shown. The page opens on the **Search** view when it is available and on **Asset list** otherwise, and a deployment that offers only the asset list shows no switch. The active view is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same view. A database-scoped link (`/#/search/{databaseId}/assets`) locks both views to that database, and the title names the database.
 
 ## The query band
 
-Below the page title, the Primary Search tab places the query in a band of its own: the **Keyword / Natural language** switch (only when both engines are enabled), a full-width search box with the **Search** button, and one line beneath the box that states what the active mode does. The two modes start differently, and that line is where the difference is stated:
+Below the page title, the Search view places the query in a band of its own: the **Keyword / Natural language** switch (only when both engines are enabled), a full-width search box with the **Search** button, and one line beneath the box that states what the active mode does. The two modes start differently, and that line is where the difference is stated:
 
--   **Keyword** matches asset and file names, descriptions, tags, and metadata. With an empty query it lists everything in scope, so results appear as soon as the tab opens or a filter changes; filters narrow the list.
+-   **Keyword** matches asset and file names, descriptions, tags, and metadata. With an empty query it lists everything in scope, so results appear as soon as the view opens or a filter changes; filters narrow the list.
 -   **Natural language** matches on meaning across file contents — including image and video scenes — as well as names, descriptions, tags, and metadata. Nothing is searched until you describe what you are looking for: the table shows "Describe what you are looking for" instead of a result count, and filters take effect once a description is entered. Switching from **Keyword** with an empty box shows the same state; the keyword listing is not carried over.
 
 The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** in the title row resets the query and every filter.
 
 ## What to search for
 
-The Primary Search tab returns either assets or the individual files inside them. Choose with the **Search for** selector at the top of the sidebar.
+The Search view returns either assets or the individual files inside them. Choose with the **Search for** selector at the top of the sidebar.
 
 | Entity type | Description                                                                                              | Selection                             |
 | ----------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -49,13 +49,13 @@ Results include a relevance score. Choose the information icon next to any resul
 
 ![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
 
-<!-- TODO(owner): screenshot: file_search_table_2026MMDD_v2.7.png — the Primary Search tab in Files mode with keyword results (replaces the v2.5 capture above) -->
+<!-- TODO(owner): screenshot: file_search_table_2026MMDD_v2.7.png — the Search view in Files mode with keyword results (replaces the v2.5 capture above) -->
 
 ## Natural language search
 
 Choose **Natural language** to describe what you are looking for instead of naming it — "a rusted pump housing", "drone footage of a bridge deck", "a floor plan with two stairwells". VAMS embeds your description with an Amazon Bedrock model and ranks files by the similarity of the text embedded for each file: the metadata the pipeline generated from renders, keyframes, and extracted text, the metadata already recorded on the file, its asset, and its database, the file's attributes, and the extracted text itself. Natural-language mode searches **files**; in Assets mode the results are grouped by asset and each asset is ranked by its best-matching file.
 
-<!-- TODO(owner): screenshot: search_nlp_mode_2026MMDD_v2.7.png — the Primary Search tab in Natural language mode with the mode line under the query box, the reduced filter sidebar, the Search inside files checkbox, and the Relevance column -->
+<!-- TODO(owner): screenshot: search_nlp_mode_2026MMDD_v2.7.png — the Search view in Natural language mode with the mode line under the query box, the reduced filter sidebar, the Search inside files checkbox, and the Relevance column -->
 
 -   Only the latest live version of each file is searched, and archived files are excluded unless **Include archived** is on.
 -   The **Relevance** column shows the similarity as a percentage; the modality popover beside it lists which parts of the embedded text contributed to the match: `asset-metadata`, `file-identity`, `genai-metadata`, `file-attributes`, `existing-file-metadata`, `existing-asset-metadata`, `existing-database-metadata`, `existing-file-attributes`, and `file-text`. A video analyzed in time windows or a document embedded in content chunks is listed once however many of them match; the popover then also names the best-matching window or chunk and how many matched. A match on a time window also lists `segment-frames`; a match on a content chunk lists `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`.
@@ -248,7 +248,7 @@ Permanently deleting an archived asset cannot be undone. The asset and all its f
 
 ## Limited search mode
 
-If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), keyword search, metadata filtering, and map view are unavailable. When vector search is also disabled, the page shows only the **Basic Asset List** tab — a paginated table of assets with archive, permanent-delete, and unarchive actions. When vector search is enabled, the **Primary Search** tab remains available in natural-language mode with the database, file-type, and archived filters and the **Search inside files** checkbox, and its table shows the asset name, database, file path, extension, size, archived status, and relevance columns.
+If your deployment has Amazon OpenSearch Service disabled (the `NOOPENSEARCH` feature flag is active), keyword search, metadata filtering, and map view are unavailable. When vector search is also disabled, the page shows only the **Asset list** view, with no view switch — a paginated table of assets with archive, permanent-delete, and unarchive actions. When vector search is enabled, the **Search** view remains available in natural-language mode with the database, file-type, and archived filters and the **Search inside files** checkbox, and its table shows the asset name, database, file path, extension, size, archived status, and relevance columns.
 
 :::tip[CLI alternative]
 Search operations can also be performed via the command line. See [CLI Search Commands](../cli/commands/search.md).

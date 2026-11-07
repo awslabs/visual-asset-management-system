@@ -38,7 +38,10 @@ export function defaultProviderId(providers: SearchProviderConfig[]): string | u
     return providers[0]?.id;
 }
 
-/** The tab label: the catalog name with the whole words Asset/Assets replaced by the deployment's synonyms. */
+/**
+ * The view switch label: the catalog name with the whole words Asset/Assets replaced by the
+ * deployment's synonyms.
+ */
 export function providerLabel(config: SearchProviderConfig): string {
     return config.name
         .replace(/\bAssets\b/g, Synonyms.Assets)
