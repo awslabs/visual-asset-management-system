@@ -874,6 +874,10 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
                     warnings.append(f"The partial copy of output '{job.get('relativeKey', '')}' "
                                     f"could not be removed.")
                     aborted = False
+            # This abort's answer (and a NoSuchUpload) is not final: a part copy accepted before the
+            # stop can still land minutes later. The delayed sweep aborts the recorded upload again
+            # after the copy tasks have ended; it leaves a job whose object landed alone (#1123 D5).
+            schedule_delayed_sweep(sfn_client, job_id)
             if aborted:
                 # Decided by the landed object, whatever the abort answered: S3 answers 204 (not
                 # NoSuchUpload) to an abort sent during or after a Complete that succeeds, and the
@@ -941,7 +945,9 @@ def abort_until_gone(s3_client, bucket, key, upload_id, attempts=ABORT_SWEEP_ATT
                      wait_seconds=ABORT_SWEEP_WAIT_SECONDS, sleep=None):
     """Abort a multipart upload until S3 no longer knows it (ListParts answers NoSuchUpload), at most
     ``attempts`` aborts, waiting ``wait_seconds`` before each repeat (only when parts are still
-    listed). Returns True when the upload is gone, False when it is still listed after the last
+    listed). A NoSuchUpload here is not final (a part copy accepted earlier can still land minutes
+    later), so every caller also schedules the delayed sweep (schedule_delayed_sweep). Returns True
+    when ListParts answered NoSuchUpload, False when it is still listed after the last
     attempt (logged; the copy tasks' own abort after their last part, and the bucket's lifecycle
     rule where it has one, still apply). Raises on an abort error other than NoSuchUpload.
 
@@ -966,6 +972,115 @@ def abort_until_gone(s3_client, bucket, key, upload_id, attempts=ABORT_SWEEP_ATT
     logger.warning(f"Multipart upload {upload_id} is still listed after {max(1, attempts)} aborts; "
                    f"a part copy still running aborts it again when it ends")
     return False
+
+
+# Delayed sweep (#1123 D5, live recheck on demo21). An abort answered, and a ListParts right after it
+# answered NoSuchUpload, yet the upload was listed again 2 to 8 minutes later with a part whose copy
+# had been accepted before the stop; one later abort removed it for good. So no immediate answer is
+# final: every stopped or failed job with an upload also gets a delayed sweep, an execution of the
+# copy state machine itself (its sweep branch: Wait SWEEP_FIRST_WAIT_SECONDS, sweep, Wait
+# SWEEP_SECOND_WAIT_SECONDS, sweep; infra lambdaBuilder/largeObjectCopyEngine.ts). The second pass
+# runs after the longest a copy task alive at the stop can still run (the engine's 15-minute timeout).
+SWEEP_EXECUTION_PREFIX = "locsweep-"
+SWEEP_FIRST_WAIT_SECONDS = 300
+SWEEP_SECOND_WAIT_SECONDS = 600
+# Upload pages read per pass for one key (the prefix is the exact key, so normally one page).
+SWEEP_MAX_LIST_PAGES = 10
+SWEEPABLE_STATUSES = (STATUS_FAILED, STATUS_CANCELLED)
+
+
+def sweep_execution_name_for(job_id):
+    """Step Functions execution name of a job's delayed sweep (<= 80 chars of [A-Za-z0-9-_])."""
+    return SWEEP_EXECUTION_PREFIX + hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:48]
+
+
+def sweep_input(job_id):
+    """The sweep execution's input. Only the job id: every scheduler sends the same input, so a
+    second StartExecution with the job's name is deduplicated by Step Functions, and the sweep reads
+    the bucket, key and upload id from the job row, never from its input."""
+    return json.dumps({"sweep": {"jobId": job_id}})
+
+
+def schedule_delayed_sweep(sfn_client, job_id, machine_arn=None):
+    """Start the delayed sweep of a job's multipart upload, once per job (a fixed execution name and
+    input: an execution already started under that name answers ExecutionAlreadyExists, which counts
+    as scheduled). Best-effort: returns False (logged) when it could not be started; the immediate
+    aborts already ran and the asset bucket's AbortIncompleteMultipartUpload rule still applies."""
+    machine_arn = machine_arn or state_machine_arn()
+    if not machine_arn or not job_id or sfn_client is None:
+        return False
+    try:
+        sfn_client.start_execution(stateMachineArn=machine_arn, name=sweep_execution_name_for(job_id),
+                                   input=sweep_input(job_id))
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ExecutionAlreadyExists":
+            return True
+        logger.warning(f"Could not schedule the delayed sweep of copy job {job_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Could not schedule the delayed sweep of copy job {job_id}: {e}")
+        return False
+
+
+def _is_sweepable(row):
+    """A job whose recorded upload the delayed sweep may abort: finalized FAILED or CANCELLED, or
+    still open with a stop recorded (its stopper aborted it already; the decision is still being
+    made). Never a SUCCEEDED job (its upload was completed and its object landed) and never an open
+    job without a stop (a copy still running)."""
+    status = (row or {}).get("status")
+    if status in SWEEPABLE_STATUSES:
+        return True
+    return is_open_job(row) and bool((row or {}).get("stopRequestedAt"))
+
+
+def recorded_upload_listed(s3_client, bucket, key, upload_id, max_pages=SWEEP_MAX_LIST_PAGES):
+    """True when ListMultipartUploads (prefix = the exact key) lists this upload id at this key.
+    Uploads of other writers at the same key, or at keys that only start with it, never match."""
+    kwargs = {"Bucket": bucket, "Prefix": key}
+    for _ in range(max(1, max_pages)):
+        response = s3_client.list_multipart_uploads(**kwargs)
+        for upload in response.get("Uploads", []) or []:
+            if upload.get("Key") == key and upload.get("UploadId") == upload_id:
+                return True
+        if not response.get("IsTruncated"):
+            return False
+        kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
+        kwargs["UploadIdMarker"] = response.get("NextUploadIdMarker", "")
+    logger.warning(f"Stopped listing the uploads of one key after {max_pages} pages")
+    return False
+
+
+def sweep_recorded_upload(table, s3_client, job_id, final=False):
+    """One pass of a job's delayed sweep. Reads the job row, decides first by the landed object (a
+    job whose own object is at the key is left alone), then lists the uploads at the job's exact key
+    and aborts the one the row recorded, if listed. Aborts nothing else and removes no object.
+    Raises when the landed check or a listing fails (the state machine retries the pass)."""
+    row = get_job_row(table, job_id)
+    upload_id = row.get("uploadIdS3", "")
+    bucket, key = row.get("destBucket", ""), row.get("destKey", "")
+    if not upload_id or not bucket or not key:
+        return {"swept": False, "reason": "no recorded upload"}
+    if not _is_sweepable(row):
+        return {"swept": False, "reason": f"job is {row.get('status') or 'unrecorded'}"}
+    landed, _version = landed_object_version(s3_client, row)
+    if landed:
+        return {"swept": False, "reason": "the job's object landed"}
+    if not recorded_upload_listed(s3_client, bucket, key, upload_id):
+        return {"swept": True, "listed": False, "remaining": False}
+    try:
+        s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "NoSuchUpload":
+            raise
+    remaining = recorded_upload_listed(s3_client, bucket, key, upload_id)
+    if remaining:
+        log = logger.error if final else logger.warning
+        log(f"Multipart upload of copy job {job_id} is still listed after the delayed sweep's abort"
+            + ("; the bucket's lifecycle rule, where it has one, removes it" if final else ""))
+    else:
+        logger.info(f"Delayed sweep aborted the leftover multipart upload of copy job {job_id}")
+    return {"swept": True, "listed": True, "remaining": remaining}
 
 
 def mark_cancelled(table, job_id):

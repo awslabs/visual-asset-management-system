@@ -34,6 +34,7 @@ import {
     LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
     LARGE_OBJECT_COPY_STATUS_PERMISSION_ID,
     LARGE_OBJECT_COPY_STATUS_RULE_ID,
+    LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS,
     MAP_ITERATION_EVENTS,
     MAX_BATCHES,
     NOTIFY_LAST_ATTEMPT_RETRY,
@@ -426,6 +427,134 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
                     JSON.stringify(s.Resource).includes(`/index/${S3_ASSET_BUCKETS_NAME_INDEX}`)
             );
         expect(docs.some(queriesBucketIndex)).toBe(true);
+    });
+
+    // #1123 D5 (live recheck on demo21): an abort's immediate answer is not final. Each stopped or
+    // failed job gets a delayed sweep, an execution of the copy state machine's own sweep branch.
+    test("a sweep execution waits, sweeps, waits past the task timeout and sweeps again", () => {
+        expect(definition.StartAt).toBe("LargeObjectCopyCopyOrSweep");
+        const start = jobStates.LargeObjectCopyCopyOrSweep;
+        expect(start.Type).toBe("Choice");
+        expect(start.Choices).toEqual([
+            { Variable: "$.sweep", IsPresent: true, Next: "LargeObjectCopySweepFirstWait" },
+        ]);
+        // A copy execution (input `job`, no `sweep`) runs the copy as before.
+        expect(start.Default).toBe("LargeObjectCopyPrepare");
+
+        const first = jobStates.LargeObjectCopySweepFirstWait;
+        const second = jobStates.LargeObjectCopySweepSecondWait;
+        expect(first).toEqual(
+            expect.objectContaining({
+                Type: "Wait",
+                Seconds: LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.first,
+            })
+        );
+        expect(second).toEqual(
+            expect.objectContaining({
+                Type: "Wait",
+                Seconds: LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second,
+            })
+        );
+        expect(LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS).toEqual({ first: 300, second: 600 });
+        // The last pass runs after the longest a copy task alive at the stop can still run.
+        expect(
+            LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.first + LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second
+        ).toBeGreaterThanOrEqual(engineFunction.Properties.Timeout);
+        expect(first.Next).toBe("LargeObjectCopySweepFirst");
+
+        const sweepFirst = jobStates.LargeObjectCopySweepFirst;
+        const sweepFinal = jobStates.LargeObjectCopySweepFinal;
+        for (const [task, final] of [
+            [sweepFirst, false],
+            [sweepFinal, true],
+        ] as [any, boolean][]) {
+            expect(isLambdaTask(task)).toBe(true);
+            expect(task.Parameters.Payload).toEqual({
+                action: "sweep",
+                "sweep.$": "$.sweep",
+                final,
+            });
+            // The task's result is discarded, so the second pass sees the same input.
+            expect(task.ResultPath).toBeNull();
+        }
+        expect(sweepFirst.Next).toBe("LargeObjectCopySweepSecondWait");
+        // A failed first pass still runs the second.
+        expect(sweepFirst.Catch).toEqual([
+            expect.objectContaining({
+                ErrorEquals: ["States.ALL"],
+                Next: "LargeObjectCopySweepSecondWait",
+            }),
+        ]);
+        expect(second.Next).toBe("LargeObjectCopySweepFinal");
+        expect(sweepFinal.Next).toBe("LargeObjectCopySwept");
+        expect(jobStates.LargeObjectCopySwept.Type).toBe("Succeed");
+
+        // Bounded history: the choice, two waits and two tasks with every retrier exhausted.
+        const sweepEvents =
+            2 +
+            2 * 2 +
+            worstCaseTaskEvents(sweepFirst.Retry) +
+            worstCaseTaskEvents(sweepFinal.Retry) +
+            2;
+        expect(sweepEvents).toBeLessThan(1000);
+
+        const backend = fs.readFileSync(
+            path.join(__dirname, "../../../backend/backend/common/largeObjectCopy.py"),
+            "utf8"
+        );
+        expect(backend).toMatch(
+            new RegExp(
+                `^SWEEP_FIRST_WAIT_SECONDS = ${LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.first}$`,
+                "m"
+            )
+        );
+        expect(backend).toMatch(
+            new RegExp(
+                `^SWEEP_SECOND_WAIT_SECONDS = ${LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second}$`,
+                "m"
+            )
+        );
+    });
+
+    const copyMachineArn = `arn:${PARTITION_OF[cell.template]}:states:${REGION_OF[cell.template]}:`;
+    const startsOnlyTheCopyMachine = (doc: any) =>
+        (doc.Statement as any[]).some((s) => {
+            const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+            if (!actions.includes("states:StartExecution")) return false;
+            const targets = (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).map((r: any) =>
+                SynthResult.flatten(r)
+            );
+            return (
+                targets.length === 1 &&
+                targets[0].startsWith(copyMachineArn) &&
+                /:stateMachine:LargeObjectCopy-[^*]+$/.test(targets[0])
+            );
+        });
+
+    test.each([
+        ["executionService.lambda_handler", "the abort route and the status change handler"],
+        ["sfn.handleExecutionError.lambda_handler", "the error handler"],
+        ["sfn.processWorkflowExecutionOutput.lambda_handler", "the output step"],
+    ])("%s (%s) may start the delayed sweep on the copy state machine only", (handler) => {
+        const [, fn] = functionByHandler(handler);
+        const docs = managedPoliciesOf(roleIdOf(fn)).map(
+            ([, r]: [string, any]) => r.Properties.PolicyDocument
+        );
+        expect(docs.some(startsOnlyTheCopyMachine)).toBe(true);
+    });
+
+    test("the engine may start the delayed sweep on its own state machine only", () => {
+        const roleId = roleIdOf(engineFunction);
+        const docs = Object.values(resources)
+            .filter(
+                (r: any) =>
+                    r.Type === "AWS::IAM::Policy" &&
+                    JSON.stringify(r.Properties.Roles ?? []).includes(`"${roleId}"`)
+            )
+            .map((r: any) => r.Properties.PolicyDocument);
+        expect(docs.some(startsOnlyTheCopyMachine)).toBe(true);
+        // Built from the fixed name: the engine does not reference the state machine (no cycle).
+        expect(JSON.stringify(docs)).not.toContain(stateMachineId);
     });
 
     test("the output step reads the engine name from SSM and may invoke it, with no cycle", () => {

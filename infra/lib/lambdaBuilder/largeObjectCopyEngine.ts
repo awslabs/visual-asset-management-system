@@ -183,6 +183,14 @@ export function grantLargeObjectCopyCoordination(
             actions: ["states:StopExecution"],
             resources: [largeObjectCopyExecutionArnPattern(config)],
         }),
+        // After its abort the stopper starts the job's delayed sweep (the copy state machine's sweep
+        // branch, backend loc.schedule_delayed_sweep): an abort's immediate answer is not final
+        // (#1123 D5). Only that one state machine.
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:StartExecution"],
+            resources: [largeObjectCopyStateMachineArn(config)],
+        }),
     ];
     // A stopped copy execution runs no Catch state, so the stopper aborts its multipart upload in
     // the asset bucket (cancel_execution_copy_jobs). Only that action: it reads and writes no object.
@@ -443,6 +451,16 @@ export function buildLargeObjectCopyEngine(
             resources: [largeObjectCopyExecutionArnPattern(config)],
         })
     );
+    // The failure cleanup and the reconcile of a cancelled stop start the job's delayed sweep, an
+    // execution of the copy state machine's sweep branch (#1123 D5). The ARN is built from the fixed
+    // name, so the engine does not reference the state machine that invokes it.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:StartExecution"],
+            resources: [largeObjectCopyStateMachineArn(config)],
+        })
+    );
 
     // Read staged sources, write the destination multipart upload, delete the staged object.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -679,6 +697,13 @@ export const CHUNK_START_RETRY = {
     maxDelaySeconds: 120,
 };
 
+/**
+ * Waits of the delayed sweep branch (#1123 D5): the first pass about 5 minutes after the stop, the
+ * last one 10 minutes later, past the engine's 15-minute task timeout. Same values as backend
+ * common/largeObjectCopy.py SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
+ */
+export const LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };
+
 /** Construct ids, for the tests and the resource list in documentation. */
 export const LARGE_OBJECT_COPY_STATUS_RULE_ID = "LargeObjectCopyStatusChangeRule";
 export const LARGE_OBJECT_COPY_STATUS_PERMISSION_ID = "LargeObjectCopyStatusChangeInvokePermission";
@@ -908,6 +933,46 @@ function buildCopyStateMachine(
         state.addCatch(failurePath, { errors: [sfn.Errors.ALL], resultPath: "$.error" });
     }
 
+    // The delayed sweep (#1123 D5): an execution whose input carries `sweep` (started by the cancel
+    // path and the engine's failure cleanup, backend loc.schedule_delayed_sweep, once per job) waits,
+    // sweeps the job's recorded upload, waits again past the longest a copy task alive at the stop can
+    // run (the engine's 15-minute timeout), and sweeps a last time. An abort's immediate answer is not
+    // final: a part copy accepted before the stop can land minutes later. A failed first pass still
+    // runs the second. Bounded history: two waits and two engine tasks (see the history budget).
+    const sweepFirstWait = new sfn.Wait(scope, "LargeObjectCopySweepFirstWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.first)),
+    });
+    const sweepFirst = engineTask(
+        scope,
+        "LargeObjectCopySweepFirst",
+        fun,
+        { action: "sweep", sweep: sfn.JsonPath.objectAt("$.sweep"), final: false },
+        {}
+    );
+    const sweepSecondWait = new sfn.Wait(scope, "LargeObjectCopySweepSecondWait", {
+        time: sfn.WaitTime.duration(Duration.seconds(LARGE_OBJECT_COPY_SWEEP_WAIT_SECONDS.second)),
+    });
+    const sweepFinal = engineTask(
+        scope,
+        "LargeObjectCopySweepFinal",
+        fun,
+        { action: "sweep", sweep: sfn.JsonPath.objectAt("$.sweep"), final: true },
+        {}
+    );
+    const swept = new sfn.Succeed(scope, "LargeObjectCopySwept", {
+        comment: "The delayed sweep of a stopped or failed copy ended.",
+    });
+    sweepFirst.addCatch(sweepSecondWait, { errors: [sfn.Errors.ALL], resultPath: "$.sweepError" });
+    const sweepPath = sweepFirstWait
+        .next(sweepFirst)
+        .next(sweepSecondWait)
+        .next(sweepFinal)
+        .next(swept);
+    const copyPath = prepare.next(copyChunks).next(complete).next(notifySucceeded);
+    const start = new sfn.Choice(scope, "LargeObjectCopyCopyOrSweep")
+        .when(sfn.Condition.isPresent("$.sweep"), sweepPath)
+        .otherwise(copyPath);
+
     const logGroup = stateMachineLogGroup(
         scope,
         "LargeObjectCopyStateMachineLogGroup",
@@ -919,9 +984,7 @@ function buildCopyStateMachine(
     const stateMachine = new sfn.StateMachine(scope, "LargeObjectCopyStateMachine", {
         stateMachineName: largeObjectCopyStateMachineName(config),
         stateMachineType: sfn.StateMachineType.STANDARD,
-        definitionBody: sfn.DefinitionBody.fromChainable(
-            prepare.next(copyChunks).next(complete).next(notifySucceeded)
-        ),
+        definitionBody: sfn.DefinitionBody.fromChainable(start),
         logs: {
             destination: logGroup,
             // Execution data carries bucket and key names only; level ALL satisfies AwsSolutions-SF1.
