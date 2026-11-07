@@ -280,6 +280,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Validator test literals** — Two backend validator test literals use raw strings instead of invalid escape sequences. (PR #1006)
 -   **Deprecated `datetime.utcnow()` removed** — The backend reads the current UTC time through one helper, `common.timestamps.utc_now`, which returns the same value without the Python 3.12+ deprecation warning; stored timestamps keep their format. (PR #1043)
 -   **Security scan suppressions re-pinned** — The ASH secret-scan suppressions for the workflow API, API overview and custom pipeline documentation examples point at the lines that hold the example values again, and an infra test fails when a line-pinned suppression no longer lands on a matching value. (issue #1014)
+-   **Shared download eligibility checks** — The checks a file passes before a download URL is issued (asset distributable, key inside the asset, asset-version pin, delete marker, file-type blocklist) are one shared backend module, `common/downloadEligibility.py`; download behaviour is unchanged. (issue #1124)
 
 **Known issues:**
 
