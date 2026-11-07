@@ -286,7 +286,7 @@ describe("ZipDownloadsTable", () => {
         expect(await screen.findByText("archive-1.zip was cancelled.")).toBeInTheDocument();
     });
 
-    it.each([
+    it.each<[string, ZipDownloadJob["status"], string]>([
         ["cancel", "RUNNING", "Cancel archive-1.zip"],
         ["delete", "SUCCEEDED", "Delete archive-1.zip"],
     ])(

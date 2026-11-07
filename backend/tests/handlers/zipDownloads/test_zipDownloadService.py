@@ -255,7 +255,10 @@ class TestCreate:
         env.lam.responses["executeFn"] = answer
         response = _create(env, FILE_SELECTION)
         assert response["statusCode"] == status
-        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == calls
+        launches = [c for c in env.lam.calls if c[0] == "executeFn"]
+        assert launches, "the launch was never sent"
+        # A transient pre-start answer is retried exactly once; anything else is never retried.
+        assert len(launches) == calls
         if row_status is None:
             assert env.zip.items == {}
             assert not [k for (b, k) in env.s3.objects if b == h.AUX]
@@ -276,7 +279,9 @@ class TestCreate:
         assert response["statusCode"] == 200
         row = next(iter(env.zip.items.values()))
         assert row["workflowExecutionId"] == "exec-2" and row["status"] == "QUEUED"
-        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == 2
+        launches = [c for c in env.lam.calls if c[0] == "executeFn"]
+        assert launches, "the launch was never sent"
+        assert len(launches) == 2
 
     def test_a_launch_that_may_have_started_is_never_retried(self, env, monkeypatch):
         monkeypatch.setattr(env.svc, "LAUNCH_RETRY_DELAY_SECONDS", 0)
@@ -284,7 +289,9 @@ class TestCreate:
                                           (200, {"message": {"executionId": "exec-2"}})]
         response = _create(env, FILE_SELECTION)
         assert response["statusCode"] == 503
-        assert len([c for c in env.lam.calls if c[0] == "executeFn"]) == 1
+        launches = [c for c in env.lam.calls if c[0] == "executeFn"]
+        assert launches, "the launch was never sent"
+        assert len(launches) == 1
 
     def test_folder_totals_from_prescan(self, env):
         item = h.body_of(_create(env, {"selection": [{"type": "folder", "relativePath": "/textures/"}]}))
