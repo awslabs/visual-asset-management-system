@@ -63,6 +63,22 @@ describe("ListPage page heading", () => {
         ).toBeInTheDocument();
     });
 
+    it("sets the document title for the pages that use it directly", async () => {
+        document.title = "unchanged";
+        renderListPage("/databases");
+        await waitFor(() => expect(screen.getByTestId("table-list")).toBeInTheDocument());
+        expect(document.title).toMatch(/ - Databases$/);
+    });
+
+    it("leaves the document title to the host page with hidePageHeading", async () => {
+        // The search page owns its title: a hosted asset list that set it on mount would leave it
+        // in place after the user switches back to the search view.
+        document.title = "host page title";
+        renderListPage("/databases/db1/assets", { hidePageHeading: true });
+        await waitFor(() => expect(screen.getByTestId("table-list")).toBeInTheDocument());
+        expect(document.title).toBe("host page title");
+    });
+
     it("hides the breadcrumbs and the h1, not the table, with hidePageHeading", async () => {
         renderListPage("/databases/db1/assets", { hidePageHeading: true });
         await waitFor(() => expect(screen.getByTestId("table-list")).toBeInTheDocument());

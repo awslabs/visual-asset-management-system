@@ -20,7 +20,7 @@ import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import Synonyms from "../synonyms";
-import { usePageTitle } from "../hooks/usePageTitle";
+import { usePageTitleWhen } from "../hooks/usePageTitle";
 
 export default function ListPage(props: any) {
     const { databaseId } = useParams();
@@ -45,10 +45,11 @@ export default function ListPage(props: any) {
         onReloadReady,
         createDisabledReason,
         // For a host page that renders the breadcrumbs and the h1 itself (the search page's asset
-        // list view): the list then starts with its table, whose own header names it.
+        // list view): the list then starts with its table, whose own header names it, and the
+        // host page keeps the document title.
         hidePageHeading = false,
     } = props;
-    usePageTitle(databaseId || null, pluralNameTitleCase);
+    usePageTitleWhen(!hidePageHeading, databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<any[]>([]);
