@@ -211,6 +211,28 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
             StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
         });
     });
+
+    test("the callback deletes and lists versions only under vams.preparedDownloads/ (#1125 D13)", () => {
+        const callback = functionByHandler(synth, CALLBACK_HANDLER);
+        const statements = roleStatements(synth, callback);
+        const deletes = statements.filter((s) =>
+            actionsOf(s).some((a) => a.startsWith("s3:Delete"))
+        );
+        expect(deletes).toHaveLength(1);
+        expect(actionsOf(deletes[0]).sort()).toEqual(
+            [
+                "s3:AbortMultipartUpload",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion",
+                "s3:GetObject",
+            ].sort()
+        );
+        expect(SynthResult.flatten(deletes[0].Resource)).toMatch(/\/vams\.preparedDownloads\/\*$/);
+        const list = statements.find((s) => actionsOf(s).includes("s3:ListBucketVersions"));
+        expect(list.Condition).toEqual({
+            StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
+        });
+    });
 });
 
 describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
