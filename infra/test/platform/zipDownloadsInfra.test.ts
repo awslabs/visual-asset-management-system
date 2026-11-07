@@ -319,7 +319,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
 
     // #1125 D16 round 2 (the #1123 D5 rule after the demo21 recheck): an abort's immediate answer is
     // not final, so every stopper starts the job's delayed sweep.
-    test("the delayed sweep waits, sweeps, waits past the container's last part and sweeps again", () => {
+    test("the delayed sweep waits, sweeps, waits again and sweeps a last time", () => {
         const machines = synth.where("AWS::StepFunctions::StateMachine", (r) =>
             r.logicalId.startsWith("ZipDownloadSweepStateMachine")
         );

@@ -305,6 +305,83 @@ def test_no_sweep_is_scheduled_with_the_feature_off(env, monkeypatch):
     env.sfn.start_execution.assert_not_called()
 
 
+def test_a_missing_state_machine_is_logged(env, monkeypatch):
+    """A job stopped while the sweep is not deployed gets no later pass: say so (#1141 round-10
+    review, applied to the zip sweep)."""
+    monkeypatch.delenv("ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN")
+    logger = MagicMock()
+    assert env.zd.schedule_delayed_sweep(dict(_row(env)), logger) is False
+    logger.warning.assert_called_once()
+    assert "ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN" in logger.warning.call_args.args[0]
+    # Not a job (nothing to sweep): no warning.
+    logger.reset_mock()
+    assert env.zd.schedule_delayed_sweep({}, logger) is False
+    logger.warning.assert_not_called()
+
+
+def test_a_client_that_cannot_be_made_is_logged(env, monkeypatch):
+    monkeypatch.setattr(env.zd, "_sweep_sfn_client", None)
+    monkeypatch.setattr(env.zd, "_sweep_client", MagicMock(side_effect=RuntimeError("no client")))
+    logger = MagicMock()
+    assert env.zd.schedule_delayed_sweep(dict(_row(env)), logger) is False
+    logger.warning.assert_called_once()
+
+
+def _abort_route_fails(env, how):
+    if how == "run-gone":
+        env.lam.responses["executionServiceFn"] = (404, {"message": "Execution not found"})
+    else:
+        def _raise(event):
+            raise RuntimeError("invoke failed")
+        env.lam.effects["executionServiceFn"] = _raise
+
+
+@pytest.mark.parametrize("how", ["run-gone", "invoke-fails"])
+def test_a_cancel_that_stops_no_run_still_gets_the_delayed_sweep(env, how):
+    """The DELETE route's cancel when the run's abort makes no stop (the run is gone, or the abort
+    call fails): no terminal callback follows, so cancel_job's own schedule_delayed_sweep call is
+    the only scheduler. Fails when that call is removed."""
+    s3 = _ghost(env, 480)
+    h.put_asset(env)
+    _abort_route_fails(env, how)
+    response = env.svc.lambda_handler(h.api_event(
+        "DELETE", h.asset_path(suffix=f"/{REQUEST_ID}"),
+        {"databaseId": "db1", "assetId": "asset1", "requestId": REQUEST_ID}), None)
+    assert h.body_of(response)["action"] == "cancelled"
+    # The run's abort was attempted once, and made no stop.
+    assert len(env.lam.calls) == 1
+    function_name, _invocation, abort_event = env.lam.calls[0]
+    assert function_name == "executionServiceFn"
+    assert abort_event["requestContext"]["http"] == {"method": "DELETE",
+                                                     "path": "/workflows/executions/exec-1"}
+    assert _row(env)["status"] == "CANCELLED"
+    starts = _starts(env)
+    assert [s["name"] for s in starts] == [env.zd.sweep_execution_name_for("alice", REQUEST_ID)]
+    _run_sweep_execution(env, s3, starts[0])
+    assert s3.uploads == []
+
+
+def test_the_delete_of_an_ended_job_schedules_the_sweep_from_its_snapshot(env):
+    """Deleting a job that already ended without its archive (the container's FAILED, its own abort
+    answered but not final): the row is removed at once, so the delete's own schedule_delayed_sweep
+    call, carrying the snapshot, is the only scheduler. Fails when that call is removed."""
+    s3 = _ghost(env, 480)
+    h.put_asset(env)
+    _row(env)["status"] = "FAILED"
+    s3.abort_multipart_upload(h.AUX, env.key, "u1")  # the sink's own abort (answered, not removed)
+    response = env.svc.lambda_handler(h.api_event(
+        "DELETE", h.asset_path(suffix=f"/{REQUEST_ID}"),
+        {"databaseId": "db1", "assetId": "asset1", "requestId": REQUEST_ID}), None)
+    assert h.body_of(response)["action"] == "deleted"
+    assert _row(env) is None
+    starts = _starts(env)
+    assert len(starts) == 1
+    request = json.loads(starts[0]["input"])["zipSweep"]
+    assert request["uploadIds"] == ["u1"] and request["archiveKey"] == env.key
+    _run_sweep_execution(env, s3, starts[0])
+    assert s3.uploads == []
+
+
 def test_a_cancel_whose_sweep_cannot_be_scheduled_still_cancels(env):
     s3 = _plain(env)
     env.sfn.start_execution.side_effect = h._client_error("AccessDeniedException", "StartExecution")

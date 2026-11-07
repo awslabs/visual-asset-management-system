@@ -726,7 +726,14 @@ def schedule_delayed_sweep(row: Optional[dict], logger=None, sfn_client=None,
     Best-effort: False when the feature's sweep is not deployed or the start failed (logged); the
     immediate aborts already ran and the prepared-downloads lifecycle rule is the backstop."""
     machine_arn = machine_arn if machine_arn is not None else os.environ.get(SWEEP_STATE_MACHINE_ARN_ENV, "")
-    if not machine_arn or not row or not row.get("userId") or not is_request_id(row.get("requestId")):
+    if not row or not row.get("userId") or not is_request_id(row.get("requestId")):
+        return False
+    if not machine_arn:
+        # Only a job stopped while the feature is off (a job left from when it was on) gets here; no
+        # later pass runs for it, so say so. The prepared-downloads lifecycle rule still applies.
+        if logger:
+            logger.warning(f"Could not schedule the delayed sweep of a zip download: no state machine "
+                           f"ARN ({SWEEP_STATE_MACHINE_ARN_ENV})")
         return False
     try:
         client = sfn_client or _sweep_client()

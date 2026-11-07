@@ -323,8 +323,13 @@ export function grantZipDownloadLaunch(
 
 /**
  * Waits of the zip download delayed sweep (#1125 D16, the #1123 D5 rule): the first pass about 5
- * minutes after the stop, the last one 10 minutes later. Same values as backend
- * common/zipDownloads.py SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
+ * minutes after the stop, the last one 10 minutes later (15 minutes after the stop). Unlike the copy
+ * engine's sweep, no task timeout sets this bound: the container is the only writer of parts, uploads
+ * no part after it sees the stop (stopRequestedAt, or AWS Batch's SIGTERM, with SIGKILL 30 s later)
+ * and aborts again after its last part. The passes cover what S3 lists again after those aborts (2 to
+ * 8 minutes later on demo21). The callback and the service only abort, so their 5- and 15-minute
+ * function timeouts do not bound it either. Same values as backend common/zipDownloads.py
+ * SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
  */
 export const ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };
 
