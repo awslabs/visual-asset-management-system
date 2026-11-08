@@ -47,7 +47,7 @@ flowchart LR
 
 The `constructPipeline` Lambda function inspects the input file extension and builds a pipeline definition with either one or two stages:
 
--   **E57 and PLY files**: Two stages -- PDAL converts the file to LAZ, then PotreeConverter generates the octree from the intermediate LAZ file.
+-   **E57 and PLY files**: Two stages -- PDAL converts the file to LAZ, then PotreeConverter generates the octree from the intermediate LAZ file. If PDAL cannot read an E57 file, the run fails with `E57 file could not be read by the converter:` followed by PDAL's message; for other PDAL failures the message names PDAL's exit code instead.
 -   **LAS and LAZ files**: Single stage -- PotreeConverter processes the file directly into the octree format.
 
 ### Output Location
@@ -100,7 +100,7 @@ This pipeline runs on AWS Batch with AWS Fargate compute. Enabling it automatica
 
 The pipeline uses two container images, each built during CDK deployment from its own Dockerfile in `backendPipelines/preview/pcPotreeViewer/container/` and stored in Amazon ECR:
 
--   `Dockerfile_PDAL` -- **PDAL**, the Point Data Abstraction Library, for format translation
+-   `Dockerfile_PDAL` -- **PDAL** 2.10.2, the Point Data Abstraction Library, for format translation. Its E57 reader is libE57Format 3.3.0. The intermediate LAZ file is written as LAS 1.2 with point data record format 3 (XYZ, intensity, GPS time, RGB).
 -   `Dockerfile_Potree` -- **PotreeConverter**, which generates the octree structure for web-based viewing
 
 Each image runs under its own AWS Batch job definition, AWS Fargate compute environment, and job queue.
