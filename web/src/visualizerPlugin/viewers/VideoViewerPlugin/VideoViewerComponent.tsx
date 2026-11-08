@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 
 const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -46,7 +47,9 @@ const VideoViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading video file:", response);
-                        throw new Error("Failed to download video file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download video file")
+                        );
                     } else {
                         // Presigned URL — log the key, not the signed URL.
                         console.log("Successfully loaded video file:", assetKey);

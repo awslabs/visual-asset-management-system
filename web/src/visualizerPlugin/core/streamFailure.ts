@@ -16,6 +16,57 @@ export interface StreamFailure {
 }
 
 /**
+ * The HTTP status a failed `downloadAsset` call reported. `downloadAsset` returns a tuple
+ * `[false, message, status?]` on failure (APIService.ts): the status is the download-authorization
+ * response's status (401/403 denied, 410 archived, 404 missing), absent when a block by the AWS WAF
+ * web ACL ate the response. `false` (not a tuple) is a non-authorization client error.
+ */
+export function downloadResponseStatus(response: unknown): number | undefined {
+    if (Array.isArray(response) && typeof response[2] === "number") return response[2];
+    return undefined;
+}
+
+/**
+ * The user-facing message for a failed `downloadAsset`, decided ONLY by the status the API returned
+ * (never by the caller's role or any client-side rule): 401 is a missing or expired session, 403 a
+ * permission denial, 410 an
+ * archived version, 404 a missing file, and anything else returns `subject`, the viewer's own
+ * generic wording (e.g. "Failed to download PDF file").
+ *
+ * This is the one place every core viewer turns a download failure into a sentence, so the wording
+ * is identical across them (#1211). The Text Diff Viewer classifies per side with the same 403
+ * wording.
+ */
+export function downloadFailureMessage(response: unknown, subject: string): string {
+    return downloadStatusMessage(downloadResponseStatus(response), subject);
+}
+
+/** What a viewer shows when the API refuses a file's download (403). */
+export const DOWNLOAD_FORBIDDEN_MESSAGE =
+    "You do not have permission to view or download this file.";
+/** What a viewer shows when the API answers 401: the session is missing or has expired. */
+export const DOWNLOAD_UNAUTHENTICATED_MESSAGE =
+    "Your session has expired. Sign in again to view this file.";
+/** What a viewer shows when the API answers 410 for a file version. */
+export const DOWNLOAD_ARCHIVED_MESSAGE =
+    "This file version has been archived and is not available.";
+/** What a viewer shows when the API answers 404 for a file or version. */
+export const DOWNLOAD_NOT_FOUND_MESSAGE = "This file or version could not be found.";
+
+/**
+ * `downloadFailureMessage` for a viewer that fetched the file itself (the streaming route) and has
+ * the response's HTTP status rather than a `downloadAsset` tuple. `status` undefined (no response,
+ * e.g. a WAF block or a network error) and any status not listed return `subject`.
+ */
+export function downloadStatusMessage(status: number | undefined, subject: string): string {
+    if (status === 401) return DOWNLOAD_UNAUTHENTICATED_MESSAGE;
+    if (status === 403) return DOWNLOAD_FORBIDDEN_MESSAGE;
+    if (status === 410) return DOWNLOAD_ARCHIVED_MESSAGE;
+    if (status === 404) return DOWNLOAD_NOT_FOUND_MESSAGE;
+    return subject;
+}
+
+/**
  * Requests `url` again with the viewer's `headers` to learn why a viewer library failed to load it.
  * Potree's loader rejects without the HTTP status, so the status comes from this second request.
  */

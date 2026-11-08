@@ -80,6 +80,8 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
+                            #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -283,6 +285,8 @@ npm run build
 # INCORRECT — NEVER use yarn
 yarn install
 ```
+
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
 
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
@@ -871,7 +875,7 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
 -   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers, which ship disabled) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts` in that order
 -   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
 -   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
@@ -924,7 +928,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
