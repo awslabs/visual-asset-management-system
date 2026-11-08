@@ -1382,9 +1382,11 @@ These points determine whether a registered pipeline is actually usable:
     Extension patterns do not reach a whole-asset (`/`) or folder (`/folder/`) selection, which names a
     container rather than a file: the `*.ext` and `.ext` forms are dropped from both lists for such a
     selection, and `assetScope` decides it instead. A pipeline that processes one file at a time
-    therefore sets `assetScope.wholeAssetAllowed` and `assetScope.folderAllowed` to `false`, as the
-    built-in pipelines do. An `allow` list of `*.stl` alone does not keep a whole-asset selection out,
-    and the pipeline receives the whole asset.
+    therefore sets `assetScope.wholeAssetAllowed` and `assetScope.folderAllowed` to `false`. The
+    built-in single-file pipelines declare `wholeAsset: false`, the registration shorthand for
+    `wholeAssetAllowed`, and their workflows do not allow folder selections. An `allow` list of
+    `*.stl` alone does not keep a whole-asset selection out, and the pipeline receives the whole
+    asset.
 
 -   **A template can raise the pipeline's input requirements.** When one pipeline supports several modes
     that consume different inputs, set the pipeline's `inputFileArity` to the **lowest** value any of its

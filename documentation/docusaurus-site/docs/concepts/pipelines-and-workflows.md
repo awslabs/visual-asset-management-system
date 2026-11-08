@@ -225,7 +225,7 @@ A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an `exclude` list 
 :::warning[Extension patterns do not apply to whole-asset or folder selections]
 A whole-asset (`/`) or folder (`/folder/`) selection names a container rather than a file, so an extension pattern cannot describe it. The extension forms — `*.ext` and the `.ext` shorthand — are dropped from both lists for such a selection, while path and name globs (`*skip*`, `/models/*`) and exact keys still apply. An `allow` list made up only of extension patterns therefore admits a container selection, and the `assetScope` booleans `wholeAssetAllowed` and `folderAllowed` decide whether it is accepted.
 
-A pipeline that processes one file at a time sets both to `false` rather than relying on `inputFileFilters` to keep a container selection out. The built-in pipelines declare `wholeAsset: false` for that reason.
+A pipeline that processes one file at a time sets both to `false` rather than relying on `inputFileFilters` to keep a container selection out. The built-in single-file pipelines declare `wholeAsset: false`.
 :::
 
 #### The resolution chain
