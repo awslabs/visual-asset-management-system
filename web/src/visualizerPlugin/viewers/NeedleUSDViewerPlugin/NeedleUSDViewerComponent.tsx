@@ -22,6 +22,7 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
+import { downloadStatusMessage } from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -809,7 +810,12 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
-                        throw new Error(`Failed to load: ${fileKey} (${response.status})`);
+                        throw new Error(
+                            downloadStatusMessage(
+                                response.status,
+                                `Failed to load: ${fileKey} (${response.status})`
+                            )
+                        );
                     } else {
                         console.warn(
                             `Dependency not found (skipping): ${fileKey} (${response.status})`
