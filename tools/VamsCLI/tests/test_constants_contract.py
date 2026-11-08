@@ -370,3 +370,22 @@ class TestExecutionListIncludeSystemParam:
         backend_value = _backend_string_constant(BACKEND_EXECUTION_SERVICE, "INCLUDE_SYSTEM_PARAM")
         assert backend_value is not None, "INCLUDE_SYSTEM_PARAM not found in executionService.py"
         assert constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM == backend_value
+
+
+BACKEND_ZIP_MODELS = REPO_ROOT / "backend/backend/models/zipDownloads.py"
+
+
+class TestZipDownloadCancelIntent:
+    """The CLI's cancel sends the DELETE's cancel intent by the field name and value the backend's
+    DeleteZipDownloadQueryModel accepts (#1125 D23). A rename on either side would make every CLI
+    and MCP cancel a 400, or (if the backend ignored it) a delete of a job that just finished."""
+
+    def test_the_intent_matches_the_backend_query_model(self):
+        tree = ast.parse(BACKEND_ZIP_MODELS.read_text(encoding="utf-8"))
+        model = next((n for n in tree.body if isinstance(n, ast.ClassDef)
+                      and n.name == "DeleteZipDownloadQueryModel"), None)
+        assert model is not None, "DeleteZipDownloadQueryModel not found in models/zipDownloads.py"
+        fields = {n.target.id: ast.unparse(n.annotation) for n in model.body
+                  if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
+        assert constants.ZIP_DOWNLOAD_INTENT_PARAM in fields
+        assert f"'{constants.ZIP_DOWNLOAD_CANCEL_INTENT}'" in fields[constants.ZIP_DOWNLOAD_INTENT_PARAM]

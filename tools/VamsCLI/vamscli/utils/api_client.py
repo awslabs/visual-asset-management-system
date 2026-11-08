@@ -255,7 +255,8 @@ from ..constants import (
     API_ZIP_DOWNLOADS_GLOBAL, FEATURE_ZIPDOWNLOADS, ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
     ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
     ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
-    ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES
+    ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
+    ZIP_DOWNLOAD_INTENT_PARAM, ZIP_DOWNLOAD_CANCEL_INTENT
 )
 from ..version import get_version
 from .exceptions import (
@@ -4435,16 +4436,21 @@ class APIClient(CustomAPIClientMixin):
                                  database_id, asset_id, url_request=True, json={})
 
     def _delete_zip_download_request(self, database_id: str, asset_id: str,
-                                     request_id: str, action: str) -> Dict[str, Any]:
+                                     request_id: str, action: str,
+                                     cancel_intent: bool = False) -> Dict[str, Any]:
         endpoint = API_ZIP_DOWNLOADS_ASSET_REQUEST.format(
             databaseId=database_id, assetId=asset_id, requestId=request_id)
-        return self._zip_request('DELETE', endpoint, action, database_id, asset_id)
+        kwargs: Dict[str, Any] = {}
+        if cancel_intent:
+            kwargs['params'] = {ZIP_DOWNLOAD_INTENT_PARAM: ZIP_DOWNLOAD_CANCEL_INTENT}
+        return self._zip_request('DELETE', endpoint, action, database_id, asset_id, **kwargs)
 
     def cancel_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
         """
-        Cancel a queued or running zip download (DELETE on the request route) after checking that
-        it is still active. The run is stopped and its partial archive discarded; the job stays
-        listed as CANCELLED until it expires or is deleted.
+        Cancel a queued or running zip download (DELETE on the request route with
+        `intent=cancel`) after checking that it is still active. The run is stopped and its partial
+        archive discarded; the job stays listed as CANCELLED until it expires or is deleted. The
+        cancel intent means the API never deletes the job, even if it finished after the check.
 
         Returns:
             {"message": "Zip download cancelled", "action": "cancelled"}. Should the job finish
@@ -4461,7 +4467,7 @@ class APIClient(CustomAPIClientMixin):
             raise ZipDownloadStateError(
                 f"Zip download '{request_id}' has already finished ({status}); delete it instead")
         return self._delete_zip_download_request(
-            database_id, asset_id, request_id, "cancel the zip download")
+            database_id, asset_id, request_id, "cancel the zip download", cancel_intent=True)
 
     def delete_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
         """

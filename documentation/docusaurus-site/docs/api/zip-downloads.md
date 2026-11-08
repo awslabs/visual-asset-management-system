@@ -12,13 +12,13 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 -   **Retention** -- A job expires at its `expiresAt`, `app.zipDownloads.retentionDays` after the job was created. From then on it is no longer listed, every route answers `404` for it (so its archive can no longer be downloaded), and the table's time to live removes the record. The archive object is removed separately, by the auxiliary bucket's lifecycle rule `retentionDays` after the archive was written; Amazon S3 applies that rule asynchronously, so the object can remain for up to a day or two after `expiresAt`. An archive of an asset that is later archived or permanently deleted can no longer be downloaded (the URL route refuses it) and also remains until the lifecycle rule removes it.
 -   **Status** -- `QUEUED` -> `RUNNING` -> `SUCCEEDED`, `FAILED`, or `CANCELLED`. A terminal status is final. A job whose Zip Archive run ended outside VAMS (for example, stopped from the AWS Step Functions console) gets its final status when the job is next listed or read; once a job has written no progress for five minutes, a read checks its run at most once every five minutes.
 
-| Status      | Meaning                                                                                                                                                                                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QUEUED`    | The job is recorded and its Zip Archive run is starting.                                                                                                                                                                                                                        |
-| `RUNNING`   | The Zip Archive job is resolving the selection or writing the archive. `progress` reports files and bytes written; `bytesDone` also moves while a large file is being written (at least every 64 MiB or 30 seconds).                                                            |
-| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                                                                                                         |
-| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions`, unless its archive had already finished uploading, in which case the job is `SUCCEEDED`. |
-| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                                                                                           |
+| Status      | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QUEUED`    | The job is recorded and its Zip Archive run is starting.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `RUNNING`   | The Zip Archive job is resolving the selection or writing the archive. `progress` reports files and bytes written; `bytesDone` also moves while a large file is being written (at least every 64 MiB or 30 seconds).                                                                                                                                                                                                                                                                                                |
+| `SUCCEEDED` | The archive is ready. Request a URL with [Get Zip Download URL](#get-zip-download-url).                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions` and `cancelledBy` `execution`, unless its archive had already finished uploading, in which case the job is `SUCCEEDED`. A run that timed out ends with `The archive job timed out`; one whose archive job was stopped another way (for example, terminated in the AWS Batch console) ends with `The archive job was stopped`. |
+| `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -227,6 +227,14 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zip Archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. Once the cancel is recorded, the job ends `CANCELLED` even when its run finishes at the same moment. A cancel never deletes a job: when the job finished before the cancel was recorded (for example, its archive finished uploading just as the cancel arrived), the job keeps its outcome and the call answers `"action": "ended"` with the job's final `status`; delete it with a second call if you no longer need it.
 
+Send `intent=cancel` when the call is meant as a cancel (the web app, the CLI and the MCP cancel tool always do). The job is then never deleted, even when it finished before the call arrived, for example while a confirm dialog was open: a `SUCCEEDED` or `FAILED` job is kept and answered `"action": "ended"`, and a `CANCELLED` job answers `"action": "cancelled"`. Without `intent` the call behaves as described above.
+
+**Query Parameters:**
+
+| Parameter | Type   | Required | Description                                                                                                     |
+| --------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------- |
+| `intent`  | string | No       | `cancel`: never delete the job; a job that has already finished is kept. Any other value is refused with `400`. |
+
 **Response:**
 
 ```json
@@ -236,16 +244,16 @@ Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zi
 }
 ```
 
-A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}`. A cancel that reached a job which had already finished returns `{"message": "The zip download finished before it could be cancelled", "action": "ended", "status": "SUCCEEDED"}` (or `FAILED`).
+A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}` (never with `intent=cancel`). A cancel that reached a job which had already finished returns `{"message": "The zip download finished before it could be cancelled", "action": "ended", "status": "SUCCEEDED"}`. `status` is present only with `ended`: it is the job's final status, `SUCCEEDED` or `FAILED`, or an empty string when another call deleted the job while the cancel ran.
 
 **Error Responses:**
 
-| Status | Description                                           |
-| ------ | ----------------------------------------------------- |
-| `400`  | Invalid path parameters.                              |
-| `403`  | Not authorized.                                       |
-| `404`  | `Zip download not found`, or the feature is disabled. |
-| `500`  | Internal server error.                                |
+| Status | Description                                                  |
+| ------ | ------------------------------------------------------------ |
+| `400`  | Invalid path parameters, or an `intent` other than `cancel`. |
+| `403`  | Not authorized.                                              |
+| `404`  | `Zip download not found`, or the feature is disabled.        |
+| `500`  | Internal server error.                                       |
 
 ---
 

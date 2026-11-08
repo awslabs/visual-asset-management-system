@@ -319,8 +319,13 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
-      a prefixed execution error), else a fixed message. Raw execution errors are never shown: they
-      can carry internal resource names.
+      a prefixed execution error), else for TIMED_OUT the timeout message, else the stop the
+      container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else a
+      fixed message. Raw execution errors are never shown: they can carry internal resource names.
+
+    The container never finalizes a job on SIGTERM; it only records ``stopReason`` and leaves the
+    outcome to this rule, which knows ABORTED from TIMED_OUT or FAILED, so an abort from the
+    executions views always ends "Cancelled from workflow executions" (#1125 D24).
     """
     if not row or row.get("status") not in ACTIVE_STATUSES:
         return None
@@ -338,8 +343,10 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
                                "cancelled_by": CANCELLED_BY_EXECUTION}
     if execution_status in ("FAILED", "TIMED_OUT"):
         reason = (row.get("errorMessage") or "").strip() or container_reason(execution_error)
+        if not reason and execution_status == "TIMED_OUT":
+            reason = MSG_JOB_TIMED_OUT
         if not reason:
-            reason = MSG_JOB_TIMED_OUT if execution_status == "TIMED_OUT" else MSG_JOB_FAILED
+            reason = (row.get("stopReason") or "").strip()[:1024] or MSG_JOB_FAILED
         return STATUS_FAILED, {"error_message": reason}
     return None
 
@@ -446,6 +453,14 @@ def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_statu
                                    expected_execution_id=expected)
     if changed and status != STATUS_SUCCEEDED:
         delete_working_objects(s3_client, bucket, row, logger)
+    elif not changed and status != STATUS_SUCCEEDED:
+        # Another writer finalized the job first (the container's own failure, the user's cancel):
+        # a job that ended without its archive keeps no working objects, whoever wrote the outcome
+        # (#1125 D24). A job another writer recorded SUCCEEDED keeps them, as on the success path.
+        final = table.get_item(Key=row_key(row["userId"], row["requestId"]),
+                               ConsistentRead=True).get("Item")
+        if final and final.get("status") in (STATUS_FAILED, STATUS_CANCELLED):
+            delete_working_objects(s3_client, bucket, row, logger)
     return status, changed
 
 

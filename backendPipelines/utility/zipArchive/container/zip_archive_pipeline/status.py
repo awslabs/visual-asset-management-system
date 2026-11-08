@@ -110,6 +110,18 @@ class StatusWriter:
             return True
         return bool(row.get("stopRequestedAt"))
 
+    def stopped(self, reason):
+        """Record a SIGTERM stop on the open job (``stopReason``) WITHOUT finalizing it (#1125 D24).
+
+        AWS Batch sends SIGTERM for a user cancel, an abort from the workflow executions views, a
+        timeout and a terminate outside VAMS alike, and the container cannot tell them apart. The
+        terminal callback (and the read-time reconcile) finalize from the run's own status:
+        "Cancelled from workflow executions" for ABORTED, the timeout message for TIMED_OUT, this
+        reason for a FAILED run, CANCELLED for a recorded user cancel, and they clean the job's
+        working objects. No status change, so ``status`` stays QUEUED/RUNNING until then."""
+        return self._update(["stopReason = :r"],
+                            {":r": (reason or "The archive job was stopped")[:MAX_REASON_CHARS]})
+
     def failed(self, reason):
         """FAILED with the container's reason, unless the user's cancel was recorded
         (``cancelRequestedAt``, backend common/zipDownloads.request_cancel): a pending cancel wins and

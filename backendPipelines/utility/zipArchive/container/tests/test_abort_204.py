@@ -198,6 +198,9 @@ class TestSigtermDuringTheComplete:
         _hook(monkeypatch, "upload_open", terminate)
         assert _run(job)["status"] == "raised"   # S3 refused the Complete of the aborted upload
         assert exits == [143]
+        # #1125 D24: the container records the stop only; the run's callback decides the outcome.
+        assert table.row["status"] == "RUNNING" and table.row["stopReason"] == runner.STOPPED
+        assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "FAILED")[0] == zd.STATUS_FAILED
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert table.row["errorMessage"] == runner.STOPPED
 

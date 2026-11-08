@@ -2736,9 +2736,9 @@ if CONFIG.enable_destructive:
 
         The Zip Archive run is stopped and its partial archive discarded; the job stays listed as
         CANCELLED. A job that has already finished is refused with ZipDownloadStateError (use
-        delete_zip_download). Should the job finish between the state check and the call, nothing
-        is deleted: the result's `action` then reads "ended" and `status` gives the job's final
-        status (SUCCEEDED or FAILED) — report that.
+        delete_zip_download). The request carries the cancel intent, so a cancel never deletes a
+        job: should it finish between the state check and the call, the result's `action` reads
+        "ended" and `status` gives the job's final status (SUCCEEDED or FAILED) — report that.
         """
         return CLIENT.api.cancel_zip_download(database_id, asset_id, request_id)
 

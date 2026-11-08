@@ -160,3 +160,54 @@ def test_url_tool_says_it_returns_a_bearer_credential():
     start = doc.index("def get_zip_download_url(")
     docstring = doc[start:start + 1500]
     assert "bearer credential" in docstring and "autoApprove" in docstring
+
+
+def _real_api_client(monkeypatch, *responses):
+    """A real vamscli APIClient whose HTTP sends are recorded (the last response repeats)."""
+    import requests
+    from vamscli.utils.api_client import APIClient
+
+    profile_manager = MagicMock()
+    profile_manager.is_override_token.return_value = False
+    profile_manager.is_token_expired.return_value = False
+    profile_manager.load_auth_profile.return_value = {"access_token": "t"}
+    profile_manager.get_feature_switches_info.return_value = {
+        "has_feature_switches": True, "enabled": ["ZIPDOWNLOADS", "AUTHPROVIDER_COGNITO"]}
+    api = APIClient("https://api.example.com", profile_manager=profile_manager)
+    sends, queue = [], list(responses)
+
+    def request(method, url, **kwargs):
+        sends.append((method, url, kwargs))
+        body = queue.pop(0) if len(queue) > 1 else queue[0]
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response._content = json.dumps(body).encode("utf-8")
+        response.headers["Content-Type"] = "application/json"
+        return response
+    monkeypatch.setattr(api.session, "request", request)
+    return api, sends
+
+
+def test_cancel_tool_sends_the_cancel_intent_and_reports_ended(gated, monkeypatch):
+    """#1125 D23: the cancel tool's DELETE carries intent=cancel, so a job that finished after the
+    state check is kept (`ended`), never deleted."""
+    module, client = gated
+    ended = {"message": "The zip download finished before it could be cancelled",
+             "action": "ended", "status": "SUCCEEDED"}
+    client.api, sends = _real_api_client(
+        monkeypatch, {"requestId": "r1", "databaseId": "db", "assetId": "a", "status": "RUNNING"},
+        ended)
+    assert module.cancel_zip_download("db", "a", "r1") == ended
+    method, url, kwargs = sends[-1]
+    assert method == "DELETE" and url.endswith("/database/db/assets/a/download/zip/r1")
+    assert kwargs["params"] == {"intent": "cancel"}
+
+
+def test_delete_tool_sends_no_cancel_intent(gated, monkeypatch):
+    module, client = gated
+    client.api, sends = _real_api_client(
+        monkeypatch, {"requestId": "r1", "databaseId": "db", "assetId": "a", "status": "SUCCEEDED"},
+        {"message": "Zip download deleted", "action": "deleted"})
+    assert module.delete_zip_download("db", "a", "r1")["action"] == "deleted"
+    assert sends[-1][0] == "DELETE" and not sends[-1][2].get("params")

@@ -257,7 +257,7 @@ class Job:
             return False
         if self.sink is not None:
             self.sink.abort()
-        self._record_failure(STOPPED)
+        self._record_stop()
         return True
 
     def _is_own_archive(self, head):
@@ -293,6 +293,18 @@ class Job:
             def warning(self, message):
                 log(message)
         return _Warn()
+
+    def _record_stop(self):
+        """A SIGTERM stop: record the reason on the open job, never its outcome (#1125 D24). The run's
+        own status (ABORTED, TIMED_OUT, FAILED) and a recorded user cancel decide it in the terminal
+        callback or the read-time reconcile, which also clean the job's working objects. Best-effort:
+        the container is about to exit either way."""
+        if self.status is None:
+            return
+        try:
+            self.status.stopped(STOPPED)
+        except Exception as e:  # nosec B110 - the finalizers decide without the recorded reason
+            self.log(f"Could not record the stop of the job: {e!r}")
 
     def _record_failure(self, reason):
         if self.status is None:
@@ -512,12 +524,21 @@ class Job:
                 return self.run_archive()
             raise ArchiveFailure(GENERIC_FAILURE)
         except ArchiveFailure as f:
-            self._record_failure(f.reason)
+            self._record_end(f.reason)
             raise
         except Exception as e:
             self.log(f"zipArchive job failed: {e!r}")
-            self._record_failure(GENERIC_FAILURE)
+            self._record_end(GENERIC_FAILURE)
             raise ArchiveFailure(GENERIC_FAILURE) from e
+
+    def _record_end(self, reason):
+        """A failure of the run. After a SIGTERM (``_stopped``) every failure is the stop's
+        consequence (an aborted upload's Complete refused, a part refused): the container records the
+        stop and leaves the outcome to the finalizers (#1125 D24); otherwise it records FAILED."""
+        if self._stopped:
+            self._record_stop()
+        else:
+            self._record_failure(reason)
 
 
 def sigterm_handler(job):

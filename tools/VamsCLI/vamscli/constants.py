@@ -320,6 +320,11 @@ ZIP_DOWNLOAD_COMPRESSIONS = ("store", "deflate")
 ZIP_DOWNLOAD_MAX_SELECTION_ENTRIES = 1000
 ZIP_DOWNLOAD_ACTIVE_STATUSES = ("QUEUED", "RUNNING")
 ZIP_DOWNLOAD_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELLED")
+# The DELETE request route's cancel intent (DeleteZipDownloadQueryModel in
+# backend/backend/models/zipDownloads.py): with it the API never deletes a job that finished before
+# the cancel arrived; it keeps it and answers action "ended".
+ZIP_DOWNLOAD_INTENT_PARAM = "intent"
+ZIP_DOWNLOAD_CANCEL_INTENT = "cancel"
 ZIP_DOWNLOADS_DISABLED_API_MESSAGE = "Zip downloads are not enabled for this deployment"
 ZIP_DOWNLOADS_DISABLED_MESSAGE = "Zip downloads are not available for this deployment"
 ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE = "Zip download not found"

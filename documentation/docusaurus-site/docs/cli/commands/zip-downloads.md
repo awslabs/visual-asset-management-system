@@ -120,7 +120,7 @@ vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm
 | `-r, --request-id`  | Job ID (required)             |
 | `--confirm`         | Confirm the cancel (required) |
 
-A job that has already finished is refused; delete it instead. If the job finishes between that check and the cancel, nothing is deleted: the command warns that the job finished and, with `--json-output`, returns `"action": "ended"` with the job's final `status`.
+A job that has already finished is refused; delete it instead. A cancel never deletes a job: the command sends the cancel intent (`intent=cancel`), so if the job finishes between that check and the cancel, it is kept with its outcome. The command then warns that the job finished and, with `--json-output`, returns `"action": "ended"` with the job's final `status` (`SUCCEEDED` or `FAILED`). The MCP `cancel_zip_download` tool behaves the same way.
 
 ---
 

@@ -356,7 +356,7 @@ class TestZipDownloadMode:
         assert s3.aborted == ["vams.preparedDownloads/db1/asset1/h/r1/out.zip"]
         assert table.row["errorMessage"] == runner.GENERIC_FAILURE
 
-    def test_sigterm_stop_aborts_and_records(self, s3):
+    def test_sigterm_stop_aborts_and_records_the_stop_without_finalizing(self, s3):
         job, table = _zip_job(s3, _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}]))
         job.status = StatusWriter(table.__class__({"status": "RUNNING", "workflowExecutionId": "exec-1"}),
                                   "alice", "r1", "exec-1")
@@ -371,7 +371,10 @@ class TestZipDownloadMode:
                 return None
         job.sink = Sink()
         job.stop()
-        assert Sink.aborted and job.status._table.row["errorMessage"] == runner.STOPPED
+        row = job.status._table.row
+        # #1125 D24: the stop is recorded, the outcome is left to the run's terminal callback.
+        assert Sink.aborted and row["stopReason"] == runner.STOPPED
+        assert row["status"] == "RUNNING" and "errorMessage" not in row
 
     @pytest.mark.parametrize("fmt", ["tar", "tar.gz"])
     def test_tar_formats(self, s3, fmt):

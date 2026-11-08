@@ -217,6 +217,27 @@ class TestCancelDelete:
                      _response({"message": "Zip download deleted", "action": "deleted"}))
         assert client.delete_zip_download("db", "a", "r1")["action"] == "deleted"
         assert wire.sends[1][:2] == ("DELETE", BASE + "/database/db/assets/a/download/zip/r1")
+        assert not wire.sends[1][2].get("params"), "a delete carries no cancel intent"
+
+    def test_cancel_sends_the_cancel_intent(self, monkeypatch):
+        """#1125 D23: the DELETE says it is a cancel, so the API never deletes a job that finished
+        between the state check and the call."""
+        client = _client()
+        wire = _Wire(monkeypatch, client, _response({**JOB, "status": "RUNNING"}),
+                     _response({"message": "Zip download cancelled", "action": "cancelled"}))
+        client.cancel_zip_download("db", "a", "r1")
+        method, url, kwargs = wire.sends[1]
+        assert (method, url) == ("DELETE", BASE + "/database/db/assets/a/download/zip/r1")
+        assert kwargs["params"] == {constants.ZIP_DOWNLOAD_INTENT_PARAM: constants.ZIP_DOWNLOAD_CANCEL_INTENT}
+        assert kwargs["params"] == {"intent": "cancel"}
+
+    def test_cancel_of_a_job_that_finished_after_the_check_reports_ended(self, monkeypatch):
+        client = _client()
+        ended = {"message": "The zip download finished before it could be cancelled",
+                 "action": "ended", "status": "SUCCEEDED"}
+        wire = _Wire(monkeypatch, client, _response({**JOB, "status": "RUNNING"}), _response(ended))
+        assert client.cancel_zip_download("db", "a", "r1") == ended
+        assert wire.sends[1][2]["params"] == {"intent": "cancel"}
 
 
 class _Stream:

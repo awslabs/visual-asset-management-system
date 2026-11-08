@@ -3612,12 +3612,16 @@ export const getZipDownloadUrl = async ({ databaseId, assetId, requestId }: any)
 
 /**
  * Cancels a queued or running zip download, or deletes a finished one and its archive.
- * @returns {Promise<[boolean, {message, action: "cancelled" | "deleted"} | string, number?]>}
+ * With `intent: "cancel"` the request carries the cancel intent: the API then never deletes the
+ * job. A job that finished before the cancel arrived is kept and answered `action: "ended"`, with
+ * `status` its final status (SUCCEEDED or FAILED; "" if the job was removed meanwhile).
+ * @returns {Promise<[boolean, {message, action: "cancelled" | "deleted" | "ended", status?} | string, number?]>}
  */
-export const deleteZipDownload = async ({ databaseId, assetId, requestId }: any) => {
+export const deleteZipDownload = async ({ databaseId, assetId, requestId, intent }: any) => {
     try {
         const response = await apiClient.del(
-            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`,
+            intent === "cancel" ? { queryStringParameters: { intent: "cancel" } } : undefined
         );
         if (response?.success === false) {
             return [false, response?.message ?? "Failed to remove the zip download"];

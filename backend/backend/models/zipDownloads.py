@@ -120,6 +120,13 @@ class ListZipDownloadsQueryModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, min_length=1, max_length=4096)
 
 
+class DeleteZipDownloadQueryModel(BaseModel, extra='ignore'):
+    """Query of the DELETE request route. ``intent=cancel`` says the caller means a cancel: a job that
+    has already finished is then kept and answered ``ended`` instead of deleted (#1125 D23). Without
+    it the route keeps its behaviour (cancel an active job, delete a finished one)."""
+    intent: Optional[Literal["cancel"]] = None
+
+
 class ZipSelectionSummaryModel(BaseModel, extra='ignore'):
     files: int = 0
     folders: int = 0
@@ -176,8 +183,11 @@ class ZipDownloadUrlResponseModel(BaseModel, extra='ignore'):
 
 class ZipDownloadDeleteResponseModel(BaseModel, extra='ignore'):
     message: str
-    # "ended": a cancel of a job that ended before the cancel was recorded; the job is kept with
-    # its outcome (``status``) and nothing is deleted (#1125 D22).
+    # "ended": a cancel of a job that ended before the cancel was recorded (#1125 D22), or a DELETE
+    # with intent=cancel of a job that had already finished (#1125 D23). The job is kept with its
+    # outcome and nothing is deleted. ``status`` is set only with "ended": the job's final status
+    # (SUCCEEDED or FAILED), or "" when the job was removed meanwhile. A cancel of a job that is
+    # already CANCELLED answers "cancelled" (a repeated cancel).
     action: Literal["cancelled", "deleted", "ended"]
     status: Optional[str] = None
 

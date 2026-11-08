@@ -284,6 +284,50 @@ describe("ZipDownloadsTable", () => {
         dialog = await screen.findByRole("dialog");
         await userEvent.click(within(dialog).getByRole("button", { name: "Cancel download" }));
         expect(await screen.findByText("archive-1.zip was cancelled.")).toBeInTheDocument();
+        // #1125 D23: the cancel carries the cancel intent, so the API never deletes the job.
+        expect(mockDelete).toHaveBeenCalledWith({
+            databaseId: "db1",
+            assetId: "a1",
+            requestId: "1",
+            intent: "cancel",
+        });
+    });
+
+    it("does not cancel a job that finished while the cancel dialog was open (D23)", async () => {
+        jest.useFakeTimers();
+        const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+        mockAssetList
+            .mockResolvedValueOnce(page([job("1", "RUNNING")]))
+            .mockResolvedValue(page([job("1", "SUCCEEDED", { archiveSizeBytes: 2048 })]));
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        await user.click(screen.getByRole("button", { name: "Cancel archive-1.zip" }));
+        const dialog = await screen.findByRole("dialog");
+        expect(within(dialog).getByText(/Stop preparing archive-1.zip\?/)).toBeInTheDocument();
+        expect(within(dialog).getByRole("status")).toBeEmptyDOMElement();
+
+        // The poll behind the dialog finds the job finished.
+        await act(async () => {
+            jest.advanceTimersByTime(ZIP_POLL_INTERVAL_MS);
+        });
+        expect(
+            await within(dialog).findByText(
+                "archive-1.zip finished (Ready) before it was cancelled. Nothing was cancelled or deleted."
+            )
+        ).toBeInTheDocument();
+        // Announced through the dialog's polite live region.
+        expect(within(dialog).getByRole("status")).toHaveTextContent(
+            "This zip download has finished"
+        );
+        expect(within(dialog).queryByText(/Stop preparing/)).toBeNull();
+        const confirmButton = within(dialog).getByRole("button", { name: "Cancel download" });
+        expect(confirmButton).toBeDisabled();
+        await user.click(confirmButton);
+        expect(mockDelete).not.toHaveBeenCalled();
+
+        await user.click(within(dialog).getByRole("button", { name: "Close" }));
+        expect(mockDelete).not.toHaveBeenCalled();
+        expect(within(rowFor("archive-1.zip")).getByText("Ready")).toBeInTheDocument();
     });
 
     it("tells the user when the job finished before the cancel (D22)", async () => {

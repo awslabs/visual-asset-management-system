@@ -9,6 +9,7 @@ Routes (common/apiRoutes.py ZIP_DOWNLOAD_ROUTES):
   GET    /download/zip                                                           caller's jobs, all assets
   GET    /database/{databaseId}/assets/{assetId}/download/zip/{requestId}        one job
   DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}        cancel or delete
+                                                                                 (?intent=cancel: never deletes)
   POST   /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url    presigned URL
 
 Every call: Tier-1 route check, then the feature check (404 while app.zipDownloads is off), then
@@ -79,7 +80,11 @@ from models.common import (
     validation_error,
     validation_error_message,
 )
-from models.zipDownloads import CreateZipDownloadRequestModel, ListZipDownloadsQueryModel
+from models.zipDownloads import (
+    CreateZipDownloadRequestModel,
+    DeleteZipDownloadQueryModel,
+    ListZipDownloadsQueryModel,
+)
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
@@ -1024,13 +1029,34 @@ def job_url(event, database_id, asset_id, request_id):
                          "archiveFileName": file_name, "archiveSizeBytes": size})
 
 
+def _ended_answer(event, database_id, asset_id, request_id, status):
+    """A cancel that found the job finished: the job is kept with its outcome (#1125 D22, D23)."""
+    log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
+                                             "requestId": request_id, "outcome": "ended",
+                                             "status": status})
+    return success(body={"message": zd.MSG_ALREADY_FINISHED, "action": "ended", "status": status})
+
+
 def delete_job(event, database_id, asset_id, request_id):
+    try:
+        query = parse(event.get("queryStringParameters") or {}, model=DeleteZipDownloadQueryModel)
+    except ValidationError as v:
+        logger.error(f"Validation error: {v}")
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
+    cancel_intent = query.intent == "cancel"
     row = _owned_row(event, database_id, asset_id, request_id, "delete")
     if not row:
         return _not_found(event)
     if not _can_read_asset(_get_asset(database_id, asset_id)):
         return _not_found(event)
     prefix = _job_prefix(row)
+    if cancel_intent and row.get("status") not in zd.ACTIVE_STATUSES:
+        # The caller asked for a cancel (intent=cancel) and the job had already finished, for example
+        # while a confirm dialog was open: a cancel never deletes, so the job keeps its outcome
+        # (#1125 D23). A repeated cancel of a CANCELLED job answers cancelled.
+        if row.get("status") == zd.STATUS_CANCELLED:
+            return success(body={"message": "Zip download cancelled", "action": "cancelled"})
+        return _ended_answer(event, database_id, asset_id, request_id, row.get("status", ""))
     if row.get("status") in zd.ACTIVE_STATUSES:
         # A cancel. It records the cancel first and aborts the open uploads; an archive that already
         # landed wins (common/zipDownloads.cancel_job). It never deletes the job: a job that ended
@@ -1047,12 +1073,8 @@ def delete_job(event, database_id, asset_id, request_id):
                                                      "requestId": request_id})
             return success(body={"message": "Zip download cancelled", "action": "cancelled"})
         fresh = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
-                                   ConsistentRead=True).get("Item") or row
-        log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
-                                                 "requestId": request_id, "outcome": "ended",
-                                                 "status": fresh.get("status", "")})
-        return success(body={"message": zd.MSG_ALREADY_FINISHED, "action": "ended",
-                             "status": fresh.get("status", "")})
+                                   ConsistentRead=True).get("Item") or {}
+        return _ended_answer(event, database_id, asset_id, request_id, fresh.get("status", ""))
     zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
     # The row is removed below, so the delayed sweep carries its archive key and recorded upload ids
     # (a sweep the cancel already started keeps its own; ExecutionAlreadyExists counts as scheduled).

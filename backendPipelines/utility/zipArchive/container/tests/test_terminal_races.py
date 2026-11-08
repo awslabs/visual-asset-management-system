@@ -315,6 +315,9 @@ class TestContainerNeverFailsALandedArchive:
         s3, table, job = _setup()
         _hook(monkeypatch, "upload_open", job.stop)
         assert _run(job)["status"] == "raised"
+        # #1125 D24: no FAILED from the container; the stop is recorded for the finalizer.
+        assert table.row["status"] == "RUNNING" and table.row["stopReason"] == runner.STOPPED
+        assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "FAILED")[0] == zd.STATUS_FAILED
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert table.row["errorMessage"] == runner.STOPPED
 
@@ -400,3 +403,109 @@ class TestEarlierSameSizeObjectAtTheKey:
         _run(job)
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)
         assert s3.head_object(Bucket=AUX, Key=ARCHIVE_KEY)["VersionId"] == "old"
+
+
+def _working_objects_left(s3):
+    return [k for k in (MANIFEST_KEY, zd.resolved_manifest_key("db1", "asset1", USER, REQUEST))
+            if s3.objects.get((AUX, k))]
+
+
+@pytest.mark.parametrize("execution_status, reason, cancelled_by", [
+    ("ABORTED", zd.MSG_CANCELLED_FROM_EXECUTIONS, zd.CANCELLED_BY_EXECUTION),
+    ("TIMED_OUT", zd.MSG_JOB_TIMED_OUT, None),
+    ("FAILED", runner.STOPPED, None),
+])
+class TestSigtermLeavesTheOutcomeToTheRunStatus:
+    """#1125 D24: AWS Batch sends SIGTERM for an abort from the workflow executions views, a timeout
+    and a terminate outside VAMS alike. Whichever of the container and the run's finalizer (terminal
+    callback or read-time reconcile, both finalize_ended_run) acts first, the job ends with the
+    reason of the run's own status, the executions abort records cancelledBy execution, and the job's
+    working objects are removed."""
+
+    def _assert_final(self, s3, table, reason, cancelled_by):
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
+        assert table.row["errorMessage"] == reason
+        assert table.row.get("cancelledBy") == cancelled_by
+        assert _working_objects_left(s3) == []
+
+    def test_sigterm_first_then_the_finalizer(self, monkeypatch, execution_status, reason,
+                                              cancelled_by):
+        s3, table, job = _setup()
+        exits = []
+
+        def sigterm():
+            try:
+                runner.sigterm_handler(job)(15, None)
+            except SystemExit as e:
+                exits.append(e.code)
+                raise
+        _hook(monkeypatch, "upload_open", sigterm)
+        with pytest.raises(SystemExit):
+            job.run()
+        assert exits == [143] and table.row["status"] == "RUNNING"
+        assert _working_objects_left(s3), "the resolved manifest is there until the finalizer runs"
+        status, changed = zd.finalize_ended_run(table, s3, AUX, dict(table.row), execution_status)
+        assert (status, changed) == (zd.STATUS_FAILED, True)
+        self._assert_final(s3, table, reason, cancelled_by)
+
+    def test_finalizer_first_then_sigterm(self, monkeypatch, execution_status, reason, cancelled_by):
+        s3, table, job = _setup()
+
+        def finalize_then_sigterm():
+            zd.finalize_ended_run(table, s3, AUX, dict(table.row), execution_status)
+            try:
+                runner.sigterm_handler(job)(15, None)
+            except SystemExit:
+                raise
+        _hook(monkeypatch, "upload_open", finalize_then_sigterm)
+        with pytest.raises(SystemExit):
+            job.run()
+        # A FAILED run finalized before any stop was recorded has no container reason to show.
+        expected = zd.MSG_JOB_FAILED if execution_status == "FAILED" else reason
+        self._assert_final(s3, table, expected, cancelled_by)
+        assert "stopReason" not in table.row, "the stop write lost against the finalized row"
+
+    def test_finalizer_sees_the_row_before_the_sigterm_write(self, monkeypatch, execution_status,
+                                                             reason, cancelled_by):
+        """The finalizer read the row, then the container's SIGTERM stop landed, then the finalizer
+        wrote: the stop write changes no status, so the finalizer's write still wins."""
+        s3, table, job = _setup()
+        stale = {}
+
+        def read_then_sigterm():
+            stale.update(table.row)
+            try:
+                runner.sigterm_handler(job)(15, None)
+            except SystemExit:
+                raise
+        _hook(monkeypatch, "upload_open", read_then_sigterm)
+        with pytest.raises(SystemExit):
+            job.run()
+        assert zd.finalize_ended_run(table, s3, AUX, stale, execution_status)[1] is True
+        self._assert_final(s3, table, reason, cancelled_by)
+
+
+class TestFinalizerCleansUpWhenAnotherWriterEnded:
+    def test_container_failure_between_the_read_and_the_write_still_removes_the_working_objects(
+            self, monkeypatch):
+        """A genuine container failure lands between the abort callback's re-read and its write: the
+        job keeps the container's FAILED reason, and the callback whose write lost still removes the
+        working objects (#1125 D24; before, they stayed until the lifecycle rule)."""
+        s3, table, job = _setup()
+        original = zd.landed_archive
+        results = []
+
+        def container_fails_meanwhile(*a, **k):
+            answer = original(*a, **k)
+            job.status.failed(runner.GENERIC_FAILURE)
+            return answer
+        monkeypatch.setattr(zd, "landed_archive", container_fails_meanwhile)
+
+        def abort_callback():
+            results.append(zd.finalize_ended_run(table, s3, AUX, dict(table.row), "ABORTED"))
+        _hook(monkeypatch, "upload_open", abort_callback)
+        _run(job)
+        assert results == [(zd.STATUS_FAILED, False)]
+        _assert_one_outcome(s3, table, zd.STATUS_FAILED)
+        assert table.row["errorMessage"] == runner.GENERIC_FAILURE
+        assert _working_objects_left(s3) == []

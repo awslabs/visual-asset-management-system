@@ -374,8 +374,9 @@ def cancel(ctx: click.Context, database_id: str, asset_id: str, request_id: str,
     """Cancel a queued or running zip download.
 
     The Zip Archive run stops and its partial archive is discarded; the job stays listed as
-    CANCELLED. A job that has already finished is refused: delete it instead. The --confirm
-    flag is required.
+    CANCELLED. A job that has already finished is refused: delete it instead. A cancel never
+    deletes a job: one that finishes while the cancel is sent is kept with its outcome. The
+    --confirm flag is required.
 
     Examples:
         vamscli zip-download cancel -d my-db -a my-asset -r <request-id> --confirm

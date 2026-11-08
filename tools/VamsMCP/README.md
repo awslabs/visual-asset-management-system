@@ -491,7 +491,9 @@ Zip downloads: `cancel_zip_download`, `delete_zip_download`. Both use the one
 DELETE route, which cancels an active job and deletes a finished one, so each tool
 reads the job first and refuses the other state with `ZipDownloadStateError`.
 `cancel_zip_download` stops a QUEUED or RUNNING job and discards its partial
-archive; the job stays listed as CANCELLED. `delete_zip_download` permanently
+archive; the job stays listed as CANCELLED. Its DELETE carries the cancel intent,
+so it never deletes a job: one that finished after the check is kept and the
+result reads `action: "ended"` with the final `status`. `delete_zip_download` permanently
 removes a finished job and its archive, and any URL already issued stops working.
 
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock

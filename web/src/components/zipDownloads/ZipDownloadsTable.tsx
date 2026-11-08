@@ -275,15 +275,28 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         triggerBrowserDownload(result[1].url, result[1].archiveFileName || job.archiveFileName);
     };
 
+    // The job behind an open cancel confirm as the latest poll shows it. A job that finished while
+    // the dialog was open is not cancelled: the dialog says so and offers no confirm (#1125 D23).
+    const confirmJob = confirm
+        ? jobs.find((j) => j.requestId === confirm.job.requestId) ?? confirm.job
+        : null;
+    const finishedWhileOpen =
+        confirm?.kind === "cancel" && !!confirmJob && isTerminalStatus(confirmJob.status);
+
     const runConfirm = async () => {
-        if (!confirm) return;
+        if (!confirm || finishedWhileOpen) return;
         const { job, kind } = confirm;
         setConfirming(true);
-        const result: any = await deleteZipDownload({
+        const target = {
             databaseId: job.databaseId,
             assetId: job.assetId,
             requestId: job.requestId,
-        });
+        };
+        // A cancel carries the cancel intent, so the API never deletes a job that finished
+        // after this dialog last saw it; it keeps it and answers "ended".
+        const result: any = await deleteZipDownload(
+            kind === "cancel" ? { ...target, intent: "cancel" } : target
+        );
         if (!mounted.current) return;
         setConfirming(false);
         setConfirm(null);
@@ -509,20 +522,49 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 onClick={() => setConfirm(null)}
                                 disabled={confirming}
                             >
-                                {confirm?.kind === "cancel" ? "Keep it" : "Keep"}
+                                {finishedWhileOpen
+                                    ? "Close"
+                                    : confirm?.kind === "cancel"
+                                    ? "Keep it"
+                                    : "Keep"}
                             </Button>
-                            <Button variant="primary" onClick={runConfirm} loading={confirming}>
+                            <Button
+                                variant="primary"
+                                onClick={runConfirm}
+                                loading={confirming}
+                                disabled={finishedWhileOpen}
+                            >
                                 {confirm?.kind === "cancel" ? "Cancel download" : "Delete"}
                             </Button>
                         </SpaceBetween>
                     </Box>
                 }
             >
-                {confirm?.kind === "cancel"
-                    ? `Stop preparing ${confirm.job.archiveFileName}? The partial archive is discarded.`
-                    : confirm
-                    ? `Delete ${confirm.job.archiveFileName}? The archive is removed and cannot be recovered.`
-                    : null}
+                {confirm?.kind === "cancel" ? (
+                    <SpaceBetween size="s">
+                        {!finishedWhileOpen && (
+                            <Box variant="p">
+                                {`Stop preparing ${confirm.job.archiveFileName}? The partial archive is discarded.`}
+                            </Box>
+                        )}
+                        {/* Announced when the job finishes while the dialog is open. */}
+                        <div role="status" aria-live="polite">
+                            {finishedWhileOpen && confirmJob && (
+                                <Alert
+                                    type="info"
+                                    statusIconAriaLabel="Info"
+                                    header="This zip download has finished"
+                                >
+                                    {`${confirmJob.archiveFileName} finished (${
+                                        STATUS_LABELS[confirmJob.status] ?? confirmJob.status
+                                    }) before it was cancelled. Nothing was cancelled or deleted.`}
+                                </Alert>
+                            )}
+                        </div>
+                    </SpaceBetween>
+                ) : confirm ? (
+                    `Delete ${confirm.job.archiveFileName}? The archive is removed and cannot be recovered.`
+                ) : null}
             </Modal>
         </SpaceBetween>
     );

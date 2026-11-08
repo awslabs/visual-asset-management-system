@@ -2288,7 +2288,15 @@ paths:
                                 $ref: '#/components/schemas/error'
         delete:
             summary: "Cancel or delete one of the caller's zip download jobs."
-            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). A cancel that reaches a job which finished before the cancel was recorded deletes nothing: the job keeps its outcome (action 'ended', with its status). Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
+            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). A cancel never deletes a job: a cancel that reaches a job which finished before the cancel was recorded keeps the job with its outcome (action 'ended', with its status). Send intent=cancel to say the call is a cancel: a job that is already SUCCEEDED or FAILED is then kept and answered 'ended' instead of deleted, and a CANCELLED one answers 'cancelled'. Without intent the call cancels an active job and deletes a finished one. Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
+            parameters:
+              - in: query
+                name: intent
+                required: false
+                schema:
+                    type: string
+                    enum: [cancel]
+                description: "cancel: the call is a cancel and never deletes the job, even when the job finished before the call arrived. Any other value answers 400 and changes nothing. Omitted, the call cancels a QUEUED or RUNNING job and deletes a finished one."
             responses:
                 "200":
                     description: "The job was cancelled or deleted."
@@ -2297,7 +2305,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadDeleteResponse"
                 "400":
-                    description: "Invalid path parameters."
+                    description: "Invalid path parameters, or an intent other than cancel."
                     content:
                         application/json:
                             schema:
@@ -16112,10 +16120,11 @@ components:
                 action:
                     type: string
                     enum: [cancelled, deleted, ended]
-                    description: "cancelled: the job is CANCELLED. deleted: a finished job and its archive were removed. ended: a cancel reached a job that had already finished; the job is kept with its outcome and nothing is deleted."
+                    description: "cancelled: the job is CANCELLED (also a repeated cancel with intent=cancel of a CANCELLED job). deleted: a finished job and its archive were removed (never with intent=cancel). ended: a cancel reached a job that had already finished; the job is kept with its outcome and nothing is deleted."
                 status:
                     type: string
-                    description: "Only with action ended: the job's final status (SUCCEEDED or FAILED)."
+                    enum: [SUCCEEDED, FAILED, ""]
+                    description: "Present only with action ended: the job's final status, SUCCEEDED or FAILED. An empty string when the job was deleted by another call while the cancel ran."
     responses:
         RequestBlocked:
             description: "The deployment's AWS WAF web ACL blocked the request at the API Gateway stage before it reached VAMS. Any operation can return it while app.useWaf is enabled; signing in again does not change the result."
