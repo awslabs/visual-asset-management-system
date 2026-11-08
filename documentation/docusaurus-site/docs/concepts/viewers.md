@@ -68,7 +68,8 @@ This table is the definitive reference for all built-in viewer plugins.
 | **Needle USD Viewer (Experimental)**  | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                                                                                                | 1        | No         | Universal Scene Description via WebAssembly. Requires `ALLOWUNSAFEEVAL`. Experimental -- may not display all USD files correctly or load all dependencies.                                                                                                                                                                                                                                        |
 | **ThatOpen IFC BIM Viewer**           | 3D       | `.ifc`, `.ifczip`                                                                                                                                                                | 1        | No         | Industry Foundation Classes (BIM) via the open-source That Open Engine (web-ifc, WebAssembly). Spatial model tree, element properties, hide/isolate, section planes, and measurements. Uses the multithreaded WASM build when cross-origin isolation is available and falls back to single-thread otherwise. Requires `ALLOWUNSAFEEVAL`.                                                          |
 | **SuperSplat Editor (PlayCanvas)**    | 3D       | `.lcc`, `.ply`, `.sog`, `.splat`                                                                                                                                                 | 1        | No         | Full PlayCanvas SuperSplat Gaussian-splat **editor** UI embedded via iframe (scene panel, transform/selection tools, camera animation, export menus). Default viewer for splat formats. Sole viewer for `.lcc` (XGRIDS multi-LOD). Requires `ALLOWUNSAFEEVAL` and a WebGPU-capable browser. Editing/export is local-only (not saved back to VAMS). Use bundled `.sog` rather than unbundled SOGS. |
-| **Online 3D Viewer**                  | 3D       | `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`                                                                                                                                           | 2        | Yes        | Rhinoceros 3D, AMF, BIM, OFF, and VRML formats.                                                                                                                                                                                                                                                                                                                                                   |
+| **Online 3D Viewer**                  | 3D       | `.amf`, `.bim`, `.off`, `.wrl`                                                                                                                                                   | 2        | Yes        | AMF, BIM, OFF, and VRML formats.                                                                                                                                                                                                                                                                                                                                                                  |
+| **Online 3D Viewer (Rhinoceros 3D)**  | 3D       | `.3dm`                                                                                                                                                                           | 2        | Yes        | Rhinoceros 3D models through the same Online3DViewer bundle. Requires `ALLOWUNSAFEEVAL`: the rhino3dm library it loads for `.3dm` compiles with `eval`.                                                                                                                                                                                                                                           |
 | **Cesium 3D Tileset Viewer**          | 3D       | `.json`                                                                                                                                                                          | 2        | No         | 3D Tileset viewing with geospatial capabilities via the CesiumJS engine (`@cesium/engine`) with VAMS custom scene controls.                                                                                                                                                                                                                                                                       |
 | **PlayCanvas Gaussian Splat Viewer**  | 3D       | `.ply`, `.sog`                                                                                                                                                                   | 5        | No         | Gaussian splat visualization with orbit camera and auto-focus.                                                                                                                                                                                                                                                                                                                                    |
 | **VNTANA 3D Viewer**                  | 3D       | `.glb`                                                                                                                                                                           | 2        | No         | Licensed viewer for high-quality GLB rendering. See [Licensed viewers](#licensed-viewers).                                                                                                                                                                                                                                                                                                        |
@@ -93,27 +94,27 @@ This table provides a quick lookup from file extension to the viewer(s) that han
 
 ### 3D model extensions
 
-| Extension        | Default Viewer          | Other Available Viewers |
-| ---------------- | ----------------------- | ----------------------- |
-| `.3dm`           | Online 3D Viewer        | --                      |
-| `.3ds`           | Three.js Viewer         | --                      |
-| `.3mf`           | Three.js Viewer         | --                      |
-| `.amf`           | Online 3D Viewer        | --                      |
-| `.bim`           | Online 3D Viewer        | --                      |
-| `.brep`          | Three.js Viewer         | --                      |
-| `.dae`           | Three.js Viewer         | --                      |
-| `.fbx`           | Three.js Viewer         | --                      |
-| `.glb`           | Three.js Viewer         | VNTANA 3D Viewer        |
-| `.gltf`          | Three.js Viewer         | --                      |
-| `.ifc`           | ThatOpen IFC BIM Viewer | --                      |
-| `.ifczip`        | ThatOpen IFC BIM Viewer | --                      |
-| `.iges`          | Three.js Viewer         | --                      |
-| `.igs`           | Three.js Viewer         | --                      |
-| `.obj`           | Three.js Viewer         | --                      |
-| `.off`           | Online 3D Viewer        | --                      |
-| `.step` / `.stp` | Three.js Viewer         | --                      |
-| `.stl`           | Three.js Viewer         | --                      |
-| `.wrl`           | Online 3D Viewer        | --                      |
+| Extension        | Default Viewer                   | Other Available Viewers |
+| ---------------- | -------------------------------- | ----------------------- |
+| `.3dm`           | Online 3D Viewer (Rhinoceros 3D) | --                      |
+| `.3ds`           | Three.js Viewer                  | --                      |
+| `.3mf`           | Three.js Viewer                  | --                      |
+| `.amf`           | Online 3D Viewer                 | --                      |
+| `.bim`           | Online 3D Viewer                 | --                      |
+| `.brep`          | Three.js Viewer                  | --                      |
+| `.dae`           | Three.js Viewer                  | --                      |
+| `.fbx`           | Three.js Viewer                  | --                      |
+| `.glb`           | Three.js Viewer                  | VNTANA 3D Viewer        |
+| `.gltf`          | Three.js Viewer                  | --                      |
+| `.ifc`           | ThatOpen IFC BIM Viewer          | --                      |
+| `.ifczip`        | ThatOpen IFC BIM Viewer          | --                      |
+| `.iges`          | Three.js Viewer                  | --                      |
+| `.igs`           | Three.js Viewer                  | --                      |
+| `.obj`           | Three.js Viewer                  | --                      |
+| `.off`           | Online 3D Viewer                 | --                      |
+| `.step` / `.stp` | Three.js Viewer                  | --                      |
+| `.stl`           | Three.js Viewer                  | --                      |
+| `.wrl`           | Online 3D Viewer                 | --                      |
 
 The tables in this section list the viewers available in every deployment. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
 
@@ -269,7 +270,7 @@ The following viewers use WASM:
 | Robotics Data Viewer (Lichtblick)  | Lichtblick (SQLite for `.db3`, decompression for `.mcap`) | `ALLOWUNSAFEEVAL`     |
 
 :::warning[Content Security Policy]
-Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor, by the Robotics Data Viewer, and by WASM loaders for OpenCascade, Needle USD, and web-ifc (the ThatOpen IFC BIM viewer). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.
+Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor, by the Robotics Data Viewer, and by WASM loaders for OpenCascade, Needle USD, web-ifc (the ThatOpen IFC BIM viewer), and rhino3dm (the Online 3D Viewer's `.3dm` support). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.
 :::
 
 The Three.js Viewer works without `ALLOWUNSAFEEVAL` for standard mesh formats (`.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`) and for USD (`.usd`, `.usda`, `.usdc`, `.usdz`), which it parses in JavaScript. The WASM requirement applies only to CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) which use the OpenCascade library.

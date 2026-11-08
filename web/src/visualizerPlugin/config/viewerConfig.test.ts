@@ -76,6 +76,24 @@ describe("viewerConfig vs the loaders", () => {
     });
 });
 
+describe("viewerConfig vs the default Content Security Policy", () => {
+    // rhino3dm, which Online3DViewer loads for .3dm, compiles with eval; the default CSP refuses it
+    // and the viewer then fails with "Failed to load rhino3dm" (#921). Offered only with
+    // ALLOWUNSAFEEVAL, a default deployment takes the standard "no compatible viewer" path instead.
+    it("offers .3dm only from a viewer gated on ALLOWUNSAFEEVAL", () => {
+        const offering = viewers.filter((viewer) => viewer.supportedExtensions.includes(".3dm"));
+        expect(offering.map((viewer) => viewer.id)).toEqual(["online3d-viewer-rhino"]);
+        expect(offering[0].featuresEnabledRestriction).toContain("ALLOWUNSAFEEVAL");
+    });
+
+    it("keeps the other Online 3D Viewer formats ungated, rendered by the same component", () => {
+        const online3d = byId("online3d-viewer");
+        expect(online3d.featuresEnabledRestriction ?? []).toEqual([]);
+        expect([...online3d.supportedExtensions].sort()).toEqual([".amf", ".bim", ".off", ".wrl"]);
+        expect(byId("online3d-viewer-rhino").componentPath).toBe(online3d.componentPath);
+    });
+});
+
 describe("viewerConfig vs the selection paths", () => {
     // The Text Diff Viewer renders only `compareFiles`, which the visualize path never passes.
     // Offered there, it fails at once with "needs exactly two files"; it must be compare-only.

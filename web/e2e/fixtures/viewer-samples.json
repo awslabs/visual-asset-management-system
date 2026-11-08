@@ -1,0 +1,187 @@
+{
+    "schemaVersion": 1,
+    "description": "Public sample files the viewer render cases in web/e2e/viewers.spec.ts open. tools/VamsCLI/examples/seed_viewer_samples.py validates this file, downloads each url sample and checks its size and SHA-256, produces the generated and derived samples, and uploads them all to one distributable asset; no sample is committed. Schema: web/e2e/CLAUDE.md, 'Viewer render proof'. Each licence was read at its source before the sample was listed.",
+    "samples": [
+        {
+            "id": "cesium-tileset",
+            "viewer": "cesium-viewer",
+            "path": "/tileset/tileset.json",
+            "url": "https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/a30bfdf2d6cc55f4c3078e8aea3a793af6ebfd56/1.0/TilesetWithDiscreteLOD/tileset.json",
+            "size": 1640,
+            "sha256": "5bb24155d89c13348d71c5e0cd2b049535f636e119b2a561312dd64506e0b796",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/CesiumGS/3d-tiles-samples/tree/main/1.0/TilesetWithDiscreteLOD"
+        },
+        {
+            "id": "cesium-tile-low",
+            "viewer": "cesium-viewer",
+            "path": "/tileset/dragon_low.b3dm",
+            "url": "https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/a30bfdf2d6cc55f4c3078e8aea3a793af6ebfd56/1.0/TilesetWithDiscreteLOD/dragon_low.b3dm",
+            "size": 44960,
+            "sha256": "763e16468653a104ed2223c689e6c197193f8e5a126c35fff43755a5741bf0db",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/CesiumGS/3d-tiles-samples/tree/main/1.0/TilesetWithDiscreteLOD"
+        },
+        {
+            "id": "cesium-tile-medium",
+            "viewer": "cesium-viewer",
+            "path": "/tileset/dragon_medium.b3dm",
+            "url": "https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/a30bfdf2d6cc55f4c3078e8aea3a793af6ebfd56/1.0/TilesetWithDiscreteLOD/dragon_medium.b3dm",
+            "size": 269432,
+            "sha256": "62b28ac8d172cec579ea96cb83a564719ac5638d86626e66f48ffadb096b8e3b",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/CesiumGS/3d-tiles-samples/tree/main/1.0/TilesetWithDiscreteLOD"
+        },
+        {
+            "id": "cesium-tile-high",
+            "viewer": "cesium-viewer",
+            "path": "/tileset/dragon_high.b3dm",
+            "url": "https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/a30bfdf2d6cc55f4c3078e8aea3a793af6ebfd56/1.0/TilesetWithDiscreteLOD/dragon_high.b3dm",
+            "size": 4475004,
+            "sha256": "e691ff60f06b4420a68121dd09aac778142305b96d7f0a45022a0ffb584f57bb",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/CesiumGS/3d-tiles-samples/tree/main/1.0/TilesetWithDiscreteLOD"
+        },
+        {
+            "id": "splat-ply",
+            "viewer": "gaussian-splat-viewer-playcanvas",
+            "path": "/Unicorn_Stuffy.ply",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/Unicorn_Stuffy.ply",
+            "size": 12302827,
+            "sha256": "230f2c01196ab620a4e9ed26ba537e66df02ead47fdecb4ebb4faa68bd7c4348",
+            "licence": "CC-BY-4.0",
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)"
+        },
+        {
+            "id": "splat-sog",
+            "viewer": "gaussian-splat-viewer-playcanvas",
+            "path": "/Unicorn_Stuffy.sog",
+            "url": "https://raw.githubusercontent.com/BabylonJS/Assets/3798844710bb7e76199ee38b175176c0fe4e9e62/splats/Unicorn_Stuffy.sog",
+            "size": 2065634,
+            "sha256": "c78a66448959dbc46e3601629f7bc78ad4ca02f863a09041150d431d5d7c8573",
+            "licence": "CC-BY-4.0",
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)"
+        },
+        {
+            "id": "online3d-3dm",
+            "viewer": "online3d-viewer-rhino",
+            "path": "/RhinoLogo.3dm",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/RhinoLogo.3dm",
+            "size": 928347,
+            "sha256": "34c8d808e8ae3887545d55928240e180572b7dadda8005648b79a72967229758",
+            "licence": "MIT",
+            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (Robert McNeel & Associates)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "online3d-amf",
+            "viewer": "online3d-viewer",
+            "path": "/rook.amf",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/rook.amf",
+            "size": 49369,
+            "sha256": "59e123ec3bae184ede7beab9a7b982a9b4452c2a85c2e5abb0fa6461f932126a",
+            "licence": "MIT",
+            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (three.js authors)"
+        },
+        {
+            "id": "online3d-bim",
+            "viewer": "online3d-viewer",
+            "path": "/MultipleMeshes.bim",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/MultipleMeshes.bim",
+            "size": 86848,
+            "sha256": "634d18bef6bd59f266f0d72f33a38bb0c4e5734fdeacf98beb79d9d8be92a23c",
+            "licence": "MIT",
+            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (Wojciech Radaczyński, dotbim)"
+        },
+        {
+            "id": "online3d-off",
+            "viewer": "online3d-viewer",
+            "path": "/cube.off",
+            "generated": "off-cube",
+            "licence": "generated by the seed script",
+            "source": "The Online3DViewer cube.off sample is taken from Wikipedia (CC BY-SA), so the seed writes its own coloured cube instead."
+        },
+        {
+            "id": "online3d-wrl",
+            "viewer": "online3d-viewer",
+            "path": "/extrusion3.wrl",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/extrusion3.wrl",
+            "size": 2219,
+            "sha256": "a679dcf403777b3840c585c6257e2c780543fd9b3c4f7463e32d66c316535f19",
+            "licence": "MIT",
+            "source": "https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md (three.js authors)"
+        },
+        {
+            "id": "pdf",
+            "viewer": "pdf-viewer",
+            "path": "/dummy.pdf",
+            "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+            "size": 13264,
+            "sha256": "3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4",
+            "licence": "W3C Document License",
+            "source": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+        },
+        {
+            "id": "csv",
+            "viewer": "columnar-viewer",
+            "path": "/co2-annmean-mlo.csv",
+            "url": "https://raw.githubusercontent.com/datasets/co2-ppm/52f2be52ee6145eaad67367959af9b1b0a0bd83e/data/co2-annmean-mlo.csv",
+            "size": 1161,
+            "sha256": "b1548ededea6f9b7eecac370753de8d8da6e0afafe1041f749a11db78c2e33c4",
+            "licence": "ODC-PDDL-1.0 (NOAA data, US Government work)",
+            "source": "https://github.com/datasets/co2-ppm",
+            "expect": {
+                "firstHeader": "Year",
+                "columns": 3
+            }
+        },
+        {
+            "id": "csv-bom",
+            "viewer": "columnar-viewer",
+            "path": "/co2-annmean-mlo-bom.csv",
+            "derivedFrom": "csv",
+            "transform": "prepend-utf8-bom",
+            "licence": "inherits csv",
+            "source": "the csv sample with a UTF-8 byte order mark prepended",
+            "expect": {
+                "firstHeader": "Year",
+                "columns": 3
+            }
+        },
+        {
+            "id": "csv-ragged",
+            "viewer": "columnar-viewer",
+            "path": "/co2-mm-mlo.csv",
+            "url": "https://raw.githubusercontent.com/datasets/co2-ppm/52f2be52ee6145eaad67367959af9b1b0a0bd83e/data/co2-mm-mlo.csv",
+            "size": 37678,
+            "sha256": "7de17cf66ec3c285c2a3bbb8e6fe132badb7c01d065575afa73030dff432db9e",
+            "licence": "ODC-PDDL-1.0 (NOAA data, US Government work)",
+            "source": "https://github.com/datasets/co2-ppm (6 headers over 7-cell rows)",
+            "expect": {
+                "firstHeader": "Date",
+                "columns": 7
+            }
+        },
+        {
+            "id": "fcs",
+            "viewer": "columnar-viewer",
+            "path": "/0877408774.B08.fcs",
+            "url": "https://raw.githubusercontent.com/RGLab/flowCore/4935c7bf318697b3128ee50dae81018a6b246ab8/inst/extdata/0877408774.B08",
+            "size": 162305,
+            "sha256": "86a1ff4489a7b59bb7be6bc2a86cbf885b9b102071413adabeaac6d8b450f74b",
+            "licence": "Artistic-2.0",
+            "source": "https://github.com/RGLab/flowCore (inst/extdata, FCS 2.0)"
+        },
+        {
+            "id": "text",
+            "viewer": "text-viewer",
+            "path": "/viewer-sample.txt",
+            "generated": "text",
+            "licence": "generated by the seed script",
+            "source": "a short text file the seed writes",
+            "expect": {
+                "line": "VAMS viewer sample: plain text line 2"
+            }
+        }
+    ]
+}

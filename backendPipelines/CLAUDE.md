@@ -1274,6 +1274,13 @@ in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a su
 whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
 drifts from the thumbnail Dockerfile.
 
+**Container-level smoke scripts live in `ci/smoke/`, not in the pipeline folder.** They need Docker and
+built images, so CI does not run them; they are run by hand when a converter or its base image changes.
+`ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
+them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
+row per file (exit codes, LAS format, point count, colour and intensity ranges, octree points); run it on
+the old and new PDAL image and diff the two (#1203).
+
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls
 its loader with no argument, so any other suite in the same process that sets

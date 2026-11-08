@@ -112,7 +112,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 2. Online3dViewerPlugin
 
--   **ID**: `online3d-viewer`
+-   **ID**: `online3d-viewer` (`.amf`, `.bim`, `.off`, `.wrl`) and `online3d-viewer-rhino` (`.3dm`, offered only with `ALLOWUNSAFEEVAL` because rhino3dm compiles with `eval`)
 -   **Extensions**: `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`
 -   **Features**: 3D model viewing with Online3DViewer
 -   **Multi-file**: Yes (can load multiple models simultaneously)

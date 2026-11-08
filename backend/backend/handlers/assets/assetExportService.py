@@ -27,7 +27,7 @@ from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
-from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
 from common.compliance.quarantineGuard import check_quarantine_block
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1037,10 +1037,11 @@ def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[s
         
         if version_id and version_id != 'null':
             params['VersionId'] = version_id
-            
+
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params=params,
+            Params=presigned_get_object_params(params),
             ExpiresIn=int(presigned_url_timeout)
         )
         

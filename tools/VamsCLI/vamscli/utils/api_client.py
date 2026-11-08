@@ -366,6 +366,12 @@ class APIClient(CustomAPIClientMixin):
         every deployed route an `APIError`, and, with auth, a handler's or the resource policy's refusal
         `PermissionDeniedError`. Only the authorizer's deny, or a 403 of no known shape, is refreshed and
         resent.
+
+        A 401 means the credential did not authenticate (VAMS 2.7.0 and later answer an expired or
+        invalid token, and an unknown, disabled or expired API key, with 401; issue #1212). It is
+        refreshed and resent up to MAX_AUTH_RETRIES times, and one that persists raises
+        `AuthenticationError`. The authorizer-deny refresh above is kept for deployments older than
+        2.7.0, which answer the same credentials with a 403.
         """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
@@ -468,6 +474,16 @@ class APIClient(CustomAPIClientMixin):
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
+
+            # A 401 that persists through every refresh: the API's authorizer answers a credential
+            # that does not authenticate (expired, invalid, or an unknown, disabled or expired API
+            # key) with 401. Reported as a sign-in problem, whatever raise_http_errors says, instead
+            # of falling through to a generic "API request failed (401)" APIError.
+            if response.status_code == 401 and include_auth:
+                raise AuthenticationError(
+                    "Authentication failed: the VAMS API did not accept the credential even after "
+                    "refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate."
+                )
             
             # A 403 is answered by one of several parties, told apart by the response, or by the host a
             # followed redirect reached. Only the authorizer's deny can be cured by a fresh token, so

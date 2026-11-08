@@ -50,7 +50,7 @@ PCP follows the multi-stage build strategy. First, the `build` image downloads, 
 
 Building the container image can range from a few minutes to 15 minutes depending on the machine you are building on. The PDAL container image is based on "condaforge/miniforge3" as the base docker image and POTREE is built on "python:3.11-alpine" as the base. This is based on the requirements and dependencies that each application needs.
 
-The PDAL container size is 2.22GB while the Potree Container size is 228MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
+The PDAL container (PDAL 2.10.2) size is about 2.5GB while the Potree Container size is about 600MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
 
 To build the container follow the below commands.
 
