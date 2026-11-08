@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Box from "@cloudscape-design/components/box";
+import LiveRegion from "@cloudscape-design/components/live-region";
 import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import { appCache } from "../../services/appCache";
 import Alert from "@cloudscape-design/components/alert";
@@ -71,6 +72,13 @@ const resultCountMessage = (result: SearchResponse) => {
     const exactOne = getTotalResultCount(result) === 1 && !isTotalLowerBound(result);
     return `Found ${formatTotalResultCount(result)} ${exactOne ? "result" : "results"}`;
 };
+
+/**
+ * Natural-language warnings that only say a search window filled. The page states them itself (the
+ * count's "+" and the line under the results), so they raise no toast; every other code is rare and
+ * is toasted.
+ */
+const NLP_WINDOW_WARNING_CODES = new Set(["truncated:window", "segments:window_full"]);
 
 const ModernSearchContainer: React.FC<
     SearchContainerProps & {
@@ -149,6 +157,9 @@ const ModernSearchContainer: React.FC<
     // search only in the mode that ran it, so a keyword listing is never presented as a natural-
     // language answer.
     const [answeredMode, setAnsweredMode] = useState<SearchMode | null>(null);
+    // The count a finished search announces to screen readers through the polite live region below:
+    // "Found N results". Cleared when the next search starts, so the same count is announced again.
+    const [countAnnouncement, setCountAnnouncement] = useState("");
 
     // Initialize search query if provided
     useEffect(() => {
@@ -225,11 +236,15 @@ const ModernSearchContainer: React.FC<
             setNlpResult(result);
             setAnsweredMode("nlp");
             searchState.setResult(result);
-            if (result.warnings && result.warnings.length > 0) {
-                // Each entry is `{ code, message }`; the user reads the messages.
-                showWarning("Search notice", result.warnings.map((w) => w.message).join(" "));
+            // Each entry is `{ code, message }`; the user reads the messages. A filled window is
+            // stated on the page instead (see NLP_WINDOW_WARNING_CODES).
+            const rareWarnings = (result.warnings ?? []).filter(
+                (w) => !NLP_WINDOW_WARNING_CODES.has(w.code)
+            );
+            if (rareWarnings.length > 0) {
+                showWarning("Search notice", rareWarnings.map((w) => w.message).join(" "));
             }
-            // The completion notification shows the count the badge and the table header show.
+            // The announcement reads the count the badge and the table header show.
             return withNlpResultTotal(result);
         }
         setNlpResult(null);
@@ -247,11 +262,14 @@ const ModernSearchContainer: React.FC<
     const handleSearch = async () => {
         try {
             searchState.setLoading(true);
+            setCountAnnouncement("");
             const result = await runSearch(searchState.buildSearchQuery());
 
             // `null` means no request was issued (empty natural-language query): nothing to announce.
+            // An auto-refresh is not announced either. No toast: the badge in the title row shows
+            // the count, and a toast would cover the title row's controls.
             if (result && !autoRefreshing) {
-                showSuccess("Search completed", resultCountMessage(result));
+                setCountAnnouncement(resultCountMessage(result));
             }
         } catch (error: any) {
             console.error("Search error:", error);
@@ -264,7 +282,7 @@ const ModernSearchContainer: React.FC<
     };
 
     // A search whose query differs from state (a sort or page change applied before the reducer
-    // re-renders), reported like handleSearch but without the completion toast.
+    // re-renders), reported like handleSearch but without the count announcement.
     const runOverride = async (searchQuery: SearchQuery) => {
         try {
             searchState.setLoading(true);
@@ -403,9 +421,10 @@ const ModernSearchContainer: React.FC<
             // Trigger search with the new page size - pass pagination directly to avoid closure
             try {
                 searchState.setLoading(true);
+                setCountAnnouncement("");
                 const result = await runSearch(searchState.buildSearchQuery(newPagination));
                 if (result) {
-                    showSuccess("Search completed", resultCountMessage(result));
+                    setCountAnnouncement(resultCountMessage(result));
                 }
             } catch (error: any) {
                 console.error("Search error:", error);
@@ -795,6 +814,11 @@ const ModernSearchContainer: React.FC<
             {/* Toast notifications at the very top */}
             <ToastManager toasts={toasts} onDismiss={removeToast} />
 
+            {/* Visually hidden; announces a finished search's count politely to screen readers. */}
+            <LiveRegion hidden data-testid="search-count-announcement">
+                {countAnnouncement}
+            </LiveRegion>
+
             {/* Top Bar */}
             <SearchTopBar
                 query={searchState.query}
@@ -892,6 +916,23 @@ const ModernSearchContainer: React.FC<
                                 may exist.
                             </Box>
                         )}
+                        {/* Only a segment window filled: the files are all counted, but some may
+                            match in more scenes or passages than were checked. */}
+                        {searchMode === "nlp" &&
+                            nlpResult &&
+                            !nlpResult.nlp?.truncated &&
+                            (nlpResult.warnings ?? []).some(
+                                (w) => w.code === "segments:window_full"
+                            ) && (
+                                <Box
+                                    padding={{ top: "s" }}
+                                    color="text-body-secondary"
+                                    fontSize="body-s"
+                                >
+                                    Some files have more matching scenes or passages than were
+                                    checked; more may exist.
+                                </Box>
+                            )}
                     </Box>
                 }
                 initialLeftWidth={sidebarWidth}

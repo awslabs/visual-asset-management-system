@@ -16,7 +16,7 @@
  */
 
 import { test, expect, Page } from "@playwright/test";
-import { apiContext, collectPageErrors } from "./support/fixtures";
+import { apiContext, collectPageErrors, searchCountBadgeText } from "./support/fixtures";
 
 const PAGE_SIZE = 100;
 
@@ -125,10 +125,13 @@ test.describe("Search counts", () => {
         const total = Math.max(shown.aggregationTotal ?? 0, shown.hits?.total?.value ?? 0);
         test.skip(total === 0, "No search results for this user");
 
-        const suffix = shown.hits?.total?.relation === "gte" ? "+" : "";
-        await expect(
-            page.getByText(`${total.toLocaleString()}${suffix} results`).first()
-        ).toBeVisible({
+        // The page's own wording: "+" only for a minimum, and "1 result" for exactly one. Matched
+        // exactly, so "1 result" cannot pass on a page that reads "1 results" (or "11 results").
+        const expected = searchCountBadgeText({
+            value: total,
+            relation: shown.hits?.total?.relation,
+        });
+        await expect(page.getByText(expected, { exact: true }).first()).toBeVisible({
             timeout: 30000,
         });
         expect(errors).toEqual([]);

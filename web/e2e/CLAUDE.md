@@ -155,6 +155,7 @@ locators — the app's markup is not always guessable, and these were establishe
 | `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
 | `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
 | `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| `actionDisabledReason(button)`                                | A gated Button's disabled reason once its permission check settles, or `""` if allowed     |
 
 **Selector facts worth not rediscovering:**
 
@@ -202,6 +203,16 @@ locators — the app's markup is not always guessable, and these were establishe
     on every lower-bound count.
 -   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment you
     press by its `data-testid` (the view id) before pressing it, then assert on the pinned locator.
+-   **A permission-gated action depends on the signed-in role.** A role the API refuses sees the
+    Button disabled with its reason (hidden text named by `aria-describedby`), and reads "Checking
+    your permissions." until the allowed-routes check answers. Branch on
+    `actionDisabledReason(button)`: assert the refusal and `test.skip` the steps behind the action,
+    or exercise them when it returns `""`. Never assume the admin role.
+-   **The search page announces a finished search's count, it does not toast it.** "Found N
+    results" goes to a visually hidden polite live region; only rare natural-language warnings
+    raise a "Search notice" toast (never `truncated:window` or `segments:window_full`, which the
+    page states under the results). Count toasts as a snapshot right after the answer: a toast
+    hides after 5 s, so a polled `toHaveCount(0)` passes once it has gone.
 
 When a page's markup changes, fix the helper once; every spec follows.
 

@@ -311,6 +311,32 @@ export async function expectReachable(target: Locator, what: string): Promise<vo
     );
 }
 
+/** The reason a permission-gated action shows while the allowed-routes check is still running. */
+const PERMISSIONS_CHECKING_REASON = "Checking your permissions.";
+
+/**
+ * The reason a Cloudscape Button gives for being disabled — the hidden text its `aria-describedby`
+ * names — or `""` when it gives none. A permission-gated action reads "Checking your permissions."
+ * while the page's allowed-routes check runs; this waits that out, so the answer is the role's:
+ * `""` when the API allows the action, the role's refusal (e.g. "Your role does not allow …")
+ * when it does not. The API still enforces every call; this only reads what the page shows.
+ */
+export async function actionDisabledReason(button: Locator): Promise<string> {
+    const read = () =>
+        button.evaluate((el) =>
+            (el.getAttribute("aria-describedby") ?? "")
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+                .join(" ")
+                .trim()
+        );
+    await expect
+        .poll(read, { message: "the permission check did not settle", timeout: 30_000 })
+        .not.toBe(PERMISSIONS_CHECKING_REASON);
+    return read();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Asset file viewer
 // ---------------------------------------------------------------------------------------------

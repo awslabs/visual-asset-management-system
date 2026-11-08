@@ -5,6 +5,7 @@
 
 import { test, expect, Page } from "@playwright/test";
 import {
+    actionDisabledReason,
     collectPageErrors,
     expectSearchRendered,
     gotoSearch,
@@ -301,18 +302,38 @@ test.describe("Unified search — natural-language behaviour", () => {
         }
     });
 
-    test("the truncation notice and warning toast appear exactly when the response says so", async ({
+    test("the window notices and the warning toast appear exactly when the response says so", async ({
         page,
     }) => {
         const mode = await openUnified(page);
         await enterNlpMode(page, mode);
         const { body } = await runNlpSearch(page, NLP_PROBE_QUERY);
         test.skip(!body?.hits, "No natural-language response body to compare against");
+        // Read the toasts first, as a snapshot: runNlpSearch returns 1.2 s after the answer, inside
+        // a toast's 5 s life, so 0 here means none was raised (a polled toHaveCount(0) would also
+        // pass once a raised toast had hidden).
+        const noticeToasts = await page.getByText("Search notice").count();
+        const completedToasts = await page.getByText("Search completed").count();
+        const codes: string[] = (body.warnings ?? []).map((w: any) => w.code);
+        // Only the rare warnings are toasted; the two window-full codes never are, and the count
+        // is announced to screen readers rather than toasted.
+        const rare = codes.filter((c) => c !== "truncated:window" && c !== "segments:window_full");
+        expect(noticeToasts, `warning codes ${codes.join(", ") || "none"}`).toBe(
+            rare.length > 0 ? 1 : 0
+        );
+        expect(completedToasts).toBe(0);
+        // A filled window is stated on the page: a whole-file window (the answer is truncated) as
+        // the "top N" line, a segment window alone as the scenes-or-passages line.
+        const truncated = !!body.nlp?.truncated;
         const notice = page.getByText(/^Showing the top \d+ semantic matches; more may exist\.$/);
-        await expect(notice).toHaveCount(body.nlp?.truncated ? 1 : 0);
-        const toast = page.getByText("Search notice");
-        const warnings: any[] = body.warnings ?? [];
-        await expect(toast).toHaveCount(warnings.length > 0 ? 1 : 0);
+        await expect(notice).toHaveCount(truncated ? 1 : 0);
+        const segmentNotice = page.getByText(
+            "Some files have more matching scenes or passages than were checked; more may exist.",
+            { exact: true }
+        );
+        await expect(segmentNotice).toHaveCount(
+            !truncated && codes.includes("segments:window_full") ? 1 : 0
+        );
     });
 
     test("switching the record type keeps natural-language mode and re-queries", async ({
@@ -605,6 +626,14 @@ test.describe("Asset list view — bulk actions", () => {
         test.skip((await rows.count()) < 2, "No assets in this environment");
         // Row 0 is the header's select-all; pick the first data row.
         await rows.nth(1).getByRole("checkbox").check();
+        // The role decides (Rule 1: any signed-in role): a role the API refuses archive and delete
+        // keeps the action disabled with its reason, and has no confirm to open.
+        const refusal = await actionDisabledReason(del);
+        if (refusal) {
+            expect(refusal).toMatch(/^Your role does not allow archiving or deleting .+\.$/);
+            await expect(del).toBeDisabled();
+            test.skip(true, `This role may not archive or delete assets ("${refusal}")`);
+        }
         await expect(del).toBeEnabled();
         await del.click();
         const dialog = page.getByRole("dialog");

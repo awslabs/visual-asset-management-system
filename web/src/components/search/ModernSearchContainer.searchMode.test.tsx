@@ -162,6 +162,24 @@ const clearPreferenceCookie = () => {
     document.cookie = "vams-search-preferences=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/";
 };
 
+/** The visually hidden live region's source: the count the last finished search announces. */
+const countAnnouncement = () => screen.getByTestId("search-count-announcement");
+
+/**
+ * What the polite live regions on the page read out. Cloudscape's LiveRegion copies its source
+ * into its own `aria-live="polite"` announcer after a 1 s throttle, so this waits that long.
+ */
+const expectPoliteAnnouncement = (text: string) =>
+    waitFor(
+        () =>
+            expect(
+                Array.from(document.querySelectorAll('[aria-live="polite"]')).map((el) =>
+                    (el.textContent ?? "").replace(/\.$/, "")
+                )
+            ).toContain(text),
+        { timeout: 3000 }
+    );
+
 // Several cases wait out the page's 500 ms auto-refresh window on real timers, so a full parallel run can
 // take them past the 5-second default.
 jest.setTimeout(20000);
@@ -199,7 +217,8 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.queryByText(/\d+ results$/)).toBeNull();
         expect(searchNlp).not.toHaveBeenCalled();
         expect(searchAssets).not.toHaveBeenCalled();
-        expect(screen.queryByText("Search completed")).toBeNull();
+        // A search that never ran announces nothing.
+        expect(countAnnouncement().textContent).toBe("");
     });
 
     it("marks the search page's splitter for the phone layout, which stacks the filters above the results", async () => {
@@ -247,20 +266,26 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.getByText("90%")).toBeInTheDocument();
     });
 
-    it("announces one explicit natural-language search with one notification", async () => {
+    it("announces an explicit natural-language search's count in the polite live region, with no completion toast", async () => {
+        // D72: a "Search completed" toast covered the title row's view switch and Clear all
+        // filters for 5 s after every search; the badge shows the count, the live region reads it out.
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         (searchNlp as jest.Mock).mockResolvedValue([true, nlpEnvelope(true)]);
         renderContainer();
         const input = await screen.findByPlaceholderText("Describe what you are looking for...");
         await userEvent.type(input, "red truck{Enter}");
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await screen.findByText("Search completed");
-        // Let a pending auto-refresh window pass: it must not announce the same search again.
+        await screen.findByText("Truck");
+        expect(screen.queryByText("Search completed")).toBeNull();
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2+ results"));
+        await expectPoliteAnnouncement("Found 2+ results");
+        // Let a pending auto-refresh window pass: still no toast, and the search is not re-run.
         await new Promise((resolve) => setTimeout(resolve, 900));
-        expect(screen.getAllByText("Search completed")).toHaveLength(1);
+        expect(screen.queryByText("Search completed")).toBeNull();
+        expect(searchNlp).toHaveBeenCalledTimes(1);
     });
 
-    it("shows one count for a natural-language search: the route's total, in the notification, the badge and the table header", async () => {
+    it("shows one count for a natural-language search: the route's total, in the announcement, the badge and the table header", async () => {
         // UAT D61: the notification said "Found 101+ results" (the route's total) while the badge and
         // the table header said "100+" (the returned hits). The route counted exactly 150 readable matches
         // and returned 2, so every place shows 150, exact as the route says (as `vamscli search nlp` does);
@@ -280,7 +305,7 @@ describe("ModernSearchContainer search modes", () => {
         await userEvent.type(input, "red truck");
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await screen.findByText("Found 150 results");
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 150 results"));
         expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150 results");
         const table = createWrapper(container).findTable();
         expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150");
@@ -298,7 +323,7 @@ describe("ModernSearchContainer search modes", () => {
         await userEvent.type(input, "red truck");
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await screen.findByText("Found 2 results");
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2 results"));
         expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("2 results");
         const header = createWrapper(container).findTable()?.findHeaderSlot()?.getElement();
         expect(header?.textContent).toContain("2");
@@ -316,7 +341,39 @@ describe("ModernSearchContainer search modes", () => {
         // Keyword mode has no `includeSegments`, so the checkbox is not rendered.
         expect(screen.queryByLabelText("Search inside files")).toBeNull();
         // Positive control for the empty-query test above: a search that ran is announced.
-        await screen.findByText("Search completed");
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 0 results"));
+    });
+
+    it("announces a keyword search's count without a toast, on load and after an explicit search", async () => {
+        setFeatures([]);
+        (searchAssets as jest.Mock).mockResolvedValue([true, keywordRows]);
+        renderContainer();
+        await screen.findByText("Keyword Alpha");
+        expect(screen.queryByText("Search completed")).toBeNull();
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2 results"));
+        await expectPoliteAnnouncement("Found 2 results");
+        await userEvent.type(screen.getByPlaceholderText("Search by keywords..."), "alpha");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2 results"));
+        expect(screen.queryByText("Search completed")).toBeNull();
+        expect(screen.getByText("Keyword Alpha")).toBeInTheDocument();
+    });
+
+    it("announces a single result in the singular", async () => {
+        setFeatures([]);
+        (searchAssets as jest.Mock).mockResolvedValue([
+            true,
+            {
+                ...keywordRows,
+                hits: { total: { value: 1, relation: "eq" }, hits: [keywordRows.hits.hits[0]] },
+                aggregationTotal: 1,
+            },
+        ]);
+        renderContainer();
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 1 result"));
+        await expectPoliteAnnouncement("Found 1 result");
+        expect(screen.queryByText("Search completed")).toBeNull();
     });
 
     it("with both engines on: a live control defaulting to keyword; switching persists, shows `Search inside files` beside the full sidebar, and routes the next search to NLP", async () => {
@@ -384,29 +441,77 @@ describe("ModernSearchContainer search modes", () => {
         expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
     });
 
-    it("shows the message of each response warning in one toast, never the object", async () => {
-        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
-        const truncatedMessage =
-            "At least one vector search call returned a full window of candidates; more matches may exist. Narrow the query or the database scope.";
-        const ignoredMessage =
-            "filters, metadataQuery, geoSearch and tags require OpenSearch, which is not enabled on this deployment; they were ignored.";
-        (searchNlp as jest.Mock).mockResolvedValue([
-            true,
-            {
-                ...nlpEnvelope(true),
-                warnings: [
-                    { code: "truncated:window", message: truncatedMessage },
-                    { code: "opensearch:fields_ignored", message: ignoredMessage },
-                ],
-            },
-        ]);
-        renderContainer();
-        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
-        await userEvent.type(input, "red truck");
-        await userEvent.click(screen.getByRole("button", { name: "Search" }));
-        await screen.findByText("Search notice");
-        expect(screen.getByText(`${truncatedMessage} ${ignoredMessage}`)).toBeInTheDocument();
-        expect(screen.queryByText(/\[object Object\]/)).toBeNull();
+    describe("response warnings (D72: toast only the rare ones)", () => {
+        const truncatedMessage = "A result window of 100 filled; more files may match";
+        const segmentMessage = "A segment window of 100 filled; more segments may match";
+        const ignoredMessage = "OpenSearch is not enabled; ignored: filters, tags";
+        const noneAccessibleMessage = "No searchable database is accessible to the caller";
+        const truncatedLine = "Showing the top 2 semantic matches; more may exist.";
+        const segmentLine =
+            "Some files have more matching scenes or passages than were checked; more may exist.";
+
+        const searchWith = async (
+            truncated: boolean,
+            warnings: Array<{ code: string; message: string }>
+        ) => {
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            (searchNlp as jest.Mock).mockResolvedValue([
+                true,
+                { ...nlpEnvelope(truncated), warnings },
+            ]);
+            renderContainer();
+            const input = await screen.findByPlaceholderText(
+                "Describe what you are looking for..."
+            );
+            await userEvent.type(input, "red truck");
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+            await screen.findByText("Truck");
+        };
+
+        it("toasts the rare warnings' messages in one notice, never the object or a window-full message", async () => {
+            await searchWith(true, [
+                { code: "truncated:window", message: truncatedMessage },
+                { code: "opensearch:fields_ignored", message: ignoredMessage },
+                { code: "databases:none_accessible", message: noneAccessibleMessage },
+            ]);
+            await screen.findByText("Search notice");
+            expect(
+                screen.getByText(`${ignoredMessage} ${noneAccessibleMessage}`)
+            ).toBeInTheDocument();
+            expect(screen.queryByText(new RegExp(truncatedMessage))).toBeNull();
+            expect(screen.queryByText(/\[object Object\]/)).toBeNull();
+            // The filled window is stated on the page instead.
+            expect(screen.getByText(truncatedLine)).toBeInTheDocument();
+        });
+
+        it("raises no toast for a truncated:window warning alone; the page states it", async () => {
+            await searchWith(true, [{ code: "truncated:window", message: truncatedMessage }]);
+            expect(screen.getByText(truncatedLine)).toBeInTheDocument();
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            expect(screen.queryByText("Search notice")).toBeNull();
+            expect(screen.queryByText(truncatedMessage)).toBeNull();
+        });
+
+        it("raises no toast for a segments:window_full warning alone and states it on the page", async () => {
+            await searchWith(false, [{ code: "segments:window_full", message: segmentMessage }]);
+            expect(screen.getByText(segmentLine)).toBeInTheDocument();
+            // A segment window is not a truncated answer: no whole-file line, and the count is exact.
+            expect(screen.queryByText(truncatedLine)).toBeNull();
+            expect(countAnnouncement().textContent).toBe("Found 2 results");
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            expect(screen.queryByText("Search notice")).toBeNull();
+            expect(screen.queryByText(segmentMessage)).toBeNull();
+        });
+
+        it("still toasts a databases:none_accessible warning", async () => {
+            await searchWith(false, [
+                { code: "databases:none_accessible", message: noneAccessibleMessage },
+            ]);
+            await screen.findByText("Search notice");
+            expect(screen.getByText(noneAccessibleMessage)).toBeInTheDocument();
+            expect(screen.queryByText(segmentLine)).toBeNull();
+        });
     });
 
     it("clearing `Search inside files` re-runs the search with includeSegments false; the default and a re-check send no key", async () => {
