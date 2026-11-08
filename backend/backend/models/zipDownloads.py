@@ -176,5 +176,8 @@ class ZipDownloadUrlResponseModel(BaseModel, extra='ignore'):
 
 class ZipDownloadDeleteResponseModel(BaseModel, extra='ignore'):
     message: str
-    action: Literal["cancelled", "deleted"]
+    # "ended": a cancel of a job that ended before the cancel was recorded; the job is kept with
+    # its outcome (``status``) and nothing is deleted (#1125 D22).
+    action: Literal["cancelled", "deleted", "ended"]
+    status: Optional[str] = None
 

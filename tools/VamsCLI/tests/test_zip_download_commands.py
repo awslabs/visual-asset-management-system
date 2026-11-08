@@ -245,6 +245,23 @@ class TestCancelDelete:
             assert json.loads(result.output)["action"] == "cancelled"
             mocks["api_client"].cancel_zip_download.assert_called_once_with("db", "a", "r1")
 
+    @pytest.mark.parametrize("json_output", [True, False])
+    def test_cancel_of_a_job_that_ended_meanwhile(self, cli_runner, generic_command_mocks, json_output):
+        """#1125 D22: the API kept a job that finished before the cancel was recorded."""
+        answer = {"message": "The zip download finished before it could be cancelled",
+                  "action": "ended", "status": "SUCCEEDED"}
+        with generic_command_mocks("zip_download") as mocks:
+            mocks["api_client"].cancel_zip_download.return_value = answer
+            args = ["cancel", *SCOPE, "-r", "r1", "--confirm"] + (["--json-output"] if json_output else [])
+            result = _invoke(cli_runner, *args)
+            assert result.exit_code == 0, result.output
+            if json_output:
+                assert json.loads(result.output) == answer
+            else:
+                assert "finished (SUCCEEDED) before it could be cancelled" in result.output
+                assert "deleted" not in result.output
+                assert "✓ Zip download cancelled!" not in result.output
+
     def test_cancel_of_a_finished_job_is_a_state_error(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("zip_download") as mocks:
             mocks["api_client"].cancel_zip_download.side_effect = ZipDownloadStateError(

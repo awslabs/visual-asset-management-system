@@ -2288,7 +2288,7 @@ paths:
                                 $ref: '#/components/schemas/error'
         delete:
             summary: "Cancel or delete one of the caller's zip download jobs."
-            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
+            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). A cancel that reaches a job which finished before the cancel was recorded deletes nothing: the job keeps its outcome (action 'ended', with its status). Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "The job was cancelled or deleted."
@@ -16108,10 +16108,14 @@ components:
             properties:
                 message:
                     type: string
-                    enum: ["Zip download cancelled", "Zip download deleted"]
+                    enum: ["Zip download cancelled", "Zip download deleted", "The zip download finished before it could be cancelled"]
                 action:
                     type: string
-                    enum: [cancelled, deleted]
+                    enum: [cancelled, deleted, ended]
+                    description: "cancelled: the job is CANCELLED. deleted: a finished job and its archive were removed. ended: a cancel reached a job that had already finished; the job is kept with its outcome and nothing is deleted."
+                status:
+                    type: string
+                    description: "Only with action ended: the job's final status (SUCCEEDED or FAILED)."
     responses:
         RequestBlocked:
             description: "The deployment's AWS WAF web ACL blocked the request at the API Gateway stage before it reached VAMS. Any operation can return it while app.useWaf is enabled; signing in again does not change the result."

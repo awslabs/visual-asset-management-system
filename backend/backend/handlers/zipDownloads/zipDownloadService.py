@@ -730,7 +730,7 @@ def _reconcile(row, run_check_budget=None):
         age = _seconds_since(row.get("createdAt")) or 0
         if age > zd.LAUNCH_GRACE_SECONDS:
             if zd.finalize_row(zip_table, row["userId"], row["requestId"], zd.STATUS_FAILED,
-                               error_message=zd.MSG_LAUNCH_FAILED):
+                               error_message=zd.MSG_LAUNCH_FAILED, unless_cancel_requested=True):
                 zd.delete_working_objects(s3, aux_bucket_name, row, logger)
                 row = dict(row, status=zd.STATUS_FAILED, errorMessage=zd.MSG_LAUNCH_FAILED)
         return row
@@ -1032,10 +1032,12 @@ def delete_job(event, database_id, asset_id, request_id):
         return _not_found(event)
     prefix = _job_prefix(row)
     if row.get("status") in zd.ACTIVE_STATUSES:
-        # Aborts the open uploads first; an archive that already landed wins and the job is deleted
-        # below like any finished job (common/zipDownloads.cancel_job).
-        if zd.cancel_job(zip_table, s3, aux_bucket_name, row, zd.CANCELLED_BY_USER,
-                         logger) == zd.CANCEL_CANCELLED:
+        # A cancel. It records the cancel first and aborts the open uploads; an archive that already
+        # landed wins (common/zipDownloads.cancel_job). It never deletes the job: a job that ended
+        # before the cancel was recorded keeps its outcome and the caller is told so (#1125 D22);
+        # only a DELETE of a job that has already finished deletes it.
+        outcome = zd.cancel_job(zip_table, s3, aux_bucket_name, row, zd.CANCELLED_BY_USER, logger)
+        if outcome == zd.CANCEL_CANCELLED:
             _abort_execution(row.get("workflowExecutionId"))
             # An upload the container created since the first abort.
             zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
@@ -1044,9 +1046,13 @@ def delete_job(event, database_id, asset_id, request_id):
             log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
                                                      "requestId": request_id})
             return success(body={"message": "Zip download cancelled", "action": "cancelled"})
-        # It ended meanwhile: fall through to delete it.
-        row = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
-                                 ConsistentRead=True).get("Item") or row
+        fresh = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
+                                   ConsistentRead=True).get("Item") or row
+        log_actions(event, "zipDownloadCancel", {"databaseId": database_id, "assetId": asset_id,
+                                                 "requestId": request_id, "outcome": "ended",
+                                                 "status": fresh.get("status", "")})
+        return success(body={"message": zd.MSG_ALREADY_FINISHED, "action": "ended",
+                             "status": fresh.get("status", "")})
     zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
     # The row is removed below, so the delayed sweep carries its archive key and recorded upload ids
     # (a sweep the cancel already started keeps its own; ExecutionAlreadyExists counts as scheduled).

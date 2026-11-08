@@ -300,6 +300,12 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         if (action === "deleted") {
             setJobs((current) => current.filter((j) => j.requestId !== job.requestId));
             setNotice({ type: "success", text: `${job.archiveFileName} was deleted.` });
+        } else if (action === "ended") {
+            // The job finished before the cancel was recorded; it keeps its outcome.
+            setNotice({
+                type: "info",
+                text: `${job.archiveFileName} finished before it could be cancelled.`,
+            });
         } else {
             setNotice({ type: "success", text: `${job.archiveFileName} was cancelled.` });
         }

@@ -43,7 +43,7 @@ Each asset has a **My zip downloads** tab that lists your zip downloads for that
 While a job is queued or running, the list refreshes itself every few seconds.
 
 -   **Download** -- available when the job has succeeded. VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
--   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept.
+-   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept. If the job finishes just before your cancel reaches it, it keeps its outcome and a message says it finished before it could be cancelled.
 -   **Delete** -- available when a job has finished. The archive and the job are removed.
 
 ## Retention

@@ -4448,7 +4448,8 @@ class APIClient(CustomAPIClientMixin):
 
         Returns:
             {"message": "Zip download cancelled", "action": "cancelled"}. Should the job finish
-            between the check and the call, the API deletes it instead and `action` says "deleted".
+            between the check and the call, nothing is deleted: `action` says "ended" and
+            `status` gives the job's final status (SUCCEEDED or FAILED).
 
         Raises:
             ZipDownloadStateError: When the job has already finished (use delete_zip_download)

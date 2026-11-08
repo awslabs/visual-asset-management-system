@@ -25,6 +25,12 @@ the status machine is defined once here:
   then finds the job finalized and deletes it (its own version only). If that container was killed
   during the Complete, the archive stays unserved (only a SUCCEEDED job gets a download URL) until the
   job is deleted or the prepared-downloads retention rule expires it.
+- A user's cancel is recorded on the row (``cancelRequestedAt``, request_cancel) BEFORE anything stops
+  the run. From then on no writer records FAILED: the terminal callback, the read-time reconcile and
+  the container's own failure write all condition on the marker being absent, and a finalizer that
+  finds it records CANCELLED (by the user) instead (decide_finalization). So a cancel whose own stop
+  made the run end before the cancel's CANCELLED write landed still ends CANCELLED (#1125 D22). A
+  landed archive still wins over the cancel.
 - The container is the primary status source (live progress, its own refusal reason). The terminal
   callback of the workflow run, and the read-time reconcile in the API, finalize a row the container
   could not (a job that never started, a timeout, an abort from the workflow executions views).
@@ -112,6 +118,8 @@ MSG_JOB_TIMED_OUT = "The archive job timed out"
 MSG_CANCELLED_FROM_EXECUTIONS = "Cancelled from workflow executions"
 MSG_NOT_READY = "The archive is not ready for download"
 MSG_EXPIRED = "This zip download has expired"
+# A cancel of a job that ended before the cancel was recorded: the job keeps its outcome.
+MSG_ALREADY_FINISHED = "The zip download finished before it could be cancelled"
 
 _ARCHIVE_NAME_ALLOWED = re.compile(r"[^A-Za-z0-9 ._()\-]")
 MAX_ARCHIVE_FILE_NAME_CHARS = 200
@@ -234,12 +242,15 @@ def row_key(user_id: str, request_id: str) -> dict:
 
 def finalize_row(table, user_id: str, request_id: str, status: str, *, error_message: str = "",
                  cancelled_by: str = "", archive_size_bytes: Optional[int] = None,
-                 now: Optional[datetime] = None, expected_execution_id: str = "") -> bool:
+                 now: Optional[datetime] = None, expected_execution_id: str = "",
+                 unless_cancel_requested: bool = False) -> bool:
     """Move a non-terminal row to a terminal ``status``. True when this call made the transition;
     False when the row is missing or already terminal (the first terminal write wins).
 
     With ``expected_execution_id`` the write also requires the row to belong to that run, so a
-    callback for an older run never finalizes a row relaunched since."""
+    callback for an older run never finalizes a row relaunched since. With
+    ``unless_cancel_requested`` it also requires that no user cancel was recorded
+    (``cancelRequestedAt``, request_cancel): a FAILED write then loses to a pending cancel (#1125 D22)."""
     if status not in TERMINAL_STATUSES:
         raise ValueError(f"not a terminal zip download status: {status}")
     stamp = iso(now or utc_now())
@@ -260,6 +271,8 @@ def finalize_row(table, user_id: str, request_id: str, status: str, *, error_mes
     if expected_execution_id:
         condition += " AND workflowExecutionId = :eid"
         values[":eid"] = expected_execution_id
+    if unless_cancel_requested:
+        condition += " AND attribute_not_exists(cancelRequestedAt)"
     try:
         table.update_item(
             Key=row_key(user_id, request_id),
@@ -300,6 +313,9 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
       still land after this check from a Complete that was already in flight (S3 answers 204 to the
       abort and lets it finish) or from an upload created since; the container deletes it when it
       finds the job finalized.
+    - A recorded user cancel (``cancelRequestedAt``, request_cancel) without the archive: CANCELLED,
+      cancelledBy the canceller, whatever the run's status. The cancel's own stop makes the container
+      stop and exit 0, so the run can end SUCCEEDED before the cancel's own write (#1125 D22).
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
@@ -313,6 +329,8 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     exists, size = (archive_exists() if archive_exists else (False, None))
     if exists:
         return STATUS_SUCCEEDED, {"archive_size_bytes": size}
+    if row.get("cancelRequestedAt"):
+        return STATUS_CANCELLED, {"cancelled_by": row.get("cancelRequestedBy") or CANCELLED_BY_USER}
     if execution_status == "SUCCEEDED":
         return STATUS_FAILED, {"error_message": MSG_NOT_PRODUCED}
     if execution_status == "ABORTED":
@@ -346,6 +364,32 @@ def request_stop(table, row: dict, logger=None) -> bool:
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException" and logger:
             logger.warning(f"Could not record the stop of a zip download: {e}")
+        return False
+
+
+def request_cancel(table, row: dict, cancelled_by: str, logger=None) -> bool:
+    """Record the user's cancel on an open job (``cancelRequestedAt``, ``cancelRequestedBy``) together
+    with the stop marker, BEFORE anything stops the run (#1125 D22). From then on a FAILED write loses
+    (finalize_row ``unless_cancel_requested``; the container's failure write conditions the same way)
+    and a finalizer records CANCELLED instead (decide_finalization), so the job ends CANCELLED whichever
+    writer finalizes it. True when recorded; False when the job is no longer open (it ended first)."""
+    stamp = iso(utc_now())
+    try:
+        table.update_item(
+            Key=row_key(row["userId"], row["requestId"]),
+            UpdateExpression=("SET cancelRequestedAt = :cancelRequestedAt, "
+                              "cancelRequestedBy = :cancelRequestedBy, "
+                              "stopRequestedAt = :stopRequestedAt"),
+            ConditionExpression="attribute_exists(requestId) AND #status IN (:queued, :running)",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":cancelRequestedAt": stamp, ":cancelRequestedBy": cancelled_by,
+                                       ":stopRequestedAt": stamp, ":queued": STATUS_QUEUED,
+                                       ":running": STATUS_RUNNING},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
         return False
 
 
@@ -387,8 +431,19 @@ def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_statu
     if not decision:
         return None, False
     status, fields = decision
+    expected = row.get("workflowExecutionId") or ""
     changed = finalize_row(table, row["userId"], row["requestId"], status,
-                           expected_execution_id=row.get("workflowExecutionId") or "", **fields)
+                           expected_execution_id=expected,
+                           unless_cancel_requested=status == STATUS_FAILED, **fields)
+    if not changed and status == STATUS_FAILED:
+        # A user cancel recorded after this call read the row wins over the FAILED (#1125 D22).
+        fresh = table.get_item(Key=row_key(row["userId"], row["requestId"]),
+                               ConsistentRead=True).get("Item")
+        if fresh and fresh.get("status") in ACTIVE_STATUSES and fresh.get("cancelRequestedAt"):
+            status = STATUS_CANCELLED
+            changed = finalize_row(table, row["userId"], row["requestId"], status,
+                                   cancelled_by=fresh.get("cancelRequestedBy") or CANCELLED_BY_USER,
+                                   expected_execution_id=expected)
     if changed and status != STATUS_SUCCEEDED:
         delete_working_objects(s3_client, bucket, row, logger)
     return status, changed
@@ -403,23 +458,40 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
     """The user's cancel of a non-terminal job. Same rule as finalize_ended_run: abort the open
     uploads, then a landed archive wins, decided by the job's upload token whatever the abort answered.
 
-    Returns CANCEL_CANCELLED when this call cancelled the job, CANCEL_LANDED when the archive had
-    landed (the job is SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when another
-    writer finalized the job first."""
-    row = _abort_then_reread(table, s3_client, bucket, row, logger)
-    if not row or row.get("status") not in ACTIVE_STATUSES:
-        return CANCEL_ENDED
+    Returns CANCEL_CANCELLED when the job is CANCELLED (by this call, or by the terminal callback or
+    reconcile that found the recorded cancel), CANCEL_LANDED when the archive had landed (the job is
+    SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when the job had already ended
+    before the cancel was recorded. Never deletes the job: the caller reports a job that ended.
+
+    The cancel is recorded first (request_cancel, #1125 D22), before the stop marker reaches the
+    container: the run its stop ends can be finalized by the terminal callback at any point after
+    that, and that callback then records CANCELLED rather than FAILED."""
+    def _outcome():
+        fresh = table.get_item(Key=row_key(row["userId"], row["requestId"]),
+                               ConsistentRead=True).get("Item") or {}
+        status = fresh.get("status")
+        if status == STATUS_CANCELLED:
+            return CANCEL_CANCELLED
+        return CANCEL_LANDED if status == STATUS_SUCCEEDED else CANCEL_ENDED
+
+    if not request_cancel(table, row, cancelled_by, logger):
+        return _outcome()
+    fresh = _abort_then_reread(table, s3_client, bucket, row, logger)
+    if not fresh or fresh.get("status") not in ACTIVE_STATUSES:
+        return _outcome()
+    row = fresh
     exists, size = landed_archive(s3_client, bucket, row)
     if exists:
-        finalize_row(table, row["userId"], row["requestId"], STATUS_SUCCEEDED, archive_size_bytes=size,
-                     expected_execution_id=row.get("workflowExecutionId") or "")
-        return CANCEL_LANDED
+        if finalize_row(table, row["userId"], row["requestId"], STATUS_SUCCEEDED, archive_size_bytes=size,
+                        expected_execution_id=row.get("workflowExecutionId") or ""):
+            return CANCEL_LANDED
+        return _outcome()
     if finalize_row(table, row["userId"], row["requestId"], STATUS_CANCELLED, cancelled_by=cancelled_by):
         # A resolved manifest the container writes after this is removed by the terminal callback of
         # the aborted run (zipDownloadCallback), which deletes them again for an ended job.
         delete_working_objects(s3_client, bucket, row, logger)
         return CANCEL_CANCELLED
-    return CANCEL_ENDED
+    return _outcome()
 
 
 # ---------------------------------------------------------------------------

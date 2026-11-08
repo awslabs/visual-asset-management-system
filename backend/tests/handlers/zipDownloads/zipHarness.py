@@ -122,6 +122,8 @@ class FakeTable:
             m = re.search(r"runCheckedAt < (:\w+)", cond)
             if ok and m and row.get("runCheckedAt") is not None:
                 ok = row["runCheckedAt"] < values[m.group(1)]
+            if ok and "attribute_not_exists(cancelRequestedAt)" in cond:
+                ok = not row.get("cancelRequestedAt")
         if row is None and cond:
             ok = False
         if not ok:

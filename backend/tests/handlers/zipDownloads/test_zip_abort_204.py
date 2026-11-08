@@ -181,8 +181,9 @@ class TestUserCancelAfterA204Abort:
         assert _row(env)["status"] == "CANCELLED"
 
     def test_the_delete_route_never_writes_cancelled_over_a_landed_archive(self):
-        # The archive landed before the cancel: the job is finished (SUCCEEDED), and the user's
-        # DELETE removes it like any finished job rather than recording a cancel over it.
+        # The archive landed before the cancel: the job is finished (SUCCEEDED). The cancel records
+        # no cancel over it and deletes nothing (#1125 D22): the job stays SUCCEEDED and the answer
+        # says it had already ended.
         env = _env("204")
         _landed(env)
         written, update = [], env.zip.update_item
@@ -194,7 +195,8 @@ class TestUserCancelAfterA204Abort:
         env.zip.update_item = recording
         response = _job_route(env, "DELETE")
         assert response["statusCode"] == 200
-        assert h.body_of(response)["action"] == "deleted"
+        assert h.body_of(response)["action"] == "ended"
+        assert h.body_of(response)["status"] == "SUCCEEDED"
         assert _abort_sent(env)
         assert "CANCELLED" not in written and "SUCCEEDED" in written
-        assert ("alice", REQUEST_ID) not in env.zip.items
+        assert _row(env)["status"] == "SUCCEEDED"

@@ -120,7 +120,7 @@ vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm
 | `-r, --request-id`  | Job ID (required)             |
 | `--confirm`         | Confirm the cancel (required) |
 
-A job that has already finished is refused; delete it instead.
+A job that has already finished is refused; delete it instead. If the job finishes between that check and the cancel, nothing is deleted: the command warns that the job finished and, with `--json-output`, returns `"action": "ended"` with the job's final `status`.
 
 ---
 

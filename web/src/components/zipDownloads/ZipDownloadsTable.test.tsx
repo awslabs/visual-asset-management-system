@@ -286,6 +286,27 @@ describe("ZipDownloadsTable", () => {
         expect(await screen.findByText("archive-1.zip was cancelled.")).toBeInTheDocument();
     });
 
+    it("tells the user when the job finished before the cancel (D22)", async () => {
+        mockAssetList.mockResolvedValue(page([job("1", "RUNNING")]));
+        mockDelete.mockResolvedValue([
+            true,
+            {
+                message: "The zip download finished before it could be cancelled",
+                action: "ended",
+                status: "SUCCEEDED",
+            },
+        ]);
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        await userEvent.click(screen.getByRole("button", { name: "Cancel archive-1.zip" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel download" }));
+        expect(
+            await screen.findByText("archive-1.zip finished before it could be cancelled.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText("archive-1.zip was cancelled.")).not.toBeInTheDocument();
+    });
+
     it.each<[string, ZipDownloadJob["status"], string]>([
         ["cancel", "RUNNING", "Cancel archive-1.zip"],
         ["delete", "SUCCEEDED", "Delete archive-1.zip"],

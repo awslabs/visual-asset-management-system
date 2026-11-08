@@ -67,6 +67,8 @@ class SharedTable:
                 ok = "workflowExecutionId" not in row or row["workflowExecutionId"] == values[":eid"]
             else:
                 ok = row.get("workflowExecutionId") == values[":eid"]
+        if ok and "attribute_not_exists(cancelRequestedAt)" in ConditionExpression:
+            ok = not row.get("cancelRequestedAt")
         if not ok:
             raise _err("ConditionalCheckFailedException")
         for assignment in UpdateExpression.replace("SET ", "", 1).split(", "):
@@ -195,6 +197,42 @@ class TestCancelVersusArchiveCompletion:
         _hook(monkeypatch, "before_upload", _cancel(s3, table, results))
         _run(job)
         assert results == [zd.CANCEL_CANCELLED]
+        _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
+
+    def test_run_stopped_by_the_cancel_and_finalized_first_ends_cancelled(self, monkeypatch):
+        """#1125 D22: the cancel's stop marker makes the container stop and exit 0; the terminal
+        callback of that SUCCEEDED run finalizes before the cancel's own CANCELLED write. The job
+        ends CANCELLED by the user, not FAILED, and the cancel reports it cancelled."""
+        s3, table, job = _setup()
+        results = []
+        original = zd.abort_open_uploads
+        fired = []
+
+        def abort_then_callback(*a, **k):
+            answer = original(*a, **k)
+            if not fired:
+                fired.append(True)
+                # The run ended SUCCEEDED (the container stopped and exited 0): its callback.
+                zd.finalize_ended_run(table, s3, AUX, dict(table.row), "SUCCEEDED", "")
+            return answer
+        monkeypatch.setattr(zd, "abort_open_uploads", abort_then_callback)
+        _hook(monkeypatch, "upload_open", _cancel(s3, table, results))
+        _run(job)
+        assert fired and results == [zd.CANCEL_CANCELLED]
+        _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
+        assert table.row["cancelledBy"] == zd.CANCELLED_BY_USER
+
+    def test_container_failure_after_a_recorded_cancel_loses_to_it(self, monkeypatch):
+        """The container's own FAILED write conditions on no recorded cancel (#1125 D22)."""
+        s3, table, job = _setup()
+
+        def broken(self):
+            zd.request_cancel(table, dict(table.row), zd.CANCELLED_BY_USER)
+            raise IOError("network down")
+        monkeypatch.setattr(runner.MultipartSink, "close", broken)
+        _run(job)
+        assert table.row["status"] == "RUNNING", "no FAILED over a recorded cancel"
+        assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "FAILED")[0] == zd.STATUS_CANCELLED
         _assert_one_outcome(s3, table, zd.STATUS_CANCELLED)
 
     def test_container_success_first_then_cancel_has_nothing_to_do(self):

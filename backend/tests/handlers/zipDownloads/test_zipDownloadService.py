@@ -734,8 +734,8 @@ class TestCancelLandedArchive:
         assert order[:2] == ["abort", "head"]
 
     def test_archive_that_landed_before_the_cancel_wins(self, env):
-        # The container completed its upload but had not recorded SUCCEEDED: the job is finished,
-        # so the DELETE deletes it like any finished job instead of recording a second outcome.
+        # The container completed its upload but had not recorded SUCCEEDED: the job is finished.
+        # The cancel records SUCCEEDED, never a second outcome, and deletes nothing (#1125 D22).
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
         row = next(iter(env.zip.items.values()))
         row["status"] = "RUNNING"
@@ -751,9 +751,11 @@ class TestCancelLandedArchive:
             return result
         env.zip.update_item = recording
         response = _job_route(env, "DELETE", request_id)
-        assert h.body_of(response)["action"] == "deleted"
+        assert h.body_of(response)["action"] == "ended"
+        assert h.body_of(response)["status"] == "SUCCEEDED"
         assert statuses == ["SUCCEEDED"], "never CANCELLED over a landed archive"
-        assert env.zip.items == {}
+        assert next(iter(env.zip.items.values()))["status"] == "SUCCEEDED"
+        assert (h.AUX, row["archiveKey"]) in env.s3.objects, "the landed archive is kept"
         # Only the create's launch: no abort of a run whose archive already landed.
         assert [c[0] for c in env.lam.calls] == ["executeFn"]
 

@@ -390,9 +390,12 @@ def cancel(ctx: click.Context, database_id: str, asset_id: str, request_id: str,
             return None
         output_status(f"Cancelling zip download '{request_id}'...", json_output)
         result = api_client.cancel_zip_download(database_id, asset_id, request_id)
-        if isinstance(result, dict) and result.get('action') == 'deleted':
-            output_warning("The job finished before it could be cancelled, so it was deleted.",
-                           json_output)
+        if isinstance(result, dict) and result.get('action') == 'ended':
+            output_warning(
+                f"The job finished ({result.get('status') or 'unknown status'}) before it could be "
+                "cancelled; it was kept with that outcome.", json_output)
+            output_result(result, json_output, success_message="Zip download not cancelled.")
+            return result
         output_result(result, json_output, success_message="✓ Zip download cancelled!")
         return result
     except _HANDLED_ERRORS as e:

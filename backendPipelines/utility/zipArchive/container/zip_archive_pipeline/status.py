@@ -36,15 +36,18 @@ class StatusWriter:
         self._last_progress = None
         self.lost = False
 
-    def _update(self, sets, values):
+    def _update(self, sets, values, unless_cancel_requested=False):
         values = dict(values)
         values.update({":queued": "QUEUED", ":running": "RUNNING", ":eid": self._execution_id,
                        ":updatedAt": _now()})
         sets = list(sets) + ["updatedAt = :updatedAt"]
+        condition = ACTIVE_CONDITION
+        if unless_cancel_requested:
+            condition += " AND attribute_not_exists(cancelRequestedAt)"
         try:
             self._table.update_item(
                 Key=self._key, UpdateExpression="SET " + ", ".join(sets),
-                ConditionExpression=ACTIVE_CONDITION,
+                ConditionExpression=condition,
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues=values)
             return True
@@ -108,6 +111,9 @@ class StatusWriter:
         return bool(row.get("stopRequestedAt"))
 
     def failed(self, reason):
+        """FAILED with the container's reason, unless the user's cancel was recorded
+        (``cancelRequestedAt``, backend common/zipDownloads.request_cancel): a pending cancel wins and
+        is finalized CANCELLED by the API or the terminal callback (#1125 D22)."""
         return self._update(["#status = :s", "errorMessage = :e", "completedAt = :c"],
                             {":s": "FAILED", ":e": (reason or "The archive job failed")[:MAX_REASON_CHARS],
-                             ":c": _now()})
+                             ":c": _now()}, unless_cancel_requested=True)

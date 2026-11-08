@@ -225,7 +225,7 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 `DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}`
 
-Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zip Archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. A job whose archive finished uploading just as the cancel arrived counts as finished: the call deletes it and answers `"action": "deleted"`.
+Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zip Archive run is aborted, and any partial upload is discarded. Deletes a job that is `SUCCEEDED`, `FAILED`, or `CANCELLED`: the archive and the job record are removed. Once the cancel is recorded, the job ends `CANCELLED` even when its run finishes at the same moment. A cancel never deletes a job: when the job finished before the cancel was recorded (for example, its archive finished uploading just as the cancel arrived), the job keeps its outcome and the call answers `"action": "ended"` with the job's final `status`; delete it with a second call if you no longer need it.
 
 **Response:**
 
@@ -236,7 +236,7 @@ Cancels a job that is `QUEUED` or `RUNNING`: the job becomes `CANCELLED`, its Zi
 }
 ```
 
-A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}`.
+A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}`. A cancel that reached a job which had already finished returns `{"message": "The zip download finished before it could be cancelled", "action": "ended", "status": "SUCCEEDED"}` (or `FAILED`).
 
 **Error Responses:**
 
