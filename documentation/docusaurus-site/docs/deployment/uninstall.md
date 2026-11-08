@@ -146,7 +146,7 @@ aws cloudformation delete-stack \
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the compliance job queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
@@ -256,6 +256,8 @@ done
 ## Step 4: Delete Amazon CloudWatch log groups
 
 VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+
+The Lambda function log groups are not stack resources: AWS Lambda creates each one, under `/aws/lambda/<function name>`, when the function first runs, and no removal policy applies to it, so it stays after the stack is deleted. That includes the log groups of the compliance trigger and the compliance job Lambda, whose function names CloudFormation generates from the stack name; the commands below find them with the other Lambda log groups.
 
 The key named log groups are:
 

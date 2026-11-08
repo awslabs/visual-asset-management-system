@@ -144,7 +144,10 @@ backend/
 │   │   │                                           #   evaluation table, aborts pending cascades, ends
 │   │   │                                           #   waiting pipeline rules), run() (paged, resumable,
 │   │   │                                           #   idempotent move, phase by phase, driven by
-│   │   │                                           #   move_message on the trigger queue),
+│   │   │                                           #   move_message on the job queue; begin_run()
+│   │   │                                           #   counts runs against run_limit(), from the
+│   │   │                                           #   tables' item counts; a run past it is
+│   │   │                                           #   stopped, stop_at_run_limit()),
 │   │   │                                           #   move_in_progress()/moving_response() (the 409 every
 │   │   │                                           #   compliance action on the id answers meanwhile),
 │   │   │                                           #   Presenter (listings show moving rows under #deleted;
@@ -224,16 +227,22 @@ backend/
 │   │   │                                           #   answers 202 and is applied in the background by
 │   │   │                                           #   complianceBindingApply: apply record
 │   │   │                                           #   `bindingApply#<db>` in the evaluation table, message
-│   │   │                                           #   with ids only, run() pages from the trigger in a
-│   │   │                                           #   records phase (409 while it runs, queues no
-│   │   │                                           #   evaluation) then an evaluations phase (a bounded
-│   │   │                                           #   share per run, holds nothing); stalled is derived
-│   │   │                                           #   from its own messages (stop_reason: queued step,
-│   │   │                                           #   run in flight, redelivery), never from elapsed
-│   │   │                                           #   time; resume repeats the change; D161),
+│   │   │                                           #   with ids only, run() pages from the job Lambda
+│   │   │                                           #   in a records phase (409 while it runs, queues no
+│   │   │                                           #   evaluation) then an evaluations phase (shares on
+│   │   │                                           #   the trigger queue, paced by its backlog,
+│   │   │                                           #   trigger_backlog(); holds nothing); stalled is
+│   │   │                                           #   derived from its own messages (stop_reason:
+│   │   │                                           #   queued step, run in flight, redelivery) and its
+│   │   │                                           #   run limit (run_limit(), stopReason), never from
+│   │   │                                           #   elapsed time; resume repeats the change; D161),
 │   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
 │   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
-│   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger
+│   │   │                                           #   complianceAuditService. Event-driven: complianceJobs
+│   │   │                                           #   (the job queue: a deleted database's move and a
+│   │   │                                           #   binding change applied in the background, each
+│   │   │                                           #   continuing itself; recursive-loop detection off,
+│   │   │                                           #   each job's run limit instead), complianceTrigger
 │   │   │                                           #   (own SQS queue on the asset + file indexer topics;
 │   │   │                                           #   stamps metadata/link changes, evaluates, removes a
 │   │   │                                           #   deleted asset's record; automatic_evaluation_target()
@@ -1159,7 +1168,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 `VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`. `WORKFLOW_SERVICE_V2_FUNCTION_NAME` is set on `pipelineService`, `executeWorkflow` and `importGlobalPipelineWorkflow`; the first two read it with `os.environ.get` and degrade (the refresh is not scheduled; a stale launch returns `409`) when it is absent.
 
-Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_TRIGGER_QUEUE_URL` (the trigger — its own queue, on which it holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once, and on which it queues the next `moveDeletedDatabaseCompliance` message when a move run ends early; unset, completions are evaluated at once. Also set on `databaseService`, which queues the first move message after a database delete, and on `complianceSchemaBindingService`, which queues one `{databaseId, assetId}` evaluation per affected asset when a binding change runs under `complianceAutoEval`; unset, nothing is queued); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (the four asset download Lambdas `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset`, set from `app.compliance.quarantineBlocksDownload`; read by the shared `common/compliance/quarantineGuard.py`, which resolves the compliance asset-state table only when it is `true` and whose `check_quarantine_block()` the handlers call only after Tier-1 + Tier-2 authorization); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
+Compliance-related handler-specific vars: `EXECUTE_WORKFLOW_FUNCTION_NAME` (the evaluate-service, cascade-service and trigger Lambdas — read by `complianceEvaluationStore` to launch a pipeline rule's workflow execution through a `lambdaCrossCall`); `COMPLIANCE_TRIGGER_QUEUE_URL` (the trigger — its own queue, on which it holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once; unset, completions are evaluated at once. Also set on `complianceSchemaBindingService`, which queues an asset override's `{databaseId, assetId}` evaluation under `complianceAutoEval`, and on `complianceJobs`, which queues a database binding change's evaluations there (and reads the queue's backlog to pace them); unset, nothing is queued); `COMPLIANCE_JOB_QUEUE_URL` (the compliance job queue: `databaseService` queues a delete's `moveDeletedDatabaseCompliance` message, `complianceSchemaBindingService` a binding change's first `applyDatabaseBinding` message, `complianceJobs` each continuation, and `complianceTrigger` forwards a job message an upgrade left on its own queue there, unchanged); `COMPLIANCE_JOB_DLQ_URL` (`complianceJobs` only: a move stopped at its run limit is put in the job queue's dead-letter queue, from which a redrive resumes it); `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` (the four asset download Lambdas `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset`, set from `app.compliance.quarantineBlocksDownload`; read by the shared `common/compliance/quarantineGuard.py`, which resolves the compliance asset-state table only when it is `true` and whose `check_quarantine_block()` the handlers call only after Tier-1 + Tier-2 authorization); `ORCHESTRATION_BUS_ARN` + `ORCHESTRATION_EVENT_SOURCE_PREFIX` (set on the workflow Lambdas by `workflowFunctions.ts`; `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set). The compliance Lambdas receive **no** table-name env vars: every table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket env var.
 
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 

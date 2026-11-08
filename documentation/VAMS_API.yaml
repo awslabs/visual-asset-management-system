@@ -17603,7 +17603,7 @@ components:
                 status:
                     type: string
                     enum: [applying, stalled, applied, failed]
-                    description: "`applying` while its records are written; `stalled` when it really stopped (its last step failed on every delivery, its next step could not be queued, or a step was not delivered within the queue's retention period; the same request resumes it), never because it waits on a busy queue; `applied` once every record carries the binding; `failed` (see `reason`)."
+                    description: "`applying` while its records are written; `stalled` when it really stopped (its last step failed on every delivery, its next step could not be queued, a step was not delivered within the queue's retention period, or it ran more steps than a change of its size needs; the same request resumes it), never because it waits on a busy queue; `applied` once every record carries the binding; `failed` (see `reason`)."
                 schemaName:
                     type: string
                     description: "The schema the change applies; absent for `unbind`."
