@@ -786,11 +786,8 @@ export function buildComplianceTriggerFunction(
     // settled (ChangeMessageVisibility, part of the consume grant), so consecutive completions of
     // one multi-request upload are evaluated once (complianceTrigger.UPLOAD_COMPLETION_SETTLE_SECONDS).
     fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
-    // A compliance job's message left on this queue by an upgrade (queued by code that ran the jobs
-    // here) is forwarded, unchanged, to the job queue (complianceTrigger.forward_job_message).
-    const jobQueue = storageResources.sqs.complianceJobQueue;
-    jobQueue.grantSendMessages(fun);
-    fun.addEnvironment("COMPLIANCE_JOB_QUEUE_URL", jobQueue.queueUrl);
+    // The trigger sends nothing to the compliance job queue: a job's message found on its own queue
+    // is logged and dropped (complianceTrigger.drop_job_message).
 
     // GovCloud and EU Sovereign Lambda reject Tags on an event source mapping, which the high-level
     // addEventSource() stamps from the stack tags; there the mapping is built directly and its Tags
@@ -883,8 +880,8 @@ export function complianceJobRecursiveLoop(
  * stack beside the trigger's queue, so the database service (ApiBuilder), the binding service, the
  * trigger and the job Lambda (ApiBuilder2) all reference it from the stack every one of them already
  * depends on. No topic subscribes to it: the senders are the roles granted SendMessage (the binding
- * service, the database service, the job Lambda's continuations, and the trigger, which forwards a
- * job's message an upgrade left on its own queue). Encrypted as the trigger's queue is.
+ * service, the database service and the job Lambda's continuations). Encrypted as the trigger's
+ * queue is.
  */
 export function buildComplianceJobQueue(
     scope: Construct,

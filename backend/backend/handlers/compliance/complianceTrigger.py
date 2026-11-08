@@ -88,8 +88,10 @@ The compliance jobs (a deleted database's move and a database binding change app
 background) run in the compliance job Lambda from its own queue (`complianceJobs`); a binding
 change's evaluations come here like any other evaluation message, and run with Lambda's
 recursive-loop detection on, since nothing this function does queues a message on its own queue. A
-job's message found on this queue (queued before an upgrade by code that ran the jobs here) is
-forwarded to the job queue once, its body unchanged, and not run here.
+job's message found on this queue is logged with one WARNING naming its action and database and
+dropped: nothing runs for it, and the record is not failed (`drop_job_message`). Only a test stack
+that ran an earlier, unreleased build of the compliance feature could hold one; the feature
+carries no migration path for those builds.
 """
 
 import json
@@ -137,13 +139,9 @@ dynamodb = boto3.resource("dynamodb", config=retry_config)
 # for the Region of the event's bucket.
 s3_client = region_routing_s3_client()
 # Defers an upload completion's queue record (ChangeMessageVisibility on the trigger's own queue,
-# `TriggerBatch.defer`) and forwards a compliance job's message to the job queue; the queues' URLs
-# are set by complianceFunctions.ts.
+# `TriggerBatch.defer`); the queue's URL is set by complianceFunctions.ts.
 sqs_client = boto3.client("sqs", config=retry_config)
 trigger_queue_url = os.environ.get("COMPLIANCE_TRIGGER_QUEUE_URL", "")
-# The compliance job queue: a job's message left on this queue by an upgrade is forwarded there
-# (`forward_job_message`).
-job_queue_url = os.environ.get("COMPLIANCE_JOB_QUEUE_URL", "")
 logger = safeLogger(service_name="ComplianceTrigger")
 
 SCHEMA_SOURCE_DATABASE = "database"
@@ -434,14 +432,11 @@ class TriggerBatch:
 def lambda_handler(event, context):
     """Process one SQS batch of indexer-topic messages and report the records an infrastructure
     error failed (`batchItemFailures`), so only those are redelivered. A compliance job's message
-    on this queue is forwarded to the job queue (`forward_job_message`) and not run here."""
+    on this queue is logged and dropped (`drop_job_message`)."""
     batch = TriggerBatch()
-    failures = []
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
-        if is_job_message(record):
-            if not forward_job_message(record):
-                failures.append({"itemIdentifier": message_id})
+        if drop_job_message(record):
             continue
         batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
@@ -451,32 +446,25 @@ def lambda_handler(event, context):
         batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
     batch.write_stamps()
     batch.evaluate_all()
-    return {"batchItemFailures": batch.failures() + failures}
+    return {"batchItemFailures": batch.failures()}
 
 
-def is_job_message(record) -> bool:
-    """Whether a queue record carries a compliance job's message (a deleted database's move, or a
-    database binding change's run) as its raw body. The job Lambda runs those from its own queue;
-    one is found here only when code that ran the jobs on this queue queued it before an upgrade,
-    or during one."""
-    return (databaseRetirement.move_message_database(record) is not None
-            or binding_apply.message_target(record) is not None)
-
-
-def forward_job_message(record) -> bool:
-    """Send a compliance job's message found on this queue to the job queue, its body unchanged,
-    so the job Lambda runs it; the trigger runs nothing for it, and once it is forwarded the record
-    is done. Returns False (the record is redelivered and forwarded then) when it could not be
-    sent."""
-    if not job_queue_url:
-        logger.error("No compliance job queue to forward a compliance job's message to")
-        return False
-    try:
-        sqs_client.send_message(QueueUrl=job_queue_url, MessageBody=record["body"])
-    except Exception as e:
-        logger.exception(f"Could not forward a compliance job's message to the job queue: {e}")
-        return False
-    logger.info("Forwarded a compliance job's message to the compliance job queue")
+def drop_job_message(record) -> bool:
+    """Whether a queue record carries a compliance job's message (a deleted database's move,
+    `databaseRetirement.MOVE_ACTION`, or a database binding change's run,
+    `complianceBindingApply.APPLY_ACTION`) as its raw body. The job Lambda runs those from its own
+    queue, so one found here is logged with one WARNING naming its action and database, and
+    dropped: nothing runs for it and the record is not failed, so SQS deletes it."""
+    move_database = databaseRetirement.move_message_database(record)
+    if move_database is not None:
+        action, database_id = databaseRetirement.MOVE_ACTION, move_database
+    else:
+        target = binding_apply.message_target(record)
+        if target is None:
+            return False
+        action, database_id = binding_apply.APPLY_ACTION, target[0]
+    logger.warning(f"Compliance job message {action} for database {database_id} on the trigger "
+                   "queue dropped: compliance jobs run from the compliance job queue")
     return True
 
 

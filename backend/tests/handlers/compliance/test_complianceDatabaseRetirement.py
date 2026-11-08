@@ -12,8 +12,8 @@ Compliance Admin template; reads and actions on the live id wait while the move 
 across databases shows the moving rows under `<databaseId>#deleted`; a second delete merges into
 `<databaseId>#deleted`; a large audit history moves in pages and survives an interruption; the
 compliance job Lambda runs and continues the move from the job queue, and stops a move past its run
-limit (its message kept in the job dead-letter queue, resumed when it is sent again); the trigger
-forwards a move message an upgrade left on its queue to the job queue once and moves nothing.
+limit (its message kept in the job dead-letter queue, resumed when it is sent again); a move
+message found on the trigger's queue is logged and dropped, and nothing is moved or sent for it.
 """
 
 import json
@@ -858,36 +858,32 @@ class TestTheMoveRunLimit:
 
 
 @pytest.mark.unit
-class TestTheTriggerForwardsALeftoverMoveMessage:
+class TestTheTriggerDropsALeftoverMoveMessage:
 
-    def test_it_is_forwarded_once_unchanged_and_nothing_is_moved(self):
+    def test_it_is_logged_and_dropped_and_nothing_is_moved_or_sent(self):
         with World(_stand_in({"*"})) as world:
             world.seed()
             world.delete(run=False)
             before = world.rows_under(DB)
-            body = json.dumps(retirement.move_message(DB))
-            event = {"Records": [{"messageId": "m1", "body": body}]}
-            with patch.object(trigger, "sqs_client") as sqs, \
-                    patch.object(trigger, "job_queue_url", JOB_QUEUE), \
-                    patch.object(retirement, "run") as run:
-                assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
-            run.assert_not_called()
-            assert [call.kwargs for call in sqs.send_message.call_args_list] == [
-                {"QueueUrl": JOB_QUEUE, "MessageBody": body}]
-            assert world.rows_under(DB) == before
-            assert retirement.get_record(world.t["complianceEvaluationStorage"], DB)["state"] == \
-                "moving"
-
-    def test_a_forward_that_fails_is_redelivered(self):
-        with World(_stand_in({"*"})) as world:
+            record = retirement.get_record(world.t["complianceEvaluationStorage"], DB)
             event = {"Records": [{"messageId": "m1",
                                   "body": json.dumps(retirement.move_message(DB))}]}
             with patch.object(trigger, "sqs_client") as sqs, \
-                    patch.object(trigger, "job_queue_url", JOB_QUEUE):
-                sqs.send_message.side_effect = RuntimeError("down")
-                assert trigger.lambda_handler(event, _context()) == {
-                    "batchItemFailures": [{"itemIdentifier": "m1"}]}
-            assert world.t is not None
+                    patch.object(retirement, "run") as run, \
+                    patch.object(trigger.logger, "warning") as warning:
+                assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
+            run.assert_not_called()
+            assert sqs.method_calls == []
+            assert world.rows_under(DB) == before
+            assert retirement.get_record(world.t["complianceEvaluationStorage"], DB) == record
+            assert [call.args[0] for call in warning.call_args_list] == [
+                f"Compliance job message moveDeletedDatabaseCompliance for database {DB} on the "
+                "trigger queue dropped: compliance jobs run from the compliance job queue"]
+
+    def test_an_sns_envelope_carrying_the_body_is_not_a_job_message(self):
+        with World(_stand_in({"*"})):
+            body = {"Type": "Notification", "Message": json.dumps(retirement.move_message(DB))}
+            assert trigger.drop_job_message({"body": json.dumps(body)}) is False
 
 
 def _index_error(message):

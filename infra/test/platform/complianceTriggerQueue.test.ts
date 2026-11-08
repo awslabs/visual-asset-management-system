@@ -9,9 +9,9 @@
  * with a bounded receive count, a visibility timeout of at least six times the function timeout, a
  * message-body filter policy on each topic subscription, and a batched, concurrency-capped event
  * source that reads `batchItemFailures`. The only send access to the queue is each topic's, and the
- * trigger's role consumes it without a wildcard resource. The trigger sends nothing on its own queue:
- * the jobs that continue themselves run in the compliance job Lambda from the job queue, and the
- * trigger's only send is a job's message an upgrade left on its queue, forwarded to the job queue.
+ * trigger's role consumes it without a wildcard resource. The trigger sends nothing: the jobs that
+ * continue themselves run in the compliance job Lambda from the job queue, and a job's message found
+ * on the trigger's queue is logged and dropped.
  *
  * Built from `buildComplianceTriggerQueue` and `buildComplianceTriggerFunction` against a stand-in
  * storage stack, so it runs in seconds; `complianceTriggerQueueNoOpenSearch.test.ts` asserts the same wiring survives a full
@@ -385,8 +385,7 @@ describe("compliance trigger queue", () => {
                 [st.Action].flat().some((a: string) => a.startsWith("sqs:"))
             )
         );
-        // Consuming is one statement; the trigger's one send (a leftover job's message, forwarded
-        // to the job queue) is checked in the next test.
+        // Consuming is one statement; the trigger sends nothing (the next test).
         const consume = sqsStatements.filter((st: any) =>
             [st.Action].flat().includes("sqs:ReceiveMessage")
         );
@@ -404,25 +403,14 @@ describe("compliance trigger queue", () => {
         expect(getAtt(st.Resource)).toBe(source.id);
     });
 
-    test("the trigger sends only to the job queue, never on its own queue", () => {
-        const { source } = queues(commercial);
-        const jobQueue = resources(commercial, "AWS::SQS::Queue").find((q) =>
-            q.id.startsWith("ComplianceJobQueue")
-        )!;
+    test("the trigger sends to no queue", () => {
         const policies = triggerPolicies(commercial);
         const sends = policies.flatMap((p) =>
-            p.Properties.PolicyDocument.Statement.filter(
-                (st: any) =>
-                    [st.Action].flat().some((a: string) => a.startsWith("sqs:")) &&
-                    ![st.Action].flat().includes("sqs:ReceiveMessage")
+            p.Properties.PolicyDocument.Statement.filter((st: any) =>
+                [st.Action].flat().includes("sqs:SendMessage")
             )
         );
-        expect(sends).toHaveLength(1);
-        expect([sends[0].Action].flat().sort()).toEqual(
-            ["sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:SendMessage"].sort()
-        );
-        expect(getAtt(sends[0].Resource)).toBe(jobQueue.id);
-        expect(getAtt(sends[0].Resource)).not.toBe(source.id);
+        expect(sends).toEqual([]);
     });
 
     test("the trigger keeps Lambda's recursive-loop detection on", () => {
@@ -440,13 +428,10 @@ describe("compliance trigger queue", () => {
         expect(triggers[0].Properties.Environment.Variables.COMPLIANCE_TRIGGER_QUEUE_URL).toEqual({
             Ref: source.id,
         });
-        // ... and the job queue's, to forward a leftover job's message there.
-        const jobQueue = resources(commercial, "AWS::SQS::Queue").find((q) =>
-            q.id.startsWith("ComplianceJobQueue")
-        )!;
-        expect(triggers[0].Properties.Environment.Variables.COMPLIANCE_JOB_QUEUE_URL).toEqual({
-            Ref: jobQueue.id,
-        });
+        // ... and not the job queue's: it sends nothing there.
+        expect(triggers[0].Properties.Environment.Variables).not.toHaveProperty(
+            "COMPLIANCE_JOB_QUEUE_URL"
+        );
     });
 
     test("the trigger can stamp the asset row with UpdateItem and writes it no other way", () => {

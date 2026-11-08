@@ -145,7 +145,6 @@ class World:
             patch.object(binding_svc, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(trigger, "sqs_client", self.queue),
             patch.object(trigger, "trigger_queue_url", QUEUE),
-            patch.object(trigger, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(trigger, "trigger_evaluation", side_effect=self._evaluate),
             patch.object(jobs, "sqs_client", self.queue, create=True),
             patch.object(jobs, "trigger_queue_url", QUEUE, create=True),

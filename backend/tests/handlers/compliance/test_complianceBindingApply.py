@@ -25,9 +25,9 @@ from the CDK definitions, with a stand-in enforcer that allows everything:
   pending assets in the background;
 - the binding read reports the apply; no state answer returns the apply's stamp;
 - the first message and every continuation go to the job queue, the evaluations to the trigger's
-  queue; the trigger forwards an apply message an upgrade left on its queue to the job queue once
-  and runs nothing; a run past the apply's run limit runs nothing and the apply reads stopped
-  until the same change resumes it with a fresh count.
+  queue; an apply message found on the trigger's queue is logged and dropped, and nothing runs or
+  is sent for it; a run past the apply's run limit runs nothing and the apply reads stopped until
+  the same change resumes it with a fresh count.
 """
 
 import json
@@ -96,7 +96,6 @@ class World:
             patch.object(binding_svc, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(trigger, "sqs_client", self.sqs),
             patch.object(trigger, "trigger_queue_url", QUEUE),
-            patch.object(trigger, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(jobs, "sqs_client", self.sqs, create=True),
             patch.object(jobs, "trigger_queue_url", QUEUE, create=True),
             patch.object(jobs, "job_queue_url", JOB_QUEUE, create=True),
@@ -451,22 +450,25 @@ class TestTheMessageCarriesIdsOnly:
                     } == {QUEUE}
             assert world.queued() == sorted(asset for asset in ASSETS if asset != OVERRIDE)
 
-    def test_the_trigger_forwards_a_leftover_apply_message_once_and_runs_nothing(self, world):
+    def test_the_trigger_logs_and_drops_a_leftover_apply_message_and_runs_nothing(self, world):
         world.bind(NEW)
         record = world.apply_record()
         before = world.records()
-        world.sqs.send_message.reset_mock()
+        world.sqs.reset_mock()
         body = json.dumps(binding_apply.message(DB, record["applyId"], record["runId"]))
         event = {"Records": [{"messageId": "m1", "body": body,
                               "attributes": {"ApproximateReceiveCount": "1"}}]}
-        with patch.object(binding_apply, "run") as run:
+        with patch.object(binding_apply, "run") as run, \
+                patch.object(trigger.logger, "warning") as warning:
             assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
         run.assert_not_called()
-        assert [call.kwargs for call in world.sqs.send_message.call_args_list] == [
-            {"QueueUrl": JOB_QUEUE, "MessageBody": body}]
+        # Nothing sent, nothing written, the apply untouched.
+        assert world.sqs.method_calls == []
         assert world.records() == before
-        assert world.apply_record()["runs"] == 0
-
+        assert world.apply_record() == record
+        assert [call.args[0] for call in warning.call_args_list] == [
+            f"Compliance job message applyDatabaseBinding for database {DB} on the trigger queue "
+            "dropped: compliance jobs run from the compliance job queue"]
 
 @pytest.mark.unit
 class TestWhileAChangeIsApplied:

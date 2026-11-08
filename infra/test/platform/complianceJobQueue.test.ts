@@ -12,9 +12,9 @@
  * capped, that reads `batchItemFailures`.
  *
  * Senders, by role grant: the binding service (a change's first message), the database service (a
- * delete's move), the job Lambda (its continuations; a stopped move to the dead-letter queue) and the
- * trigger (a job's message an upgrade left on its queue). The job Lambda sends a binding change's
- * evaluations to the trigger's queue and reaches only the tables the two jobs use.
+ * delete's move) and the job Lambda (its continuations; a stopped move to the dead-letter queue). The
+ * trigger sends nothing. The job Lambda sends a binding change's evaluations to the trigger's queue
+ * and reaches only the tables the two jobs use.
  *
  * Built from the builders against a stand-in storage stack, so it runs in seconds;
  * test/storage/bucketSyncRecursiveLoop.test.ts asserts the job Lambda's `RecursiveLoop` per partition
@@ -336,7 +336,6 @@ describe("compliance job queue and job Lambda", () => {
             COMPLIANCE_TRIGGER_QUEUE_URL: { Ref: trigger() },
         });
         expect(queueEnv("trigger")).toEqual({
-            COMPLIANCE_JOB_QUEUE_URL: { Ref: job() },
             COMPLIANCE_TRIGGER_QUEUE_URL: { Ref: trigger() },
         });
         expect(queueEnv("binding")).toEqual({
@@ -358,11 +357,8 @@ describe("compliance job queue and job Lambda", () => {
                 [dlq(), send],
                 [trigger(), send],
             ],
-            // Reads its own queue; its only send is a leftover job's message, to the job queue.
-            trigger: [
-                [trigger(), consume],
-                [job(), send],
-            ],
+            // Reads its own queue and sends nothing.
+            trigger: [[trigger(), consume]],
             // A binding change's first message; an asset override's evaluation.
             binding: [
                 [job(), send],
