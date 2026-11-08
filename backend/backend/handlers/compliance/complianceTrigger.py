@@ -83,12 +83,18 @@ table has its record removed (`outcome=removed`) as its permanent delete removes
 
 A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
 a further evaluation does not open another.
+
+The compliance jobs (a deleted database's move and a database binding change applied in the
+background) run in the compliance job Lambda from its own queue (`complianceJobs`); a binding
+change's evaluations come here like any other evaluation message, and run with Lambda's
+recursive-loop detection on, since nothing this function does queues a message on its own queue. A
+job's message found on this queue (queued before an upgrade by code that ran the jobs here) is
+forwarded to the job queue once, its body unchanged, and not run here.
 """
 
 import json
 import math
 import os
-import time
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -121,7 +127,6 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
-from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluationStore as store
@@ -132,9 +137,13 @@ dynamodb = boto3.resource("dynamodb", config=retry_config)
 # for the Region of the event's bucket.
 s3_client = region_routing_s3_client()
 # Defers an upload completion's queue record (ChangeMessageVisibility on the trigger's own queue,
-# `TriggerBatch.defer`); the queue's URL is set by complianceFunctions.ts.
+# `TriggerBatch.defer`) and forwards a compliance job's message to the job queue; the queues' URLs
+# are set by complianceFunctions.ts.
 sqs_client = boto3.client("sqs", config=retry_config)
 trigger_queue_url = os.environ.get("COMPLIANCE_TRIGGER_QUEUE_URL", "")
+# The compliance job queue: a job's message left on this queue by an upgrade is forwarded there
+# (`forward_job_message`).
+job_queue_url = os.environ.get("COMPLIANCE_JOB_QUEUE_URL", "")
 logger = safeLogger(service_name="ComplianceTrigger")
 
 SCHEMA_SOURCE_DATABASE = "database"
@@ -424,19 +433,15 @@ class TriggerBatch:
 
 def lambda_handler(event, context):
     """Process one SQS batch of indexer-topic messages and report the records an infrastructure
-    error failed (`batchItemFailures`), so only those are redelivered."""
+    error failed (`batchItemFailures`), so only those are redelivered. A compliance job's message
+    on this queue is forwarded to the job queue (`forward_job_message`) and not run here."""
     batch = TriggerBatch()
-    moves = []
-    applies = []
+    failures = []
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
-        move_database = databaseRetirement.move_message_database(record)
-        if move_database is not None:
-            moves.append((message_id, move_database))
-            continue
-        apply_target = binding_apply.message_target(record)
-        if apply_target is not None:
-            applies.append((message_id, apply_target, _receive_count(record)))
+        if is_job_message(record):
+            if not forward_job_message(record):
+                failures.append({"itemIdentifier": message_id})
             continue
         batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
@@ -446,99 +451,33 @@ def lambda_handler(event, context):
         batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
     batch.write_stamps()
     batch.evaluate_all()
-    failures = batch.failures()
-    for message_id, database_id in moves:
-        if not run_database_move(database_id, context):
-            failures.append({"itemIdentifier": message_id})
-    for message_id, (database_id, apply_id, run_id), receive_count in applies:
-        if not run_binding_apply(database_id, apply_id, run_id, context, receive_count):
-            failures.append({"itemIdentifier": message_id})
-    return {"batchItemFailures": failures}
+    return {"batchItemFailures": batch.failures() + failures}
 
 
-def _receive_count(record):
-    """How many times SQS has delivered a queue record (`ApproximateReceiveCount`, 1 when absent)."""
-    try:
-        return max(1, int(((record or {}).get("attributes") or {}).get(
-            "ApproximateReceiveCount", "1")))
-    except (TypeError, ValueError):
-        return 1
+def is_job_message(record) -> bool:
+    """Whether a queue record carries a compliance job's message (a deleted database's move, or a
+    database binding change's run) as its raw body. The job Lambda runs those from its own queue;
+    one is found here only when code that ran the jobs on this queue queued it before an upgrade,
+    or during one."""
+    return (databaseRetirement.move_message_database(record) is not None
+            or binding_apply.message_target(record) is not None)
 
 
-def run_binding_apply(database_id, apply_id, run_id, context, receive_count=1) -> bool:
-    """Run a database binding change (`complianceBindingApply.run`) until this invocation's
-    deadline, and queue the next message when it is not done. Only the ids come from the message;
-    the change itself is read from the stored apply and the database row. `receive_count` is the
-    message's delivery count, recorded on the apply so its status knows whether the queue delivers
-    the message again if this run fails. Returns False when the run failed, so the message is
-    redelivered (and, past the queue's receive limit, kept in its dead-letter queue) rather than
-    queued again."""
-    (valid, message) = validate({
-        "databaseId": {"value": database_id, "validator": "ID"},
-        "applyId": {"value": apply_id, "validator": "UUID"},
-        "runId": {"value": run_id, "validator": "UUID"},
-    })
-    if not valid:
-        logger.error(f"Compliance binding apply message rejected: {message}")
-        return True
-    remaining = context.get_remaining_time_in_millis() / 1000 if context else 60
-    deadline = binding_apply.monotonic() + max(
-        1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
-    try:
-        done = binding_apply.run(database_id, apply_id, run_id, deadline, sqs=sqs_client,
-                                 queue_url=trigger_queue_url, receive_count=receive_count)
-    except Exception as e:
-        logger.exception(f"Compliance binding apply of database {database_id} failed: {e}")
+def forward_job_message(record) -> bool:
+    """Send a compliance job's message found on this queue to the job queue, its body unchanged,
+    so the job Lambda runs it; the trigger runs nothing for it, and once it is forwarded the record
+    is done. Returns False (the record is redelivered and forwarded then) when it could not be
+    sent."""
+    if not job_queue_url:
+        logger.error("No compliance job queue to forward a compliance job's message to")
         return False
-    if not done:
-        record = binding_apply.get_record(database_id) or {}
-        if record.get("applyId") != apply_id or record.get("runId") != run_id:
-            return True
-        if not binding_apply.send_message(sqs_client, trigger_queue_url, record):
-            # This run's own message is delivered again (its progress is saved); the apply is
-            # not recorded as having a message queued meanwhile.
-            binding_apply.message_not_queued(record)
-            return False
-        logger.info(f"Compliance binding apply of database {database_id} continues in a new message")
-    return True
-
-
-def run_database_move(database_id, context) -> bool:
-    """Run the move of a deleted database's compliance data (`databaseRetirement.run`) until this
-    invocation's deadline, and queue the next message when it is not done. Returns False when the
-    run failed, so the message is redelivered (and, past the queue's receive limit, kept in its
-    dead-letter queue) rather than queued again."""
-    (valid, message) = validate({"databaseId": {"value": database_id, "validator": "ID"}})
-    if not valid:
-        logger.error(f"Compliance move message rejected: {message}")
-        return True
-    remaining = context.get_remaining_time_in_millis() / 1000 if context else 60
-    deadline = time.monotonic() + max(1, remaining - databaseRetirement.TRIGGER_SAFETY_MARGIN_SECONDS)
     try:
-        done = databaseRetirement.run(_retirement_tables(), database_id, deadline)
+        sqs_client.send_message(QueueUrl=job_queue_url, MessageBody=record["body"])
     except Exception as e:
-        logger.exception(f"Compliance move of deleted database {database_id} failed: {e}")
+        logger.exception(f"Could not forward a compliance job's message to the job queue: {e}")
         return False
-    if not done:
-        if not trigger_queue_url:
-            logger.error("No compliance trigger queue to continue the compliance move on")
-            return False
-        sqs_client.send_message(QueueUrl=trigger_queue_url,
-                                MessageBody=json.dumps(databaseRetirement.move_message(database_id)))
-        logger.info(f"Compliance move of deleted database {database_id} continues in a new message")
+    logger.info("Forwarded a compliance job's message to the compliance job queue")
     return True
-
-
-_RETIREMENT_TABLES = None
-
-
-def _retirement_tables():
-    global _RETIREMENT_TABLES
-    if _RETIREMENT_TABLES is None:
-        _RETIREMENT_TABLES = databaseRetirement.Tables(
-            dynamodb=dynamodb, schema=store.schema_table, asset_state=store.asset_state_table,
-            evaluation=store.evaluation_table, cascade=cascade_table, audit=store.audit_table)
-    return _RETIREMENT_TABLES
 
 
 def _dispatch_event(message, batch=None, message_id=""):

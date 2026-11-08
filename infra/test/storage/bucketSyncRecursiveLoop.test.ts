@@ -22,10 +22,11 @@
  * documents it as not available and gets no property. The opt-out is a stopgap until the self-write is
  * removed (#1207).
  *
- * The compliance trigger opts out too, in the same partitions: a deleted database's compliance move
- * and a database binding change applied in the background continue themselves on its own queue, one
- * message per run, for as many runs as the database's size needs (D161). Every other function keeps
- * the default.
+ * The compliance job Lambda opts out too, in the same partitions: a deleted database's compliance
+ * move and a database binding change applied in the background continue themselves on its queue, one
+ * message per run, for as many runs as the database's size needs (D161), each job stopped by its own
+ * run limit instead. The compliance trigger, which evaluates the jobs' evaluations, keeps the default
+ * in every partition, as does every other function.
  */
 
 import { Resource, SynthResult, synthTemplate, TemplateName } from "../support/templateSynth";
@@ -35,8 +36,9 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created";
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
 const COMPLIANCE_TRIGGER_HANDLER = "handlers.compliance.complianceTrigger.lambda_handler";
+const COMPLIANCE_JOBS_HANDLER = "handlers.compliance.complianceJobs.lambda_handler";
 /** The functions that opt out of recursive-loop detection where the partition has it. */
-const OPTED_OUT = new Set([CREATED_HANDLER, COMPLIANCE_TRIGGER_HANDLER]);
+const OPTED_OUT = new Set([CREATED_HANDLER, COMPLIANCE_JOBS_HANDLER]);
 
 /** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
 const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
@@ -90,10 +92,16 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         }
     });
 
-    test("the compliance trigger allows recursion in commercial and EU Sovereign only", () => {
+    test("the compliance job Lambda allows recursion in commercial and EU Sovereign only", () => {
+        const jobs = functionsWithHandler(synth, COMPLIANCE_JOBS_HANDLER);
+        expect(jobs).toHaveLength(1);
+        expect(jobs[0].properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+    });
+
+    test("the compliance trigger keeps the detection on in every partition", () => {
         const triggers = functionsWithHandler(synth, COMPLIANCE_TRIGGER_HANDLER);
         expect(triggers).toHaveLength(1);
-        expect(triggers[0].properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+        expect(triggers[0].properties.RecursiveLoop).toBeUndefined();
     });
 
     test("no other function changes its recursive-loop setting", () => {

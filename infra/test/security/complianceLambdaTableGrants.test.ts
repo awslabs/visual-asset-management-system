@@ -472,15 +472,32 @@ const BINDING_APPLY_RECORD_ACTIONS = [
 ];
 
 /**
- * The trigger runs the move of a deleted database's compliance data (`databaseRetirement.run`),
- * which reaches its tables through a `databaseRetirement.Tables` holder the analysis does not
- * follow. Of the tables it moves rows in, the schema table is the only one the trigger's own code
- * does not already write: the move re-scopes schema rows with UpdateItem (`_move_schema`).
+ * Writes the analysis cannot see. The compliance job Lambda runs the move of a deleted database's
+ * compliance data (`databaseRetirement.run`), which reaches its tables through a
+ * `databaseRetirement.Tables` holder the analysis does not follow: it copies asset-state records
+ * (PutItem, DeleteItem) and re-scopes evaluations, cascades, schemas and audit entries (UpdateItem;
+ * a cascade's pending marker with DeleteItem). It also runs a database binding change, whose record
+ * pages are chosen through a table of functions (`complianceBindingApply._RECORD_PAGES`) the
+ * analysis does not follow either: a bind writes asset-state records (UpdateItem) and a removal
+ * deletes them (DeleteItem). The trigger no longer runs either job.
  */
 const RETIREMENT_MOVE_WRITES: Record<string, Record<string, string[]>> = {
-    "handlers.compliance.complianceTrigger": {
+    "handlers.compliance.complianceJobs": {
+        COMPLIANCE_ASSET_STATE_STORAGE_TABLE: [
+            "dynamodb:DeleteItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+        ],
+        COMPLIANCE_AUDIT_STORAGE_TABLE: ["dynamodb:UpdateItem"],
+        COMPLIANCE_CASCADE_STORAGE_TABLE: ["dynamodb:DeleteItem", "dynamodb:UpdateItem"],
+        COMPLIANCE_EVALUATION_STORAGE_TABLE: ["dynamodb:UpdateItem"],
         COMPLIANCE_SCHEMA_STORAGE_TABLE: ["dynamodb:UpdateItem"],
     },
+};
+
+/** Reads behind the same table of functions: a bind or a change pages the database's asset rows. */
+const NOT_FOLLOWED_READS: Record<string, string[]> = {
+    "handlers.compliance.complianceJobs": ["ASSET_STORAGE_TABLE"],
 };
 
 /**
@@ -510,6 +527,7 @@ function needsOf(handlerModule: string): Needs {
         const entry = needs.get(key);
         if (entry && !entry.write && !entry.index) entry.readActions = ["dynamodb:GetItem"];
     }
+    for (const key of NOT_FOLLOWED_READS[handlerModule] ?? []) need(needs, key);
     for (const [key, actions] of Object.entries(RETIREMENT_MOVE_WRITES[handlerModule] ?? {})) {
         const entry = need(needs, key);
         entry.write = true;
@@ -776,7 +794,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         lambdas = resolver.complianceLambdas();
     });
 
-    test("the synth carries the nine compliance Lambdas and every derived table resolves", () => {
+    test("the synth carries the ten compliance Lambdas and every derived table resolves", () => {
         // Positive control for every per-Lambda assertion: an empty Lambda list or an unresolvable
         // key would otherwise leave nothing to compare.
         expect(lambdas.map((l) => l.handlerModule)).toEqual([
@@ -784,6 +802,7 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             "handlers.compliance.complianceCascadeExecutor",
             "handlers.compliance.complianceCascadeService",
             "handlers.compliance.complianceEvaluateService",
+            "handlers.compliance.complianceJobs",
             "handlers.compliance.complianceQuarantineService",
             "handlers.compliance.complianceSchemaBindingService",
             "handlers.compliance.complianceSchemaService",
@@ -898,6 +917,25 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
             resolver.grantedTables(cascade)
         );
         expect(surplus.map((s) => s.detail)).toEqual([]);
+    });
+
+    test("the job Lambda is granted exactly the tables its two jobs reach", () => {
+        // The move of a deleted database's compliance data and a database binding change applied in
+        // the background: no evaluation-engine table, no workflow or pipeline table.
+        const jobs = lambdaFor("complianceJobs");
+        const needs = needsOf(jobs.handlerModule);
+        expect([...needs.keys()].sort()).toEqual([
+            "ASSET_STORAGE_TABLE",
+            "COMPLIANCE_ASSET_STATE_STORAGE_TABLE",
+            "COMPLIANCE_AUDIT_STORAGE_TABLE",
+            "COMPLIANCE_CASCADE_STORAGE_TABLE",
+            "COMPLIANCE_EVALUATION_STORAGE_TABLE",
+            "COMPLIANCE_SCHEMA_STORAGE_TABLE",
+            "DATABASE_STORAGE_TABLE",
+        ]);
+        expect(
+            surplusGrants(resolver, needs, resolver.grantedTables(jobs)).map((s) => s.detail)
+        ).toEqual([]);
     });
 
     test("the schema service reads workflows and pipelines with GetItem only", () => {

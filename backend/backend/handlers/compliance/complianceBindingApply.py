@@ -8,9 +8,12 @@ the schema in force reach every asset record of the database, which takes longer
 request may run on a large database. The request (`PUT` / `DELETE /compliance/bind/{databaseId}`,
 `complianceSchemaBindingService`) makes every check it made before, saves the database binding,
 writes the database-level audit entry naming the caller, records an **apply** (`begin`) and queues
-its first message on the compliance trigger's queue (`message`), then answers `202` with the
-number of assets the apply goes through (`count_assets`, a count query). The trigger runs the apply
-(`run`), as it moves a deleted database's data (`databaseRetirement.run`), in two phases:
+its first message on the compliance job queue (`message`), then answers `202` with the number of
+assets the apply goes through (`count_assets`, a count query). The compliance job Lambda
+(`complianceJobs`) runs the apply (`run`), as it moves a deleted database's data
+(`databaseRetirement.run`), in two phases, and queues each continuation on its own queue; the
+evaluations the apply queues go to the compliance trigger's queue, where the trigger evaluates
+them as it evaluates any asset change:
 
 - **records** (`PHASE_RECORDS`; the apply is `applying`): the records are written page by page
   until the run's deadline (the asset rows for a bind or a change, each record decided by
@@ -22,13 +25,18 @@ number of assets the apply goes through (`count_assets`, a count query). The tri
   an audit entry is never rewritten).
 - **evaluations** (`PHASE_EVALUATIONS`; the apply is `applied`, `evaluationStatus` `queueing`),
   only with automatic evaluation on: the records the apply wrote (its stamp) are read again and one
-  evaluation is queued for each, at most EVALUATIONS_PER_RUN per run before the run hands over to
-  its continuation, so at most EVALUATIONS_PER_RUN + PAGE_SIZE - 1 of the apply's own evaluations
-  are ever ahead of its next message on the queue, whatever the database's size (the phase moves at
-  the pace the trigger evaluates). Turning automatic evaluation on for the schema in force is this
-  phase alone (`evaluatePending`, over the records pending or awaiting re-evaluation). An
-  evaluation message names the apply (`bindingApplyId`) and the trigger evaluates the asset only
-  while that apply is the database's, only for a record it reached, and judged as a change made
+  evaluation is queued for each on the trigger's queue, in shares of EVALUATIONS_PER_SHARE. The
+  trigger's queue is shared by every database's automatic evaluations, so a share is queued only
+  while fewer than EVALUATION_BACKLOG_LIMIT messages wait on it (`trigger_backlog`): another
+  database's change then waits behind at most about that many plus one share of the apply's,
+  whatever the apply's size. While the queue is at the limit the phase gives way: it hands over to
+  a continuation delayed by EVALUATION_FIRST_WAIT_SECONDS, doubled at each wait, and after
+  EVALUATION_WAITS_PER_SHARE waits for one share it queues the share anyway, so a busy or held
+  trigger slows the phase down but never stops it. Turning automatic evaluation on for the
+  schema in force is this phase alone (`evaluatePending`, over the records pending or awaiting
+  re-evaluation). An evaluation message names the apply (`bindingApplyId`) and the trigger
+  evaluates the asset only while that apply is the database's, only for a record it reached, and
+  judged as a change made
   when the binding reached the record (`bindingAppliedAt`), so a record evaluated since, or a
   message delivered twice, is not evaluated again (`complianceTrigger._process_binding_evaluation`).
   The phase does not hold the database: every record already carries the binding, so another
@@ -46,8 +54,9 @@ apply, kept after it ends, so `GET /compliance/bind/{databaseId}` shows its outc
     assetCount, startedAt, lastProgressAt, finishedAt, cursor (the paging key, JSON), counts
     (`COUNT_FIELDS`), applyStatus (`applying` | `applied` | `failed`), failureReason,
     evaluationStatus (`queueing` | `queued` | `cancelled`), evaluationsToQueue,
-    evaluationEndReason, nextMessageAt, runStartedAt, runReceiveCount, resumedAt, resumedBy,
-    resumes.
+    evaluationEndReason, nextMessageAt, nextMessageDelay (seconds the next message waits before
+    delivery while the trigger's queue is busy), evaluationWaits, runStartedAt, runReceiveCount,
+    runs, runLimit, stopReason, resumedAt, resumedBy, resumes.
 
 **The message** (`APPLY_ACTION`) carries the database id, the apply id and the run id only, and
 is read from a raw queue body only (`message_target`, never an SNS envelope). A run acts only while
@@ -60,14 +69,25 @@ queue's redelivery and, past the receive limit, to its dead-letter queue.
 
 **Stopped or not** (`stop_reason`) is derived from the apply's own messages, never from how long
 ago it last made progress, so a healthy apply of any size never reads `stalled`, however long its
-next message waits on a busy queue: a message recorded as queued after the last run started
-(`nextMessageAt`) will be delivered; a run started (`runStartedAt`) within the trigger's timeout is
-in flight; a run that ended without handing over is retried by the queue unless that was its last
-delivery (`runReceiveCount` at the queue's receive limit). Only when none holds (the last delivery
-failed, the next message could not be queued, or a message outlived the queue's retention) does the
-apply read `stalled`; repeating the same change then resumes it from its cursor with a new run id
-(`resume`), and a message of the run before is ignored. The timings are the trigger's and its
-queue's (complianceFunctions.ts; a test reads them from there).
+next message waits (behind other databases' jobs on the job queue, or delayed while the trigger's
+queue is busy): a message recorded as queued after the last run started (`nextMessageAt`) will be
+delivered; a run started (`runStartedAt`) within the job Lambda's timeout is in flight; a run that
+ended without handing over is retried by the queue unless that was its last delivery
+(`runReceiveCount` at the queue's receive limit). Only when none holds (the last delivery failed,
+the next message could not be queued, or a message outlived the queue's retention), or the apply
+was stopped at its run limit (below), does the apply read `stalled`; repeating the same change then
+resumes it from its cursor with a new run id (`resume`), and a message of the run before is
+ignored. The timings are the job Lambda's and its queue's (complianceFunctions.ts; a test reads
+them from there).
+
+**The run limit.** The job Lambda runs with Lambda's recursive-loop detection off, since an apply
+continues itself for as many runs as the database's size needs; the apply's own count replaces it.
+Every run counts itself on the record (`runs`, each delivery of the apply's message included) and
+the apply carries a limit derived from its size (`runLimit`, `run_limit`: every run reads at least
+one page, so the pages its phases read bound its runs, with a factor and an allowance for
+redeliveries and for the evaluations phase's waits). A run past the limit runs nothing, queues no
+continuation and records why (`stopReason`, STALLED_RUN_LIMIT), so the apply reads `stalled` and the
+same change resumes it with a fresh count.
 
 **Idempotency.** Every record a bind or a kept-quarantined removal writes carries the apply's id
 (`APPLY_STAMP_FIELD`) and the time of the write (`APPLIED_AT_FIELD`); a page applied twice (a
@@ -128,9 +148,16 @@ COUNT_FIELDS = ("assetsProcessed", "assetsPendingEvaluation", "assetsKeptQuarant
                 "removedComplianceRecords", "evaluationsQueued")
 
 PAGE_SIZE = 100
-# The evaluations phase queues at most this many evaluations in a run before it hands over to its
-# continuation (module docstring).
-EVALUATIONS_PER_RUN = 100
+# The evaluations phase queues the apply's evaluations in shares of this many, a share only while
+# fewer than EVALUATION_BACKLOG_LIMIT messages wait on the trigger's queue; while it is at the limit
+# the phase hands over to a continuation delayed by EVALUATION_FIRST_WAIT_SECONDS, doubled at each
+# wait up to SQS's largest delay, and after EVALUATION_WAITS_PER_SHARE waits for one share (about
+# 21 minutes) queues the share anyway (module docstring).
+EVALUATIONS_PER_SHARE = 100
+EVALUATION_BACKLOG_LIMIT = 200
+EVALUATION_FIRST_WAIT_SECONDS = 5
+EVALUATION_MAX_WAIT_SECONDS = 900
+EVALUATION_WAITS_PER_SHARE = 8
 
 PHASE_RECORDS = "records"
 PHASE_EVALUATIONS = "evaluations"
@@ -143,16 +170,20 @@ CANCELLED_AUTO_EVAL_OFF = "Automatic evaluation was turned off"
 CANCELLED_DATABASE_DELETED = "The database was deleted"
 CANCELLED_BINDING_CHANGED = "The database binding changed"
 
-# The settings of the compliance trigger and its queue the stop decision relies on
-# (infra/lib/lambdaBuilder/complianceFunctions.ts: COMPLIANCE_TRIGGER_TIMEOUT,
-# COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT, COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT; the queue
-# sets no retention period, so SQS keeps a message 4 days). A test reads them from there.
-TRIGGER_TIMEOUT_SECONDS = 300
-TRIGGER_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 1800
-TRIGGER_QUEUE_MAX_RECEIVE_COUNT = 3
-TRIGGER_QUEUE_RETENTION_SECONDS = 4 * 24 * 3600
+# The settings of the compliance job Lambda and its queue the stop decision relies on
+# (infra/lib/lambdaBuilder/complianceFunctions.ts: COMPLIANCE_JOB_TIMEOUT,
+# COMPLIANCE_JOB_QUEUE_VISIBILITY_TIMEOUT, COMPLIANCE_JOB_QUEUE_MAX_RECEIVE_COUNT; the queue sets
+# no retention period, so SQS keeps a message 4 days). A test reads them from there.
+JOB_TIMEOUT_SECONDS = 300
+JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS = 1800
+JOB_QUEUE_MAX_RECEIVE_COUNT = 3
+JOB_QUEUE_RETENTION_SECONDS = 4 * 24 * 3600
 # Time after a run's start by which it has certainly ended (its Lambda timeout, plus clock skew).
 RUN_END_MARGIN_SECONDS = 60
+# The run limit (module docstring, "The run limit"): runs counted against the pages the apply's
+# phases read, twice over, plus an allowance for redeliveries and resumes.
+RUN_LIMIT_FACTOR = 2
+RUN_LIMIT_ALLOWANCE = 20
 
 APPLYING_STATUS = 409
 APPLYING_MESSAGE = ("The compliance schema binding of this database is still being applied; "
@@ -163,6 +194,8 @@ STALLED_FAILED = "Its last step failed on every delivery; repeat the same change
 STALLED_NOT_QUEUED = "Its next step could not be queued; repeat the same change to resume it"
 STALLED_NOT_DELIVERED = ("Its next step was not delivered within the queue's retention period; "
                          "repeat the same change to resume it")
+STALLED_RUN_LIMIT = ("It ran more steps than a change of its size needs, so it was stopped; "
+                     "repeat the same change to resume it")
 FAILED_DATABASE_DELETED = "The database was deleted while the binding was being applied"
 FAILED_BINDING_CHANGED = "The database binding no longer matches the change being applied"
 FAILED_NOT_SAVED = "The binding could not be saved"
@@ -262,23 +295,48 @@ def stop_reason(record: Optional[Dict[str, Any]], now: Optional[datetime] = None
     not count: a message waiting on a busy queue is delivered when its turn comes."""
     if active_phase(record) is None:
         return None
+    if record.get("stopReason"):
+        # Stopped at its run limit (`run`): nothing runs until the same change resumes it.
+        return record["stopReason"]
     now = now or datetime.now(timezone.utc)
     queued = _parse(record.get("nextMessageAt"))
     started = _parse(record.get("runStartedAt"))
     if queued is not None and (started is None or queued >= started):
-        waited = (now - queued).total_seconds()
-        return STALLED_NOT_DELIVERED if waited > TRIGGER_QUEUE_RETENTION_SECONDS else None
+        waited = (now - queued).total_seconds() - _number(record.get("nextMessageDelay"))
+        return STALLED_NOT_DELIVERED if waited > JOB_QUEUE_RETENTION_SECONDS else None
     if started is None:
         return STALLED_NOT_QUEUED
     age = (now - started).total_seconds()
-    if age <= TRIGGER_TIMEOUT_SECONDS + RUN_END_MARGIN_SECONDS:
+    if age <= JOB_TIMEOUT_SECONDS + RUN_END_MARGIN_SECONDS:
         return None
-    if max(1, _number(record.get("runReceiveCount"))) < TRIGGER_QUEUE_MAX_RECEIVE_COUNT:
+    if max(1, _number(record.get("runReceiveCount"))) < JOB_QUEUE_MAX_RECEIVE_COUNT:
         # The run ended without handing over; the queue delivers its message again once its
         # visibility timeout passes.
-        limit = TRIGGER_QUEUE_VISIBILITY_TIMEOUT_SECONDS + TRIGGER_QUEUE_RETENTION_SECONDS
+        limit = JOB_QUEUE_VISIBILITY_TIMEOUT_SECONDS + JOB_QUEUE_RETENTION_SECONDS
         return STALLED_NOT_DELIVERED if age > limit else None
     return STALLED_FAILED
+
+
+def run_limit(operation: Optional[str], asset_count: Any, auto_eval: Any) -> int:
+    """The most runs an apply of `asset_count` records may take (module docstring, "The run
+    limit"). Every run reads at least one page, so a phase takes at most as many runs as it reads
+    pages: the records phase one per PAGE_SIZE records, and the evaluations phase (a bind or a
+    change with automatic evaluation on, or `evaluatePending`) as many again, each of whose shares
+    may also wait up to EVALUATION_WAITS_PER_SHARE times for a busy trigger queue. Twice that, plus
+    a fixed allowance for redeliveries and resumes."""
+    pages = max(1, -(-_number(asset_count) // PAGE_SIZE))
+    records = 0 if operation == OPERATION_EVALUATE_PENDING else pages
+    evaluates = operation == OPERATION_EVALUATE_PENDING or (
+        operation in (OPERATION_BIND, OPERATION_CHANGE) and bool(auto_eval))
+    evaluations = pages * (1 + EVALUATION_WAITS_PER_SHARE) if evaluates else 0
+    return RUN_LIMIT_FACTOR * (records + evaluations) + RUN_LIMIT_ALLOWANCE
+
+
+def limit_of(record: Dict[str, Any]) -> int:
+    """The apply's run limit as stored, or derived from it (an apply recorded before the limit
+    was)."""
+    return _number(record.get("runLimit")) or run_limit(
+        record.get("operation"), record.get("assetCount"), record.get("complianceAutoEval"))
 
 
 def is_stalled(record: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
@@ -445,6 +503,8 @@ def begin(database_id: str, operation: str, schema_name: Optional[str],
         "nextMessageAt": started,
         "counts": {field: 0 for field in COUNT_FIELDS},
         "resumes": 0,
+        "runs": 0,
+        "runLimit": run_limit(operation, asset_count, auto_eval),
     }
     if operation == OPERATION_EVALUATE_PENDING:
         record.update(applyStatus=STATUS_APPLIED, finishedAt=started, phase=PHASE_EVALUATIONS,
@@ -474,29 +534,31 @@ def begin(database_id: str, operation: str, schema_name: Optional[str],
 def resume(record: Dict[str, Any], actor: str, now: Optional[datetime] = None
            ) -> Optional[Dict[str, Any]]:
     """Resume a stalled apply from its cursor, in the phase it stopped in: a new run id (a message
-    of the run before is then ignored) and its message recorded as queued, conditional on the apply
-    and run being the ones read. Returns the record as resumed, or None when another request
-    resumed it or a run moved it meanwhile."""
+    of the run before is then ignored), its message recorded as queued and its run count started
+    again (a stop at the run limit is cleared), conditional on the apply and run being the ones
+    read. Returns the record as resumed, or None when another request resumed it or a run moved it
+    meanwhile."""
     resumed_at = now_iso(now)
     run_id = str(uuid.uuid4())
+    limit = limit_of(record)
+    cleared = ("runStartedAt", "runReceiveCount", "stopReason", "nextMessageDelay")
     try:
         store.evaluation_table.update_item(
             Key=record_key(record["bindingDatabaseId"]),
             UpdateExpression=("SET runId = :run, lastProgressAt = :now, nextMessageAt = :now, "
-                              "resumedAt = :now, resumedBy = :actor ADD resumes :one "
-                              "REMOVE runStartedAt, runReceiveCount"),
+                              "resumedAt = :now, resumedBy = :actor, runs = :zero, "
+                              "runLimit = :limit ADD resumes :one REMOVE " + ", ".join(cleared)),
             ConditionExpression="applyId = :apply AND runId = :readRun",
             ExpressionAttributeValues={
-                ":run": run_id, ":now": resumed_at, ":actor": actor, ":one": 1,
-                ":apply": record["applyId"], ":readRun": record.get("runId")})
+                ":run": run_id, ":now": resumed_at, ":actor": actor, ":one": 1, ":zero": 0,
+                ":limit": limit, ":apply": record["applyId"], ":readRun": record.get("runId")})
     except Exception as e:
         if store.is_conditional_check_failure(e):
             return None
         raise
-    resumed = {key: value for key, value in record.items()
-               if key not in ("runStartedAt", "runReceiveCount")}
+    resumed = {key: value for key, value in record.items() if key not in cleared}
     resumed.update(runId=run_id, lastProgressAt=resumed_at, nextMessageAt=resumed_at,
-                   resumedAt=resumed_at, resumedBy=actor,
+                   resumedAt=resumed_at, resumedBy=actor, runs=0, runLimit=limit,
                    resumes=_number(record.get("resumes")) + 1)
     return resumed
 
@@ -537,11 +599,33 @@ def mark_run_started(record: Dict[str, Any], receive_count: int = 1,
     longer names this apply and run."""
     started = now_iso(now)
     count = max(1, int(receive_count or 1))
-    if not _owned_update(record, "SET runStartedAt = :started, runReceiveCount = :count, "
-                                 "lastProgressAt = :started",
-                         {":started": started, ":count": count}):
-        return None
-    return dict(record, runStartedAt=started, runReceiveCount=count, lastProgressAt=started)
+    condition, names, values = _owner_condition(record)
+    try:
+        response = store.evaluation_table.update_item(
+            Key=record_key(record["bindingDatabaseId"]),
+            UpdateExpression=("SET runStartedAt = :started, runReceiveCount = :count, "
+                              "lastProgressAt = :started ADD runs :one"),
+            ConditionExpression=condition, ExpressionAttributeNames=names,
+            ExpressionAttributeValues={**values, ":started": started, ":count": count, ":one": 1},
+            ReturnValues="UPDATED_NEW")
+    except Exception as e:
+        if store.is_conditional_check_failure(e):
+            return None
+        raise
+    runs = _number((response or {}).get("Attributes", {}).get("runs")) or (
+        _number(record.get("runs")) + 1)
+    return dict(record, runStartedAt=started, runReceiveCount=count, lastProgressAt=started,
+                runs=runs)
+
+
+def stop_at_run_limit(record: Dict[str, Any]) -> bool:
+    """Stop an apply whose run went past its run limit: record why (`stopReason`), so it reads
+    `stalled` and the same change resumes it, and that no message is queued. Conditional on the
+    record still naming this apply and run. Returns whether it landed."""
+    logger.error(f"Binding apply {record['applyId']} of {record['bindingDatabaseId']} stopped: run "
+                 f"{_number(record.get('runs'))} is past its limit of {limit_of(record)}")
+    return _owned_update(record, "SET stopReason = :reason REMOVE nextMessageAt, nextMessageDelay",
+                         {":reason": STALLED_RUN_LIMIT})
 
 
 def message_not_queued(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -558,21 +642,34 @@ def message_not_queued(record: Dict[str, Any]) -> Dict[str, Any]:
 
 def _save_progress(record: Dict[str, Any], cursor: Optional[Dict[str, Any]],
                    counts: Dict[str, int], continuing: bool = False,
-                   now: Optional[datetime] = None) -> bool:
+                   now: Optional[datetime] = None, waits: Optional[int] = None,
+                   delay: int = 0) -> bool:
     """Save a page's cursor and the counts, conditional on the record still naming this apply and
     run; `continuing` (the run hands over to its next message) also records that message as
-    queued. Returns False when the record no longer names them (a resume handed the apply to a new
-    run)."""
+    queued, delivered after `delay` seconds (the evaluations phase giving way to a busy trigger
+    queue). `waits` saves how many times the evaluations phase has waited for its next share.
+    Returns False when the record no longer names them (a resume handed the apply to a new run)."""
     stamp = now_iso(now)
     values: Dict[str, Any] = {":counts": counts, ":now": stamp}
     expression = "SET counts = :counts, lastProgressAt = :now"
+    removed = []
     if continuing:
         expression += ", nextMessageAt = :now"
+        if delay > 0:
+            expression += ", nextMessageDelay = :delay"
+            values[":delay"] = int(delay)
+        else:
+            removed.append("nextMessageDelay")
+    if waits is not None:
+        expression += ", evaluationWaits = :waits"
+        values[":waits"] = int(waits)
     if cursor:
         expression += ", #c = :cursor"
         values[":cursor"] = json.dumps(cursor, default=_json_default)
     else:
-        expression += " REMOVE #c"
+        removed.append("#c")
+    if removed:
+        expression += " REMOVE " + ", ".join(removed)
     return _owned_update(record, expression, values, {"#c": "cursor"})
 
 
@@ -672,16 +769,22 @@ def message_target(queue_record: Any) -> Optional[Tuple[str, str, str]]:
 
 
 def send_message(sqs, queue_url: str, record: Dict[str, Any]) -> bool:
-    """Queue the message of an apply's run; False (logged) when it could not be queued: the caller
+    """Queue the message of an apply's run on the compliance job queue (`queue_url`), delayed by
+    the record's `nextMessageDelay` when the evaluations phase is giving way to a busy trigger
+    queue; False (logged) when it could not be queued: the caller
     then records it (`message_not_queued`, so the apply reads stalled and the same change resumes
     it) or leaves its own message to the queue's redelivery."""
     if not queue_url or sqs is None:
-        logger.error(f"No compliance trigger queue to apply the binding of "
+        logger.error(f"No compliance job queue to apply the binding of "
                      f"{record['bindingDatabaseId']} on")
         return False
+    kwargs: Dict[str, Any] = {}
+    delay = min(EVALUATION_MAX_WAIT_SECONDS, _number(record.get("nextMessageDelay")))
+    if delay > 0:
+        kwargs["DelaySeconds"] = delay
     try:
         sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(
-            message(record["bindingDatabaseId"], record["applyId"], record["runId"])))
+            message(record["bindingDatabaseId"], record["applyId"], record["runId"])), **kwargs)
     except Exception as e:
         logger.exception(f"Could not queue the binding apply of {record['bindingDatabaseId']}: {e}")
         return False
@@ -1030,45 +1133,87 @@ def _run_records(database_id: str, record: Dict[str, Any], db_item: Dict[str, An
             return True
 
 
+def trigger_backlog(sqs, queue_url: str) -> Optional[int]:
+    """How many messages wait on the compliance trigger's queue (`ApproximateNumberOfMessages`);
+    None when it cannot be read, and the evaluations phase then goes on (the count only paces
+    it)."""
+    if not queue_url or sqs is None:
+        return None
+    try:
+        response = sqs.get_queue_attributes(QueueUrl=queue_url,
+                                            AttributeNames=["ApproximateNumberOfMessages"])
+        return int((response.get("Attributes") or {}).get("ApproximateNumberOfMessages", 0))
+    except Exception as e:
+        logger.warning(f"Could not read the compliance trigger queue's backlog: {e}")
+        return None
+
+
+def wait_delay(waits: int) -> int:
+    """The delay of the evaluations phase's continuation on its `waits`-th wait for a share (0
+    first): EVALUATION_FIRST_WAIT_SECONDS doubled each time, at most SQS's largest delay."""
+    return min(EVALUATION_MAX_WAIT_SECONDS, EVALUATION_FIRST_WAIT_SECONDS * (2 ** max(0, waits)))
+
+
 def _run_evaluations(database_id: str, record: Dict[str, Any], deadline: float,
-                     clock: Callable[[], float], page_size: int, per_run: int, sqs,
+                     clock: Callable[[], float], page_size: int, per_share: int, sqs,
                      queue_url: str) -> bool:
-    """The evaluations phase from the cursor: pages until EVALUATIONS_PER_RUN evaluations are
-    gathered (or the phase or the deadline ends), queues them, then saves the cursor and hands
-    over. Sent before the cursor is saved, so a run that fails in between sends a page again on
-    redelivery, and the trigger does not evaluate an asset twice for it."""
+    """The evaluations phase from the cursor, share by share until it ends or the deadline
+    passes. Before each share it reads the trigger queue's backlog: at EVALUATION_BACKLOG_LIMIT or
+    more it hands over to a delayed continuation without queueing (until the share has waited
+    EVALUATION_WAITS_PER_SHARE times; then the share is queued anyway). A share pages until
+    `per_share` evaluations are gathered (or the phase or the deadline ends) and is sent before the
+    cursor is saved, so a run that fails in between sends it again on redelivery, and the trigger
+    does not evaluate an asset twice for it."""
     cursor = json.loads(record["cursor"]) if record.get("cursor") else None
     counts = counts_of(record)
-    asset_ids: List[str] = []
+    waits = _number(record.get("evaluationWaits"))
     while True:
-        response = store.asset_state_table.query(**_page_kwargs(database_id, cursor, page_size))
-        asset_ids.extend(item["assetId"] for item in response.get("Items", [])
-                         if item.get("assetId") and _to_evaluate(record, item))
-        # The phase goes on while the read says more pages remain (the key's presence).
-        more = "LastEvaluatedKey" in response
-        cursor = response["LastEvaluatedKey"] if more else None
-        if not more or len(asset_ids) >= per_run or clock() >= deadline:
-            break
-    counts["evaluationsQueued"] += queue_evaluations(database_id, asset_ids, sqs, queue_url,
-                                                     apply_id=record["applyId"])
-    if not more:
-        end_evaluations(record, EVALUATIONS_QUEUED, counts)
-        return True
-    return not _save_progress(record, cursor, counts, continuing=True)
+        backlog = trigger_backlog(sqs, queue_url)
+        if (backlog is not None and backlog >= EVALUATION_BACKLOG_LIMIT
+                and waits < EVALUATION_WAITS_PER_SHARE):
+            logger.info(f"Binding apply {record['applyId']} of {database_id}: {backlog} messages "
+                        f"wait on the trigger queue; the next share waits {wait_delay(waits)} s")
+            return not _save_progress(record, cursor, counts, continuing=True, waits=waits + 1,
+                                      delay=wait_delay(waits))
+        asset_ids: List[str] = []
+        while True:
+            response = store.asset_state_table.query(**_page_kwargs(database_id, cursor,
+                                                                    page_size))
+            asset_ids.extend(item["assetId"] for item in response.get("Items", [])
+                             if item.get("assetId") and _to_evaluate(record, item))
+            # The phase goes on while the read says more pages remain (the key's presence).
+            more = "LastEvaluatedKey" in response
+            cursor = response["LastEvaluatedKey"] if more else None
+            if not more or len(asset_ids) >= per_share or clock() >= deadline:
+                break
+        counts["evaluationsQueued"] += queue_evaluations(database_id, asset_ids, sqs, queue_url,
+                                                         apply_id=record["applyId"])
+        waits = 0
+        if not more:
+            end_evaluations(record, EVALUATIONS_QUEUED, counts)
+            return True
+        if clock() >= deadline:
+            return not _save_progress(record, cursor, counts, continuing=True, waits=0)
+        if not _save_progress(record, cursor, counts, waits=0):
+            logger.info(f"Binding apply {record['applyId']} of {database_id} continues in "
+                        "another run")
+            return True
 
 
 def run(database_id: str, apply_id: str, run_id: str, deadline: float,
         clock: Optional[Callable[[], float]] = None, sqs=None, queue_url: str = "",
         page_size: Optional[int] = None, receive_count: int = 1,
-        evaluations_per_run: Optional[int] = None) -> bool:
+        evaluations_per_share: Optional[int] = None) -> bool:
     """Run the apply's current phase from its cursor until it ends, the deadline (a `clock` value)
-    passes, or (evaluations) a run's share is queued; `sqs` and `queue_url` queue the evaluations.
-    `receive_count` is the delivery count of the message that started the run. Returns False when
-    the apply goes on and the next message must be queued (recorded as queued already); True when
-    it is done, ended, or not this run's to make (nothing is written then)."""
+    passes, or (evaluations) the trigger's queue is busy; `sqs` and `queue_url` (the compliance
+    trigger's queue) queue the evaluations. `receive_count` is the delivery count of the message
+    that started the run. A run past the apply's run limit runs nothing and stops the apply
+    (`stop_at_run_limit`). Returns False when the apply goes on and the next message must be queued
+    (recorded as queued already); True when it is done, ended, stopped, or not this run's to make
+    (nothing is written then)."""
     clock = clock or monotonic
     page_size = page_size or PAGE_SIZE
-    per_run = evaluations_per_run or EVALUATIONS_PER_RUN
+    per_share = evaluations_per_share or EVALUATIONS_PER_SHARE
     record = get_record(database_id)
     phase = active_phase(record)
     if (phase is None or record.get("applyId") != apply_id or record.get("runId") != run_id):
@@ -1096,10 +1241,16 @@ def run(database_id: str, apply_id: str, run_id: str, deadline: float,
         if db_item.get("complianceAutoEval") is not True:
             end_evaluations(record, EVALUATIONS_CANCELLED, reason=CANCELLED_AUTO_EVAL_OFF)
             return True
+    if record.get("stopReason"):
+        logger.info(f"Binding apply message for {database_id} ignored: the apply was stopped")
+        return True
     record = mark_run_started(record, receive_count)
     if record is None:
         return True
+    if _number(record.get("runs")) > limit_of(record):
+        stop_at_run_limit(record)
+        return True
     if phase == PHASE_RECORDS:
         return _run_records(database_id, record, db_item, deadline, clock, page_size)
-    return _run_evaluations(database_id, record, deadline, clock, page_size, per_run, sqs,
+    return _run_evaluations(database_id, record, deadline, clock, page_size, per_share, sqs,
                             queue_url)

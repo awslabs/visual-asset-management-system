@@ -25,11 +25,19 @@ for a running execution of their workflow (`completed` with an error result, the
 phase by phase (`PHASES`), one page at a time, saving the phase and cursor on the record after each
 page, until the deadline it is given; it is resumable and idempotent (a row is moved conditionally
 on still carrying the database id, so a page read twice moves nothing twice). The delete request
-queues `move_message` on the compliance trigger's queue; the trigger runs the move until its own
-deadline and queues the next message when the move is not done. A run that fails leaves the
-message to the queue's redelivery and, after its receive limit, to the queue's dead-letter queue,
-so a failing move never loops; the record then stays `moving` and the move resumes from its last
-saved page when the message is sent again.
+queues `move_message` on the compliance job queue; the compliance job Lambda (`complianceJobs`)
+runs the move until its own deadline and queues the next message when the move is not done. A run
+that fails leaves the message to the queue's redelivery and, after its receive limit, to the
+queue's dead-letter queue, so a failing move never loops; the record then stays `moving` and the
+move resumes from its last saved page when the message is sent again.
+
+The job Lambda runs with Lambda's recursive-loop detection off (a move of large tables continues
+itself for more runs than the detection allows), so the move counts its own runs: every run counts
+itself on the record (`runs`, `begin_run`) against a limit derived from the size of the tables the
+move reads (`runLimit`, `run_limit`). A run past the limit moves nothing: the job Lambda puts the
+move's message in the job queue's dead-letter queue and the record notes why (`stopReason`,
+`stoppedAt`, `stop_at_run_limit`) with its count started again, so the move is in the same state
+as one that kept failing, and resumes from its last saved page when the message is sent again.
 
 While the record is `moving`, the deleted generation's rows may still carry the live id. Every
 compliance read of the live id then answers as for a database with no compliance data, every
@@ -70,15 +78,28 @@ STATE_DONE = "done"
 # wrote under the live id before that are still ahead of the move.
 PHASES = ("evaluations", "cascades", "assetState", "schemas", "audit")
 
-# The message that runs the move: the database service queues it on the compliance trigger's queue
-# once the database row has moved, and the trigger queues the next one when a run ends before the
+# The message that runs the move: the database service queues it on the compliance job queue
+# once the database row has moved, and the job Lambda queues the next one when a run ends before the
 # move does. Read from a raw queue body only (never an SNS envelope), and acted on only while the
 # record is `moving`, so a message can continue a move a delete started and never start one.
 MOVE_ACTION = "moveDeletedDatabaseCompliance"
 
-# Time a trigger run leaves itself before the Lambda timeout to save its cursor and queue the rest.
-TRIGGER_SAFETY_MARGIN_SECONDS = 45
+# Time a job run leaves itself before the Lambda timeout to save its cursor and queue the rest.
+RUN_SAFETY_MARGIN_SECONDS = 45
 PAGE_SIZE = 100
+
+# The run limit (module docstring): runs counted against the pages the move's reads take over the
+# tables it reads, twice over, plus an allowance for redeliveries. The tables' item counts are
+# DynamoDB's (DescribeTable, refreshed about every six hours), which the factor and the allowance
+# also cover.
+RUN_LIMIT_FACTOR = 2
+RUN_LIMIT_ALLOWANCE = 20
+STOPPED_RUN_LIMIT = ("The move ran more steps than the size of the compliance tables needs, so it "
+                     "was stopped; send its message again to resume it")
+# What `begin_run` decided.
+RUN_GO = "run"
+RUN_NOTHING = "nothing"
+RUN_STOP = "stop"
 
 CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
 CASCADE_STATE_ABORTED = "aborted"
@@ -632,6 +653,79 @@ def _phase_read(tables: Tables, phase: str, database_id: str) -> Dict[str, Any]:
                        "KeyConditionExpression": Key("allListPartition").eq(AUDIT_LIST_PARTITION),
                        "FilterExpression": Attr("databaseId").eq(database_id)},
             "move": _move_audit}
+
+
+def _item_count(table) -> int:
+    """The table's item count as DynamoDB keeps it (DescribeTable, refreshed about every six
+    hours); 0 when it cannot be read."""
+    try:
+        return int(table.meta.client.describe_table(TableName=table.name)["Table"]["ItemCount"])
+    except Exception:
+        return 0
+
+
+def run_limit(tables: Tables) -> int:
+    """The most runs a move may take (module docstring). Every run reads at least one page, and
+    each phase reads at most its table's items a page at a time (the evaluation and cascade phases
+    scan their whole table, the audit phase reads the whole audit listing), so the pages of the five
+    tables bound the runs. Twice that, plus a fixed allowance for redeliveries."""
+    pages = sum(max(1, -(-_item_count(table) // PAGE_SIZE))
+                for table in (tables.evaluation, tables.cascade, tables.asset_state, tables.schema,
+                              tables.audit))
+    return RUN_LIMIT_FACTOR * pages + RUN_LIMIT_ALLOWANCE
+
+
+def begin_run(tables: Tables, database_id: str) -> tuple:
+    """Count one run of the move against its run limit, before it moves anything: `(RUN_GO,
+    record)` to run, `(RUN_NOTHING, record)` when no move of the id is under way (or a later
+    delete restarted it), `(RUN_STOP, record)` when this run is past the limit. The limit is
+    derived once per move, on its first run, and kept on the record."""
+    record = get_record(tables.evaluation, database_id)
+    if not record or record.get("state") != STATE_MOVING:
+        return RUN_NOTHING, record
+    limit = int(record.get("runLimit") or 0) or run_limit(tables)
+    try:
+        response = tables.evaluation.update_item(
+            Key=record_key(database_id),
+            UpdateExpression="SET runLimit = if_not_exists(runLimit, :limit) ADD runs :one",
+            ConditionExpression="generation = :gen AND #s = :moving",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={":limit": limit, ":one": 1, ":moving": STATE_MOVING,
+                                       ":gen": record.get("generation")},
+            ReturnValues="ALL_NEW")
+    except Exception as e:
+        if _conditional_failure(e):
+            return RUN_NOTHING, record
+        raise
+    counted = (response or {}).get("Attributes") or dict(
+        record, runs=int(record.get("runs") or 0) + 1, runLimit=limit)
+    if int(counted.get("runs") or 0) > int(counted.get("runLimit") or limit):
+        return RUN_STOP, counted
+    return RUN_GO, counted
+
+
+def stop_at_run_limit(tables: Tables, database_id: str, generation, restart_count: bool,
+                      now: Optional[datetime] = None) -> bool:
+    """Note on the record that the move stopped at its run limit (`stopReason`, `stoppedAt`); with
+    `restart_count` (its message is kept in the dead-letter queue) its run count starts again, so
+    the message sent again resumes it. The record stays `moving`. Conditional on the move still
+    being this generation's. Returns whether it landed."""
+    expression = "SET stopReason = :reason, stoppedAt = :now"
+    values = {":reason": STOPPED_RUN_LIMIT, ":now": now_iso(now), ":gen": generation,
+              ":moving": STATE_MOVING}
+    if restart_count:
+        expression += ", runs = :zero"
+        values[":zero"] = 0
+    try:
+        tables.evaluation.update_item(
+            Key=record_key(database_id), UpdateExpression=expression,
+            ConditionExpression="generation = :gen AND #s = :moving",
+            ExpressionAttributeNames={"#s": "state"}, ExpressionAttributeValues=values)
+    except Exception as e:
+        if _conditional_failure(e):
+            return False
+        raise
+    return True
 
 
 def run(tables: Tables, database_id: str, deadline: float,

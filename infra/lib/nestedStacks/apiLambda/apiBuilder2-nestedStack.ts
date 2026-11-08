@@ -56,6 +56,7 @@ import {
     buildComplianceCascadeServiceFunction,
     buildComplianceAuditServiceFunction,
     buildComplianceTriggerFunction,
+    buildComplianceJobFunction,
     buildComplianceWorkflowCallbackFunction,
 } from "../../lambdaBuilder/complianceFunctions";
 import { DynamoDbComplianceSchemaDefaultsConstruct } from "./constructs/dynamodb-complianceschema-defaults-construct";
@@ -839,13 +840,23 @@ export class ApiBuilder2NestedStack extends NestedStack {
             registry: registry,
         });
 
-        // Event-driven: the asset/file indexer SNS topics feed the trigger; the orchestration bus
-        // workflow-completion event feeds the callback. Neither has an API route.
+        // Event-driven: the asset/file indexer SNS topics feed the trigger; the compliance job queue
+        // feeds the job Lambda (a deleted database's move, a binding change applied in the
+        // background); the orchestration bus workflow-completion event feeds the callback. None has
+        // an API route.
         buildComplianceTriggerFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
             executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+        buildComplianceJobFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
             config,
             vpc,
             subnets

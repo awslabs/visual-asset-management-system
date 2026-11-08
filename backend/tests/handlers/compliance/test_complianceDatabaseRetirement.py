@@ -11,7 +11,9 @@ approval and its waiting pipeline rules are closed by the delete; the history is
 Compliance Admin template; reads and actions on the live id wait while the move runs, and a listing
 across databases shows the moving rows under `<databaseId>#deleted`; a second delete merges into
 `<databaseId>#deleted`; a large audit history moves in pages and survives an interruption; the
-trigger runs and continues the move from its queue.
+compliance job Lambda runs and continues the move from the job queue, and stops a move past its run
+limit (its message kept in the job dead-letter queue, resumed when it is sent again); the trigger
+forwards a move message an upgrade left on its queue to the job queue once and moves nothing.
 """
 
 import json
@@ -37,6 +39,7 @@ from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceCascadeService as cascade_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceJobs as jobs
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 from handlers.compliance import complianceSchemaBindingService as binding_svc
 from handlers.compliance import complianceSchemaService as schema_svc
@@ -48,7 +51,7 @@ from backend.backend.handlers.databases import databaseService
 USES_RETIREMENT_RECORD = True
 
 SERVICES = (store, evaluate_svc, quarantine_svc, cascade_svc, audit_svc, schema_svc, binding_svc,
-            trigger)
+            trigger, jobs)
 READERS = (evaluate_svc, quarantine_svc, cascade_svc, audit_svc, schema_svc, binding_svc)
 DB = "retired-db"
 DELETED = f"{DB}#deleted"
@@ -703,8 +706,16 @@ class TestALargeAuditHistory:
             assert status == 200 and len(body["entries"]) == 200
 
 
+JOB_QUEUE = "https://sqs.example/compliance-jobs"
+JOB_DLQ = "https://sqs.example/compliance-jobs-dlq"
+
+
+def _context(seconds=300):
+    return MagicMock(get_remaining_time_in_millis=MagicMock(return_value=seconds * 1000))
+
+
 @pytest.mark.unit
-class TestTheTriggerRunsTheMove:
+class TestTheJobLambdaRunsTheMove:
 
     def _event(self, database_id, sns=False):
         body = retirement.move_message(database_id)
@@ -716,30 +727,31 @@ class TestTheTriggerRunsTheMove:
         with World(_stand_in({"*"})) as world:
             world.seed()
             world.delete(run=False)
-            context = MagicMock(get_remaining_time_in_millis=MagicMock(return_value=300000))
-            with patch.object(trigger, "sqs_client") as sqs:
-                result = trigger.lambda_handler(self._event(DB), context)
+            with patch.object(jobs, "sqs_client") as sqs:
+                result = jobs.lambda_handler(self._event(DB), _context())
             assert result == {"batchItemFailures": []}
             sqs.send_message.assert_not_called()
-            assert retirement.get_record(world.t["complianceEvaluationStorage"], DB)["state"] == "done"
+            record = retirement.get_record(world.t["complianceEvaluationStorage"], DB)
+            assert (record["state"], record["runs"]) == ("done", 1)
+            assert record["runLimit"] >= retirement.RUN_LIMIT_ALLOWANCE
 
-    def test_an_unfinished_run_queues_the_next_message(self):
+    def test_an_unfinished_run_queues_the_next_message_on_the_job_queue(self):
         with World(_stand_in({"*"})) as world:
             world.seed()
             world.delete(run=False)
-            context = MagicMock(get_remaining_time_in_millis=MagicMock(return_value=1000))
             real_run = retirement.run
 
             def one_page(tables, database_id, deadline):
                 return real_run(tables, database_id, 1, clock=iter(range(100)).__next__,
                                 page_size=1)
 
-            with patch.object(trigger, "sqs_client") as sqs, \
-                    patch.object(trigger, "trigger_queue_url", "https://queue"), \
+            with patch.object(jobs, "sqs_client") as sqs, \
+                    patch.object(jobs, "job_queue_url", JOB_QUEUE), \
                     patch.object(retirement, "run", side_effect=one_page):
-                result = trigger.lambda_handler(self._event(DB), context)
+                result = jobs.lambda_handler(self._event(DB), _context(1))
             assert result == {"batchItemFailures": []}
             sqs.send_message.assert_called_once()
+            assert sqs.send_message.call_args.kwargs["QueueUrl"] == JOB_QUEUE
             assert json.loads(sqs.send_message.call_args.kwargs["MessageBody"]) == \
                 retirement.move_message(DB)
 
@@ -747,21 +759,135 @@ class TestTheTriggerRunsTheMove:
         with World(_stand_in({"*"})) as world:
             world.seed()
             world.delete(run=False)
-            with patch.object(trigger, "sqs_client") as sqs, \
+            with patch.object(jobs, "sqs_client") as sqs, \
                     patch.object(retirement, "run", side_effect=RuntimeError("throttled")):
-                result = trigger.lambda_handler(self._event(DB), MagicMock(
-                    get_remaining_time_in_millis=MagicMock(return_value=300000)))
+                result = jobs.lambda_handler(self._event(DB), _context())
             assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
             sqs.send_message.assert_not_called()
 
     def test_a_message_never_starts_a_move_and_an_sns_envelope_is_not_one(self):
         with World(_stand_in({"*"})) as world:
             world.seed()
-            context = MagicMock(get_remaining_time_in_millis=MagicMock(return_value=300000))
-            trigger.lambda_handler(self._event(DB), context)
-            trigger.lambda_handler(self._event(DB, sns=True), context)
+            assert jobs.lambda_handler(self._event(DB), _context()) == {"batchItemFailures": []}
+            assert jobs.lambda_handler(self._event(DB, sns=True), _context()) == {
+                "batchItemFailures": []}
             assert world.rows_under(DB)["audit"] == ["compliance_check", "compliance_check"]
             assert retirement.get_record(world.t["complianceEvaluationStorage"], DB) is None
+
+
+@pytest.mark.unit
+class TestTheMoveRunLimit:
+    """The job Lambda runs with Lambda's recursive-loop detection off, so the move counts its own
+    runs against a limit derived from the size of the tables it reads."""
+
+    _event = TestTheJobLambdaRunsTheMove._event
+
+    def test_the_limit_is_derived_from_the_tables_item_counts(self):
+        counts = {"evaluation": 250, "cascade": 0, "asset_state": 101, "schema": 3, "audit": 1000}
+        tables = MagicMock()
+        for name, count in counts.items():
+            table = getattr(tables, name)
+            table.name = name
+            table.meta.client.describe_table.return_value = {"Table": {"ItemCount": count}}
+        # Pages of 100: 3 + 1 + 2 + 1 + 10 = 17, twice over, plus the allowance.
+        assert retirement.run_limit(tables) == 2 * 17 + retirement.RUN_LIMIT_ALLOWANCE
+        # An unreadable count is one page.
+        tables.audit.meta.client.describe_table.side_effect = RuntimeError("denied")
+        assert retirement.run_limit(tables) == 2 * 8 + retirement.RUN_LIMIT_ALLOWANCE
+
+    def test_a_run_past_the_limit_moves_nothing_and_its_message_is_kept_in_the_dlq(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            evaluation = world.t["complianceEvaluationStorage"]
+            evaluation.update_item(Key=retirement.record_key(DB),
+                                   UpdateExpression="SET runs = :r, runLimit = :l",
+                                   ExpressionAttributeValues={":r": 5, ":l": 5})
+            before = world.rows_under(DB)
+            with patch.object(jobs, "sqs_client") as sqs, \
+                    patch.object(jobs, "job_queue_url", JOB_QUEUE), \
+                    patch.object(jobs, "job_dlq_url", JOB_DLQ):
+                result = jobs.lambda_handler(self._event(DB), _context())
+            # The message is consumed here and kept in the dead-letter queue; nothing moved.
+            assert result == {"batchItemFailures": []}
+            assert [(call.kwargs["QueueUrl"], json.loads(call.kwargs["MessageBody"]))
+                    for call in sqs.send_message.call_args_list] == [
+                (JOB_DLQ, retirement.move_message(DB))]
+            assert world.rows_under(DB) == before
+            record = retirement.get_record(evaluation, DB)
+            assert (record["state"], record["stopReason"], record["runs"]) == (
+                "moving", retirement.STOPPED_RUN_LIMIT, 0)
+            # The live id still shows none of the deleted database's data (the existing state of a
+            # move that keeps failing) ...
+            assert retirement.move_in_progress(evaluation, DB)
+            # ... and the message sent again (a redrive) resumes it from its last saved page.
+            with patch.object(jobs, "sqs_client"):
+                assert jobs.lambda_handler(self._event(DB), _context()) == {
+                    "batchItemFailures": []}
+            assert retirement.get_record(evaluation, DB)["state"] == "done"
+
+    def test_a_stopped_move_whose_message_cannot_be_kept_is_redelivered_and_keeps_its_count(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            evaluation = world.t["complianceEvaluationStorage"]
+            evaluation.update_item(Key=retirement.record_key(DB),
+                                   UpdateExpression="SET runs = :r, runLimit = :l",
+                                   ExpressionAttributeValues={":r": 5, ":l": 5})
+            with patch.object(jobs, "sqs_client") as sqs, \
+                    patch.object(jobs, "job_dlq_url", JOB_DLQ):
+                sqs.send_message.side_effect = RuntimeError("down")
+                result = jobs.lambda_handler(self._event(DB), _context())
+            assert result == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+            record = retirement.get_record(evaluation, DB)
+            # Not restarted: its redeliveries stop again until the queue keeps it in its DLQ.
+            assert (record["state"], record["stopReason"], record["runs"]) == (
+                "moving", retirement.STOPPED_RUN_LIMIT, 6)
+
+    def test_a_new_delete_starts_a_new_count(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            evaluation = world.t["complianceEvaluationStorage"]
+            evaluation.update_item(Key=retirement.record_key(DB),
+                                   UpdateExpression="SET runs = :r, runLimit = :l",
+                                   ExpressionAttributeValues={":r": 5, ":l": 5})
+            record = retirement.begin(world.tables, DB, USER)
+            assert "runs" not in record and "runLimit" not in record
+            assert retirement.begin_run(world.tables, DB)[0] == retirement.RUN_GO
+
+
+@pytest.mark.unit
+class TestTheTriggerForwardsALeftoverMoveMessage:
+
+    def test_it_is_forwarded_once_unchanged_and_nothing_is_moved(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete(run=False)
+            before = world.rows_under(DB)
+            body = json.dumps(retirement.move_message(DB))
+            event = {"Records": [{"messageId": "m1", "body": body}]}
+            with patch.object(trigger, "sqs_client") as sqs, \
+                    patch.object(trigger, "job_queue_url", JOB_QUEUE), \
+                    patch.object(retirement, "run") as run:
+                assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
+            run.assert_not_called()
+            assert [call.kwargs for call in sqs.send_message.call_args_list] == [
+                {"QueueUrl": JOB_QUEUE, "MessageBody": body}]
+            assert world.rows_under(DB) == before
+            assert retirement.get_record(world.t["complianceEvaluationStorage"], DB)["state"] == \
+                "moving"
+
+    def test_a_forward_that_fails_is_redelivered(self):
+        with World(_stand_in({"*"})) as world:
+            event = {"Records": [{"messageId": "m1",
+                                  "body": json.dumps(retirement.move_message(DB))}]}
+            with patch.object(trigger, "sqs_client") as sqs, \
+                    patch.object(trigger, "job_queue_url", JOB_QUEUE):
+                sqs.send_message.side_effect = RuntimeError("down")
+                assert trigger.lambda_handler(event, _context()) == {
+                    "batchItemFailures": [{"itemIdentifier": "m1"}]}
+            assert world.t is not None
 
 
 def _index_error(message):

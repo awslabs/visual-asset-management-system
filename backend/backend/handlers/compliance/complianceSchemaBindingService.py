@@ -47,11 +47,11 @@ assets still pending).
 A database binding change (bind, change, removal, and automatic evaluation turned on with assets
 pending) is applied to the asset records in the background (D161, `complianceBindingApply`): the
 request saves the binding, audits it naming the caller and answers `202` with the number of assets
-the change goes through (`applyStatus` `applying`, `applyId`, `assetCount`, `apply`); the trigger
-applies it page by page. While it is applied, another binding change of the database answers
-`409`; a stalled change resumes when the same change is requested again. The binding read reports
-the last change's `apply` (status, counts, times). An asset-level override is one record and is
-written in the request, as before.
+the change goes through (`applyStatus` `applying`, `applyId`, `assetCount`, `apply`); the
+compliance job Lambda applies it page by page. While it is applied, another binding change of
+the database answers `409`; a stalled change resumes when the same change is requested again.
+The binding read reports the last change's `apply` (status, counts, times). An asset-level
+override is one record and is written in the request, as before.
 """
 
 import base64
@@ -93,10 +93,12 @@ from models.compliance import GLOBAL_DATABASE_ID, BindSchemaRequestModel
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 logger = safeLogger(service_name="ComplianceSchemaBindingService")
-# Queues the evaluations a binding change calls for on the compliance trigger's queue (set by
-# complianceFunctions.ts); unset, nothing is queued.
+# Queues a database binding change's first message on the compliance job queue, where the job
+# Lambda applies it, and an asset override's evaluation on the compliance trigger's queue (both set
+# by complianceFunctions.ts); unset, nothing is queued.
 sqs_client = boto3.client("sqs", config=retry_config)
 trigger_queue_url = os.environ.get("COMPLIANCE_TRIGGER_QUEUE_URL", "")
+job_queue_url = os.environ.get("COMPLIANCE_JOB_QUEUE_URL", "")
 
 claims_and_roles = {}
 
@@ -394,7 +396,7 @@ def resolved_auto_eval(requested, db_item):
 def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel):
     """Bind a schema to a database, or change its schema. The request saves the binding on the
     database row, writes the database-level audit entry naming the caller and answers `202` at
-    once with the number of assets the change goes through; the trigger then applies it to every
+    once with the number of assets the change goes through; the job Lambda then applies it to every
     asset record in the background (`complianceBindingApply`). `complianceAutoEval` is the
     request's when it names one; when it is omitted, a database that already has a binding keeps
     its stored value (so changing the schema never turns automatic evaluation on or off) and a new
@@ -499,7 +501,7 @@ def _queue_first_message(record):
     """Queue the message that runs an apply (begun or resumed); when it cannot be queued, the apply
     is recorded as having none, so it reads stalled at once and the same request resumes it.
     Returns the record as it now stands."""
-    if apply.send_message(sqs_client, trigger_queue_url, record):
+    if apply.send_message(sqs_client, job_queue_url, record):
         return record
     return apply.message_not_queued(record)
 
@@ -603,7 +605,7 @@ def _rebind_same_schema(event, database_id, schema_name, db_item, auto_eval, act
 def unbind_schema_from_database(event, database_id):
     """Remove the database binding. The request removes it from the database row, writes the
     database-level audit entry naming the caller and answers `202` at once with the number of
-    records the removal goes through; the trigger then removes the records that inherited the
+    records the removal goes through; the job Lambda then removes the records that inherited the
     binding (keeping a quarantined one, marked) in the background (`complianceBindingApply`).
     While a change of the database is being applied, another answers `409`; repeating a stalled
     removal resumes it."""

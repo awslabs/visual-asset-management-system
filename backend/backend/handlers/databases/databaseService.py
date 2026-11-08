@@ -67,13 +67,14 @@ def compliance_tables():
 
 
 def hand_off_compliance_move(database_id):
-    """Queue the move of the deleted database's compliance data on the compliance trigger's queue
-    (`databaseRetirement.move_message`), where the trigger runs it. A failed send is logged and the
-    delete still succeeds: the database row has moved, and the record stays `moving`, so the live
-    id shows none of the deleted database's data until the message is sent again."""
+    """Queue the move of the deleted database's compliance data on the compliance job queue
+    (`databaseRetirement.move_message`), where the compliance job Lambda runs it. A failed send is
+    logged and the delete still succeeds: the database row has moved, and the record stays
+    `moving`, so the live id shows none of the deleted database's data until the message is sent
+    again."""
     import os
     from common.compliance import databaseRetirement
-    queue_url = os.environ.get('COMPLIANCE_TRIGGER_QUEUE_URL', '')
+    queue_url = os.environ.get('COMPLIANCE_JOB_QUEUE_URL', '')
     try:
         boto3.client('sqs', config=retry_config).send_message(
             QueueUrl=queue_url, MessageBody=json.dumps(databaseRetirement.move_message(database_id)))

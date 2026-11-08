@@ -5,7 +5,7 @@
 
 A bind of about 2,500 assets ran past the API's 29 s timeout: the request wrote every record
 itself. Now the request saves the binding, audits it as the caller and answers `202` with the
-number of assets; the compliance trigger applies the change page by page
+number of assets; the compliance job Lambda applies the change page by page
 (`complianceBindingApply.run`), as it moves a deleted database's data. Covered on moto tables built
 from the CDK definitions, with a stand-in enforcer that allows everything:
 
@@ -23,7 +23,11 @@ from the CDK definitions, with a stand-in enforcer that allows everything:
 - a stalled apply reads `stalled` and resumes when the same change is requested again;
 - automatic evaluation queues each asset once; turning it on for the schema in force queues the
   pending assets in the background;
-- the binding read reports the apply; no state answer returns the apply's stamp.
+- the binding read reports the apply; no state answer returns the apply's stamp;
+- the first message and every continuation go to the job queue, the evaluations to the trigger's
+  queue; the trigger forwards an apply message an upgrade left on its queue to the job queue once
+  and runs nothing; a run past the apply's run limit runs nothing and the apply reads stopped
+  until the same change resumes it with a fresh count.
 """
 
 import json
@@ -44,6 +48,7 @@ from common.compliance import databaseRetirement as retirement
 from handlers.compliance import complianceBindingApply as binding_apply
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceJobs as jobs
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 from handlers.compliance import complianceSchemaBindingService as binding_svc
 from handlers.compliance import complianceTrigger as trigger
@@ -55,6 +60,7 @@ USES_RETIREMENT_RECORD = True
 DB = "apply-db"
 OLD, NEW = "old-schema", "new-schema"
 QUEUE = "https://sqs.example/compliance-trigger"
+JOB_QUEUE = "https://sqs.example/compliance-jobs"
 # Literal so the tests do not lean on the module's own constants (one case ties them).
 APPLYING_MESSAGE = ("The compliance schema binding of this database is still being applied; "
                     "try again when it finishes")
@@ -76,7 +82,7 @@ class World:
         self._mock.start()
         resource = boto3.resource("dynamodb", region_name="us-east-1")
         self.patches, self.t = _cdkTables.table_doubles(
-            resource, (store, binding_svc, evaluate_svc, quarantine_svc, trigger))
+            resource, (store, binding_svc, evaluate_svc, quarantine_svc, trigger, jobs))
         self.sqs = MagicMock(name="sqs")
         self.sqs.send_message_batch.side_effect = lambda **kwargs: {"Failed": []}
         for module in (binding_svc, evaluate_svc, quarantine_svc):
@@ -87,8 +93,13 @@ class World:
         self.patches += [
             patch.object(binding_svc, "sqs_client", self.sqs, create=True),
             patch.object(binding_svc, "trigger_queue_url", QUEUE, create=True),
+            patch.object(binding_svc, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(trigger, "sqs_client", self.sqs),
             patch.object(trigger, "trigger_queue_url", QUEUE),
+            patch.object(trigger, "job_queue_url", JOB_QUEUE, create=True),
+            patch.object(jobs, "sqs_client", self.sqs, create=True),
+            patch.object(jobs, "trigger_queue_url", QUEUE, create=True),
+            patch.object(jobs, "job_queue_url", JOB_QUEUE, create=True),
             patch.object(store, "to_update_expr", REAL_TO_UPDATE_EXPR),
         ]
         for active in self.patches:
@@ -138,13 +149,13 @@ class World:
     def bindings(self):
         return self.call(binding_svc, "GET", f"/compliance/bind/{DB}", {"databaseId": DB})
 
-    # --- the trigger's side ---
+    # --- the job Lambda's side ---
 
     def apply_record(self):
         return binding_apply.get_record(DB)
 
     def run_once(self, page_size=2, record=None):
-        """One trigger run of the apply: one page (its deadline has passed after the first)."""
+        """One job run of the apply: one page (its deadline has passed after the first)."""
         record = record or self.apply_record()
         return binding_apply.run(DB, record["applyId"], record["runId"], 0.0, clock=lambda: 1.0,
                                  sqs=self.sqs, queue_url=QUEUE, page_size=page_size)
@@ -379,7 +390,7 @@ class TestTheMessageCarriesIdsOnly:
         for wrong in ({"applyId": "00000000-0000-4000-8000-000000000000"},
                       {"runId": "00000000-0000-4000-8000-000000000000"}):
             message = dict(binding_apply.message(DB, record["applyId"], record["runId"]), **wrong)
-            assert trigger.lambda_handler(_queue_event(message), _context()) == {
+            assert jobs.lambda_handler(_queue_event(message), _context()) == {
                 "batchItemFailures": []}
         assert world.records() == before
 
@@ -388,7 +399,7 @@ class TestTheMessageCarriesIdsOnly:
         record = world.apply_record()
         message = dict(binding_apply.message(DB, record["applyId"], record["runId"]),
                        schemaName=OLD, actor="someone-else", operation="unbind")
-        trigger.lambda_handler(_queue_event(message), _context())
+        jobs.lambda_handler(_queue_event(message), _context())
         assert world.apply_record()["applyStatus"] == "applied"
         assert {row["schemaName"] for asset_id, row in world.records().items()} == {NEW}
         assert {entry["actor"] for entry in world.audit("schema_binding_applied_to_asset")} == {
@@ -397,7 +408,7 @@ class TestTheMessageCarriesIdsOnly:
     def test_a_message_never_starts_an_apply_and_an_sns_envelope_is_not_one(self, world):
         record_body = binding_apply.message(DB, "00000000-0000-4000-8000-000000000000",
                                             "00000000-0000-4000-8000-000000000001")
-        trigger.lambda_handler(_queue_event(record_body), _context())
+        jobs.lambda_handler(_queue_event(record_body), _context())
         envelope = {"Type": "Notification", "Message": json.dumps(record_body)}
         assert binding_apply.message_target({"body": json.dumps(envelope)}) is None
         assert world.apply_record() is None
@@ -408,7 +419,7 @@ class TestTheMessageCarriesIdsOnly:
         record = world.apply_record()
         world.drain()
         revisions = {asset_id: row["recordRevision"] for asset_id, row in world.records().items()}
-        trigger.lambda_handler(_queue_event(binding_apply.message(
+        jobs.lambda_handler(_queue_event(binding_apply.message(
             DB, record["applyId"], record["runId"])), _context())
         assert {asset_id: row["recordRevision"]
                 for asset_id, row in world.records().items()} == revisions
@@ -419,13 +430,42 @@ class TestTheMessageCarriesIdsOnly:
         world.sqs.send_message.reset_mock()
         event = _queue_event(binding_apply.message(DB, record["applyId"], record["runId"]))
         with patch.object(binding_apply, "run", return_value=False):
-            assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
+            assert jobs.lambda_handler(event, _context()) == {"batchItemFailures": []}
         assert world.apply_messages() == [binding_apply.message(DB, record["applyId"],
                                                                 record["runId"])]
+        # The continuation goes to the job queue.
+        assert [call.kwargs["QueueUrl"] for call in world.sqs.send_message.call_args_list] == [
+            JOB_QUEUE]
         with patch.object(binding_apply, "run", side_effect=ClientError(
                 {"Error": {"Code": "InternalServerError"}}, "Query")):
-            assert trigger.lambda_handler(event, _context()) == {
+            assert jobs.lambda_handler(event, _context()) == {
                 "batchItemFailures": [{"itemIdentifier": "m1"}]}
+
+    def test_the_first_message_goes_to_the_job_queue_and_the_evaluations_to_the_trigger(self):
+        with World(auto_eval=True) as world:
+            world.bind(NEW)
+            assert [call.kwargs["QueueUrl"] for call in world.sqs.send_message.call_args_list] == [
+                JOB_QUEUE]
+            world.drain(page_size=3)
+            assert {call.kwargs["QueueUrl"] for call in world.sqs.send_message_batch.call_args_list
+                    } == {QUEUE}
+            assert world.queued() == sorted(asset for asset in ASSETS if asset != OVERRIDE)
+
+    def test_the_trigger_forwards_a_leftover_apply_message_once_and_runs_nothing(self, world):
+        world.bind(NEW)
+        record = world.apply_record()
+        before = world.records()
+        world.sqs.send_message.reset_mock()
+        body = json.dumps(binding_apply.message(DB, record["applyId"], record["runId"]))
+        event = {"Records": [{"messageId": "m1", "body": body,
+                              "attributes": {"ApproximateReceiveCount": "1"}}]}
+        with patch.object(binding_apply, "run") as run:
+            assert trigger.lambda_handler(event, _context()) == {"batchItemFailures": []}
+        run.assert_not_called()
+        assert [call.kwargs for call in world.sqs.send_message.call_args_list] == [
+            {"QueueUrl": JOB_QUEUE, "MessageBody": body}]
+        assert world.records() == before
+        assert world.apply_record()["runs"] == 0
 
 
 @pytest.mark.unit
@@ -642,5 +682,139 @@ def test_the_literals_are_the_modules():
     assert (binding_apply.APPLYING_MESSAGE, binding_apply.STALLED_MESSAGE,
             binding_apply.APPLY_ACTION, binding_apply.APPLY_STAMP_FIELD) == (
         APPLYING_MESSAGE, STALLED_MESSAGE, "applyDatabaseBinding", "bindingApplyId")
-    assert (binding_apply.EVALUATIONS_PER_RUN, binding_apply.APPLIED_AT_FIELD) == (
+    assert (binding_apply.EVALUATIONS_PER_SHARE, binding_apply.APPLIED_AT_FIELD) == (
         100, "bindingAppliedAt")
+    assert binding_apply.STALLED_RUN_LIMIT == RUN_LIMIT_STOPPED
+
+
+RUN_LIMIT_STOPPED = ("It ran more steps than a change of its size needs, so it was stopped; "
+                     "repeat the same change to resume it")
+
+
+@pytest.mark.unit
+class TestTheRunLimit:
+    """The job Lambda runs with Lambda's recursive-loop detection off; an apply counts its runs
+    against a limit derived from its size and stops past it."""
+
+    @pytest.mark.parametrize("operation, assets, auto_eval, limit", [
+        ("bind", 3000, False, 2 * 30 + 20),
+        ("change", 3000, True, 2 * (30 + 30 * 9) + 20),
+        ("unbind", 3000, True, 2 * 30 + 20),
+        ("evaluatePending", 250, True, 2 * (3 * 9) + 20),
+        ("bind", 0, False, 2 * 1 + 20),
+    ], ids=["bind", "change with automatic evaluation", "removal", "automatic evaluation on",
+            "empty database"])
+    def test_the_limit_follows_the_size(self, operation, assets, auto_eval, limit):
+        assert binding_apply.run_limit(operation, assets, auto_eval) == limit
+
+    def test_every_run_counts_and_the_limit_is_stored(self, world):
+        world.bind(NEW)
+        record = world.apply_record()
+        assert (record["runs"], record["runLimit"]) == (
+            0, binding_apply.run_limit("change", len(ASSETS), False))
+        runs = world.drain(page_size=2)
+        assert world.apply_record()["runs"] == runs
+
+    def test_a_run_past_the_limit_runs_nothing_and_the_apply_reads_stopped(self, world):
+        world.bind(NEW)
+        world.run_once()
+        before = world.records()
+        world.t["complianceEvaluationStorage"].update_item(
+            Key=binding_apply.record_key(DB), UpdateExpression="SET runLimit = :l",
+            ExpressionAttributeValues={":l": 1})
+        record = world.apply_record()
+        world.sqs.send_message.reset_mock()
+        event = _queue_event(binding_apply.message(DB, record["applyId"], record["runId"]))
+        assert jobs.lambda_handler(event, _context()) == {"batchItemFailures": []}
+        # Nothing written and no continuation queued.
+        assert world.records() == before
+        world.sqs.send_message.assert_not_called()
+        record = world.apply_record()
+        assert (record["applyStatus"], record["stopReason"]) == ("applying", RUN_LIMIT_STOPPED)
+        assert "nextMessageAt" not in record
+        status, body = world.bindings()
+        assert (body["applyStatus"], body["apply"]["reason"]) == ("stalled", RUN_LIMIT_STOPPED)
+        # A later delivery of a message of the stopped run changes nothing.
+        assert jobs.lambda_handler(event, _context()) == {"batchItemFailures": []}
+        assert world.records() == before
+        # Another change answers the stalled 409; the same change resumes it with a fresh count.
+        assert world.bind(OLD) == (409, {"message": STALLED_MESSAGE})
+        status, body = world.bind(NEW)
+        assert (status, body["resumed"], body["applyStatus"]) == (202, True, "applying")
+        record = world.apply_record()
+        assert (record["runs"], "stopReason" in record) == (0, False)
+        world.t["complianceEvaluationStorage"].update_item(
+            Key=binding_apply.record_key(DB), UpdateExpression="SET runLimit = :l",
+            ExpressionAttributeValues={":l": 50})
+        world.drain()
+        assert world.apply_record()["applyStatus"] == "applied"
+        assert {row["schemaName"] for row in world.records().values()} == {NEW}
+
+    def test_an_apply_recorded_before_the_limit_gets_it_from_its_size(self, world):
+        world.bind(NEW)
+        world.t["complianceEvaluationStorage"].update_item(
+            Key=binding_apply.record_key(DB), UpdateExpression="REMOVE runLimit, runs")
+        world.drain()
+        record = world.apply_record()
+        assert record["applyStatus"] == "applied" and "stopReason" not in record
+        assert binding_apply.limit_of(record) == binding_apply.run_limit(
+            "change", len(ASSETS), False)
+
+
+@pytest.mark.unit
+class TestTheEvaluationsGiveWayToABusyTriggerQueue:
+
+    def _backlog(self, world, depths):
+        values = iter(depths)
+        world.sqs.get_queue_attributes.side_effect = lambda **kwargs: {
+            "Attributes": {"ApproximateNumberOfMessages": str(next(values, 0))}}
+
+    def test_a_busy_queue_delays_the_next_share_and_a_quiet_one_takes_it(self):
+        with World(auto_eval=True) as world:
+            world.bind(NEW)
+            while world.apply_record()["applyStatus"] == "applying":
+                world.run_once(page_size=3)
+            self._backlog(world, [binding_apply.EVALUATION_BACKLOG_LIMIT])
+            assert world.run_once(page_size=3) is False
+            record = world.apply_record()
+            assert (record["evaluationWaits"], record["nextMessageDelay"]) == (
+                1, binding_apply.EVALUATION_FIRST_WAIT_SECONDS)
+            assert world.queued() == []
+            # The continuation is delayed, and a delayed message is waiting, not stopped.
+            assert binding_apply.send_message(world.sqs, JOB_QUEUE, record)
+            assert world.sqs.send_message.call_args.kwargs["DelaySeconds"] == \
+                binding_apply.EVALUATION_FIRST_WAIT_SECONDS
+            assert binding_apply.evaluation_status(record) == "queueing"
+            # A quiet queue takes the next share; the waits start again.
+            self._backlog(world, [0])
+            world.run_once(page_size=3)
+            record = world.apply_record()
+            assert record["evaluationWaits"] == 0 and "nextMessageDelay" not in record
+            assert len(world.queued()) == 3
+
+    def test_a_share_that_waited_its_most_is_queued_anyway(self):
+        with World(auto_eval=True) as world:
+            world.bind(NEW)
+            while world.apply_record()["applyStatus"] == "applying":
+                world.run_once(page_size=3)
+            world.sqs.get_queue_attributes.side_effect = lambda **kwargs: {
+                "Attributes": {"ApproximateNumberOfMessages": "100000"}}
+            delays = []
+            for _ in range(binding_apply.EVALUATION_WAITS_PER_SHARE):
+                world.run_once(page_size=3)
+                delays.append(world.apply_record()["nextMessageDelay"])
+            assert world.queued() == []
+            assert delays == [binding_apply.wait_delay(n)
+                              for n in range(binding_apply.EVALUATION_WAITS_PER_SHARE)]
+            assert max(delays) <= 900
+            world.run_once(page_size=3)
+            assert len(world.queued()) == 3
+
+    def test_an_unreadable_backlog_does_not_hold_the_phase(self):
+        with World(auto_eval=True) as world:
+            world.bind(NEW)
+            world.sqs.get_queue_attributes.side_effect = RuntimeError("denied")
+            world.drain(page_size=3)
+            record = world.apply_record()
+            assert record["evaluationStatus"] == "queued"
+            assert world.queued() == sorted(asset for asset in ASSETS if asset != OVERRIDE)

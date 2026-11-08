@@ -83,9 +83,9 @@ export function buildDatabaseService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // A database delete queues the move of its compliance data on the compliance trigger's
-            // queue (`common/compliance/databaseRetirement.py`).
-            COMPLIANCE_TRIGGER_QUEUE_URL: storageResources.sqs.complianceTriggerQueue.queueUrl,
+            // A database delete queues the move of its compliance data on the compliance job queue,
+            // where the compliance job Lambda runs it (`common/compliance/databaseRetirement.py`).
+            COMPLIANCE_JOB_QUEUE_URL: storageResources.sqs.complianceJobQueue.queueUrl,
         },
     });
 
@@ -96,7 +96,7 @@ export function buildDatabaseService(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     // A database delete starts the move of its compliance data before the row moves: it writes the
     // move's record, closes the database's cascades awaiting approval and its waiting pipeline
-    // rules, and records both; the compliance trigger moves the rest from its queue.
+    // rules, and records both; the compliance job Lambda moves the rest from the job queue.
     storageResources.dynamo.complianceEvaluationStorageTable.grant(
         fun,
         "dynamodb:GetItem",
@@ -112,7 +112,7 @@ export function buildDatabaseService(
         "dynamodb:DeleteItem"
     );
     storageResources.dynamo.complianceAuditStorageTable.grant(fun, "dynamodb:PutItem");
-    storageResources.sqs.complianceTriggerQueue.grantSendMessages(fun);
+    storageResources.sqs.complianceJobQueue.grantSendMessages(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

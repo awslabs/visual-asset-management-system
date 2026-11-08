@@ -314,9 +314,12 @@ export function buildComplianceSchemaBindingServiceFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     grantRetirementRecordRead(fun, storageResources);
     grantBindingApplyRecordWrite(fun, storageResources);
-    // A database binding change is applied to the asset records by the compliance trigger: the
-    // request queues the apply's first message on its queue. An asset override with automatic
-    // evaluation on queues that asset's evaluation there.
+    // A database binding change is applied to the asset records by the compliance job Lambda: the
+    // request queues the apply's first message on the job queue. An asset override with automatic
+    // evaluation on queues that asset's evaluation on the trigger's queue.
+    const jobQueue = storageResources.sqs.complianceJobQueue;
+    jobQueue.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_JOB_QUEUE_URL", jobQueue.queueUrl);
     const triggerQueue = storageResources.sqs.complianceTriggerQueue;
     triggerQueue.grantSendMessages(fun);
     fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
@@ -615,33 +618,6 @@ export function buildComplianceAuditServiceFunction(
  *   concurrency away from the API handlers; at 5 invocations of up to 10 messages each, a
  *   1000-asset burst drains in minutes, which an asynchronous compliance check tolerates.
  */
-/**
- * The compliance trigger's recursive-loop setting. Two kinds of work continue themselves on the
- * trigger's own queue, one message per run until they are done: the move of a deleted database's
- * compliance data (`databaseRetirement`) and a database binding change applied in the background
- * (`complianceBindingApply`, D161), whose evaluations phase also hands over after each bounded share
- * of evaluations so its next message never waits behind more than that share. A large database
- * needs more runs than Lambda's recursive-loop detection allows in one chain (about 16), and the
- * detection then stops the invocation before the handler runs and dead-letters its whole batch,
- * unrelated evaluations included, so the work would need a manual resume. Each chain ends by design:
- * a move ends with its last phase, an apply with its last record and its last evaluation queued, and
- * a message is acted on only while the stored work names it. ALLOW turns the detection off for this
- * function only.
- *
- * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and
- * the AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not
- * available, so `aws-us-gov` and any other partition omit the property.
- */
-export function complianceTriggerRecursiveLoop(
-    config: Config.Config
-): lambda.RecursiveLoop | undefined {
-    const partition = config.env.partition;
-    if (partition !== "aws" && partition !== "aws-eusc") {
-        return undefined;
-    }
-    return lambda.RecursiveLoop.ALLOW;
-}
-
 export const COMPLIANCE_TRIGGER_TIMEOUT = Duration.minutes(5);
 export const COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT = Duration.minutes(30);
 export const COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT = 3;
@@ -771,7 +747,9 @@ export function buildComplianceTriggerFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: COMPLIANCE_TRIGGER_TIMEOUT,
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        recursiveLoop: complianceTriggerRecursiveLoop(config),
+        // Lambda's recursive-loop detection stays on (the default): nothing this function does
+        // queues a message on its own queue. The jobs that continue themselves run in the compliance
+        // job Lambda (buildComplianceJobFunction).
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
@@ -804,15 +782,15 @@ export function buildComplianceTriggerFunction(
 
     const triggerQueue = storageResources.sqs.complianceTriggerQueue;
     triggerQueue.grantConsumeMessages(fun);
-    // The move of a deleted database's compliance data (`databaseRetirement`) runs from this queue:
-    // a run that ends before the move does queues the next message, and the move re-scopes the
-    // deleted database's schemas.
-    triggerQueue.grantSendMessages(fun);
-    storageResources.dynamo.complianceSchemaStorageTable.grant(fun, "dynamodb:UpdateItem");
     // The trigger holds an upload completion's record back on this queue until the completion has
     // settled (ChangeMessageVisibility, part of the consume grant), so consecutive completions of
     // one multi-request upload are evaluated once (complianceTrigger.UPLOAD_COMPLETION_SETTLE_SECONDS).
     fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
+    // A compliance job's message left on this queue by an upgrade (queued by code that ran the jobs
+    // here) is forwarded, unchanged, to the job queue (complianceTrigger.forward_job_message).
+    const jobQueue = storageResources.sqs.complianceJobQueue;
+    jobQueue.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_JOB_QUEUE_URL", jobQueue.queueUrl);
 
     // GovCloud and EU Sovereign Lambda reject Tags on an event source mapping, which the high-level
     // addEventSource() stamps from the stack tags; there the mapping is built directly and its Tags
@@ -836,6 +814,197 @@ export function buildComplianceTriggerFunction(
                 maxBatchingWindow: COMPLIANCE_TRIGGER_BATCHING_WINDOW,
                 reportBatchItemFailures: true,
                 maxConcurrency: COMPLIANCE_TRIGGER_MAX_CONCURRENCY,
+            })
+        );
+    }
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+/**
+ * Settings of the compliance job Lambda and its queue, exported so the synth tests (and the
+ * binding apply's status rules, backend complianceBindingApply.JOB_*) assert the values the builder
+ * uses.
+ *
+ * - The function timeout is the trigger's, five minutes: each run works to its deadline and hands
+ *   over, so a longer run would only save hops (one invocation and one message each), while it
+ *   would lengthen how long a crashed run's message waits before its redelivery (the visibility
+ *   timeout below scales with it).
+ * - The visibility timeout is six times the function timeout, the AWS guidance for an SQS event
+ *   source.
+ * - Three receives before the dead-letter queue: a run that fails three times is a lasting fault;
+ *   the job then reads stopped (a binding change, resumed by repeating it) or stays moving (a move,
+ *   resumed by sending its message again from the dead-letter queue).
+ * - One message per invocation: each message is one job's run, which works to its deadline.
+ * - `maxConcurrency` 2, the least an SQS event source allows: jobs are rare (a binding change or a
+ *   database delete), a job's runs follow one another, and two at a time bound the background
+ *   writes beside the trigger's evaluations; a third job's message waits its turn, which its status
+ *   reads as waiting, not stopped.
+ */
+export const COMPLIANCE_JOB_TIMEOUT = Duration.minutes(5);
+export const COMPLIANCE_JOB_QUEUE_VISIBILITY_TIMEOUT = Duration.minutes(30);
+export const COMPLIANCE_JOB_QUEUE_MAX_RECEIVE_COUNT = 3;
+export const COMPLIANCE_JOB_BATCH_SIZE = 1;
+export const COMPLIANCE_JOB_MAX_CONCURRENCY = 2;
+
+/**
+ * The compliance job Lambda's recursive-loop setting. The two jobs it runs continue themselves on
+ * its own queue, one message per run until they are done: the move of a deleted database's
+ * compliance data (`databaseRetirement`) and a database binding change applied in the background
+ * (`complianceBindingApply`, D161). A large job needs more runs than Lambda's recursive-loop
+ * detection allows in one chain (about 16), and the detection would stop it before the handler ran.
+ * ALLOW turns the detection off for this function only; the trigger and every other function keep
+ * it. The jobs' own run limit replaces it: each job counts its runs on its record against a limit
+ * derived from its size and stops past it (`complianceBindingApply.run_limit`,
+ * `databaseRetirement.run_limit`).
+ *
+ * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and
+ * the AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not
+ * available, so `aws-us-gov` and any other partition omit the property.
+ */
+export function complianceJobRecursiveLoop(
+    config: Config.Config
+): lambda.RecursiveLoop | undefined {
+    const partition = config.env.partition;
+    if (partition !== "aws" && partition !== "aws-eusc") {
+        return undefined;
+    }
+    return lambda.RecursiveLoop.ALLOW;
+}
+
+/**
+ * The compliance job queue (`ComplianceJobQueue`, with `ComplianceJobDLQ`). Built in the storage
+ * stack beside the trigger's queue, so the database service (ApiBuilder), the binding service, the
+ * trigger and the job Lambda (ApiBuilder2) all reference it from the stack every one of them already
+ * depends on. No topic subscribes to it: the senders are the roles granted SendMessage (the binding
+ * service, the database service, the job Lambda's continuations, and the trigger, which forwards a
+ * job's message an upgrade left on its own queue). Encrypted as the trigger's queue is.
+ */
+export function buildComplianceJobQueue(
+    scope: Construct,
+    kmsKey?: kms.IKey
+): { queue: sqs.Queue; deadLetterQueue: sqs.Queue } {
+    // Encryption mirrors the source queue: a message moved into a DLQ the job Lambda's role cannot
+    // decrypt is unreadable dead letter.
+    const deadLetterQueue = new sqs.Queue(scope, "ComplianceJobDLQ", {
+        retentionPeriod: cdk.Duration.days(14),
+        encryption: kmsKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(deadLetterQueue, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue IS the dead-letter queue of the compliance job queue. A DLQ is the " +
+                "terminal destination for job messages that failed after the receive limit (and " +
+                "for a job the job Lambda stopped at its run limit), so giving it a redrive " +
+                "policy of its own would only defer the same failure to a further queue.",
+        },
+    ]);
+    const queue = new sqs.Queue(scope, "ComplianceJobQueue", {
+        visibilityTimeout: COMPLIANCE_JOB_QUEUE_VISIBILITY_TIMEOUT,
+        encryption: kmsKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsKey,
+        enforceSSL: true,
+        deadLetterQueue: {
+            queue: deadLetterQueue,
+            maxReceiveCount: COMPLIANCE_JOB_QUEUE_MAX_RECEIVE_COUNT,
+        },
+    });
+    return { queue, deadLetterQueue };
+}
+
+/**
+ * Compliance job Lambda. Reads the compliance job queue only and runs the two jobs that continue
+ * themselves, one message per run: the move of a deleted database's compliance data
+ * (`databaseRetirement`, queued by the database service's delete) and a database binding change
+ * applied in the background (`complianceBindingApply`, D161, queued by the binding service). Each
+ * run queues its continuation on the job queue; the evaluations a binding change queues go to the
+ * trigger's queue, where the trigger, with recursive-loop detection on, evaluates them.
+ *
+ * Its grants are what the two jobs reach and nothing more: the compliance asset-state, evaluation
+ * and audit tables (a binding change's records, its apply record and the retirement record, its
+ * audit entries; the move's rows), the cascade table and UpdateItem on the schema table (the move
+ * re-scopes the deleted database's cascades and schemas), reads of the database and asset tables (a
+ * binding change reads the database row and pages the asset rows), SendMessage on the job queue
+ * (continuations), its dead-letter queue (a move stopped at its run limit) and the trigger's queue
+ * (evaluations; with GetQueueAttributes, which paces them), and the queue's consume actions. No
+ * evaluation-engine reads, workflow launch, topic publish or bucket read: it evaluates nothing.
+ */
+export function buildComplianceJobFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "complianceJobs";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.compliance.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: COMPLIANCE_JOB_TIMEOUT,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        recursiveLoop: complianceJobRecursiveLoop(config),
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
+        environment: {},
+    });
+    const dynamo = storageResources.dynamo;
+    dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
+    dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
+    dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
+    dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
+    dynamo.complianceSchemaStorageTable.grantReadData(fun);
+    dynamo.complianceSchemaStorageTable.grant(fun, "dynamodb:UpdateItem");
+    dynamo.databaseStorageTable.grantReadData(fun);
+    dynamo.assetStorageTable.grantReadData(fun);
+
+    const jobQueue = storageResources.sqs.complianceJobQueue;
+    jobQueue.grantConsumeMessages(fun);
+    jobQueue.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_JOB_QUEUE_URL", jobQueue.queueUrl);
+    const jobDlq = storageResources.sqs.complianceJobDLQ;
+    jobDlq.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_JOB_DLQ_URL", jobDlq.queueUrl);
+    const triggerQueue = storageResources.sqs.complianceTriggerQueue;
+    triggerQueue.grantSendMessages(fun);
+    fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
+
+    // GovCloud and EU Sovereign Lambda reject Tags on an event source mapping, which the high-level
+    // addEventSource() stamps from the stack tags; there the mapping is built directly and its Tags
+    // removed (test/partition/eventSourceMappingGovCloudTags.test.ts).
+    if (config.app.govCloud.enabled) {
+        const esm = new lambda.EventSourceMapping(scope, "ComplianceJobSqsEventSource", {
+            eventSourceArn: jobQueue.queueArn,
+            target: fun,
+            batchSize: COMPLIANCE_JOB_BATCH_SIZE,
+            reportBatchItemFailures: true,
+            maxConcurrency: COMPLIANCE_JOB_MAX_CONCURRENCY,
+        });
+        (esm.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(jobQueue, {
+                batchSize: COMPLIANCE_JOB_BATCH_SIZE,
+                reportBatchItemFailures: true,
+                maxConcurrency: COMPLIANCE_JOB_MAX_CONCURRENCY,
             })
         );
     }

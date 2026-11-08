@@ -32,7 +32,10 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { buildComplianceTriggerQueue } from "../../lambdaBuilder/complianceFunctions";
+import {
+    buildComplianceJobQueue,
+    buildComplianceTriggerQueue,
+} from "../../lambdaBuilder/complianceFunctions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Service, Partition } from "../../helper/service-helper";
@@ -81,6 +84,11 @@ export interface storageResources {
         // The compliance trigger's queue, subscribed to the asset and file indexer topics here so it
         // exists before the stacks that change what the request Lambdas record (buildComplianceTriggerQueue).
         complianceTriggerQueue: sqs.Queue;
+        // The compliance job queue and its dead-letter queue (buildComplianceJobQueue): the jobs
+        // that continue themselves (a deleted database's move, a database binding change applied
+        // in the background) run from it in the compliance job Lambda.
+        complianceJobQueue: sqs.Queue;
+        complianceJobDLQ: sqs.Queue;
     };
     cloudWatchAuditLogGroups: {
         authentication: logs.LogGroup;
@@ -703,6 +711,9 @@ export function storageResourcesBuilder(
         { assetIndexerSnsTopic: AssetIndexerSnsTopic, fileIndexerSnsTopic: FileIndexerSnsTopic },
         kmsEncryptionKey
     );
+    // The compliance job queue lives here too, so the database service (ApiBuilder) and the binding
+    // service, trigger and job Lambda (ApiBuilder2) reference it from the stack they already depend on.
+    const ComplianceJobQueues = buildComplianceJobQueue(scope, kmsEncryptionKey);
 
     /**
      * Create CloudWatch Log Groups for Audit Logging
@@ -2590,6 +2601,8 @@ export function storageResourcesBuilder(
         },
         sqs: {
             complianceTriggerQueue: ComplianceTriggerQueue,
+            complianceJobQueue: ComplianceJobQueues.queue,
+            complianceJobDLQ: ComplianceJobQueues.deadLetterQueue,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
         eventBridge: {

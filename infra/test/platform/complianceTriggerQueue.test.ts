@@ -9,7 +9,9 @@
  * with a bounded receive count, a visibility timeout of at least six times the function timeout, a
  * message-body filter policy on each topic subscription, and a batched, concurrency-capped event
  * source that reads `batchItemFailures`. The only send access to the queue is each topic's, and the
- * trigger's role consumes it without a wildcard resource.
+ * trigger's role consumes it without a wildcard resource. The trigger sends nothing on its own queue:
+ * the jobs that continue themselves run in the compliance job Lambda from the job queue, and the
+ * trigger's only send is a job's message an upgrade left on its queue, forwarded to the job queue.
  *
  * Built from `buildComplianceTriggerQueue` and `buildComplianceTriggerFunction` against a stand-in
  * storage stack, so it runs in seconds; `complianceTriggerQueueNoOpenSearch.test.ts` asserts the same wiring survives a full
@@ -30,6 +32,7 @@ import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
+    buildComplianceJobQueue,
     buildComplianceTriggerFunction,
     buildComplianceTriggerQueue,
     COMPLIANCE_TRIGGER_BATCH_SIZE,
@@ -71,6 +74,7 @@ const buildStorageResources = (stack: cdk.Stack, kmsKey?: kms.Key): storageResou
         },
     });
     const logGroup = (id: string) => new logs.LogGroup(stack, id);
+    const jobQueues = buildComplianceJobQueue(stack, kmsKey);
     const topics = {
         assetIndexerSnsTopic: new sns.Topic(stack, "AssetIndexerSnsTopic"),
         fileIndexerSnsTopic: new sns.Topic(stack, "FileIndexerSnsTopic"),
@@ -83,8 +87,13 @@ const buildStorageResources = (stack: cdk.Stack, kmsKey?: kms.Key): storageResou
             accessLogsBucket: new s3.Bucket(stack, "AccessLogsBucket"),
         },
         sns: topics,
-        // As the storage stack builds it: the queue and its subscriptions beside the topics.
-        sqs: { complianceTriggerQueue: buildComplianceTriggerQueue(stack, topics, kmsKey) },
+        // As the storage stack builds them: the queue and its subscriptions beside the topics, and
+        // the compliance job queue.
+        sqs: {
+            complianceTriggerQueue: buildComplianceTriggerQueue(stack, topics, kmsKey),
+            complianceJobQueue: jobQueues.queue,
+            complianceJobDLQ: jobQueues.deadLetterQueue,
+        },
         eventBridge: {
             orchestrationBus: new events.EventBus(stack, "OrchestrationBus"),
             eventSourcePrefix: "vams.test",
@@ -171,7 +180,9 @@ const triggerPolicies = (template: Template) => {
 };
 
 const queues = (template: Template) => {
-    const all = resources(template, "AWS::SQS::Queue");
+    const all = resources(template, "AWS::SQS::Queue").filter((q) =>
+        q.id.startsWith("ComplianceTrigger")
+    );
     const source = all.filter((q) => q.Properties.RedrivePolicy);
     const dlq = all.filter((q) => !q.Properties.RedrivePolicy);
     expect(source).toHaveLength(1);
@@ -374,8 +385,8 @@ describe("compliance trigger queue", () => {
                 [st.Action].flat().some((a: string) => a.startsWith("sqs:"))
             )
         );
-        // Consuming is one statement; the trigger also sends on its own queue (the next page of a
-        // deleted database's compliance move, databaseRetirement), checked in the next test.
+        // Consuming is one statement; the trigger's one send (a leftover job's message, forwarded
+        // to the job queue) is checked in the next test.
         const consume = sqsStatements.filter((st: any) =>
             [st.Action].flat().includes("sqs:ReceiveMessage")
         );
@@ -393,8 +404,11 @@ describe("compliance trigger queue", () => {
         expect(getAtt(st.Resource)).toBe(source.id);
     });
 
-    test("the trigger sends only on its own queue, and only sends", () => {
+    test("the trigger sends only to the job queue, never on its own queue", () => {
         const { source } = queues(commercial);
+        const jobQueue = resources(commercial, "AWS::SQS::Queue").find((q) =>
+            q.id.startsWith("ComplianceJobQueue")
+        )!;
         const policies = triggerPolicies(commercial);
         const sends = policies.flatMap((p) =>
             p.Properties.PolicyDocument.Statement.filter(
@@ -407,7 +421,14 @@ describe("compliance trigger queue", () => {
         expect([sends[0].Action].flat().sort()).toEqual(
             ["sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:SendMessage"].sort()
         );
-        expect(getAtt(sends[0].Resource)).toBe(source.id);
+        expect(getAtt(sends[0].Resource)).toBe(jobQueue.id);
+        expect(getAtt(sends[0].Resource)).not.toBe(source.id);
+    });
+
+    test("the trigger keeps Lambda's recursive-loop detection on", () => {
+        const fun =
+            commercial.findResources("AWS::Lambda::Function")[triggerFunctionId(commercial)];
+        expect(fun.Properties.RecursiveLoop).toBeUndefined();
     });
 
     test("the trigger knows its own queue's URL, to hold an upload completion back on it", () => {
@@ -418,6 +439,13 @@ describe("compliance trigger queue", () => {
         expect(triggers).toHaveLength(1);
         expect(triggers[0].Properties.Environment.Variables.COMPLIANCE_TRIGGER_QUEUE_URL).toEqual({
             Ref: source.id,
+        });
+        // ... and the job queue's, to forward a leftover job's message there.
+        const jobQueue = resources(commercial, "AWS::SQS::Queue").find((q) =>
+            q.id.startsWith("ComplianceJobQueue")
+        )!;
+        expect(triggers[0].Properties.Environment.Variables.COMPLIANCE_JOB_QUEUE_URL).toEqual({
+            Ref: jobQueue.id,
         });
     });
 
