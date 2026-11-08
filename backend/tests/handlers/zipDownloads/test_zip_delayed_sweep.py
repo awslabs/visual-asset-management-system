@@ -245,6 +245,44 @@ def test_the_landed_archive_is_decided_first_and_never_touched(env):
     assert s3.head_object(h.AUX, env.key)
 
 
+def _deny_head(s3):
+    def denied(Bucket, Key, VersionId=None):
+        raise h._client_error("403", "HeadObject")
+    s3.head_object = denied
+
+
+def test_a_403_on_the_missing_archive_is_settled_by_the_listing_and_the_pass_sweeps(env):
+    """#1125 D21 (demo22: every sweep pass failed with HeadObject 403). S3 answers HeadObject on a
+    missing key with 403 unless the role holds s3:ListBucket; a listing at the exact key that shows
+    no object settles it as "not landed", so the pass aborts the recorded upload."""
+    s3 = _plain(env)
+    _row(env)["status"] = "CANCELLED"
+    _deny_head(s3)
+    s3.list_objects_v2 = MagicMock(return_value={"KeyCount": 0})
+    assert _pass(env)["aborted"] == 1
+    assert s3.uploads == []
+    s3.list_objects_v2.assert_called_once_with(Bucket=h.AUX, Prefix=env.key, MaxKeys=1)
+
+
+def test_a_denied_archive_check_fails_the_pass_and_aborts_nothing(env):
+    """A 403 the listing cannot settle (the listing is refused too) is never "not landed": the pass
+    fails closed (raises, logged), so the state machine surfaces it, and nothing is aborted."""
+    s3 = _plain(env)
+    _row(env)["status"] = "CANCELLED"
+    _deny_head(s3)
+    s3.list_objects_v2 = MagicMock(side_effect=h._client_error("AccessDenied", "ListObjectsV2"))
+    logger = MagicMock()
+    with pytest.raises(env.zd.ArchiveCheckDenied) as raised:
+        env.zd.sweep_recorded_uploads(env.zip, s3, h.AUX, env.zd.sweep_request(_row(env)),
+                                      final=True, logger=logger)
+    assert "s3:ListBucket" in str(raised.value)
+    logger.error.assert_called_once()
+    assert s3.aborted == []
+    assert [u["UploadId"] for u in s3.uploads] == ["u1"]
+    with pytest.raises(env.zd.ArchiveCheckDenied):
+        _pass(env)
+
+
 def test_a_snapshot_outside_the_jobs_prefix_is_refused(env):
     s3 = _plain(env)
     request = env.zd.sweep_request(_row(env))

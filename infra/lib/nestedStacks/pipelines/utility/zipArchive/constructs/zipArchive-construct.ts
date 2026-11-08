@@ -135,6 +135,15 @@ export class ZipArchiveConstruct extends Construct {
                         `${props.assetAuxiliaryBucket.bucketArn}/${PREPARED_DOWNLOADS_PREFIX}*`,
                     ],
                 }),
+                // s3:ListBucket makes S3 answer a HeadObject on a missing archive key with 404, not
+                // 403: the container decides whether its own archive landed (#1125 D21).
+                new iam.PolicyStatement({
+                    actions: ["s3:ListBucket"],
+                    resources: [props.assetAuxiliaryBucket.bucketArn],
+                    conditions: {
+                        StringLike: { "s3:prefix": [`${PREPARED_DOWNLOADS_PREFIX}*`] },
+                    },
+                }),
             ],
         });
 

@@ -241,6 +241,27 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         });
     });
 
+    test("both zip functions hold s3:ListBucket on the auxiliary bucket, only for vams.preparedDownloads/ (#1125 D21)", () => {
+        // Without it S3 answers HeadObject on a missing archive key with 403, and every delayed
+        // sweep pass failed in landed_archive. A unit test that mocks a 404 cannot catch this.
+        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
+            const statements = roleStatements(synth, functionByHandler(synth, handler));
+            const lists = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
+            const aux = lists.filter((s) => s.Condition !== undefined);
+            expect(aux).toHaveLength(1);
+            if (handler === CALLBACK_HANDLER) {
+                // The callback reads no asset bucket: its only ListBucket is the scoped one.
+                expect(lists).toHaveLength(1);
+            }
+            expect(aux[0].Condition).toEqual({
+                StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
+            });
+            // The bucket ARN itself (a partition-aware reference), never an object or wildcard.
+            expect(SynthResult.flatten(aux[0].Resource)).not.toMatch(/\*/);
+            expect(JSON.stringify(aux[0].Resource)).not.toMatch(/arn:aws:/);
+        }
+    });
+
     test("both zip functions confirm an abort with ListParts, only under vams.preparedDownloads/ (#1125 D16)", () => {
         for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
             const statements = roleStatements(synth, functionByHandler(synth, handler));
@@ -526,10 +547,24 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
         for (const statement of output.PolicyDocument.Statement as any[]) {
             if (!actionsOf(statement).some((a) => a.startsWith("s3:"))) continue;
+            if (actionsOf(statement).includes("s3:ListBucket")) {
+                // The bucket-level grant, scoped by the prefix condition (#1125 D21).
+                expect(actionsOf(statement)).toEqual(["s3:ListBucket"]);
+                expect(statement.Condition).toEqual({
+                    StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
+                });
+                expect(SynthResult.flatten(statement.Resource)).not.toMatch(/\*/);
+                continue;
+            }
             expect(SynthResult.flatten(statement.Resource)).toMatch(
                 /\/vams\.preparedDownloads\/\*$/
             );
         }
+        expect(
+            (output.PolicyDocument.Statement as any[]).filter((s) =>
+                actionsOf(s).includes("s3:ListBucket")
+            )
+        ).toHaveLength(1);
         // The job deletes only its own late archive (one outcome): never an asset bucket object.
         const outputActions = (output.PolicyDocument.Statement as any[]).flatMap(actionsOf);
         expect(outputActions).toEqual(

@@ -119,6 +119,43 @@ class TestZipLandedArchive:
     def test_no_object(self):
         assert _zd().landed_archive(self._s3(error=_not_found()), "aux", self.ROW) == (False, None)
 
+    # #1125 D21: S3 answers HeadObject 403 for a missing key unless the caller holds s3:ListBucket.
+    @staticmethod
+    def _denied(code="403"):
+        return ClientError({"Error": {"Code": code, "Message": "Forbidden"}}, "HeadObject")
+
+    @pytest.mark.parametrize("code", ["403", "AccessDenied", "Forbidden"])
+    def test_a_denied_head_of_an_unlisted_key_is_no_object(self, code):
+        s3 = self._s3(error=self._denied(code))
+        s3.list_objects_v2.return_value = {"Contents": [{"Key": self.ROW["archiveKey"] + ".part"}]}
+        assert _zd().landed_archive(s3, "aux", self.ROW) == (False, None)
+        assert _zd().archive_head(s3, "aux", self.ROW["archiveKey"]) == (False, None)
+        s3.list_objects_v2.assert_called_with(Bucket="aux", Prefix=self.ROW["archiveKey"], MaxKeys=1)
+
+    def test_a_denied_head_of_a_listed_key_is_an_error_not_not_landed(self):
+        s3 = self._s3(error=self._denied())
+        s3.list_objects_v2.return_value = {"Contents": [{"Key": self.ROW["archiveKey"]}]}
+        with pytest.raises(_zd().ArchiveCheckDenied) as raised:
+            _zd().landed_archive(s3, "aux", self.ROW)
+        assert isinstance(raised.value, ClientError)
+        assert "s3:ListBucket" in str(raised.value)
+        with pytest.raises(_zd().ArchiveCheckDenied):
+            _zd().archive_head(s3, "aux", self.ROW["archiveKey"])
+
+    def test_a_denied_head_with_a_denied_listing_is_an_error(self):
+        s3 = self._s3(error=self._denied())
+        s3.list_objects_v2.side_effect = ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "ListObjectsV2")
+        with pytest.raises(_zd().ArchiveCheckDenied):
+            _zd().landed_archive(s3, "aux", self.ROW)
+
+    def test_another_head_error_is_raised_unchanged(self):
+        s3 = self._s3(error=self._denied("SlowDown"))
+        with pytest.raises(ClientError) as raised:
+            _zd().landed_archive(s3, "aux", self.ROW)
+        assert not isinstance(raised.value, _zd().ArchiveCheckDenied)
+        s3.list_objects_v2.assert_not_called()
+
 
 @pytest.mark.unit
 class TestEngineLandedObjectVersion:

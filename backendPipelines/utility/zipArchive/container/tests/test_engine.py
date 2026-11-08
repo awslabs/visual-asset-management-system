@@ -226,6 +226,35 @@ class TestSink:
         with pytest.raises(ValueError):
             MultipartSink(FakeMultipart(), "b", "k", MIB)
 
+    # #1125 D21: S3 answers HeadObject on a missing key with 403 unless the role holds s3:ListBucket.
+    @staticmethod
+    def _denied_head_sink(listed=None, list_error=None):
+        s3 = FakeMultipart()
+
+        def head_object(Bucket, Key):
+            raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject")
+
+        def list_objects_v2(Bucket, Prefix, MaxKeys):
+            assert (Bucket, Prefix, MaxKeys) == ("b", "k", 1)
+            if list_error:
+                raise list_error
+            return {"Contents": [{"Key": k} for k in (listed or [])]}
+
+        s3.head_object, s3.list_objects_v2 = head_object, list_objects_v2
+        return MultipartSink(s3, "b", "k", 5 * MIB)
+
+    def test_head_403_of_an_unlisted_key_is_no_object(self):
+        assert self._denied_head_sink(listed=["k.other"]).head() is None
+
+    def test_head_403_of_a_listed_key_raises(self):
+        with pytest.raises(ClientError):
+            self._denied_head_sink(listed=["k"]).head()
+
+    def test_head_403_with_a_refused_listing_raises(self):
+        refused = ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+        with pytest.raises(ClientError):
+            self._denied_head_sink(list_error=refused).head()
+
 
 class FakeRangeS3:
     def __init__(self, objects, flaky=0):

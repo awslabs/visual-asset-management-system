@@ -630,6 +630,50 @@ def delete_working_objects(s3_client, bucket: str, row: dict, logger=None) -> in
     return deleted
 
 
+# S3 answers a HeadObject on a missing key with 403, not 404, to a caller without s3:ListBucket on
+# the bucket (#1125 D21). A 403 alone never means "not landed": the key's absence is then confirmed
+# by a listing at the exact key (s3:ListBucket, granted on the prepared-downloads prefix, which is a
+# request the s3:prefix condition sees). Only a listing without the key answers "no object"; a key
+# that is listed, or a listing that fails, raises ArchiveCheckDenied, so a check that cannot tell
+# fails closed and is logged as such.
+_ACCESS_DENIED_CODES = ("403", "AccessDenied", "Forbidden")
+
+
+class ArchiveCheckDenied(ClientError):
+    """A zip download's archive HeadObject was refused (403) and a listing at the key did not show it
+    absent, so whether this job's archive landed is unknown. A ClientError, so callers that already
+    fail on a ClientError keep doing so."""
+
+    def __str__(self):
+        return ("Access denied checking a zip download's archive object (HeadObject 403, and a listing "
+                "at the key did not show it absent): cannot tell whether the archive exists; the role "
+                "needs s3:GetObject and s3:ListBucket on the prepared-downloads prefix "
+                f"({super().__str__()})")
+
+
+def _head_archive(s3_client, bucket: str, key: str):
+    """HEAD of the archive key, or None when there is no object (a 404, or a 403 whose listing at the
+    exact key shows no object). Any other 403 raises ArchiveCheckDenied."""
+    try:
+        return s3_client.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return None
+        if code not in _ACCESS_DENIED_CODES:
+            raise
+        denied = e
+    try:
+        # Keys list in order, so the key itself is the first one at that prefix when it exists.
+        listed = s3_client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+    except Exception as e:
+        raise ArchiveCheckDenied(denied.response, denied.operation_name) from e
+    if any(o.get("Key") == key for o in (listed.get("Contents") or [])):
+        # The object exists and its HEAD was refused: a real denial, never "not landed".
+        raise ArchiveCheckDenied(denied.response, denied.operation_name) from denied
+    return None
+
+
 def landed_archive(s3_client, bucket: str, row: dict) -> Tuple[bool, Optional[int]]:
     """(landed, size): whether the object at the job's archive key is the one THIS job's upload
     created. Never decided by presence or size: an earlier object of the same size can sit at the
@@ -641,26 +685,20 @@ def landed_archive(s3_client, bucket: str, row: dict) -> Tuple[bool, Optional[in
     token = row.get("archiveUploadToken")
     if not token:
         return False, None
-    try:
-        head = s3_client.head_object(Bucket=bucket, Key=row.get("archiveKey", ""))
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
-            return False, None
-        raise
+    head = _head_archive(s3_client, bucket, row.get("archiveKey", ""))
+    if head is None:
+        return False, None
     if not is_own_upload_object(head, token):
         return False, None
     return True, int(head.get("ContentLength", 0))
 
 
 def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]:
-    """(exists, size) of a job's archive object."""
-    try:
-        head = s3_client.head_object(Bucket=bucket, Key=key)
-        return True, int(head.get("ContentLength", 0))
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
-            return False, None
-        raise
+    """(exists, size) of a job's archive object (_head_archive: a 403 it cannot settle raises)."""
+    head = _head_archive(s3_client, bucket, key)
+    if head is None:
+        return False, None
+    return True, int(head.get("ContentLength", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -806,7 +844,14 @@ def sweep_recorded_uploads(table, s3_client, bucket: str, request: dict, final: 
     if not key or not upload_ids:
         return {"swept": False, "reason": "no recorded upload"}
     if row is not None:
-        landed, _size = landed_archive(s3_client, bucket, row)
+        try:
+            landed, _size = landed_archive(s3_client, bucket, row)
+        except ArchiveCheckDenied as e:
+            # Fail closed: never abort uploads of a job whose archive may have landed. The pass fails
+            # (the state machine retries it, then the run ends FAILED) and says why.
+            if logger:
+                logger.error(f"The zip download delayed sweep could not check the job's archive: {e}")
+            raise
         if landed:
             return {"swept": False, "reason": "the job's archive landed"}
     listed = _upload_ids_listed(s3_client, bucket, key, upload_ids)

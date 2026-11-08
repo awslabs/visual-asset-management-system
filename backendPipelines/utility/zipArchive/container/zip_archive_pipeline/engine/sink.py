@@ -201,13 +201,24 @@ class MultipartSink:
         return self.bytes_written
 
     def head(self):
-        """HEAD of the key's current object, or None when there is none (raises on other errors)."""
+        """HEAD of the key's current object, or None when there is none (raises on other errors).
+
+        S3 answers HeadObject on a missing key with 403 unless the role holds s3:ListBucket (#1125
+        D21); a 403 is "none" only when a listing at the exact key shows no object, else it raises."""
         try:
             return self._s3.head_object(Bucket=self.bucket, Key=self.key)
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            code = e.response.get("Error", {}).get("Code")
+            if code in ("404", "NoSuchKey", "NotFound"):
                 return None
-            raise
+            if code not in ("403", "AccessDenied", "Forbidden"):
+                raise
+            denied = e
+        # Raises when the listing is refused too. Keys list in order: the key itself comes first.
+        listed = self._s3.list_objects_v2(Bucket=self.bucket, Prefix=self.key, MaxKeys=1)
+        if any(o.get("Key") == self.key for o in (listed.get("Contents") or [])):
+            raise denied
+        return None
 
     def delete_version(self, version_id):
         """Delete exactly one object version of the key."""

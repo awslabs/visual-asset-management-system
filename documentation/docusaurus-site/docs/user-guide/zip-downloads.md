@@ -69,7 +69,7 @@ If you lose access to an asset, its zip downloads disappear from your lists and 
 
 ## Permissions
 
-Creating a zip download requires the same asset permission as downloading a file, plus access to the zip download routes, which the shipped database user, database administrator, and read-only permission templates include. Your permission on the asset is checked again each time you list, open, or download a job, so a job on an asset you can no longer read stops appearing. See [Permissions](permissions.md).
+Creating a zip download requires the same asset permission as downloading a file, plus access to the zip download routes, which the shipped database user, database administrator, and read-only permission templates include. A role built from a template of an earlier release may reach only some of the routes, for example create a job but not cancel it; your administrator can check it against [Zip download routes on roles built from earlier templates](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates). Your permission on the asset is checked again each time you list, open, or download a job, so a job on an asset you can no longer read stops appearing. See [Permissions](permissions.md).
 
 ## Related topics
 

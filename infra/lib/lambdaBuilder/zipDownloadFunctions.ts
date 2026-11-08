@@ -267,10 +267,12 @@ export function buildZipDownloadCallbackFunction(
             resources: [preparedDownloadsObjectArn(storageResources)],
         })
     );
+    // s3:ListBucket makes S3 answer a HeadObject on a missing archive key with 404, not 403: the
+    // terminal callback and the delayed sweep decide by the landed archive (#1125 D21).
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["s3:ListBucketVersions"],
+            actions: ["s3:ListBucket", "s3:ListBucketVersions"],
             resources: [storageResources.s3.assetAuxiliaryBucket.bucketArn],
             conditions: { StringLike: { "s3:prefix": [`${PREPARED_DOWNLOADS_PREFIX}*`] } },
         })

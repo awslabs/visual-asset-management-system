@@ -471,6 +471,19 @@ Templates are located in the `documentation/permissionsTemplates/` directory.
 
 The Database Admin, Database User, Database Read-Only, and Global Read-Only templates grant `GET` on `/addon/physna/viewer`, the route the Physna viewer plugin calls, with a `starts_with` criterion in their GET API route constraint (the all-methods API route constraint in Database Admin). On a deployment without the Physna add-on the criterion matches no route. The viewer token that route returns is tenant-scoped (see [Physna Viewer](./physna-integration.md#physna-viewer)); to withhold the viewer from a template-built role, remove the `/addon/physna/viewer` criterion from its imported constraint.
 
+#### Zip download routes on roles built from earlier templates
+
+API route constraints match a route by its path, and the asset zip download routes sit under `/database/`. A role imported from a template of a release before Download as Zip therefore already reaches some of them through its broad `/database` GET and `/database/` POST criteria; it does not reach `GET /download/zip` (the caller's jobs across assets) or the `/zipdownloads` web page. Every zip download call still requires asset `GET` permission on the asset (Tier 2), and each user reaches only their own jobs.
+
+| Earlier template                       | Already reached                                                 | Not reached                                                            |
+| -------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Database Admin                         | Create, list on the asset, get, download URL, cancel and delete | `GET /download/zip`, the `/zipdownloads` page                          |
+| Database User                          | Create, list on the asset, get, download URL                    | Cancel and delete (`DELETE`), `GET /download/zip`, the page            |
+| Database Read-Only, Global Read-Only   | List on the asset, get                                          | Create, download URL, cancel and delete, `GET /download/zip`, the page |
+| Database Tag Admin, Deny Tagged Assets | None                                                            | All                                                                    |
+
+A Database User role from an earlier template can create a zip download that it cannot cancel or delete. To give such a role the full feature, add the `api-routes-zip-downloads` and `api-routes-zip-downloads-list` constraints and the `/zipdownloads` web route criterion from the current template, or import the current template again. To keep a role from creating zip downloads, add an `api` `deny` constraint on `POST` for paths that end with `/download/zip` (the create route only).
+
 ### Applying templates
 
 You can apply templates using the CLI tool or the `POST /auth/constraintsTemplateImport` API endpoint.
