@@ -1,7 +1,7 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
-    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`."
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`. Any authenticated operation answers `401` (the `Unauthorized` response, `#/components/responses/Unauthorized`) when the custom authorizer does not accept the credential (missing, expired or invalid token; unknown, disabled or expired API key), and `403` when it accepts the credential and refuses the request (source IP not allowed, an API key whose user has no roles)."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
@@ -9358,7 +9358,7 @@ components:
             type: apiKey
             name: Authorization
             in: header
-            description: "Custom Amazon API Gateway Lambda authorizer. Supply an Amazon Cognito or external OAuth ID token as 'Bearer {idToken}', or a VAMS-issued API key as the raw header value. The authorizer validates the credential, applies any configured IP restrictions, and passes the resolved identity to the handler for two-tier ABAC/RBAC authorization. Applies to every operation except those declaring 'security: []'."
+            description: "Custom Amazon API Gateway Lambda authorizer. Supply an Amazon Cognito or external OAuth ID token as 'Bearer {idToken}', or a VAMS-issued API key as the raw header value. The authorizer validates the credential, applies any configured IP restrictions, and passes the resolved identity to the handler for two-tier ABAC/RBAC authorization. A credential it does not accept is answered with 401 (#/components/responses/Unauthorized); an accepted credential it refuses (IP restriction, an API key whose user has no roles) with 403. Applies to every operation except those declaring 'security: []'."
             x-amazon-apigateway-authtype: custom
     schemas:
         apiKeyMetadata:
@@ -15481,6 +15481,14 @@ components:
                 application/json:
                     schema:
                         $ref: "#/components/schemas/requestBlockedError"
+        Unauthorized:
+            description: "The custom Lambda authorizer did not accept the credential: the Authorization header is missing or malformed, the token is expired or invalid, or the API key is unknown, disabled or expired. Any operation that is not 'security: []' can return it. Refresh the token or sign in again and resend. The body is API Gateway's generic message and never names the reason. Since v2.7.0; earlier versions answered these credentials with 403."
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/error"
+                    example:
+                        message: "Unauthorized"
     parameters:
       maxItemsParam:
         name: maxItems

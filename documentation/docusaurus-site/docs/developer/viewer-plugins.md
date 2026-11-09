@@ -19,15 +19,15 @@ graph TD
 
 ### Core Components
 
-| Component         | File                            | Purpose                                        |
-| ----------------- | ------------------------------- | ---------------------------------------------- |
-| PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins      |
-| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for the core plugins        |
-| manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports |
-| StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management            |
-| streamFailure     | `core/streamFailure.ts`         | Names why a streamed file failed to load       |
-| DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering            |
-| ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers     |
+| Component         | File                            | Purpose                                                                                |
+| ----------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins                                              |
+| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for the core plugins                                                |
+| manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports                                         |
+| StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management                                                    |
+| streamFailure     | `core/streamFailure.ts`         | Names why a streamed or downloaded file failed to load (permission, archived, missing) |
+| DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering                                                    |
+| ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers                                             |
 
 The add-on viewers — the Physna viewer and the licensed VNTANA and VEERUM viewers, which ship disabled — are configured in `config/addonViewerConfig.json` and listed in `viewers/addonManifest.ts`; a fork's viewers go in `config/customViewerConfig.json` and `viewers/custom/customManifest.ts` (see [Extending VAMS in a Fork](customizing-vams.md)). `core/viewerSources.ts` merges the three tiers in the order core, add-on, custom, so on a priority tie a core viewer is listed before an add-on viewer.
 
@@ -316,10 +316,10 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM and Robotics Data viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                                             |
+| Flag               | Effect on Viewers                                                                                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM and Robotics Data viewers, plus the Online 3D Viewer `.3dm` and Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                                                                         |
 
 ### Multiple Requirements
 
