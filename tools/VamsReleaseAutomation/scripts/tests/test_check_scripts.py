@@ -130,6 +130,20 @@ def test_hardcoded_partition_only_flagged_in_code_scopes(repo):
 def test_files_index_check_accepts_prettier_layout(tmp_path):
     (tmp_path / "Makefile").write_text("x\n")
     text = gen_index.render(tmp_path)
-    realigned = text.replace("| File | Purpose |", "| File         | Purpose |").replace("|---|---|", "| ------------ | ------- |")
-    assert gen_index.normalize(realigned) == gen_index.normalize(text)
+    compact = "\n".join("|".join(c.strip() for c in ln.split("|")) if ln.startswith("|") else ln
+                        for ln in text.splitlines())
+    assert compact != text
+    assert gen_index.normalize(compact) == gen_index.normalize(text)
     assert gen_index.normalize(text + "| [`new`](new) | |\n") != gen_index.normalize(text)
+
+
+def test_files_index_is_generated_in_prettier_table_layout(tmp_path):
+    # the repository's `npm run prettier-check` covers FILES.md, so the generator writes Prettier's layout
+    (tmp_path / "Makefile").write_text("x\n")
+    (tmp_path / "a.txt").write_text("x\n")
+    rows = [ln for ln in gen_index.render(tmp_path).splitlines() if ln.startswith("|")]
+    assert rows[0].startswith("| File ") and rows[1].startswith("| ---")
+    assert len({len(r) for r in rows}) == 1, rows
+    cells = [r.split(" | ") for r in rows]
+    assert {len(c[0]) for c in cells} == {len(cells[0][0])}
+    assert set(rows[1].strip("| ").replace(" | ", "")) == {"-"}

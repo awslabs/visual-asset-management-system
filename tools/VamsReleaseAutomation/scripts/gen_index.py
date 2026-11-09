@@ -123,6 +123,9 @@ DESCRIPTIONS = {
     "engine/tests/test_core_patches.py": "Ledger core patches; the GitHub issue #431 and #1210 patches on real VAMS v2.6.6 / development input",
     "engine/tests/fixtures/iam/vams-2.6.6-iam-role-transform.aspect.ts":
         "VAMS v2.6.6 IamRoleTransform aspect source (the boundary core patch applies to it)",
+    "engine/tests/fixtures/iam/vams-development-2fb310762-iam-role-transform.aspect.ts":
+        "VAMS development 2fb310762 IamRoleTransform aspect with the upstream #431 fix (the boundary core patch "
+        "reports `present` through its marker)",
     "engine/tests/fixtures/iam/vams-2.6.6-rest-api-gateway-construct.ts":
         "VAMS v2.6.6 REST API construct source (the #1210 API deployment core patch applies to it)",
     "engine/tests/fixtures/iam/vams-development-a9ac094c4-rest-api-gateway-construct.ts":
@@ -154,6 +157,19 @@ def listing(root: Path) -> list[str]:
     return out
 
 
+def table(rows: list[tuple[str, str]]) -> list[str]:
+    """A two-column Markdown table laid out the way Prettier formats it (cells padded to the column width,
+    separator dashes as wide as the column, at least 3), so the repository's `prettier-check` accepts
+    FILES.md as generated. Widths are character counts; the index is ASCII."""
+    header = ("File", "Purpose")
+    widths = [max(3, len(header[i]), *(len(r[i]) for r in rows)) for i in range(2)]
+
+    def line(cells) -> str:
+        return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths)) + " |"
+
+    return [line(header), line(["-" * w for w in widths]), *(line(r) for r in rows)]
+
+
 def render(root: Path) -> str:
     files = listing(root)
     lines = ["# File index", "",
@@ -165,15 +181,13 @@ def render(root: Path) -> str:
         if not group:
             continue
         used.update(group)
-        lines += [f"## {title}", "", blurb + ".", "", "| File | Purpose |", "|---|---|"]
-        for f in group:
-            link = f
-            lines.append(f"| [`{f}`]({link}) | {DESCRIPTIONS.get(f, '')} |")
+        lines += [f"## {title}", "", blurb + ".", ""]
+        lines += table([(f"[`{f}`]({f})", DESCRIPTIONS.get(f, "")) for f in group])
         lines.append("")
     rest = [f for f in files if f not in used]
     if rest:
-        lines += ["## Other", "", "| File | Purpose |", "|---|---|"]
-        lines += [f"| [`{f}`]({f}) | |" for f in rest]
+        lines += ["## Other", ""]
+        lines += table([(f"[`{f}`]({f})", "") for f in rest])
         lines.append("")
     return "\n".join(lines)
 

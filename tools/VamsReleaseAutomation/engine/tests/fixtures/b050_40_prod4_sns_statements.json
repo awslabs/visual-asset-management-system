@@ -1,109 +1,100 @@
 {
- "source": "E2E-050 state/iam/prod/4/iam-policy-report.json (SNS statements only, account replaced)",
- "rows": [
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-created-0/ServiceRole",
-   "statements": [
-    {
-     "Action": "sns:Publish",
-     "Effect": "Allow",
-     "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
-    },
-    {
-     "Action": [
-      "sns:CreateTopic",
-      "sns:DeleteTopic"
-     ],
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.484]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-deleted-1/ServiceRole",
-   "statements": [
-    {
-     "Action": "sns:Publish",
-     "Effect": "Allow",
-     "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
-    },
-    {
-     "Action": [
-      "sns:CreateTopic",
-      "sns:DeleteTopic"
-     ],
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.561]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/sendEmail/ServiceRole",
-   "statements": [
-    {
-     "Action": "sns:Publish",
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.1265]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/subscriptionService/ServiceRole",
-   "statements": [
-    {
-     "Action": [
-      "sns:CreateTopic",
-      "sns:Subscribe",
-      "sns:DeleteTopic",
-      "sns:ListSubscriptionsByTopic",
-      "sns:BatchUnsubscribe",
-      "sns:Unsubscribe",
-      "sns:GetSubscriptionAttributes"
-     ],
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.1368]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/unsubscribeService/ServiceRole",
-   "statements": [
-    {
-     "Action": [
-      "sns:Subscribe",
-      "sns:DeleteTopic",
-      "sns:ListSubscriptionsByTopic",
-      "sns:BatchUnsubscribe",
-      "sns:Unsubscribe",
-      "sns:GetSubscriptionAttributes"
-     ],
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.1387]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/assetService/ServiceRole",
-   "statements": [
-    {
-     "Action": [
-      "sns:CreateTopic",
-      "sns:DeleteTopic"
-     ],
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.1484]}"
-    }
-   ]
-  },
-  {
-   "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/createAsset/ServiceRole",
-   "statements": [
-    {
-     "Action": "sns:CreateTopic",
-     "Effect": "Allow",
-     "Resource": "${Token[TOKEN.1539]}"
-    }
-   ]
-  }
- ]
+    "source": "E2E-050 state/iam/prod/4/iam-policy-report.json (SNS statements only, account replaced)",
+    "rows": [
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-created-0/ServiceRole",
+            "statements": [
+                {
+                    "Action": "sns:Publish",
+                    "Effect": "Allow",
+                    "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
+                },
+                {
+                    "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.484]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-deleted-1/ServiceRole",
+            "statements": [
+                {
+                    "Action": "sns:Publish",
+                    "Effect": "Allow",
+                    "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
+                },
+                {
+                    "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.561]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/sendEmail/ServiceRole",
+            "statements": [
+                {
+                    "Action": "sns:Publish",
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.1265]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/subscriptionService/ServiceRole",
+            "statements": [
+                {
+                    "Action": [
+                        "sns:CreateTopic",
+                        "sns:Subscribe",
+                        "sns:DeleteTopic",
+                        "sns:ListSubscriptionsByTopic",
+                        "sns:BatchUnsubscribe",
+                        "sns:Unsubscribe",
+                        "sns:GetSubscriptionAttributes"
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.1368]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/unsubscribeService/ServiceRole",
+            "statements": [
+                {
+                    "Action": [
+                        "sns:Subscribe",
+                        "sns:DeleteTopic",
+                        "sns:ListSubscriptionsByTopic",
+                        "sns:BatchUnsubscribe",
+                        "sns:Unsubscribe",
+                        "sns:GetSubscriptionAttributes"
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.1387]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/assetService/ServiceRole",
+            "statements": [
+                {
+                    "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.1484]}"
+                }
+            ]
+        },
+        {
+            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/createAsset/ServiceRole",
+            "statements": [
+                {
+                    "Action": "sns:CreateTopic",
+                    "Effect": "Allow",
+                    "Resource": "${Token[TOKEN.1539]}"
+                }
+            ]
+        }
+    ]
 }
