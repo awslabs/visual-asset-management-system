@@ -26,7 +26,14 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
-import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import {
+    buildAssetHistoryFunction,
+    buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
+    grantZipDownloadLaunch,
+    ZIP_DOWNLOAD_ROUTES,
+    ZIP_DOWNLOAD_SYSTEM_TRIGGER,
+} from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
     buildExecuteWorkflowV2Function,
@@ -48,14 +55,6 @@ import {
     SystemPipelineCallbackRegistry,
 } from "../../lambdaBuilder/systemPipelineCallbacks";
 import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
-import {
-    buildZipDownloadCallbackFunction,
-    buildZipDownloadServiceFunction,
-    buildZipDownloadSweep,
-    grantZipDownloadLaunch,
-    ZIP_DOWNLOAD_ROUTES,
-    ZIP_DOWNLOAD_SYSTEM_TRIGGER,
-} from "../../lambdaBuilder/zipDownloadFunctions";
 import {
     buildLargeObjectCopyEngine,
     grantLargeObjectCopyCoordination,
@@ -407,20 +406,13 @@ export class ApiBuilder2NestedStack extends NestedStack {
         // function here. Empty until one does, which adds no variable and no policy.
         const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
 
-        // Download as Zip: the zip download service (six routes) and the zipArchive pipeline's terminal
-        // callback deploy whatever app.zipDownloads.enabled says, so turning the feature off keeps
-        // existing jobs readable and the routes answering 404. Only with it on is the callback
-        // registered (Zip-Download) and the service granted its launch and abort cross-calls (below,
-        // once executeWorkflowV2 exists).
+        // Download as Zip: one function, the zip download service, serves the six routes, the
+        // zipArchive pipeline's terminal callback and the delayed sweep's passes. It deploys whatever
+        // app.zipDownloads.enabled says, so turning the feature off keeps existing jobs readable and
+        // the routes answering 404. Only with it on is it registered as the Zip-Download callback,
+        // given the sweep state machine, and granted its launch and abort cross-calls (below, once
+        // executeWorkflowV2 exists).
         const zipDownloadServiceFunction = buildZipDownloadServiceFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        const zipDownloadCallbackFunction = buildZipDownloadCallbackFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
@@ -436,15 +428,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             });
         }
         if (config.app.zipDownloads.enabled) {
-            systemPipelineCallbacks[ZIP_DOWNLOAD_SYSTEM_TRIGGER] = zipDownloadCallbackFunction;
+            systemPipelineCallbacks[ZIP_DOWNLOAD_SYSTEM_TRIGGER] = zipDownloadServiceFunction;
             // The delayed sweep of a stopped job's archive upload (#1125 D16).
-            buildZipDownloadSweep(
-                this,
-                zipDownloadCallbackFunction,
-                zipDownloadServiceFunction,
-                storageResources,
-                config
-            );
+            buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
         }
 
         attachSystemPipelineCallbacks(

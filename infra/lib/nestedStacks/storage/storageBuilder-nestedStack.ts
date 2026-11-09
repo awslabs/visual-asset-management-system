@@ -61,7 +61,7 @@ export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex"
 /**
  * Index of ZipDownloadRequestsStorageTable on userAssetKey (`userId#databaseId#assetId`): one user's
  * Download as Zip jobs for one asset. Mirrored as USER_ASSET_INDEX in
- * backend/backend/handlers/zipDownloads/zipDownloadService.py.
+ * backend/backend/handlers/assets/zipDownloadService.py.
  */
 export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
 

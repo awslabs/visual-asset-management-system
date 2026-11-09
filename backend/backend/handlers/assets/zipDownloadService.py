@@ -21,8 +21,17 @@ A create resolves and checks the selection (refusing the whole job on any archiv
 archive-storage-class or blocked file, owner decision), writes the request manifest and a QUEUED row,
 and launches the zipArchive system workflow as SYSTEM_USER through the system-pipeline cross-call
 (common/workflows/systemPipelines.py). The zipArchive container writes progress and the final status;
-the terminal callback (zipDownloadCallback.py) and the read-time reconcile here finalize what it
-could not.
+the terminal callback and the read-time reconcile here finalize what it could not.
+
+The same function also serves two direct invokes that no API route reaches (lambda_handler
+dispatches on the event's envelope, never on a request body):
+  - the zipArchive system pipeline's terminal callback (system trigger ``Zip-Download``), sent
+    asynchronously by whichever terminal writer records a run's terminal status
+    (common/workflows/systemPipelines.py CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER);
+  - a pass of a stopped job's delayed sweep, invoked by the zip download sweep state machine.
+API Gateway builds every proxy event with a ``requestContext`` and cannot add top-level keys, so an
+event with one is always an API request, whatever its body says; an event without one is an
+internal invoke and never reaches the API dispatch. Any other shape is logged and ignored.
 """
 
 import base64
@@ -80,7 +89,7 @@ from models.common import (
     validation_error,
     validation_error_message,
 )
-from models.zipDownloads import (
+from models.assetsV3 import (
     CreateZipDownloadRequestModel,
     DeleteZipDownloadQueryModel,
     ListZipDownloadsQueryModel,
@@ -157,8 +166,8 @@ asset_table = dynamodb.Table(asset_table_name)
 buckets_table = dynamodb.Table(buckets_table_name)
 executions_table = dynamodb.Table(executions_table_name)
 # The auxiliary bucket is the stack's own, in this deployment's Region: its manifest writes, aborts,
-# lists, deletes and presigns are signed for that Region without an asset buckets table read
-# (#1125 D17, as in zipDownloadCallback).
+# lists, deletes and presigns (and the terminal callback's and the delayed sweep's aborts, lists and
+# deletes) are signed for that Region without an asset buckets table read (#1125 D17).
 register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
@@ -1093,10 +1102,124 @@ def delete_job(event, database_id, asset_id, request_id):
 
 
 # ---------------------------------------------------------------------------
+# Terminal callback and delayed sweep (direct invokes; no API route reaches them)
+# ---------------------------------------------------------------------------
+#
+# The terminal callback finalizes the job row the container could not
+# (common/zipDownloads.finalize_ended_run): a run that succeeded without the archive object, a run
+# aborted from the executions views ("Cancelled from workflow executions"), a failure or timeout the
+# container never reported. It aborts the job's open uploads before it decides, and an archive that
+# already landed wins (SUCCEEDED) whatever the run's status. It is idempotent: every write conditions
+# on the row still being non-terminal and on the row belonging to this run, and Lambda's asynchronous
+# retries replay the same payload. It trusts only the stored row and the server-only context; the
+# payload's status decides which rule applies. Only the terminal writers' roles may invoke it with
+# a callback payload, and only the sweep state machine sends a sweep pass.
+
+# Top-level marker of a delayed sweep pass (the sweep state machine's LambdaInvoke payload,
+# infra lambdaBuilder/assetFunctions.ts buildZipDownloadSweep).
+SWEEP_ACTION = "sweep"
+
+
+def _ignored(reason):
+    logger.info(f"Zip download callback ignored: {reason}")
+    return {"status": "ignored", "reason": reason}
+
+
+def handle_callback(payload) -> dict:
+    if not isinstance(payload, dict):
+        return _ignored("payload is not an object")
+    if payload.get("callbackType") != sp.CALLBACK_TYPE:
+        return _ignored("not a system pipeline terminal callback")
+    if payload.get("schemaVersion") != sp.CALLBACK_SCHEMA_VERSION:
+        return _ignored("unsupported callback schema version")
+    if payload.get("triggerType") != zd.ZIP_DOWNLOAD_STORED_TRIGGER:
+        return _ignored("not a zip download run")
+    context = payload.get("systemExecutionContext")
+    if not isinstance(context, dict):
+        return _ignored("no system execution context")
+    user_id, request_id = context.get("userId"), context.get("requestId")
+    if not isinstance(user_id, str) or not user_id or not zd.is_request_id(request_id):
+        return _ignored("context does not name a zip download")
+    execution_id = payload.get("workflowExecutionId") or ""
+
+    row = zip_table.get_item(Key=zd.row_key(user_id, request_id), ConsistentRead=True).get("Item")
+    if not row:
+        return _ignored("zip download no longer exists")
+    if row.get("databaseId") != context.get("databaseId") or row.get("assetId") != context.get("assetId"):
+        logger.warning(f"Zip download callback context does not match job {request_id}")
+        return _ignored("context does not match the job")
+    row_execution = row.get("workflowExecutionId") or ""
+    if row_execution and execution_id and row_execution != execution_id:
+        return _ignored("callback is for another run of the job")
+
+    # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
+    status, changed = zd.finalize_ended_run(
+        zip_table, s3, aux_bucket_name, row, payload.get("executionStatus", ""),
+        payload.get("executionError", "") or "", logger)
+    if not status:
+        # Already terminal (the container, the user's cancel or an earlier delivery won). A run that
+        # did not succeed still gets its incomplete uploads cleaned, which is idempotent.
+        if payload.get("executionStatus") != "SUCCEEDED" and row.get("status") != zd.STATUS_SUCCEEDED:
+            prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
+            zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
+            # Not final either: the delayed sweep aborts the recorded upload again later.
+            zd.schedule_delayed_sweep(row, logger)
+        # A job that ended without an archive (the container's FAILED, the user's cancel) keeps no
+        # working objects: this also removes a resolved manifest the container wrote after a cancel.
+        if row.get("status") in (zd.STATUS_FAILED, zd.STATUS_CANCELLED):
+            zd.delete_working_objects(s3, aux_bucket_name, row, logger)
+        return {"status": "unchanged", "jobStatus": row.get("status", "")}
+    logger.info(f"Zip download {request_id}: run {execution_id} ended "
+                f"{payload.get('executionStatus')}; job {'set to ' + status if changed else 'unchanged'}")
+    return {"status": "finalized" if changed else "unchanged", "jobStatus": status}
+
+
+def handle_sweep(event) -> dict:
+    """One pass of a job's delayed sweep (the zip download sweep state machine, #1125 D16): abort
+    the archive uploads the job recorded that are still listed, unless its archive landed."""
+    result = zd.sweep_recorded_uploads(zip_table, s3, aux_bucket_name, event.get("zipSweep") or {},
+                                       final=bool(event.get("final")), logger=logger)
+    logger.info(f"Zip download delayed sweep ({'final' if event.get('final') else 'first'} pass): "
+                f"{result}")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+def _is_api_request(event) -> bool:
+    """An API Gateway proxy event (HTTP API v2, or REST normalized by request_to_claims): API Gateway
+    builds every one with a ``requestContext`` and cannot add top-level keys."""
+    return isinstance(event, dict) and "requestContext" in event
+
+
+def _is_internal_event(event, key, value) -> bool:
+    """A direct invoke marked by a top-level key, which no API Gateway event can carry."""
+    return isinstance(event, dict) and "requestContext" not in event and event.get(key) == value
+
+
+def lambda_handler(event, context: LambdaContext):
+    # Dispatch on the envelope, never on the body: an API request is always an API request, whatever
+    # its body imitates, and the internal branches run before any request handling or request log.
+    if _is_api_request(event):
+        return handle_api_request(event, context)
+    if _is_internal_event(event, "action", SWEEP_ACTION):
+        # Raises on a failed check or listing, so the state machine retries the pass.
+        return handle_sweep(event)
+    if _is_internal_event(event, "callbackType", sp.CALLBACK_TYPE):
+        try:
+            return handle_callback(event)
+        except Exception as e:
+            # Raising makes Lambda retry the asynchronous delivery, which is safe (idempotent writes).
+            logger.exception(f"Zip download callback failed: {e}")
+            raise
+    # Neither an API request nor a marked internal invoke: no read, no write, no retry.
+    logger.warning("Zip download service ignored an event of an unknown shape")
+    return {"status": "ignored", "reason": "unknown event shape"}
+
+
+def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
     try:

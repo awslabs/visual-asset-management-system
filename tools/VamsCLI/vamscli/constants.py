@@ -312,7 +312,7 @@ FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
 FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
 
 # Download as Zip. The archive formats and compressions the create route accepts
-# (CreateZipDownloadRequestModel in backend/backend/models/zipDownloads.py), the job statuses, and
+# (CreateZipDownloadRequestModel in backend/backend/models/assetsV3.py), the job statuses, and
 # the two "feature off" texts: the API's 404 body, and the business error the CLI and the MCP server
 # raise for it (from the profile's feature switches first, the 404 body second).
 ZIP_DOWNLOAD_FORMATS = ("zip", "tar", "tar.gz")
@@ -321,7 +321,7 @@ ZIP_DOWNLOAD_MAX_SELECTION_ENTRIES = 1000
 ZIP_DOWNLOAD_ACTIVE_STATUSES = ("QUEUED", "RUNNING")
 ZIP_DOWNLOAD_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELLED")
 # The DELETE request route's cancel intent (DeleteZipDownloadQueryModel in
-# backend/backend/models/zipDownloads.py): with it the API never deletes a job that finished before
+# backend/backend/models/assetsV3.py): with it the API never deletes a job that finished before
 # the cancel arrived; it keeps it and answers action "ended".
 ZIP_DOWNLOAD_INTENT_PARAM = "intent"
 ZIP_DOWNLOAD_CANCEL_INTENT = "cancel"

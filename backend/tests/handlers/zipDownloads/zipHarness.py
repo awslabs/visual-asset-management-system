@@ -322,7 +322,7 @@ def _module_overrides():
         sp = _load("common.workflows.systemPipelines", "common/workflows/systemPipelines.py")
         workflows_pkg.systemPipelines = sp
         # Imported once and kept: pydantic v1 refuses to register a model's validators twice.
-        importlib.import_module("models.zipDownloads")
+        importlib.import_module("models.assetsV3")
         yield
     finally:
         for n, m in saved.items():
@@ -335,7 +335,8 @@ def _module_overrides():
 
 
 def load_handlers(enabled=True, env=None):
-    """Load fresh copies of the service and the callback wired to new doubles."""
+    """Load a fresh copy of the zip download service (API routes, terminal callback and delayed
+    sweep in one handler) wired to new doubles."""
     environ = {"ZIPDOWNLOADS_ENABLED": "true" if enabled else "false",
                "EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME": "executeFn",
                "EXECUTION_SERVICE_FUNCTION_NAME": "executionServiceFn",
@@ -345,8 +346,10 @@ def load_handlers(enabled=True, env=None):
     with patch.dict(os.environ, environ), _module_overrides(), \
             patch("boto3.client", return_value=MagicMock()), \
             patch("boto3.resource", return_value=MagicMock()):
-        svc = _load("zipDownloadService_under_test", "handlers/zipDownloads/zipDownloadService.py")
-        cb = _load("zipDownloadCallback_under_test", "handlers/zipDownloads/zipDownloadCallback.py")
+        svc = _load("zipDownloadService_under_test", "handlers/assets/zipDownloadService.py")
+    # One function serves the API routes, the terminal callback and the delayed sweep: ``cb`` is
+    # the same module, kept as a name so callback tests read as such.
+    cb = svc
     env_obj = types.SimpleNamespace(
         svc=svc, cb=cb, s3=FakeS3(), lam=FakeLambda(),
         zip=FakeTable("userId", "requestId", {"UserAssetIndex": "userAssetKey"}),
@@ -355,9 +358,8 @@ def load_handlers(enabled=True, env=None):
         executions=FakeTable("workflowExecutionId", "workflowDatabaseId:workflowId"),
         audit=MagicMock())
     env_obj.buckets.query = lambda **kw: {"Items": [{"bucketId": "b1", "bucketName": ASSET_BUCKET}]}
-    for module in (svc, cb):
-        module.s3 = env_obj.s3
-        module.zip_table = env_obj.zip
+    svc.s3 = env_obj.s3
+    svc.zip_table = env_obj.zip
     svc.lambda_client = env_obj.lam
     svc.asset_table = env_obj.assets
     svc.buckets_table = env_obj.buckets

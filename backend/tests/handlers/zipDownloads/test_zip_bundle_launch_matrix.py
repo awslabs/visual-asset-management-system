@@ -128,7 +128,7 @@ def test_each_zip_download_shape_launches_through_the_execute_handler(env, versi
 
 def test_the_largest_selection_launches_through_the_execute_handler(env):
     """The API takes up to 1000 selection entries; each is one input of the launch."""
-    from backend.backend.models.zipDownloads import MAX_SELECTION_ENTRIES
+    from backend.backend.models.assetsV3 import ZIP_MAX_SELECTION_ENTRIES as MAX_SELECTION_ENTRIES
     for i in range(MAX_SELECTION_ENTRIES):
         env.s3.add(f"xasset1/many/f{i}.bin", size=1, version=f"v{i}")
     selection = [{"type": "file", "relativePath": f"/many/f{i}.bin"} for i in range(MAX_SELECTION_ENTRIES)]

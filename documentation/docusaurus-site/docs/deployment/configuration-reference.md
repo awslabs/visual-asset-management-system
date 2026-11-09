@@ -1235,7 +1235,7 @@ The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifec
 Every key is optional, and an absent block uses the defaults. Configuration validation checks every key, also while the feature is disabled, and rejects a value that is not a whole number within its range.
 
 :::note[Implemented by]
-Nested stack: `infra/lib/nestedStacks/pipelines/utility/zipArchive/zipArchiveBuilder-nestedStack.ts` (`ZipArchiveBuilderNestedStack`) — AWS Batch on Fargate. API: `backend/backend/handlers/zipDownloads/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
+Nested stack: `infra/lib/nestedStacks/pipelines/utility/zipArchive/zipArchiveBuilder-nestedStack.ts` (`ZipArchiveBuilderNestedStack`) — AWS Batch on Fargate. API, terminal callback and delayed sweep (one function): `backend/backend/handlers/assets/zipDownloadService.py`. Defaults and validation: `ZIP_DOWNLOADS_DEFAULTS`, `applyZipDownloadsDefaults()` and `validateZipDownloadsConfig()` in `infra/config/config.ts`.
 :::
 
 | Field                                       | Type    | Default                 | Range                      | Description                                                                                                                                                                                                                                                                                                                             |

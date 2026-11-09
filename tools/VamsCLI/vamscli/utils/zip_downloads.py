@@ -20,7 +20,7 @@ from .exceptions import (
     ZipDownloadTimeoutError,
 )
 
-# The charset of an S3 VersionId (VERSION_ID_PATTERN in backend/backend/models/zipDownloads.py).
+# The charset of an S3 VersionId (ZIP_VERSION_ID_PATTERN in backend/backend/models/assetsV3.py).
 _VERSION_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
 

@@ -99,7 +99,7 @@ DELIBERATE_DEPARTURES = {
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "invoke_config"),
     # The zip service's launch of the zipArchive workflow is not idempotent: a retry would start a
     # second run the job row never records (#1125 D8). Its abort and details read share the client.
-    ("handlers/zipDownloads/zipDownloadService.py", "invoke_config"),
+    ("handlers/assets/zipDownloadService.py", "invoke_config"),
     # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
     # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
     ("handlers/config/configService.py", "geo_lookup_config"),

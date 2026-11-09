@@ -98,7 +98,7 @@ API_GET_ASSET_HISTORY = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/assetHistory", (GET,), "assetHistory"
 )
 
-# Download as Zip (prepared downloads, handlers/zipDownloads/zipDownloadService.py). Always deployed;
+# Download as Zip (prepared downloads, handlers/assets/zipDownloadService.py). Always deployed;
 # the handler answers 404 while app.zipDownloads is disabled. Every job is owned by its requester.
 API_ZIP_DOWNLOADS_ASSET = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/download/zip", (GET, POST), "zipDownloads"

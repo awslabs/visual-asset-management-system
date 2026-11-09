@@ -6,8 +6,8 @@
 A zip download is a job owned by the user who requested it: a row in the zip download requests
 table (PK ``userId``, SK ``requestId``), a request manifest and, once the zipArchive system pipeline
 has run, an archive under ``vams.preparedDownloads/`` in the asset auxiliary bucket. The API
-(``handlers/zipDownloads/zipDownloadService.py``), the terminal callback
-(``handlers/zipDownloads/zipDownloadCallback.py``) and the zipArchive container all write the row, so
+(``handlers/assets/zipDownloadService.py``), its terminal callback and delayed sweep
+branches, and the zipArchive container all write the row, so
 the status machine is defined once here:
 
 - ``QUEUED`` -> ``RUNNING`` -> one of ``SUCCEEDED`` / ``FAILED`` / ``CANCELLED``.
@@ -503,7 +503,7 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
         return _outcome()
     if finalize_row(table, row["userId"], row["requestId"], STATUS_CANCELLED, cancelled_by=cancelled_by):
         # A resolved manifest the container writes after this is removed by the terminal callback of
-        # the aborted run (zipDownloadCallback), which deletes them again for an ended job.
+        # the aborted run (the zip download service's terminal callback), which deletes them again for an ended job.
         delete_working_objects(s3_client, bucket, row, logger)
         return CANCEL_CANCELLED
     return _outcome()
@@ -796,9 +796,9 @@ def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]
 # answered NoSuchUpload, and the upload was listed again 2 to 8 minutes later with a part accepted
 # before the stop. So every stopper of a zip job (the user's cancel, the terminal callback, the
 # read-time reconcile, the delete of a job) also starts the job's delayed sweep: an execution of the
-# zip download sweep state machine (infra lambdaBuilder/zipDownloadFunctions.ts: Wait
+# zip download sweep state machine (infra lambdaBuilder/assetFunctions.ts: Wait
 # SWEEP_FIRST_WAIT_SECONDS, sweep, Wait SWEEP_SECOND_WAIT_SECONDS, sweep), whose passes run the
-# terminal callback's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.zipDownloads on.
+# zip download service's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.zipDownloads on.
 
 SWEEP_STATE_MACHINE_ARN_ENV = "ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN"
 SWEEP_EXECUTION_PREFIX = "zipsweep-"

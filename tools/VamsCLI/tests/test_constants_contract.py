@@ -372,7 +372,7 @@ class TestExecutionListIncludeSystemParam:
         assert constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM == backend_value
 
 
-BACKEND_ZIP_MODELS = REPO_ROOT / "backend/backend/models/zipDownloads.py"
+BACKEND_ZIP_MODELS = REPO_ROOT / "backend/backend/models/assetsV3.py"
 
 
 class TestZipDownloadCancelIntent:
@@ -384,7 +384,7 @@ class TestZipDownloadCancelIntent:
         tree = ast.parse(BACKEND_ZIP_MODELS.read_text(encoding="utf-8"))
         model = next((n for n in tree.body if isinstance(n, ast.ClassDef)
                       and n.name == "DeleteZipDownloadQueryModel"), None)
-        assert model is not None, "DeleteZipDownloadQueryModel not found in models/zipDownloads.py"
+        assert model is not None, "DeleteZipDownloadQueryModel not found in models/assetsV3.py"
         fields = {n.target.id: ast.unparse(n.annotation) for n in model.body
                   if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
         assert constants.ZIP_DOWNLOAD_INTENT_PARAM in fields

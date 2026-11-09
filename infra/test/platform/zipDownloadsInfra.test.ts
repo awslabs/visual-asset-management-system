@@ -7,9 +7,10 @@
  * Download as Zip (app.zipDownloads) in the synthesized templates.
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
- * `vams.preparedDownloads/`, the table's SSM name, the zip download service with its six routes, and the
- * terminal callback function. Only with `enabled`: the zipArchive system pipeline stack, the
- * ZIPDOWNLOADS feature switch, the callback's registration under Zip-Download, and the service's two
+ * `vams.preparedDownloads/`, the table's SSM name, and one zip Lambda, the zip download service,
+ * which serves the six routes, the terminal callback and the delayed sweep's passes. Only with
+ * `enabled`: the zipArchive system pipeline stack, the ZIPDOWNLOADS feature switch, the service's
+ * registration as the Zip-Download callback, the sweep state machine that invokes it, and its two
  * cross-call grants (launch and abort), each on an exact function ARN.
  */
 
@@ -27,12 +28,11 @@ import {
     ZIP_DOWNLOAD_ROUTES,
     ZIP_DOWNLOAD_SWEEP_RETRY,
     ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS,
-} from "../../lib/lambdaBuilder/zipDownloadFunctions";
+} from "../../lib/lambdaBuilder/assetFunctions";
 
 jest.setTimeout(900_000);
 
-const SERVICE_HANDLER = "handlers.zipDownloads.zipDownloadService.lambda_handler";
-const CALLBACK_HANDLER = "handlers.zipDownloads.zipDownloadCallback.lambda_handler";
+const SERVICE_HANDLER = "handlers.assets.zipDownloadService.lambda_handler";
 const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteZipArchivePipeline.lambda_handler";
 
 function enabledMutate(retentionDays: number) {
@@ -72,6 +72,38 @@ function roleStatements(synth: SynthResult, fn: Resource): any[] {
 
 function actionsOf(statement: any): string[] {
     return ([] as string[]).concat(statement.Action);
+}
+
+/** Every Lambda whose handler belongs to Download as Zip's API side. */
+function zipApiFunctions(synth: SynthResult): Resource[] {
+    return synth.where("AWS::Lambda::Function", (r) =>
+        /(^|\.)zipDownload|handlers\.zipDownloads\./.test(String(r.properties.Handler ?? ""))
+    );
+}
+
+/**
+ * One Lambda serves the routes, the terminal callback and the sweep: no second zip function, no
+ * handler under the removed handlers/zipDownloads package, and no role or log group of the removed
+ * callback function.
+ */
+function expectOneZipFunction(synth: SynthResult): void {
+    const zip = zipApiFunctions(synth);
+    expect(zip.map((r) => r.properties.Handler)).toEqual([SERVICE_HANDLER]);
+    expect(synth.resources.filter((r) => /^zipDownloadCallback/i.test(r.logicalId))).toEqual([]);
+    expect(synth.grep("zipDownloadCallback")).toEqual([]);
+}
+
+/** Every S3 action that writes, deletes or aborts is granted only under vams.preparedDownloads/. */
+function expectS3MutationsPrefixScoped(statements: any[]): void {
+    const mutations = statements.filter((s) =>
+        actionsOf(s).some((a) => /^s3:(Put|Delete|Abort|Restore)/.test(a))
+    );
+    expect(mutations.length).toBeGreaterThan(0);
+    for (const s of mutations) {
+        for (const r of [].concat(s.Resource)) {
+            expect(SynthResult.flatten(r)).toMatch(/\/vams\.preparedDownloads\/\*$/);
+        }
+    }
 }
 
 describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (name) => {
@@ -182,8 +214,11 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(invoke).toEqual([]);
     });
 
-    test("the callback function exists but no terminal writer names it", () => {
-        functionByHandler(synth, CALLBACK_HANDLER);
+    test("one zip Lambda serves the routes, the callback and the sweep", () => {
+        expectOneZipFunction(synth);
+    });
+
+    test("no terminal writer names the zip download service with the feature off", () => {
         const writersWithRegistry = synth.where(
             "AWS::Lambda::Function",
             (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
@@ -218,9 +253,10 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         });
     });
 
-    test("the callback deletes and lists versions only under vams.preparedDownloads/ (#1125 D13)", () => {
-        const callback = functionByHandler(synth, CALLBACK_HANDLER);
-        const statements = roleStatements(synth, callback);
+    test("the service deletes and lists versions only under vams.preparedDownloads/ (#1125 D13)", () => {
+        const service = functionByHandler(synth, SERVICE_HANDLER);
+        const statements = roleStatements(synth, service);
+        expectS3MutationsPrefixScoped(statements);
         const deletes = statements.filter((s) =>
             actionsOf(s).some((a) => a.startsWith("s3:Delete"))
         );
@@ -232,6 +268,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
                 "s3:DeleteObjectVersion",
                 "s3:GetObject",
                 "s3:ListMultipartUploadParts",
+                "s3:PutObject",
             ].sort()
         );
         expect(SynthResult.flatten(deletes[0].Resource)).toMatch(/\/vams\.preparedDownloads\/\*$/);
@@ -241,30 +278,24 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         });
     });
 
-    test("both zip functions hold s3:ListBucket on the auxiliary bucket, only for vams.preparedDownloads/ (#1125 D21)", () => {
+    test("the service holds s3:ListBucket on the auxiliary bucket, only for vams.preparedDownloads/ (#1125 D21)", () => {
         // Without it S3 answers HeadObject on a missing archive key with 403, and every delayed
         // sweep pass failed in landed_archive. A unit test that mocks a 404 cannot catch this.
-        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
-            const statements = roleStatements(synth, functionByHandler(synth, handler));
-            const lists = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
-            const aux = lists.filter((s) => s.Condition !== undefined);
-            expect(aux).toHaveLength(1);
-            if (handler === CALLBACK_HANDLER) {
-                // The callback reads no asset bucket: its only ListBucket is the scoped one.
-                expect(lists).toHaveLength(1);
-            }
-            expect(aux[0].Condition).toEqual({
-                StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
-            });
-            // The bucket ARN itself (a partition-aware reference), never an object or wildcard.
-            expect(SynthResult.flatten(aux[0].Resource)).not.toMatch(/\*/);
-            expect(JSON.stringify(aux[0].Resource)).not.toMatch(/arn:aws:/);
-        }
+        const statements = roleStatements(synth, functionByHandler(synth, SERVICE_HANDLER));
+        const lists = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
+        const aux = lists.filter((s) => s.Condition !== undefined);
+        expect(aux).toHaveLength(1);
+        expect(aux[0].Condition).toEqual({
+            StringLike: { "s3:prefix": ["vams.preparedDownloads/*"] },
+        });
+        // The bucket ARN itself (a partition-aware reference), never an object or wildcard.
+        expect(SynthResult.flatten(aux[0].Resource)).not.toMatch(/\*/);
+        expect(JSON.stringify(aux[0].Resource)).not.toMatch(/arn:aws:/);
     });
 
-    test("both zip functions confirm an abort with ListParts, only under vams.preparedDownloads/ (#1125 D16)", () => {
-        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
-            const statements = roleStatements(synth, functionByHandler(synth, handler));
+    test("the service confirms an abort with ListParts, only under vams.preparedDownloads/ (#1125 D16)", () => {
+        {
+            const statements = roleStatements(synth, functionByHandler(synth, SERVICE_HANDLER));
             const listParts = statements.filter((s) =>
                 actionsOf(s).includes("s3:ListMultipartUploadParts")
             );
@@ -282,23 +313,11 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
                 r.logicalId.startsWith("ZipDownloadSweepStateMachine")
             )
         ).toEqual([]);
-        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
-            const fn = functionByHandler(synth, handler);
-            expect(envOf(fn).ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN).toBeUndefined();
-            expect(
-                roleStatements(synth, fn).filter((s) =>
-                    actionsOf(s).includes("states:StartExecution")
-                )
-            ).toEqual([]);
-        }
-    });
-
-    test("the callback reads no asset buckets table: its auxiliary bucket Region is registered (#1125 D17)", () => {
-        const statements = roleStatements(synth, functionByHandler(synth, CALLBACK_HANDLER));
-        const dynamoResources = statements
-            .filter((s) => actionsOf(s).some((a) => a.startsWith("dynamodb:")))
-            .flatMap((s) => [].concat(s.Resource).map((r) => SynthResult.flatten(r)));
-        expect(dynamoResources.some((r) => /S3AssetBuckets|bucketNameGSI/i.test(r))).toBe(false);
+        const fn = functionByHandler(synth, SERVICE_HANDLER);
+        expect(envOf(fn).ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN).toBeUndefined();
+        expect(
+            roleStatements(synth, fn).filter((s) => actionsOf(s).includes("states:StartExecution"))
+        ).toEqual([]);
     });
 });
 
@@ -317,6 +336,13 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(env.ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER).toBe("5");
         expect(env.EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME).toBeDefined();
         expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeDefined();
+    });
+
+    test("one zip Lambda serves the routes, the callback and the sweep; its S3 writes stay prefix-scoped", () => {
+        expectOneZipFunction(synth);
+        expectS3MutationsPrefixScoped(
+            roleStatements(synth, functionByHandler(synth, SERVICE_HANDLER))
+        );
     });
 
     test("the service may invoke exactly the execute and execution service functions", () => {
@@ -364,14 +390,14 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
             })
         );
         expect(ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS).toEqual({ first: 300, second: 600 });
-        const callbackId = functionByHandler(synth, CALLBACK_HANDLER).logicalId;
+        const serviceId = functionByHandler(synth, SERVICE_HANDLER).logicalId;
         for (const [id, final] of [
             ["ZipDownloadSweepFirst", false],
             ["ZipDownloadSweepFinal", true],
         ] as [string, boolean][]) {
             const task = states[id];
             expect(JSON.stringify(task.Resource)).toContain(":lambda:invoke");
-            expect(JSON.stringify(task.Parameters.FunctionName)).toContain(callbackId);
+            expect(JSON.stringify(task.Parameters.FunctionName)).toContain(serviceId);
             expect(task.Parameters.Payload).toEqual({
                 action: "sweep",
                 "zipSweep.$": "$.zipSweep",
@@ -418,13 +444,13 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         );
     });
 
-    test("the service and the callback may start the sweep, on its exact ARN only", () => {
+    test("the service may start the sweep, on its exact ARN only", () => {
         const machine = synth.where("AWS::StepFunctions::StateMachine", (r) =>
             r.logicalId.startsWith("ZipDownloadSweepStateMachine")
         )[0];
         const name = machine.properties.StateMachineName;
-        for (const handler of [SERVICE_HANDLER, CALLBACK_HANDLER]) {
-            const fn = functionByHandler(synth, handler);
+        {
+            const fn = functionByHandler(synth, SERVICE_HANDLER);
             const arn = SynthResult.flatten(envOf(fn).ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN);
             expect(arn).toMatch(new RegExp(`:states:[^:]+:[^:]+:stateMachine:${name}$`));
             // Built from the fixed name: the function does not reference the state machine.
@@ -438,8 +464,8 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         }
     });
 
-    test("the callback is registered under Zip-Download on the terminal writers", () => {
-        const callbackId = functionByHandler(synth, CALLBACK_HANDLER).logicalId;
+    test("the zip download service is registered under Zip-Download on the terminal writers", () => {
+        const serviceId = functionByHandler(synth, SERVICE_HANDLER).logicalId;
         const writers = synth.where(
             "AWS::Lambda::Function",
             (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
@@ -450,7 +476,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
                 envOf(writer)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV]
             );
             expect(registry).toContain('"Zip-Download"');
-            expect(registry).toContain(callbackId);
+            expect(registry).toContain(serviceId);
         }
     });
 

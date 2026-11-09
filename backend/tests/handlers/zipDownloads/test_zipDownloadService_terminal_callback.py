@@ -1,8 +1,9 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Terminal callback of zip download runs: each terminal status, idempotent replays, payloads that
-do not belong to the job, and multipart cleanup on every non-success."""
+"""Terminal callback of zip download runs (the zip download service's callback branch): each
+terminal status, idempotent replays, payloads that do not belong to the job, and multipart cleanup
+on every non-success."""
 
 import pytest
 
