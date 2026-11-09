@@ -315,6 +315,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the core viewers showing a generic download error when the API refuses a file with 403; they now say "You do not have permission to view or download this file.", a 401 says the session has expired and to sign in again, and the Text Diff Viewer uses the same wording. ([#1211](https://github.com/awslabs/visual-asset-management-system/issues/1211))
 -   **Backend** Fixed the Image Viewer and asset previews showing nothing for SVG files: download and stream links for a `.svg` file now return it as `image/svg+xml` with an attachment disposition, so the viewer renders it and opening the link directly downloads it. Stored files are unchanged. ([#1201](https://github.com/awslabs/visual-asset-management-system/issues/1201))
 -   **Documentation** The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet, instead of reading as a third note under the Three.js USD bullet, which opens USD without that setting. ([#1214](https://github.com/awslabs/visual-asset-management-system/issues/1214))
+-   **Documentation** The uninstall guide no longer lists the REST API stage access log group among the explicitly named `/aws/vendedlogs/` groups that persist after stack deletion; CDK names that group and deletes it with the stack. ([#1225](https://github.com/awslabs/visual-asset-management-system/pull/1225))
 
 ### Chores
 
