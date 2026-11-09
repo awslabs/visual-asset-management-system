@@ -5,7 +5,7 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { checkWebRoutesAllowed } from "./services/webRoutesCheck";
+import { checkWebRoutesAllowed, WebRouteCheck } from "./services/webRoutesCheck";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
@@ -445,7 +445,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     const [checkedPaths, setCheckedPaths] = useState<string[] | null>(null);
 
     useEffect(() => {
-        const allRoutes = [];
+        const allRoutes: WebRouteCheck[] = [];
         for (const route of activeRouteTable) {
             if (route.path) {
                 allRoutes.push({
