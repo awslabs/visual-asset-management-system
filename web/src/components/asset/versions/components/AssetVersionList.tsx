@@ -431,6 +431,12 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         {
             id: "actions",
             header: "Actions",
+            // Four labelled buttons sit in this cell, and without a minimum the column only gets
+            // the width the other columns leave - about 110px at 1440px with the navigation open,
+            // which breaks the labels inside their words and makes every row several hundred
+            // pixels tall. The value is the widest set a row renders (Edit, Download, Revert,
+            // Archive) with the gaps between them and the cell's padding.
+            minWidth: 420,
             cell: (item: AssetVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button
