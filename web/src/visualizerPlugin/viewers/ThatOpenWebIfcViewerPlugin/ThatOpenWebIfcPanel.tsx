@@ -8,6 +8,7 @@ import ModelTree from "./components/ModelTree";
 import Properties from "./components/Properties";
 import Tools from "./components/Tools";
 import { IfcViewerInstance, SelectedElement, SpatialNode } from "./types";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
 
 interface ThatOpenWebIfcPanelProps {
     instance: IfcViewerInstance;
@@ -17,6 +18,8 @@ interface ThatOpenWebIfcPanelProps {
     selectedLocalIds: number[];
     onSelectLocalIds: (localIds: number[]) => void;
     onClose?: () => void;
+    // The panel's root element, which the viewer measures against its info box
+    panelRef?: React.Ref<HTMLDivElement>;
 }
 
 type TabKey = "modelTree" | "properties" | "tools";
@@ -29,6 +32,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
     selectedLocalIds,
     onSelectLocalIds,
     onClose,
+    panelRef,
 }) => {
     // Tools is the default tab (camera + section + measure are the most-used).
     const [activeTab, setActiveTab] = useState<TabKey>("tools");
@@ -92,6 +96,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
 
     return (
         <div
+            ref={panelRef}
             style={{
                 position: "fixed",
                 top: "20px",
@@ -101,7 +106,7 @@ const ThatOpenWebIfcPanel: React.FC<ThatOpenWebIfcPanelProps> = ({
                 color: "white",
                 borderRadius: "8px",
                 fontSize: "0.85em",
-                zIndex: 1000,
+                zIndex: VIEWER_LAYER.panel,
                 minWidth: "280px",
                 maxWidth: "320px",
                 display: "flex",

@@ -12,10 +12,12 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
 import { applySceneEnvironment } from "./utils/sceneLighting";
+import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
+import { USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -230,9 +232,92 @@ describe("ThreeJSViewerComponent cleanup", () => {
         expectReleased(renderers[0], environments[0]);
     });
 
+    it("revokes referenced-file blob URLs when the viewer closes after a failed load", async () => {
+        const revokeAll = jest.spyOn(AssetDependencyResolver.prototype, "revokeAll");
+        mockedLoadFile.mockRejectedValue(new Error("Failed to parse file"));
+
+        const view = renderViewer("models/broken.usda");
+        await screen.findByText(/Failed to parse file/);
+        expect(revokeAll).not.toHaveBeenCalled();
+
+        view.unmount();
+
+        expect(revokeAll).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists referenced files that were not loaded, ten by name", async () => {
+        const model = new FakeObject3D();
+        model.type = "Mesh";
+        (model as any).isMesh = true;
+        const warnings = Array.from({ length: 12 }, (_, i) => `tex${i}.png (not found)`);
+        mockedLoadFile.mockResolvedValue({ object: model, warnings });
+
+        const view = renderViewer("models/scene.usda");
+
+        expect(await screen.findByText("12 referenced files were not loaded")).toBeTruthy();
+        expect(screen.getByText("tex0.png (not found)")).toBeTruthy();
+        expect(screen.queryByText("tex10.png (not found)")).toBeNull();
+        expect(screen.getByText("and 2 more")).toBeTruthy();
+        expect(
+            screen.getByRole("region", { name: "Referenced files that were not loaded" }).tabIndex
+        ).toBe(0);
+
+        view.unmount();
+    });
+
+    it("names the notice's dismiss button and lets the keyboard reach it", async () => {
+        const model = new FakeObject3D();
+        model.type = "Mesh";
+        (model as any).isMesh = true;
+        mockedLoadFile.mockResolvedValue({ object: model, warnings: ["x.png (not found)"] });
+
+        const view = renderViewer("models/scene.usda");
+        await screen.findByText("1 referenced file was not loaded");
+
+        const dismiss = screen.getByRole("button", { name: "Dismiss referenced files notice" });
+        dismiss.focus();
+        expect(document.activeElement).toBe(dismiss);
+        fireEvent.click(dismiss);
+        await waitFor(() =>
+            expect(screen.queryByText("1 referenced file was not loaded")).toBeNull()
+        );
+
+        view.unmount();
+    });
+
+    it("explains a USD scene with nothing to draw instead of showing a blank canvas", async () => {
+        mockedLoadFile.mockResolvedValue({ object: new FakeObject3D() });
+
+        const view = renderViewer("models/Teapot.usd");
+
+        expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
+        expect(screen.getByText(/such as sublayers, variants or payloads/)).toBeTruthy();
+        expect(screen.queryByText(/Please ensure the file is a supported 3D format/)).toBeNull();
+
+        view.unmount();
+    });
+
+    it("keeps the referenced files notice over the no-geometry message", async () => {
+        const failure = Object.assign(new Error(USD_NO_GEOMETRY_MESSAGE), {
+            warnings: ["layers/geo.usda (not shown by this viewer (USD sublayers))"],
+        });
+        mockedLoadFile.mockRejectedValue(failure);
+
+        const view = renderViewer("models/scene.usda");
+
+        expect(await screen.findByText(/found nothing in it to display/)).toBeTruthy();
+        expect(screen.getByText("1 referenced file was not loaded")).toBeTruthy();
+        expect(
+            screen.getByText("layers/geo.usda (not shown by this viewer (USD sublayers))")
+        ).toBeTruthy();
+
+        view.unmount();
+    });
+
     it("releases the renderer and its context exactly once after a successful load", async () => {
         const model = new FakeObject3D();
         model.type = "Mesh";
+        (model as any).isMesh = true;
         mockedLoadFile.mockResolvedValue({ object: model });
 
         const view = renderViewer("models/part.glb");

@@ -123,31 +123,44 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper                                                        | Use for                                                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                        |
-| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages           |
-| `searchBox(page)`                                             | The orchestration filter-bar search input                                                  |
-| `facet(page, label)`                                          | A native `<select>` filter                                                                 |
-| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                     |
-| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                 |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                       |
-| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                         |
-| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                            |
-| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                      |
-| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                      |
-| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does       |
-| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike          |
-| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied       |
-| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
-| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
-| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
-| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`          |
-| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`     |
-| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                     |
-| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
-| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
-| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| Helper                                                        | Use for                                                                                            |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                   |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                          |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                         |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                             |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                         |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                               |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                 |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                    |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                              |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                              |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does               |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                  |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied               |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator         |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls                    |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                       |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`                  |
+| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`             |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                             |
+| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)          |
+| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element                  |
+| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                            |
+| `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset         |
+| `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                 |
+| `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected             |
+| `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                            |
+| `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                     |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | The deployment's `featuresEnabled` list / the required features it lacks                           |
+| `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)         |
+| `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                       |
+| `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box            |
+| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll (90 s) until a canvas shows content rather than its clear colour                              |
+| `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
+| `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
+| `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
 
 **Selector facts worth not rediscovering:**
 
@@ -208,6 +221,45 @@ const hit = await dialog.evaluate((el) => {
 });
 expect(hit).toBe(true);
 ```
+
+---
+
+## Viewer render proof (shared by every viewer PR)
+
+`viewers.spec.ts` "viewer render proof (seeded samples)" proves a viewer DRAWS a known file, not only
+that it mounts. Add a viewer's cases to `renderCases` there; do not start another spec or harness.
+
+**Samples.** Every subject is an entry of `e2e/fixtures/viewer-samples.json` (tracked; schema checked by
+`web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`). An entry has `id`, `viewer` (a viewer id
+from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
+`source`, and EXACTLY ONE of:
+
+| Kind      | Fields                                                                                                                                                                                                               |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                            |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                            |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
+
+Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
+`PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
+case reads). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
+source before adding a download; no sample binary is ever committed.
+
+**Seeding.** `tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> [--samples id,id] [--cache dir]`
+validates the manifest, produces the samples (with `--samples`, a derived sample's sources are produced but not uploaded), uploads them
+to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
+`e2e/fixtures/viewer-samples-seed.json`; export its path as `E2E_VIEWER_SAMPLES`. `splat-transform` runs
+through `npm exec --min-release-age=7` at the pinned version.
+
+**A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`), and optionally
+`select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
+must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
+(`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
+development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
+(`watchRequestHosts`). Run the spec on the development build first and record the pixel stats it logs;
+a case that passes there and fails on a change is a regression.
 
 ---
 

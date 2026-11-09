@@ -208,7 +208,7 @@ To update the Cesium engine version:
     ```json
     {
         "dependencies": {
-            "@cesium/engine": "26.1.0"
+            "@cesium/engine": "26.4.0"
         }
     }
     ```

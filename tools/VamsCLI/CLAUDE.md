@@ -225,8 +225,8 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
--   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
--   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
+-   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
+-   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
 -   HTTP status to exception mapping in response handlers:
     -   `404` --> `NotFoundError` variants
     -   `409` --> `AlreadyExistsError` variants
