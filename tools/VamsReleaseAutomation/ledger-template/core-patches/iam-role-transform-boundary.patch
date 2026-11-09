@@ -8,8 +8,13 @@ patch sets the boundary on every AWS::IAM::Role when the ARN is non-empty and le
 property alone when it is empty. It does not change the role naming (every role still gets
 an explicit RoleName).
 
-Made against VAMS v2.6.6. The development branch fixed #431 upstream on 2026-11-05 in a different
-form, so on a fork based on it the patch neither applies nor reads as present: remove the entry there.
+Made against VAMS v2.6.6. VAMS fixed #431 upstream in a different form (the aspect's
+applyPermissionsBoundary(), in development for v2.7.0 and in the v2.6.7 hotfix), so on a fork that
+has that fix the diff neither applies nor reverses; the marker line below makes the engine report the
+patch as "present" there, and vra build still checks every role in the synthesized templates.
+
+Present-when: infra/lib/aspects/iam-role-transform.aspect.ts contains "public static applyPermissionsBoundary("
+
 Activate: copy this file to <home>/ledger/core-patches/ and list it in core-patches.md
 (see ledger-template/core-patches.md). vra build and vra iam plan apply it to their scratch
 copy of the fork; vra build then checks that every role in the synthesized templates carries

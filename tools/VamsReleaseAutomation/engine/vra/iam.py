@@ -44,7 +44,8 @@ from vra.errors import BlockedOnIT, ConfigError, NeedsHuman, UsageError, VraErro
 from vra.runner import workflow
 
 MODES = ("standard", "boundary", "precreated", "bootstrap")
-# the fork fix for GitHub issue #431 (the aspect drops environments.aws.PermissionBoundaryArn), shipped in
+# the fork fix for GitHub issue #431 (the aspect drops environments.aws.PermissionBoundaryArn in VAMS 2.6.6 and
+# earlier; VAMS 2.6.7 fixed it upstream, where the patch's Present-when marker reports it present), shipped in
 # ledger-template/core-patches/ and applied by vra.core_patches when core-patches.md lists it
 BOUNDARY_PATCH = "core-patches/iam-role-transform-boundary.patch"
 # GitHub issue #1210: a role-name prefix switch replaces every role, but the REST API Deployment keeps its logical
@@ -2016,11 +2017,12 @@ def check_assembly(ctx, run, env: str, out: Path, step_id: str, source: dict | N
                 f"{len(unbounded)} IAM role(s) in the {env} build carry no permission boundary although "
                 f"{'iam.boundaryArn' if want_boundary else 'permissionsBoundaryName'} is set (e.g. {unbounded[0]}). "
                 f"VAMS's IamRoleTransform (infra/lib/aspects/iam-role-transform.aspect.ts) overrides "
-                f"PermissionsBoundary with AWS::NoValue in both branches up to at least VAMS 2.6.6 (GitHub issue "
-                f"#431), which also removes the CDK @aws-cdk/core:permissionsBoundary context. Add the core patch "
-                f"{BOUNDARY_PATCH} to the ledger (copy it from the package's ledger-template/ and list it in "
-                f"core-patches.md), or commit the same fix to the fork, or use iam.mode precreated; never deploy it "
-                f"unbounded", {"rolesWithoutBoundary": unbounded[:50], "corePatch": BOUNDARY_PATCH})
+                f"PermissionsBoundary with AWS::NoValue in both branches in VAMS 2.6.6 and earlier (GitHub issue "
+                f"#431, fixed in VAMS 2.6.7), which also removes the CDK @aws-cdk/core:permissionsBoundary context. "
+                f"Upgrade the fork to VAMS 2.6.7 or later, or add the core patch {BOUNDARY_PATCH} (CP-431) to the "
+                f"ledger (copy it from the package's ledger-template/ and list it in core-patches.md), or commit the "
+                f"same fix to the fork, or use iam.mode precreated; never deploy it unbounded",
+                {"rolesWithoutBoundary": unbounded[:50], "corePatch": BOUNDARY_PATCH})
     if boundary_only or not needs_package(s):
         return res     # an A/B slot synth: its stack names differ from the package's construct paths
     if "bootstrap" in s["modes"] and not synth_failed:

@@ -237,7 +237,9 @@ A fix you want to keep out of the fork's history until upstream ships it can liv
 unified diff, `core-patches/<name>.patch`, listed on a bullet row of the same file. Every build and IAM
 plan applies it to its scratch copy of the fork and records it in the build manifest; once the fork or
 upstream contains the change, the build reports the patch as `present`, and you remove the entry. The
-package ships one such patch, the permission boundary fix for GitHub issue #431
+package ships two such patches: CP-431, the permission boundary fix for GitHub issue #431 (needed on
+VAMS v2.6.6 and earlier; present from v2.6.7), and CP-1210, the API deployment fix for GitHub issue
+#1210 after a role-prefix switch
 ([IAM for strict environments](iam-for-strict-environments.md#permission-boundary-mode-and-github-issue-431)).
 
 ## Contribute generic fixes upstream

@@ -214,38 +214,42 @@ and names it in the IT request; the loop repeats from step 3.
 
 ## Permission boundary mode and GitHub issue #431
 
-:::warning[VAMS does not apply the permission boundary on its own]
-In VAMS versions affected by
-[GitHub issue #431](https://github.com/awslabs/visual-asset-management-system/issues/431), the
+:::warning[VAMS v2.6.6 and earlier do not apply the permission boundary]
+In VAMS v2.6.6 and earlier
+([GitHub issue #431](https://github.com/awslabs/visual-asset-management-system/issues/431)), the
 `IamRoleTransform` aspect (`infra/lib/aspects/iam-role-transform.aspect.ts`) overrides
 `PermissionsBoundary` with `AWS::NoValue` for every role, so `environments.aws.PermissionBoundaryArn`
 never reaches a role. The same override removes a boundary set through the CDK context
-`@aws-cdk/core:permissionsBoundary` (`permissionsBoundaryName` in `env.yaml`). This is tracked upstream as
-GitHub issue #431.
+`@aws-cdk/core:permissionsBoundary` (`permissionsBoundaryName` in `env.yaml`). VAMS v2.6.7 and later
+fix this: the aspect sets the configured boundary on every role and leaves the property alone when the
+ARN is empty, so a CDK context boundary is kept.
 :::
 
-Release automation never deploys such a build. After every synth, `vra build` checks that every
+Release automation never deploys an unbounded build. After every synth, `vra build` checks that every
 `AWS::IAM::Role` in the templates carries the boundary the environment names, and stops with exit `20`
 otherwise. The check reads the synthesized templates, not a version number, so it passes as soon as the
 fork's source applies the boundary.
 
-There are two remedies:
+A fork on VAMS v2.6.7 or later needs nothing more. For a fork on v2.6.6 or earlier there are two
+remedies:
 
--   **The core patch** (for `boundary` mode and for `permissionsBoundaryName`). The package ships
+-   **The core patch CP-431** (for `boundary` mode and for `permissionsBoundaryName`). The package ships
     `ledger-template/core-patches/iam-role-transform-boundary.patch`, which makes the aspect set
     `PermissionsBoundary` to the ARN when it is not empty and leave the property alone when it is empty.
     Copy it into `<home>/ledger/core-patches/` and list it in `core-patches.md`:
 
     ```markdown
-    -   `core-patches/iam-role-transform-boundary.patch` (CP-431, until upstream fixes GitHub issue #431)
+    -   `core-patches/iam-role-transform-boundary.patch` (CP-431, GitHub issue #431; present from VAMS v2.6.7)
     ```
 
     `vra build` and `vra iam plan` then apply it to their scratch copy of the fork (never to the fork
     itself) and record it in the build manifest (`corePatches`). The template entry, with the register
-    row, is in `ledger-template/core-patches.md`. You can also commit the same change to the fork and
-    register its path; the build then reports the patch as `present`. A patch that no longer applies
-    (upstream changed the file) stops the build with exit `20`: refresh it or retire the entry once
-    upstream ships the fix.
+    row, is in `ledger-template/core-patches.md`. When the fork reaches VAMS v2.6.7 or later, the upstream
+    fix is in a different form, and the patch's `Present-when:` marker line makes the build report the
+    patch as `present` (`via: marker`) and change nothing; retire the entry then. You can also commit the
+    same change to the fork and register its path; the build then reports the patch as `present` too. A
+    patch that neither applies nor is present (upstream changed the file) stops the build with exit
+    `20`: refresh it or retire the entry.
 
 -   **`iam.mode: precreated`.** VAMS creates no role, so there is nothing to bound; IT applies its
     boundary when it creates the roles.
@@ -284,7 +288,7 @@ deployment, whose authorizer credentials name the deleted role. Every route, sig
 answers HTTP 500 with `x-amzn-errortype: AuthorizerConfigurationException`.
 :::
 
-The package ships a second core patch for this,
+The package ships a second core patch for this, CP-1210,
 `ledger-template/core-patches/api-deployment-role-name.patch`. It also hashes the literal
 `IamRoleNamePrefix` into the deployment's logical id when the prefix is set, so a changed prefix
 creates a new deployment that names the new role. With no prefix it changes nothing, so environments
@@ -295,8 +299,9 @@ without a prefix keep their deployment. List it next to the boundary patch:
 ```
 
 `vra ledger validate` warns when an environment sets `iam.rolePrefix` in `boundary` mode and the ledger
-does not list this patch. The patch is made against VAMS v2.6.6 and also applies to the development
-branch of 2026-11-06. If an environment already answers HTTP 500 after the switch, add the patch and
+does not list this patch. The patch is made against VAMS v2.6.6 and also applies to the v2.7.0
+development branch; GitHub issue #1210 is still open, so every current VAMS version needs it in this
+case. If an environment already answers HTTP 500 after the switch, add the patch and
 deploy a new build; the stage then moves to a new deployment.
 
 ## VAMS behaviour to know

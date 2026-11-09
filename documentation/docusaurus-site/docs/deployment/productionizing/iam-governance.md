@@ -23,12 +23,13 @@ VAMS supports these IAM setups through its IAM role customization (see the
 | Pre-created roles              | IT creates every role before the deploy; VAMS references them by name and creates none                    | Only IT may create IAM roles                                               |
 | Custom bootstrap roles         | IT provides the CDK bootstrap roles (deploy, CloudFormation execution, lookup, asset publishing), or none | The CDK bootstrap template is not allowed as is                            |
 
-:::warning[Permission boundary mode needs a fork fix]
-In VAMS versions affected by GitHub issue #431 the `IamRoleTransform` aspect replaces the configured
+:::warning[Permission boundary mode on VAMS v2.6.6 and earlier needs a fork fix]
+In VAMS v2.6.6 and earlier (GitHub issue #431) the `IamRoleTransform` aspect replaces the configured
 permission boundary with `AWS::NoValue` on every role, so a boundary set in `cdk.json` never reaches a
-role. Until VAMS fixes it, apply the core patch shipped with release automation
-(`ledger-template/core-patches/iam-role-transform-boundary.patch`) or use pre-created roles. Check the
-synthesized templates: every `AWS::IAM::Role` must carry the boundary before it is deployed.
+role. VAMS v2.6.7 and later apply it. On an earlier version, upgrade, apply the core patch CP-431 shipped
+with release automation (`ledger-template/core-patches/iam-role-transform-boundary.patch`), or use
+pre-created roles. On any version, check the synthesized templates: every `AWS::IAM::Role` must carry the
+boundary before it is deployed.
 :::
 
 ## Review the role set on every change

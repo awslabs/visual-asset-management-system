@@ -78,10 +78,10 @@ npx cdk bootstrap "aws://${ACCOUNT}/${REGION}" --template bootstrap-template.vra
     CDK CLI's bootstrap template changes.
 -   **Permissions boundary.** The scoped execution policy refuses to create a role without its boundary.
     Set the boundary's name as `permissionsBoundaryName` in every environment of that account; `vra build`
-    applies it to every role VAMS synthesizes and checks the synthesized templates. VAMS versions whose
-    `IamRoleTransform` drops the boundary
-    ([GitHub issue #431](https://github.com/awslabs/visual-asset-management-system/issues/431)) need the
-    boundary core patch in the ledger
+    applies it to every role VAMS synthesizes and checks the synthesized templates. VAMS v2.6.6 and
+    earlier, whose `IamRoleTransform` drops the boundary
+    ([GitHub issue #431](https://github.com/awslabs/visual-asset-management-system/issues/431), fixed in
+    v2.6.7), need the boundary core patch CP-431 in the ledger
     ([IAM for strict environments](iam-for-strict-environments.md#permission-boundary-mode-and-github-issue-431)).
 -   **Custom bootstrap roles.** The default bootstrap uses one CDK qualifier per ledger (`vra.yaml`
     `cdk.qualifier`). When IT provides the bootstrap roles, or none at all (the CLI-credentials

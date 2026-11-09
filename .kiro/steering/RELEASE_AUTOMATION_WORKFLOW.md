@@ -194,10 +194,12 @@ it is stale).
 
 `engine/vra/core_patches.py` applies the `core-patches/<name>.patch` files `core-patches.md` lists (bullet
 lines outside fenced code blocks) to the scratch source of `vra build` and `vra iam plan`, never to the fork
-clone; results `applied`, `present` (reverse applies) or exit `20`. A shipped patch lives in
+clone; results `applied`, `present` (reverse applies, or every `Present-when:` marker in the patch's
+preamble matches: upstream shipped the fix in another form) or exit `20`. A shipped patch lives in
 `ledger-template/core-patches/` with a fenced template entry in `ledger-template/core-patches.md`, and its
-effect is proven on the synthesized templates (the boundary patch for GitHub issue #431:
-`iam.check_assembly`), tested against real VAMS sources in `engine/tests/fixtures/iam/`.
+effect is proven on the synthesized templates (CP-431, the boundary patch for GitHub issue #431, needed on
+VAMS 2.6.6 and earlier and `present` by marker from 2.6.7: `iam.check_assembly`; CP-1210, the API
+deployment patch for GitHub issue #1210), tested against real VAMS sources in `engine/tests/fixtures/iam/`.
 
 ### The CDK pipeline app (`cicd/pipeline/`)
 

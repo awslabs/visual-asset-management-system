@@ -33,14 +33,15 @@ Copy an entry out of its code block to activate it, and copy its patch file from
 `ledger-template/core-patches/` into this ledger's `core-patches/`.
 
 Permission boundary fix for GitHub issue #431 (needed for `iam.mode: boundary` and for
-`permissionsBoundaryName` on VAMS versions whose `IamRoleTransform` drops the boundary). `vra build`
-checks that every role in the synthesized templates carries the boundary, so the patch is proven
-on each build, not by a version number:
+`permissionsBoundaryName` on VAMS v2.6.6 and earlier, whose `IamRoleTransform` drops the boundary;
+VAMS v2.6.7 fixed it upstream in a different form, and the patch's `Present-when:` marker then
+reports it as `present`). `vra build` checks that every role in the synthesized templates carries the
+boundary, so the patch is proven on each build, not by a version number:
 
 ```markdown
-| CP-431 | `infra/lib/aspects/iam-role-transform.aspect.ts` (ledger patch) | Apply environments.aws.PermissionBoundaryArn to every role (GitHub issue #431) | team@example.com | Retire when upstream fixes GitHub issue #431 (the build then reports the patch as present) | 2026-11-04 |
+| CP-431 | `infra/lib/aspects/iam-role-transform.aspect.ts` (ledger patch) | Apply environments.aws.PermissionBoundaryArn to every role (GitHub issue #431) | team@example.com | Retire once the fork is on VAMS v2.6.7 or later (the build then reports the patch as present) | 2026-11-04 |
 
--   `core-patches/iam-role-transform-boundary.patch` (CP-431, until upstream fixes GitHub issue #431)
+-   `core-patches/iam-role-transform-boundary.patch` (CP-431, GitHub issue #431; present from VAMS v2.6.7)
 ```
 
 API deployment fix for GitHub issue #1210 (needed with CP-431 whenever `iam.mode: boundary` sets a

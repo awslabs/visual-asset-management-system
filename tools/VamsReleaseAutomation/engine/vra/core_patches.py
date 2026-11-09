@@ -7,7 +7,7 @@ kept out of the fork's history until upstream ships them (one example: the IamRo
 GitHub issue #431, ``ledger-template/core-patches/iam-role-transform-boundary.patch``). For those, the ledger
 holds the diff itself under ``core-patches/<name>.patch`` and ``core-patches.md`` lists it on a bullet line::
 
-    -   `core-patches/iam-role-transform-boundary.patch` (CP-431, until upstream fixes GitHub issue #431)
+    -   `core-patches/iam-role-transform-boundary.patch` (CP-431, GitHub issue #431; present from VAMS v2.6.7)
 
 Lines inside fenced code blocks are never read, so a template entry can be shown without activating it.
 
@@ -17,7 +17,10 @@ ref, never to the fork clone. Per patch:
 - it applies cleanly: applied, recorded in the build manifest (``corePatches``: file, sha256, status);
 - its reverse applies cleanly: the tree already has the change (the fork committed it, or upstream shipped the
   same fix): ``present``, recorded, nothing changed;
-- neither: the run stops with exit 20 (refresh the patch for this VAMS version, or retire it).
+- neither, but every ``Present-when:`` marker of the patch matches: upstream shipped the fix in a different form,
+  ``present`` (``via: marker``), nothing changed. A marker is a preamble line (before the diff) of the form
+  ``Present-when: <repository path> contains "<text>"``; the text is a plain substring, never a pattern;
+- none of these: the run stops with exit 20 (refresh the patch for this VAMS version, or retire it).
 
 Whether a fix really took effect is checked on the synthesized templates, never on a version string (for the
 boundary patch: ``vra.iam.check_assembly`` requires every ``AWS::IAM::Role`` to carry the boundary).
@@ -36,6 +39,8 @@ from vra.errors import NeedsHuman, VraError
 PATCH_DIR = "core-patches"
 _ENTRY = re.compile(r"`(" + PATCH_DIR + r"/[^`\s]+\.patch)`")
 _DIFF_PATH = re.compile(r"^(?:---|\+\+\+) (?:[ab]/)?(\S+)", re.M)
+_MARKER = re.compile(r'^Present-when:\s+(\S+)\s+contains\s+"(.+)"\s*$')
+_DIFF_START = ("diff --git ", "--- ", "+++ ", "@@ ")
 
 
 def _register_lines(text: str):
@@ -74,6 +79,37 @@ def touched_paths(text: str) -> list[str]:
     return out
 
 
+def present_markers(text: str) -> list[tuple[str, str]]:
+    """``(path, text)`` of the ``Present-when:`` lines in a patch's preamble (the lines before its diff)."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith(_DIFF_START):
+            break
+        m = _MARKER.match(line)
+        if m:
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def _safe_rel(path: str) -> bool:
+    p = Path(path)
+    return not (path.startswith("/") or ".." in p.parts or p.parts[:1] == (".git",))
+
+
+def _markers_match(src: Path, markers: list[tuple[str, str]]) -> bool:
+    """True when there is at least one marker and every marker's file under ``src`` contains its text."""
+    if not markers:
+        return False
+    root = Path(src).resolve()
+    for rel, needle in markers:
+        f = (root / rel).resolve()
+        if not _safe_rel(rel) or root not in f.parents or not f.is_file():
+            return False
+        if needle not in f.read_text(encoding="utf-8", errors="replace"):
+            return False
+    return True
+
+
 def validate(ledger_root: Path) -> list[str]:
     """Errors for ``vra ledger validate``: every listed patch exists inside core-patches/ and is a unified diff of
     relative repository paths."""
@@ -92,8 +128,11 @@ def validate(ledger_root: Path) -> list[str]:
         if not paths or "\n@@ " not in "\n" + text:
             errors.append(f"{rel}: not a unified diff (no ---/+++ headers or @@ hunks)")
         for t in paths:
-            if t.startswith("/") or ".." in Path(t).parts or Path(t).parts[:1] == (".git",):
+            if not _safe_rel(t):
                 errors.append(f"{rel}: changes {t!r}; a core patch may only change relative paths of the fork")
+        for t, _ in present_markers(text):
+            if not _safe_rel(t):
+                errors.append(f"{rel}: Present-when names {t!r}; a marker may only name relative paths of the fork")
     return errors
 
 
@@ -117,8 +156,8 @@ def apply_all(ledger_root: Path, src: Path, log=None, where: str = "build") -> l
     out = []
     for rel in listed(root):
         p = root / rel
-        rec = {"file": rel, "sha256": util.sha256_file(p),
-               "paths": touched_paths(p.read_text(encoding="utf-8", errors="replace"))}
+        text = p.read_text(encoding="utf-8", errors="replace")
+        rec = {"file": rel, "sha256": util.sha256_file(p), "paths": touched_paths(text)}
         check = _git_apply(src, p, "--check")
         if check.returncode == 0:
             done = _git_apply(src, p)
@@ -127,6 +166,10 @@ def apply_all(ledger_root: Path, src: Path, log=None, where: str = "build") -> l
             rec["status"] = "applied"
         elif _git_apply(src, p, "--reverse", "--check").returncode == 0:
             rec["status"] = "present"
+        elif _markers_match(src, present_markers(text)):
+            # upstream shipped the fix in a different form; the synthesized templates still prove it took effect
+            rec["status"] = "present"
+            rec["via"] = "marker"
         else:
             raise NeedsHuman(
                 f"core patch {rel} does not apply to the {where} source and is not already in it "
@@ -149,4 +192,5 @@ def current(ledger_root: Path) -> list[dict]:
     return [{"file": rel, "sha256": util.sha256_file(root / rel)} for rel in listed(root) if (root / rel).is_file()]
 
 
-__all__ = ["PATCH_DIR", "apply_all", "current", "digest", "listed", "register_lines", "touched_paths", "validate"]
+__all__ = ["PATCH_DIR", "apply_all", "current", "digest", "listed", "present_markers", "register_lines",
+           "touched_paths", "validate"]

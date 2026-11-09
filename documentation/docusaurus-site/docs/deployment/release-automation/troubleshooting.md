@@ -137,10 +137,10 @@ These apply to environments whose `iam.mode` is not `standard`
     `vra iam apply --env <env> --from it-response.yaml` and pushes the ledger. A precreated build that needs
     new roles wrote package `n+1` itself; send its "Changes since" section to IT. A boundary build with new
     roles asks for `vra iam plan --env <env> --ref <built ref>`. Then `vra resume <run-id>`.
--   **Exit `20`, "IAM role(s) ... carry no permission boundary".** The fork's VAMS version replaces the
-    boundary with `AWS::NoValue` (GitHub issue #431). Add the core patch
-    `core-patches/iam-role-transform-boundary.patch` to the ledger and list it in `core-patches.md`, or use
-    `iam.mode: precreated`. Never deploy the build unbounded.
+-   **Exit `20`, "IAM role(s) ... carry no permission boundary".** The fork's VAMS version (v2.6.6 or
+    earlier) replaces the boundary with `AWS::NoValue` (GitHub issue #431, fixed in VAMS v2.6.7). Upgrade
+    the fork, or add the core patch CP-431, `core-patches/iam-role-transform-boundary.patch`, to the ledger
+    and list it in `core-patches.md`, or use `iam.mode: precreated`. Never deploy the build unbounded.
 -   **A first `precreated` deploy fails with "`<prefix>...-frameworkonEvent-...` is not authorized to perform:
     `lambda:GetFunction`" on a function named like `vams-core-<base>-us-east--<Logical>-<random>`.** The core
     stack name is longer than 25 characters, and CloudFormation keeps only 25 of them in a generated Lambda
@@ -158,12 +158,13 @@ These apply to environments whose `iam.mode` is not `standard`
 -   **HTTP 500 on every API route after switching to a `rolePrefix`, with
     `x-amzn-errortype: AuthorizerConfigurationException`.** The role replacement left the REST API stage
     on its old deployment, whose authorizer credentials name a deleted role (GitHub issue #1210). Add the
-    core patch `core-patches/api-deployment-role-name.patch` to the ledger, list it in `core-patches.md`,
+    core patch CP-1210, `core-patches/api-deployment-role-name.patch`, to the ledger, list it in `core-patches.md`,
     and deploy a new build. `vra ledger validate` warns about a missing entry. See
     [IAM for strict environments](iam-for-strict-environments.md#the-api-deployment-after-a-role-prefix-switch-github-issue-1210).
 -   **Exit `20`, "core patch ... does not apply".** Upstream changed the patched file. If the change is
-    already in the source, the build reports the patch as `present` instead; otherwise refresh the patch for
-    the new VAMS version, or remove its entry once upstream ships the fix.
+    already in the source (the reverse diff applies, or the patch's `Present-when:` marker matches), the
+    build reports the patch as `present` instead; otherwise refresh the patch for the new VAMS version, or
+    remove its entry once upstream ships the fix.
 -   **Exit `20`, the overlay changed after apply, or bootstrap role ARNs differ.** An IAM overlay file was
     edited by hand. Apply a new package instead of editing the overlay.
 -   **`vra iam apply` refuses the response.** The message lists each problem: a construct path left out,

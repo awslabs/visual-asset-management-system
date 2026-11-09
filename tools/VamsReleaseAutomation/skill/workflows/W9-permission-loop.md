@@ -93,9 +93,10 @@ package is not applied yet.
    `vra iam verify --env <env> --json`) and report problems and anything
    under `notChecked`. Then resume the run.
 5. Exit `20` on a build that says a role carries no permission boundary:
-   the fork's VAMS version does not apply the boundary (GitHub issue #431).
-   Tell the human the two remedies: the core patch in `core-patches.md`
-   (`iam-role-transform-boundary`) or `iam.mode: precreated`. Do not retry.
+   the fork's VAMS version (2.6.6 or earlier) does not apply the boundary
+   (GitHub issue #431, fixed in VAMS 2.6.7). Tell the human the remedies:
+   upgrade the fork, the core patch CP-431 in `core-patches.md`
+   (`iam-role-transform-boundary`), or `iam.mode: precreated`. Do not retry.
 
 ## Stop conditions
 

@@ -91,6 +91,44 @@ def test_boundary_patch_applies_to_the_real_v266_aspect_then_reports_present(tmp
     assert [r["status"] for r in again] == ["present"] and (src / ASPECT_REL).read_text() == text
 
 
+DEV_ASPECT = Path(__file__).parent / "fixtures" / "iam" / "vams-development-2fb310762-iam-role-transform.aspect.ts"
+
+
+def test_boundary_patch_reports_present_on_the_upstream_431_fix(tmp_path):
+    """VAMS fixed #431 in a different form (development 2fb310762, the v2.6.7 hotfix): the diff neither applies
+    nor reverses there, and the patch's Present-when marker reports it present without touching the file."""
+    root = _ledger(tmp_path / "l")
+    src = _src(tmp_path / "src", DEV_ASPECT.read_text())
+    recs = core_patches.apply_all(root, src)
+    assert [(r["status"], r.get("via")) for r in recs] == [("present", "marker")]
+    assert (src / ASPECT_REL).read_text() == DEV_ASPECT.read_text()
+
+
+def test_present_markers_are_read_from_the_preamble_only(tmp_path):
+    assert core_patches.present_markers(PATCH.read_text()) == [
+        (ASPECT_REL, "public static applyPermissionsBoundary(")]
+    body = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+Present-when: x contains "b"\n'
+    assert core_patches.present_markers(body) == []
+
+
+def test_a_marker_that_does_not_match_still_stops_the_run(tmp_path):
+    root = _ledger(tmp_path / "l")
+    src = _src(tmp_path / "src", DEV_ASPECT.read_text().replace("applyPermissionsBoundary(", "applyBoundary("))
+    with pytest.raises(NeedsHuman) as ei:
+        core_patches.apply_all(root, src)
+    assert "does not apply" in ei.value.message
+
+
+def test_validate_rejects_a_marker_outside_the_fork(tmp_path):
+    root = _ledger(tmp_path / "l")
+    p = root / iam.BOUNDARY_PATCH
+    p.write_text('Present-when: ../outside.ts contains "x"\n\n' + p.read_text())
+    assert any("Present-when names" in e for e in core_patches.validate(root))
+    src = _src(tmp_path / "src", DEV_ASPECT.read_text())
+    with pytest.raises(NeedsHuman):
+        core_patches.apply_all(root, src)
+
+
 def test_a_patch_that_no_longer_applies_stops_the_run(tmp_path):
     root = _ledger(tmp_path / "l")
     src = _src(tmp_path / "src", ASPECT.read_text().replace("this.conditionBoundary.logicalId",
