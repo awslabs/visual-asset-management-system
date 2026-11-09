@@ -116,12 +116,6 @@ COPY_RECONCILE_CHECK_ATTRIBUTE = "lastCopyReconcileCheckDate"
 
 # Environment variables (set by CDK on every function that starts, runs or waits on copy jobs).
 ENV_STATE_MACHINE_ARN = "LARGE_OBJECT_COPY_STATE_MACHINE_ARN"
-ENV_API_UPLOAD_THRESHOLD = "LARGE_OBJECT_COPY_API_UPLOAD_THRESHOLD_BYTES"
-ENV_MIN_PART_SIZE = "LARGE_OBJECT_COPY_MIN_PART_SIZE_BYTES"
-ENV_PARTS_PER_BATCH = "LARGE_OBJECT_COPY_PARTS_PER_BATCH"
-ENV_THREADS_PER_BATCH = "LARGE_OBJECT_COPY_THREADS_PER_BATCH"
-ENV_MAX_WAIT_HOURS = "LARGE_OBJECT_COPY_MAX_WAIT_HOURS"
-ENV_BATCHES_PER_CHUNK = "LARGE_OBJECT_COPY_BATCHES_PER_CHUNK"
 # Copy engine function name, on the functions that hand it an ended execution to reconcile.
 ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
 # Name of the SSM parameter holding that function name, for the one caller that cannot take the name
@@ -129,16 +123,21 @@ ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
 # step, so a reference back would be a CloudFormation dependency cycle).
 ENV_ENGINE_FUNCTION_NAME_PARAMETER = "LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER"
 
-# Defaults and bounds; the same values as infra/config/config.ts (app.largeFileIngestion).
-SETTINGS_BOUNDS = {
-    "apiUploadEngineThresholdBytes": (ENV_API_UPLOAD_THRESHOLD, 5 * GIB, LARGE_FILE_THRESHOLD_BYTES, S3_MAX_OBJECT_BYTES),
-    "minPartSizeBytes": (ENV_MIN_PART_SIZE, 256 * MIB, 64 * MIB, S3_MAX_PART_BYTES),
-    "partsPerBatch": (ENV_PARTS_PER_BATCH, 16, 1, 64),
-    "threadsPerBatch": (ENV_THREADS_PER_BATCH, 8, 1, 32),
-    "maxOutputIngestionWaitHours": (ENV_MAX_WAIT_HOURS, 48, 1, 168),
-    # Not a deployment setting: CDK sets it from the history arithmetic in largeObjectCopyEngine.ts.
-    "batchesPerChunk": (ENV_BATCHES_PER_CHUNK, DEFAULT_BATCHES_PER_CHUNK, 1, DEFAULT_BATCHES_PER_CHUNK),
-}
+# Engine settings. Fixed values, not deployment configuration.
+# API uploads larger than this are copied by the engine; smaller ones keep the large-file queue's
+# own copy. At least LARGE_FILE_THRESHOLD_BYTES.
+API_UPLOAD_ENGINE_THRESHOLD_BYTES = 5 * GIB
+# Smallest part of a copy. The planner widens parts to stay within MAX_PLANNED_PARTS.
+MIN_PART_SIZE_BYTES = 256 * MIB
+# Parts one Lambda task copies, and the parts it copies at the same time.
+PARTS_PER_BATCH = 16
+THREADS_PER_BATCH = 8
+# Lambda tasks one copy runs at the same time: the MaxConcurrency of the copy-parts state machine's
+# Map (infra largeObjectCopyEngine.ts MAX_CONCURRENT_BATCHES, a fixed value in the definition).
+MAX_CONCURRENT_BATCHES = 10
+# How long a workflow execution waits for its large outputs (the AwaitOutputIngestion timeout baked
+# into each generated definition; workflowAslBuilder DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS).
+MAX_OUTPUT_INGESTION_WAIT_HOURS = 48
 
 _serializer = TypeSerializer()
 
@@ -152,21 +151,16 @@ class SourceChanged(Exception):
     """The pinned source version changed or vanished during the copy. Not retried."""
 
 
-def settings(environ=None):
-    """The engine settings from the environment, each an int within its bounds. A missing or
-    unusable value falls back to its default (config validation rejects bad values at synth)."""
-    environ = os.environ if environ is None else environ
-    resolved = {}
-    for name, (env_name, default, low, high) in SETTINGS_BOUNDS.items():
-        raw = environ.get(env_name, "")
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            value = default
-        if value < low or value > high:
-            value = default
-        resolved[name] = value
-    return resolved
+def settings():
+    """The engine settings as a dict (the fixed module constants above)."""
+    return {
+        "apiUploadEngineThresholdBytes": API_UPLOAD_ENGINE_THRESHOLD_BYTES,
+        "minPartSizeBytes": MIN_PART_SIZE_BYTES,
+        "partsPerBatch": PARTS_PER_BATCH,
+        "threadsPerBatch": THREADS_PER_BATCH,
+        "maxOutputIngestionWaitHours": MAX_OUTPUT_INGESTION_WAIT_HOURS,
+        "batchesPerChunk": DEFAULT_BATCHES_PER_CHUNK,
+    }
 
 
 _engine_function_names = {}
@@ -1144,7 +1138,7 @@ def ingestion_hold(main_item, sfn_status, max_wait_hours=None, now=None):
         return None
     if sfn_status != "SUCCEEDED":
         return None
-    hours = max_wait_hours if max_wait_hours is not None else settings()["maxOutputIngestionWaitHours"]
+    hours = max_wait_hours if max_wait_hours is not None else MAX_OUTPUT_INGESTION_WAIT_HOURS
     started = _parse_iso((main_item or {}).get("outputIngestionStartedDate", ""))
     now = now or datetime.now(timezone.utc)
     if started is None or now - started > timedelta(hours=hours + 1):

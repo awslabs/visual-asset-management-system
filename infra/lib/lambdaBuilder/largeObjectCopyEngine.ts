@@ -17,7 +17,7 @@
  * execution that ends outside its states is finalized by a status change rule (reconcile).
  *
  * Starters: fileIngestion (workflow outputs over 1 GiB) and the large-file queue consumer (API uploads
- * over app.largeFileIngestion.apiUploadEngineThresholdBytes). Waiters: the workflow output step (task
+ * over 5 GiB, backend common/largeObjectCopy.py API_UPLOAD_ENGINE_THRESHOLD_BYTES). Waiters: the workflow output step (task
  * token). Stoppers: the abort route and the workflow error handler.
  *
  * The state machine has a fixed name so the starters in ApiBuilder can be given its ARN without a
@@ -82,19 +82,13 @@ export function largeObjectCopyExecutionArnPattern(config: Config.Config): strin
 }
 
 /**
- * Environment every function that starts, runs or waits on copy jobs reads (backend
- * common/largeObjectCopy.settings). The table name resolves from SSM.
+ * Environment every function that starts, runs or waits on copy jobs reads: the state machine ARN
+ * (a resource reference). The engine's sizes, batching and wait are fixed constants in backend
+ * common/largeObjectCopy.py, not deployment configuration. The table name resolves from SSM.
  */
 export function largeObjectCopyEnvironment(config: Config.Config): Record<string, string> {
-    const tuning = config.app.largeFileIngestion;
     return {
         LARGE_OBJECT_COPY_STATE_MACHINE_ARN: largeObjectCopyStateMachineArn(config),
-        LARGE_OBJECT_COPY_API_UPLOAD_THRESHOLD_BYTES: String(tuning.apiUploadEngineThresholdBytes),
-        LARGE_OBJECT_COPY_MIN_PART_SIZE_BYTES: String(tuning.minPartSizeBytes),
-        LARGE_OBJECT_COPY_PARTS_PER_BATCH: String(tuning.partsPerBatch),
-        LARGE_OBJECT_COPY_THREADS_PER_BATCH: String(tuning.threadsPerBatch),
-        LARGE_OBJECT_COPY_MAX_WAIT_HOURS: String(tuning.maxOutputIngestionWaitHours),
-        LARGE_OBJECT_COPY_BATCHES_PER_CHUNK: String(BATCHES_PER_CHUNK),
     };
 }
 
@@ -329,7 +323,6 @@ export function buildLargeObjectCopyEngine(
     subnets: ec2.ISubnet[]
 ): LargeObjectCopyEngine {
     const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
-    const reservedConcurrency = config.app.largeFileIngestion.engineReservedConcurrency;
     // Reconcile requests that could not be processed: status change events the rule could not
     // deliver, and asynchronous reconcile invocations (the rule's, the details read's and the cancel
     // path's) that still failed after Lambda's retries.
@@ -375,8 +368,7 @@ export function buildLargeObjectCopyEngine(
         evaluationPeriods: 1,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    // Checkov: like every VAMS function, reserved concurrency (CKV_AWS_115) is set only when
-    // configured, the VPC (CKV_AWS_117) follows app.useGlobalVpc, and the environment holds no
+    // Checkov: like every VAMS function, the function is unreserved (CKV_AWS_115), the VPC (CKV_AWS_117) follows app.useGlobalVpc, and the environment holds no
     // secret, so it keeps Lambda's default encryption (CKV_AWS_173). CKV_AWS_116 is met (reconcileDlq).
     const fun = new lambda.Function(scope, "largeObjectCopy", {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
@@ -389,9 +381,6 @@ export function buildLargeObjectCopyEngine(
         // Server-side part copies hold no object data in memory. Only an in-VPC copy between
         // Regions streams parts through the function (two at a time, each up to a planned part).
         memorySize: inVpc ? Config.LAMBDA_MEMORY_SIZE : LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB,
-        // Optional deployment-wide cap on concurrent copy tasks (unset: the unreserved pool). A task
-        // over the cap is throttled, and throttling only slows a copy (see THROTTLE_RETRY).
-        reservedConcurrentExecutions: reservedConcurrency > 0 ? reservedConcurrency : undefined,
         // Only asynchronous invocations (reconcile) use it; the state machines invoke synchronously.
         deadLetterQueue: reconcileDlq,
         vpc: inVpc ? vpc : undefined,
@@ -569,7 +558,7 @@ export const LARGE_OBJECT_COPY_SERVER_SIDE_MEMORY_MB = 1024;
 const NON_RETRYABLE_ERRORS = ["CopyRefused", "SourceChanged"];
 
 /**
- * Lambda throttling (the account or the engine's reserved concurrency is exhausted) is retried
+ * Lambda throttling (the account's unreserved concurrency is exhausted) is retried
  * separately from faults, with long jittered backoff, so a throttled copy waits for capacity instead
  * of failing and discarding the parts it has copied. The delays double from 10 s to a 300 s cap; with
  * full jitter each delay is uniform between 0 and that value, so 99 attempts wait about 4 hours on
@@ -675,6 +664,9 @@ export const HISTORY_EVENT_QUOTA = 25000;
 export const MAX_BATCHES = 1000;
 /** Batches each child execution of a copy runs (see the history budget above). */
 export const BATCHES_PER_CHUNK = 50;
+
+/** Copy tasks one copy runs at once (the copy-parts Map MaxConcurrency). */
+export const MAX_CONCURRENT_BATCHES = 10;
 /** Upper bound of the events one Task state adds, from its retriers' MaxAttempts. */
 export function worstCaseTaskEvents(retriers: { MaxAttempts?: number }[], submitted = false) {
     const attempts = retriers.reduce((sum, r) => sum + (r.MaxAttempts ?? 3), 0);
@@ -729,7 +721,7 @@ function stateMachineLogGroup(
     });
 }
 
-/** The child state machine: copy the batches of one chunk, at most maxConcurrentBatches at once. */
+/** The child state machine: copy the batches of one chunk, at most MAX_CONCURRENT_BATCHES at once. */
 function buildCopyPartsStateMachine(
     scope: Construct,
     fun: lambda.IFunction,
@@ -749,7 +741,8 @@ function buildCopyPartsStateMachine(
     );
     const copyBatches = new sfn.Map(scope, "LargeObjectCopyBatches", {
         itemsPath: "$.batches",
-        maxConcurrency: config.app.largeFileIngestion.maxConcurrentBatches,
+        // Fixed; mirrors backend common/largeObjectCopy.py MAX_CONCURRENT_BATCHES (a test pins both).
+        maxConcurrency: MAX_CONCURRENT_BATCHES,
         itemSelector: {
             job: sfn.JsonPath.objectAt("$.job"),
             batch: sfn.JsonPath.objectAt("$$.Map.Item.Value"),
@@ -826,8 +819,8 @@ function buildCopyStateMachine(
         maxDelay: Duration.seconds(CHUNK_START_RETRY.maxDelaySeconds),
         jitterStrategy: sfn.JitterType.FULL,
     });
-    // One chunk at a time: the child runs maxConcurrentBatches batches at once, so the copy's
-    // concurrency stays what maxConcurrentBatches sets.
+    // One chunk at a time: the child runs MAX_CONCURRENT_BATCHES batches at once, so the copy's
+    // concurrency stays MAX_CONCURRENT_BATCHES.
     const copyChunks = new sfn.Map(scope, "LargeObjectCopyChunks", {
         itemsPath: "$.chunks",
         maxConcurrency: 1,

@@ -28,6 +28,7 @@ import boto3
 from botocore.config import Config
 
 from customLogging.logger import safeLogger
+from common.largeObjectCopy import MAX_OUTPUT_INGESTION_WAIT_HOURS
 from common.workflows.workflowAslBuilder import generate_workflow_asl
 from common.workflows.stepfunctions_builder import (
     create_state_machine,
@@ -159,24 +160,14 @@ def fingerprints_match(workflow_item, pipeline_records):
     return dict(stored) == workflow_pipeline_fingerprints(pipeline_records)
 
 
-def configured_wait_hours():
-    """The maximum output-ingestion wait this function was configured with, or None when it was not
-    given one (the deployment check then does not compare the wait)."""
-    if not os.environ.get("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", ""):
-        return None
-    return _max_wait_hours()
-
-
 def asl_schema_current(workflow_item):
-    """True when the workflow's deployed definition was generated with the current ASL schema and,
-    when this function knows the configured maximum output-ingestion wait, with that wait (the wait
-    is baked into the definition, so a changed app.largeFileIngestion.maxOutputIngestionWaitHours
-    redeploys the workflow at its next launch)."""
+    """True when the workflow's deployed definition was generated with the current ASL schema and
+    with the current maximum output-ingestion wait (the wait is baked into the definition, so a
+    release that changes MAX_OUTPUT_INGESTION_WAIT_HOURS redeploys the workflow at its next launch)."""
     item = workflow_item or {}
     if str(item.get("aslSchemaVersion") or "") != str(ASL_SCHEMA_VERSION):
         return False
-    wait = configured_wait_hours()
-    return wait is None or str(item.get("outputIngestionWaitHours") or "") == str(wait)
+    return str(item.get("outputIngestionWaitHours") or "") == str(_max_wait_hours())
 
 
 def deployment_matches(workflow_item, pipeline_records):
@@ -198,18 +189,14 @@ def _deploy_env():
         # Deployment partition for the service-integration ARNs embedded in the ASL (defaults to
         # commercial "aws"); GovCloud/China/ISO inject the matching partition.
         "aws_partition": os.environ.get("AWS_PARTITION", "aws") or "aws",
-        # Maximum wait for large outputs (app.largeFileIngestion.maxOutputIngestionWaitHours).
+        # Maximum wait for large outputs (common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS).
         "max_output_ingestion_wait_hours": _max_wait_hours(),
     }
 
 
 def _max_wait_hours():
-    """The configured maximum output-ingestion wait, within 1..168 hours (48 when unset)."""
-    try:
-        value = int(os.environ.get("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "") or 48)
-    except ValueError:
-        value = 48
-    return value if 1 <= value <= 168 else 48
+    """The maximum output-ingestion wait, in hours (a fixed value)."""
+    return MAX_OUTPUT_INGESTION_WAIT_HOURS
 
 
 def _sf_client():

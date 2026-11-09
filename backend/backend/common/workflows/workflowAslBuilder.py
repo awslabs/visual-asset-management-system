@@ -37,7 +37,8 @@ logger = safeLogger()
 # the process-output state (AwaitOutputIngestion + FinalizeOutputs).
 ASL_SCHEMA_VERSION = 2
 
-# Default maximum wait for large outputs (common.largeObjectCopy settings; app.largeFileIngestion).
+# Default maximum wait for large outputs. Mirrors common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS
+# (this module keeps its import-free contract; a unit test pins the two equal).
 DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS = 48
 
 # State ids of the large-output wait (fixed: they appear once per definition).

@@ -231,8 +231,27 @@ prompt.
 
 ### Large Output Limits
 
-Outputs over 1 GiB are copied into the asset by the large object copy engine after the step that wrote
-them (see [Large file ingestion](../deployment/configuration-reference.md#large-file-ingestion-applargefileingestion)).
+Workflow outputs over 1 GiB, and API uploads over 5 GiB, are copied into their asset by the large
+object copy engine: a Step Functions state machine that copies the file in parts with short AWS Lambda
+tasks. A task that times out or fails is retried and resumes at the next missing part, so there is no
+size limit below the Amazon S3 object limit of 5 TiB. A workflow execution whose outputs include such a
+file stays `RUNNING` until its copies finish, then ends `SUCCEEDED`, or `FAILED` with an error naming
+each file that did not land. A copy that fails discards its partial upload at once.
+
+The engine runs with fixed values; they are not deployment configuration.
+
+| Engine value                         | Value   | Effect                                                                                                         |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| API upload size that uses the engine | 5 GiB   | API uploads larger than this use the copy engine. Smaller uploads over 1 GiB keep the large-file queue's copy. |
+| Smallest part of a copy              | 256 MiB | Larger files use larger parts, so a copy has at most 9,000 parts.                                              |
+| Parts per Lambda task                | 16      | Parts one Lambda task copies, 8 of them at the same time.                                                      |
+| Lambda tasks per copy                | 10      | Lambda tasks one copy runs at the same time.                                                                   |
+| Maximum wait for large outputs       | 48 h    | How long a workflow execution waits for its large outputs before it fails.                                     |
+
+The copy engine function is unreserved: it draws on the account's unreserved Lambda concurrency, like
+the VAMS API functions. When the account runs out, a copy task is throttled, and throttling slows a copy
+rather than failing it. A throttled task waits with jittered backoff, about 4 hours on average and at
+most about 8 hours, before its copy fails.
 
 | Parameter                                  | Value                          | Exceeding it                                   |
 | ------------------------------------------ | ------------------------------ | ---------------------------------------------- |

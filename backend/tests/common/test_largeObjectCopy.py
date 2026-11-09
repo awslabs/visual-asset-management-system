@@ -84,14 +84,33 @@ def test_execution_name_fits_step_functions_rules():
     assert all(c.isalnum() or c in "-_" for c in name)
 
 
-def test_settings_default_when_unset_or_out_of_bounds():
-    assert loc.settings({}) == {
+def test_settings_are_the_fixed_constants():
+    assert loc.settings() == {
         "apiUploadEngineThresholdBytes": 5 * GIB, "minPartSizeBytes": 256 * loc.MIB,
         "partsPerBatch": 16, "threadsPerBatch": 8, "maxOutputIngestionWaitHours": 48,
         "batchesPerChunk": loc.DEFAULT_BATCHES_PER_CHUNK}
-    assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "500"})["maxOutputIngestionWaitHours"] == 48
-    assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "x"})["maxOutputIngestionWaitHours"] == 48
-    assert loc.settings({loc.ENV_MAX_WAIT_HOURS: "2"})["maxOutputIngestionWaitHours"] == 2
+    assert loc.MAX_CONCURRENT_BATCHES == 10
+    assert loc.DEFAULT_BATCHES_PER_CHUNK == 50
+
+
+def test_settings_ignore_the_removed_tuning_environment(monkeypatch):
+    """The engine settings are no longer deployment configuration: a function that still carries
+    an old tuning variable (a stale environment) keeps the fixed values."""
+    for name, value in (("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "2"),
+                        ("LARGE_OBJECT_COPY_API_UPLOAD_THRESHOLD_BYTES", str(2 * GIB)),
+                        ("LARGE_OBJECT_COPY_PARTS_PER_BATCH", "1"),
+                        ("LARGE_OBJECT_COPY_BATCHES_PER_CHUNK", "20")):
+        monkeypatch.setenv(name, value)
+    assert loc.settings()["maxOutputIngestionWaitHours"] == 48
+    assert loc.settings()["apiUploadEngineThresholdBytes"] == 5 * GIB
+    assert loc.settings()["partsPerBatch"] == 16
+    assert loc.settings()["batchesPerChunk"] == loc.DEFAULT_BATCHES_PER_CHUNK
+
+
+def test_the_constants_keep_the_engine_within_amazon_s3_limits():
+    assert loc.LARGE_FILE_THRESHOLD_BYTES <= loc.API_UPLOAD_ENGINE_THRESHOLD_BYTES <= loc.S3_MAX_OBJECT_BYTES
+    assert loc.S3_MIN_PART_BYTES <= loc.MIN_PART_SIZE_BYTES <= loc.S3_MAX_PART_BYTES
+    assert 1 <= loc.THREADS_PER_BATCH <= loc.PARTS_PER_BATCH
 
 
 @pytest.mark.parametrize("size,large", [

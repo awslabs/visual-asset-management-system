@@ -341,7 +341,7 @@ Avoid narrowing this grant with an `aws:PrincipalArn` condition that matches onl
 
 If you require principal scoping, grant the VAMS account root (as shown above) and rely on Account A's IAM policies to constrain which roles use the access, or enumerate the specific CDK-generated role ARNs after a first deployment and add them explicitly.
 
-From v2.7 the large object copy engine writes workflow outputs over 1 GiB and API uploads over `app.largeFileIngestion.apiUploadEngineThresholdBytes` (5 GiB by default) into the bucket, with its own role: the service role of the `largeObjectCopy` Lambda function. A policy that lists role ARNs must add that role, or those files fail to land after the update. A grant to the VAMS account root needs no change.
+From v2.7 the large object copy engine writes workflow outputs over 1 GiB and API uploads over 5 GiB into the bucket, with its own role: the service role of the `largeObjectCopy` Lambda function. A policy that lists role ARNs must add that role, or those files fail to land after the update. A grant to the VAMS account root needs no change.
 :::
 
 #### Object ownership (cross-account writes)

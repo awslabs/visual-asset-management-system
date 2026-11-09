@@ -1194,37 +1194,6 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFun
 | ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `app.pipelines.executionLogReadPrefixes` | string[] | `["/aws/vendedlogs/VAMSStateMachine-*", "/aws/vendedlogs/VAMSstateMachine-*", "/aws/vendedlogs/Pipelines/*", "/aws/batch/job", "/aws/sagemaker/TrainingJobs"]` | Log-group names under `/aws/` the execution logs API may read; trailing `*` is a prefix. |
 
-## Large file ingestion (`app.largeFileIngestion`)
-
-Workflow outputs over 1 GiB, and API uploads over `apiUploadEngineThresholdBytes`, are copied into their asset by the large object copy engine: a Step Functions state machine that copies the file in parts with short AWS Lambda tasks. A task that times out or fails is retried and resumes at the next missing part, so there is no size limit below the Amazon S3 object limit of 5 TiB. A workflow execution whose outputs include such a file stays `RUNNING` until its copies finish, then ends `SUCCEEDED`, or `FAILED` with an error naming each file that did not land. A copy that fails discards its partial upload at once.
-
-Every key is optional, and the defaults suit most deployments. The 1 GiB threshold for asynchronous ingestion is fixed. Configuration validation rejects a value that is not a whole number within its range.
-
-:::note[Implemented by]
-Engine: `infra/lib/lambdaBuilder/largeObjectCopyEngine.ts`, `backend/backend/common/largeObjectCopy.py`, `backend/backend/handlers/assets/largeObjectCopy.py`. Defaults and validation: `LARGE_FILE_INGESTION_DEFAULTS`, `LARGE_FILE_INGESTION_BOUNDS` and `validateLargeFileIngestionConfig()` in `infra/config/config.ts`.
-:::
-
-| Field                                                  | Type   | Default               | Range           | Description                                                                                                    |
-| ------------------------------------------------------ | ------ | --------------------- | --------------- | -------------------------------------------------------------------------------------------------------------- |
-| `app.largeFileIngestion.apiUploadEngineThresholdBytes` | number | `5368709120` (5 GiB)  | 1 GiB to 5 TiB  | API uploads larger than this use the copy engine. Smaller uploads over 1 GiB keep the large-file queue's copy. |
-| `app.largeFileIngestion.minPartSizeBytes`              | number | `268435456` (256 MiB) | 64 MiB to 5 GiB | Smallest part of a copy. Larger files use larger parts, so a copy has at most 9,000 parts.                     |
-| `app.largeFileIngestion.partsPerBatch`                 | number | `16`                  | 1 to 64         | Parts one Lambda task copies.                                                                                  |
-| `app.largeFileIngestion.threadsPerBatch`               | number | `8`                   | 1 to 32         | Parts one Lambda task copies at the same time.                                                                 |
-| `app.largeFileIngestion.maxConcurrentBatches`          | number | `10`                  | 1 to 40         | Lambda tasks one copy runs at the same time.                                                                   |
-| `app.largeFileIngestion.engineReservedConcurrency`     | number | `0` (unreserved)      | 0 to 1000       | Reserved concurrency of the copy engine function. See [Sizing the copy engine](#sizing-the-copy-engine).       |
-| `app.largeFileIngestion.maxOutputIngestionWaitHours`   | number | `48`                  | 1 to 168        | How long a workflow execution waits for its large outputs before it fails.                                     |
-
-### Sizing the copy engine
-
-`engineReservedConcurrency` caps the copy tasks running at the same time across the whole deployment, all files and all executions together. The copy engine function draws on the same account concurrency pool as the VAMS API functions, so on a busy deployment a cap keeps large copies from taking the concurrency the API needs. `0`, the default, leaves the function unreserved.
-
--   Lambda keeps at least 100 unreserved concurrent executions per account and Region. A value the account cannot reserve fails the deploy, so check the account's concurrency quota first; new accounts and GovCloud accounts often have a lower one.
--   A copy task over the cap is throttled, and throttling slows a copy rather than failing it. A throttled task waits with jittered backoff, about 4 hours on average and at most about 8 hours, before its copy fails.
--   Each copy runs at most `maxConcurrentBatches` tasks at a time, so `engineReservedConcurrency` divided by `maxConcurrentBatches` is about the number of large files that copy at full speed at once. For example, the defaults with a cap of 50 copy 5 files at full speed. Further files do not wait in a queue: their copy tasks are throttled and retried with jittered backoff, so they start later, and can finish later than the cap alone would suggest, since a file can sit idle for minutes after capacity frees up.
--   Leave `engineReservedConcurrency` at `0` unless large copies compete with API traffic. If you set it, keep it at least as large as `maxConcurrentBatches`.
-
-A workflow uses the new wait the next time it is launched after an upgrade: the launch redeploys its state machine first. A run already in flight during the upgrade finishes on its old definition, and the copy engine records its outcome when its copies finish.
-
 ## Addons (`app.addons`)
 
 Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here.

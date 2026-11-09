@@ -66,11 +66,9 @@ def test_a_copy_driven_chunk_by_chunk_lands_the_object(env):
     assert loc.get_job_row(env["jobs"], job["jobId"])["status"] == loc.STATUS_SUCCEEDED
 
 
-def test_the_chunk_size_comes_from_the_deployment():
-    assert loc.settings({loc.ENV_BATCHES_PER_CHUNK: "20"})["batchesPerChunk"] == 20
-    assert loc.settings({})["batchesPerChunk"] == loc.DEFAULT_BATCHES_PER_CHUNK
-    # Above the bound the history arithmetic was done for: the default
-    assert loc.settings({loc.ENV_BATCHES_PER_CHUNK: "51"})["batchesPerChunk"] == loc.DEFAULT_BATCHES_PER_CHUNK
+def test_the_chunk_size_is_the_fixed_history_bound():
+    # The infra test pins DEFAULT_BATCHES_PER_CHUNK to the construct's BATCHES_PER_CHUNK.
+    assert loc.settings()["batchesPerChunk"] == loc.DEFAULT_BATCHES_PER_CHUNK == 50
 
 
 # --------------------------------------------------------------------------------------------- #

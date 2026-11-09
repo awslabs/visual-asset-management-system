@@ -2111,7 +2111,7 @@ def _reconcile_ended_copies(rows, main_item):
     """Backstop for a missed status change event of the copy state machine: hand the copy engine
     each unfinished job whose execution already ended outside its states (at most
     MAX_RECONCILE_CHECKS_PER_READ describes per check), so its run is finalized without waiting out
-    maxOutputIngestionWaitHours. A run is checked at most once per
+    MAX_OUTPUT_INGESTION_WAIT_HOURS. A run is checked at most once per
     COPY_RECONCILE_CHECK_INTERVAL_SECONDS, whatever the number of viewers polling its details: the
     check is claimed on the run's row first. Asynchronous and idempotent; never raises."""
     function_name = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME, "")

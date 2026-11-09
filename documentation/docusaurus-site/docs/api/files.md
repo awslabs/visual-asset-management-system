@@ -680,7 +680,7 @@ Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `part
 }
 ```
 
-A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchronousHandling: true` and counts as a success, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over `app.largeFileIngestion.apiUploadEngineThresholdBytes` (5 GiB by default) are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
+A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchronousHandling: true` and counts as a success, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
 
 **Error Responses:**
 

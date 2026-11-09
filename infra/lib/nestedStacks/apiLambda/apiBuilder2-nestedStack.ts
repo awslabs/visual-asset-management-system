@@ -52,7 +52,6 @@ import {
     buildLargeObjectCopyEngine,
     grantLargeObjectCopyCoordination,
     grantLargeObjectCopyHandOffByParameter,
-    largeObjectCopyEnvironment,
 } from "../../lambdaBuilder/largeObjectCopyEngine";
 import {
     buildPipelineServiceV2Function,
@@ -560,11 +559,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
-        // The generated definitions wait this long for a run's large outputs (AwaitOutputIngestion).
-        workflowServiceV2.addEnvironment(
-            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
-            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
-        );
         // List all workflows (Casbin-filtered).
         attachFunctionToApi(this, workflowServiceV2, {
             routePath: "/workflows",
@@ -603,11 +597,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
-        );
-        // The launch-time deployment check compares the wait a workflow was deployed with to this.
-        executeWorkflowV2.addEnvironment(
-            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
-            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
         );
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",

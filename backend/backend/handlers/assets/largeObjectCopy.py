@@ -75,7 +75,7 @@ from customLogging.logger import safeLogger
 logger = safeLogger(service_name="LargeObjectCopy")
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
-# Matches the largest part-copy pool (threadsPerBatch is validated to at most 32).
+# Room for the part-copy pool (common.largeObjectCopy THREADS_PER_BATCH).
 s3_pool_config = Config(retries={"max_attempts": 8, "mode": "adaptive"}, max_pool_connections=32)
 
 # Sample size for the asset-type classification after a file lands (same as the queue consumer).
@@ -180,7 +180,7 @@ def prepare(job):
     min_part_size = cfg["minPartSizeBytes"]
     if _streams_parts(job):
         # A streamed part is held in memory (STREAMED_COPY_THREADS at once), so it stays at or under
-        # STREAMED_MAX_PART_BYTES whatever minPartSizeBytes allows; MAX_PLANNED_PARTS still fits 5 TiB.
+        # STREAMED_MAX_PART_BYTES whatever MIN_PART_SIZE_BYTES allows; MAX_PLANNED_PARTS still fits 5 TiB.
         min_part_size = min(min_part_size, loc.STREAMED_MAX_PART_BYTES)
     part_size, part_count = loc.plan_parts(size, min_part_size)
     batches = loc.plan_batches(part_count, cfg["partsPerBatch"])
@@ -712,7 +712,7 @@ def reconcile(execution_arn):
 
     A Standard execution that fails at the execution level (its history quota, a runtime error),
     times out, or is stopped in the console or the API runs no Catch, Fail or notify state, so its
-    job row would stay QUEUED or RUNNING and its run would wait out maxOutputIngestionWaitHours.
+    job row would stay QUEUED or RUNNING and its run would wait out MAX_OUTPUT_INGESTION_WAIT_HOURS.
     Invoked by the copy state machine's status change rule, and by the execution details read for a
     job it finds in that state. A job the cancel path marked CANCELLED is left alone; for a stop the
     cancel path made, only a landed job is finished (_reconcile_cancelled_stop).
