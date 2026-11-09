@@ -2446,9 +2446,21 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message (D176). The message is centred in the panel
+        // and scrolls within it, so a narrow panel never clips it.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="usd-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="usd-viewer-root"
             >
                 <div
@@ -2456,12 +2468,12 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         color: "#d13212",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
-                        width: "100%",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxWidth: "800px",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
@@ -2483,7 +2495,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }
 
     return (
-        <div style={{ position: "relative", height: "100%", width: "100%" }} id="usd-viewer-root">
+        <div
+            key="usd-viewer"
+            style={{ position: "relative", height: "100%", width: "100%" }}
+            id="usd-viewer-root"
+        >
             <div
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}

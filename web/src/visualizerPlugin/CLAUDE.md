@@ -383,6 +383,15 @@ its own; at an equal z-index the element later in the document is drawn above. T
 -   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
     Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
     wide one.
+-   **The error panel of a viewer that appends its canvas outside React.** The Three.js (#832) and Needle
+    USD (D176) viewers append the renderer's canvas to their scene container themselves. Their error
+    root carries a `key` apart from the viewer root's (`threejs-viewer-error` / `threejs-viewer`,
+    `usd-viewer-error` / `usd-viewer`), so React unmounts the scene container, and the canvas with it,
+    instead of reusing that node for the message, where the canvas pushed the text out of the panel.
+    The message is centred with flex and scrolls (`maxHeight: 100%`, `overflowY: auto`), so a narrow
+    panel never clips it. A new viewer that appends a canvas follows the same pattern and pins it with
+    a test that the canvas is outside the panel and detached (`ThreeJSViewerComponent.test.tsx`,
+    `NeedleUSDViewerComponent.errorPanel.test.tsx`).
 
 ---
 

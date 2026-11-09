@@ -115,6 +115,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Needle USD viewer error messages are readable** — The error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. (issue #335)
 -   **OBJ material libraries in the Three.js viewer** — An OBJ file's `.mtl` library and its textures load from the asset, so the model renders with its materials. (issue #923)
 -   **COLLADA and 3DS textures in the Three.js viewer** — Textures load from the asset instead of being requested from the web site root, which answered 403. (issue #925)
 -   **CAD files in the Three.js viewer** — `.igs` files open like `.iges`, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. (issue #1199)
