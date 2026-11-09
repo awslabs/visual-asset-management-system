@@ -87,6 +87,19 @@ the deleted database's: for the live id it is not an archived asset, and the ass
 the live database never had (no row). Its history stays readable under `<databaseId>#deleted`. The
 retirement record is read only when an archived row is found (primed with the page's other records
 in a listing), and the archived reads are then projected on `archivedAt` too.
+
+A deleted database's history, the compliance data its delete moved under `<databaseId>#deleted`
+(D168), follows the same rule. Every asset of it is archived: its row is in the archive partition
+`<databaseId>#deleted`, whichever database last archived it. A record, evaluation or audit entry
+there that names an asset needs the compliance permission on `<databaseId>#deleted` (the route's
+`decide`, which the engine passes only when the live id passes too) and, for a caller with asset
+rules, the asset GET on that row as stored (`deleted_asset_readable`): decided per database on the
+archive partition alone, or on the row's own fields, and refused when the asset has no row there.
+A database-level entry (no asset, or `*`) needs the compliance permission alone. So a caller sees a
+deleted database's per-asset history exactly where it would see its archived assets, as for a live
+database: a global compliance role combined with asset rules for another database sees the
+database-level entries only. The history's overview and counts leave out the records the asset GET
+refuses (`live_withheld`); nothing in it is left out as archived for every caller (`left_out`).
 """
 
 import json
@@ -94,6 +107,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, FrozenSet, Hashable, Iterable, List, NamedTuple, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
+
+# A deleted database's history id, `<databaseId>#deleted` (D168).
+from common.compliance.databaseRetirement import is_deleted_scope
 
 # The partition-key suffix of an archived asset row, as the asset service writes it and the engine
 # reads it (`handlers.authz.ARCHIVED_DATABASE_ID_SUFFIX`; a test pins the two together). Kept here
@@ -168,6 +184,12 @@ def names_an_asset(database_id: Optional[str], asset_id: Optional[str]) -> bool:
     """Whether a compliance row's ids can name an asset (a live database id and an asset id), so
     that the asset decision applies to it."""
     return is_asset_database(database_id) and bool(asset_id) and asset_id != "*"
+
+
+def names_a_deleted_asset(database_id: Optional[str], asset_id: Optional[str]) -> bool:
+    """Whether a compliance row of a deleted database's history names an asset (module docstring):
+    its asset, archived in `database_id`, decides it as an archived asset is decided."""
+    return is_deleted_scope(database_id) and bool(asset_id) and asset_id != "*"
 
 
 # The attribute the asset service stamps on a row it archives (UTC, ISO-8601).
@@ -341,6 +363,9 @@ class AssetAccess:
         self._single_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._live_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._live_partitions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # A deleted database's history: its archive partition's rows, and single rows (D168).
+        self._deleted_partitions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._deleted_rows: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         # Keys a listing will decide, read with the next live-row batch (a dict as ordered set).
         self._expected: Dict[Tuple[str, str], None] = {}
         self._stored_decisions: Dict[Tuple[Hashable, str], bool] = {}
@@ -464,6 +489,30 @@ class AssetAccess:
             self._live_partitions[database_id] = _partition_rows(
                 self._asset_table, database_id, self._row_fields())
         return self._live_partitions[database_id]
+
+    def deleted_partition(self, scope: str) -> Dict[str, Dict[str, Any]]:
+        """The rows of a deleted database's archive partition `scope` (`<databaseId>#deleted`) as
+        stored, projected on the keys and the fields the caller's rules read: read once per request
+        (one Query, paged). Every row is the history's asset, whichever database archived it."""
+        if scope not in self._deleted_partitions:
+            self._deleted_partitions[scope] = _partition_rows(
+                self._asset_table, scope, self._row_fields())
+        return self._deleted_partitions[scope]
+
+    def deleted_row(self, scope: str, asset_id: str,
+                    listing: bool = False) -> Optional[Dict[str, Any]]:
+        """An asset's row in a deleted database's archive partition `scope`, or None: in a
+        listing from the partition (read once per request); otherwise one strongly-consistent
+        GetItem, cached."""
+        if listing or scope in self._deleted_partitions:
+            return self.deleted_partition(scope).get(asset_id)
+        key = (scope, asset_id)
+        if key not in self._deleted_rows:
+            response = self._asset_table.get_item(
+                Key={"databaseId": scope, "assetId": asset_id}, ConsistentRead=True,
+                **_row_projection(self._row_fields() or ("databaseId",)))
+            self._deleted_rows[key] = response.get("Item") or None
+        return self._deleted_rows[key]
 
     def expect(self, keys: Iterable[Tuple[Optional[str], Optional[str]]]) -> None:
         """Note the `(databaseId, assetId)` keys a listing is about to decide, in the order it will
@@ -612,6 +661,22 @@ class AssetAccess:
         return (self._stored_decision(database_id, decide, cache_key)
                 and self._archive_readable(database_id))
 
+    def deleted_asset_readable(self, scope: str, asset_id: Optional[str],
+                               listing: bool = False) -> bool:
+        """The asset GET on an asset of a deleted database's history `scope` (module docstring):
+        always for a caller without asset rules; decided per database, on the archive partition
+        alone (`{databaseId: scope}`); otherwise on the asset's row as stored there, and refused
+        when it has none (no fields to decide on), as a record whose archived asset is no longer
+        in the archive is."""
+        if not self.has_asset_rules():
+            return True
+        if self.decided_per_database():
+            return self._asset_readable({"databaseId": scope})
+        if not asset_id:
+            return False
+        row = self.deleted_row(scope, asset_id, listing)
+        return row is not None and self._asset_readable(row)
+
     # ---- decisions ---------------------------------------------------------------------------
 
     def access(self, database_id: str, asset_id: str, decide: Callable[[str], bool],
@@ -633,6 +698,10 @@ class AssetAccess:
         every refused check writes an authorization audit entry)."""
         if not decide(database_id):
             return ACCESS_DENIED
+        if names_a_deleted_asset(database_id, asset_id):
+            # A deleted database's history: its asset is archived there (D168).
+            return (ACCESS_VISIBLE if self.deleted_asset_readable(database_id, asset_id, listing)
+                    else ACCESS_ARCHIVED_HIDDEN)
         if not names_an_asset(database_id, asset_id):
             return ACCESS_VISIBLE
         if self.decided_per_database():
@@ -676,6 +745,11 @@ class AssetAccess:
         (nothing is read). Otherwise an asset no longer in the archive, and `asset_id` None (a
         count recorded without the ids), cannot be decided on the asset's own fields and are not
         shown."""
+        if is_deleted_scope(database_id):
+            # An asset of a deleted database's history: the compliance object on the history's id
+            # and the asset GET on its row there (D168).
+            return (bool(decide(database_id))
+                    and self.deleted_asset_readable(database_id, asset_id, listing=True))
         if not is_asset_database(database_id):
             return True
         if not self._stored_decision(database_id, decide, cache_key):
@@ -748,6 +822,17 @@ class AssetAccess:
         assets whose live row the asset GET passes (`readable`, `ids` the rows it refuses), from the
         database's live partition read once (`live_rows`). A record of an asset with no row is then
         left out: it has no fields to decide on."""
+        if is_deleted_scope(database_id) and self.has_asset_rules():
+            # A deleted database's history keeps the records of the assets the caller may read in
+            # its archive partition (D168): all, none, or those whose rows pass.
+            if self.decided_per_database():
+                if self._asset_readable({"databaseId": database_id}):
+                    return NOTHING_WITHHELD
+                return LiveWithheld(True, frozenset())
+            rows = self.deleted_partition(database_id)
+            readable = frozenset(asset_id for asset_id, row in rows.items()
+                                 if self._asset_readable(row))
+            return LiveWithheld(False, frozenset(rows) - readable, readable)
         if not is_asset_database(database_id) or not self.has_asset_rules():
             return NOTHING_WITHHELD
         if self.decided_per_database():

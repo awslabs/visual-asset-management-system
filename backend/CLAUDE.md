@@ -82,7 +82,10 @@ backend/
 │   │   │                                           #   archived_asset_visible(); asset checks run
 │   │   │                                           #   on the engine and their denials go
 │   │   │                                           #   out in one batch: handlers call flush_denials()
-│   │   │                                           #   in lambda_handler's finally. A live record
+│   │   │                                           #   in lambda_handler's finally. A deleted
+│   │   │                                           #   database's history (<db>#deleted,
+│   │   │                                           #   names_a_deleted_asset) is decided the same
+│   │   │                                           #   way on its archive rows (D168). A live record
 │   │   │                                           #   with no asset row: decided on the database
 │   │   │                                           #   per database, refused when decided per row
 │   │   │                                           #   (live_withheld().readable is the allowlist
