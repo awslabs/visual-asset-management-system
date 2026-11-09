@@ -219,8 +219,9 @@ export interface NlpSearchSummary {
  * fixed set (`truncated:window`, `truncated:targets`, `databases:none_accessible`,
  * `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full` — a segment
  * search window filled while the answer is not already truncated); `message` is written for API and
- * CLI callers. The search page shows its own text for each code (utils/nlpWarnings.ts), and the
- * API's `message` only for a code it does not know.
+ * CLI callers. The search page states the two window-full codes under the results and shows every
+ * other code in its Search notice above the results, in its own text for each code
+ * (utils/nlpWarnings.ts) and the API's `message` only for a code it does not know.
  */
 export interface NlpSearchWarning {
     code: string;

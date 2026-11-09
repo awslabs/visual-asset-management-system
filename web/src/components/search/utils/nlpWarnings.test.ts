@@ -7,7 +7,12 @@
  * D76: the search page shows its own text for each rare natural-language warning code, never the
  * API's message, which is written for API and CLI callers. A code it does not know shows the message.
  */
-import { NLP_WINDOW_WARNING_CODES, nlpWarningText, rareNlpWarningText } from "./nlpWarnings";
+import {
+    NLP_WINDOW_WARNING_CODES,
+    nlpWarningText,
+    rareNlpWarningText,
+    rareNlpWarningTexts,
+} from "./nlpWarnings";
 
 const API_MESSAGES: Record<string, string> = {
     "databases:none_accessible": "No searchable database is accessible to the caller",
@@ -90,5 +95,21 @@ describe("rareNlpWarningText", () => {
         expect(
             rareNlpWarningText([warning("truncated:targets"), warning("truncated:targets")])
         ).toBe(nlpWarningText(warning("truncated:targets")));
+    });
+});
+
+describe("rareNlpWarningTexts", () => {
+    it("lists the Search notice's lines: each rare warning's text once, in the API's order, without the window-full codes (D77)", () => {
+        expect(
+            rareNlpWarningTexts([
+                warning("databases:none_accessible"),
+                { code: "truncated:window", message: "A result window of 100 filled" },
+                { code: "future:code", message: "A new kind of notice" },
+                warning("databases:none_accessible"),
+                { code: "segments:window_full", message: "A segment window of 100 filled" },
+            ])
+        ).toEqual([nlpWarningText(warning("databases:none_accessible")), "A new kind of notice"]);
+        expect(rareNlpWarningTexts(null)).toEqual([]);
+        expect(rareNlpWarningTexts([{ code: "future:code", message: "" }])).toEqual([]);
     });
 });

@@ -1028,6 +1028,26 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
             expect(guide).toContain(`"${text.replace(/\$\{Synonyms\.database\}/g, "database")}"`);
         }
     });
+
+    test("the docs place the Search notice above the results, dismissible, not in a notification (D77)", () => {
+        const container = readRepo(
+            path.join("web", "src", "components", "search", "ModernSearchContainer.tsx")
+        );
+        // Control: the web renders the notice as a dismissible Alert and toasts no notice.
+        expect(container).toContain('header="Search notice"');
+        expect(container).toContain("dismissible");
+        expect(container).not.toContain('showWarning("Search notice"');
+        const guide = section(
+            readDoc("user-guide/search-and-discovery.md"),
+            "## Natural language search"
+        );
+        expect(guide).toContain("appear in a **Search notice** above the results");
+        expect(guide).toContain("which you can dismiss");
+        expect(guide).not.toContain("**Search notice** notification");
+        const searching = section(readDoc("concepts/vector-search.md"), "## Searching");
+        expect(searching).toContain("a dismissible **Search notice** above the results");
+        expect(searching).not.toContain("**Search notice** notification");
+    });
 });
 
 describe("sidebar and page set", () => {

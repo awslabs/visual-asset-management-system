@@ -164,6 +164,42 @@ describe("SearchSidebar facet counts", () => {
         expect(labels(container, "File Type")).toEqual(["glb (93)"]);
     });
 
+    it("labels a database with exactly one match in the singular, and a minimum of one in the plural (#911)", async () => {
+        // Keyword: an exact count of one reads "1 result", as the badge and the announcement do.
+        const keyword = {
+            ...keywordAnswer,
+            aggregations: {
+                ...keywordAnswer.aggregations,
+                str_databaseid: {
+                    buckets: [
+                        { key: "uat-open", doc_count: 1 },
+                        { key: "uat-schema", doc_count: 2 },
+                    ],
+                },
+            },
+        };
+        const first = renderSidebar(keyword, "keyword");
+        await waitFor(() => expect(labels(first.container, "Database")).toHaveLength(2));
+        expect(labels(first.container, "Database")).toEqual([
+            "uat-open (1 result)",
+            "uat-schema (2 results)",
+        ]);
+        first.unmount();
+
+        // Natural language: a count of one that is a minimum stays plural, as "Found 1+ results" reads.
+        const nlp = restrictedAnswer("gte", 3, 3);
+        nlp.aggregations.str_databaseid.buckets = [
+            { key: "uat-open", doc_count: 1 },
+            { key: "uat-schema", doc_count: 2 },
+        ];
+        const second = renderSidebar(nlp, "nlp");
+        await waitFor(() => expect(labels(second.container, "Database")).toHaveLength(2));
+        expect(labels(second.container, "Database")).toEqual([
+            "uat-open (1+ results)",
+            "uat-schema (2+ results)",
+        ]);
+    });
+
     it("marks the reduced panel's file-type counts the same way", async () => {
         const { container } = renderSidebar(restrictedAnswer("gte"), "nlp", true);
         await waitFor(() => expect(fetchAllDatabases).toHaveBeenCalled());

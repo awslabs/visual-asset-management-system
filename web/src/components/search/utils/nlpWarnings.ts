@@ -8,8 +8,8 @@ import type { NlpSearchWarning } from "../types";
 
 /**
  * Natural-language warnings that only say a search window filled. The page states them itself (the
- * count's "+" and the line under the results), so they raise no toast; every other code is rare and
- * is toasted with the text nlpWarningText gives it.
+ * count's "+" and the line under the results), so they raise no Search notice; every other code is
+ * rare and is shown in the Search notice above the results with the text nlpWarningText gives it.
  */
 export const NLP_WINDOW_WARNING_CODES = new Set(["truncated:window", "segments:window_full"]);
 
@@ -36,14 +36,22 @@ export function nlpWarningText(warning: NlpSearchWarning): string {
 }
 
 /**
- * The text of the "Search notice" toast for a natural-language answer: each rare warning's text, in
- * the order the API sent them, once each. Empty when there is nothing to toast (no rare warning, or
- * only unknown codes without a message).
+ * The lines of the Search notice above a natural-language answer: each rare warning's text, in the
+ * order the API sent them, once each. Empty when there is nothing to show (no rare warning, or only
+ * unknown codes without a message).
  */
-export function rareNlpWarningText(warnings: NlpSearchWarning[] | null | undefined): string {
+export function rareNlpWarningTexts(warnings: NlpSearchWarning[] | null | undefined): string[] {
     const texts = (warnings ?? [])
         .filter((w) => !NLP_WINDOW_WARNING_CODES.has(w.code))
         .map(nlpWarningText)
         .filter((text) => text.length > 0);
-    return Array.from(new Set(texts)).join(" ");
+    return Array.from(new Set(texts));
+}
+
+/**
+ * The Search notice as one string, for the screen-reader announcement that follows the count: the
+ * lines of rareNlpWarningTexts joined by spaces. Empty when there is no notice.
+ */
+export function rareNlpWarningText(warnings: NlpSearchWarning[] | null | undefined): string {
+    return rareNlpWarningTexts(warnings).join(" ");
 }

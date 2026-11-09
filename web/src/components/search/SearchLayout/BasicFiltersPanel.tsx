@@ -140,8 +140,11 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 }
             }
 
+            // "1 result" for exactly one match; a minimum stays plural ("1+ results"), as the page's
+            // "Found 1+ results" reads.
+            const noun = count === 1 && !countsAreMinimums ? "result" : "results";
             return {
-                label: `${db.databaseId} (${facetCount(count)} results)`,
+                label: `${db.databaseId} (${facetCount(count)} ${noun})`,
                 value: db.databaseId,
             };
         })

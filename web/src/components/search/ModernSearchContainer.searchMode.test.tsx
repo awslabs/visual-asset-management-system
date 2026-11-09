@@ -467,7 +467,7 @@ describe("ModernSearchContainer search modes", () => {
         expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
     });
 
-    describe("response warnings (D72: toast only the rare ones)", () => {
+    describe("response warnings (D77: rare ones in a Search notice above the results, never a toast)", () => {
         const truncatedMessage = "A result window of 100 filled; more files may match";
         const segmentMessage = "A segment window of 100 filled; more segments may match";
         const ignoredMessage = "OpenSearch is not enabled; ignored: filters, tags";
@@ -481,6 +481,31 @@ describe("ModernSearchContainer search modes", () => {
         const segmentLine =
             "Some files have more matching scenes or passages than were checked; more may exist.";
 
+        /** The page's Search notice: the Alert headed "Search notice", or null when none is shown. */
+        const searchNotice = (container: HTMLElement) =>
+            createWrapper(container)
+                .findAllAlerts()
+                .find(
+                    (alert) => alert.findHeader()?.getElement().textContent === "Search notice"
+                ) ?? null;
+        /** The notice's lines, one per rare warning, as the user reads them. */
+        const noticeLines = (container: HTMLElement) =>
+            Array.from(searchNotice(container)?.findContent().getElement().children ?? []).map(
+                (line) => line.textContent
+            );
+        /** Press the notice's dismiss button, as a user does. */
+        const dismissNotice = (container: HTMLElement) => {
+            const button = searchNotice(container)?.findDismissButton()?.getElement();
+            if (!button) throw new Error("no dismissible Search notice on the page");
+            fireEvent.click(button);
+        };
+        /** The headers of the toasts on screen; the toast stack is a Flashbar. */
+        const toastHeaders = (container: HTMLElement) =>
+            createWrapper(container)
+                .findFlashbar()
+                ?.findItems()
+                .map((item) => item.findHeader()?.getElement().textContent) ?? [];
+
         const searchWith = async (
             truncated: boolean,
             warnings: Array<{ code: string; message: string }>
@@ -490,7 +515,7 @@ describe("ModernSearchContainer search modes", () => {
                 true,
                 { ...nlpEnvelope(truncated), warnings },
             ]);
-            renderContainer();
+            const { container } = renderContainer();
             const input = await screen.findByPlaceholderText(
                 "Describe what you are looking for..."
             );
@@ -498,59 +523,208 @@ describe("ModernSearchContainer search modes", () => {
             await userEvent.click(screen.getByRole("button", { name: "Search" }));
             await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
             await screen.findByText("Truck");
+            return container;
         };
 
-        it("toasts the rare warnings in one notice, in the page's own words, never the API's message, the object or a window-full message (D76)", async () => {
-            await searchWith(true, [
+        it("shows a rare warning in the Search notice above the results, in the page's words, and raises no toast (D77)", async () => {
+            const container = await searchWith(false, [
+                { code: "databases:none_accessible", message: noneAccessibleMessage },
+            ]);
+            const notice = searchNotice(container);
+            expect(notice).not.toBeNull();
+            expect(notice?.getElement()).toHaveAttribute("data-testid", "search-notice");
+            expect(noticeLines(container)).toEqual([noneAccessibleText]);
+            // An info notice with a named status icon and a named dismiss button.
+            expect(notice?.getElement().querySelector('[aria-label="Info"]')).not.toBeNull();
+            expect(notice?.findDismissButton()?.getElement()).toHaveAttribute(
+                "aria-label",
+                "Dismiss search notice"
+            );
+            // It sits above the results, in the results column.
+            const table = createWrapper(container).findTable()?.getElement();
+            const noticeElement = notice?.getElement();
+            if (!table || !noticeElement) throw new Error("the notice or the results are missing");
+            expect(
+                noticeElement.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING
+            ).toBeTruthy();
+            // Nothing is toasted: no toast covers the title row's view switch or Clear all filters.
+            expect(createWrapper(container).findFlashbar()).toBeNull();
+            expect(screen.queryByText(noneAccessibleMessage)).toBeNull();
+            expect(screen.queryByText(/caller/)).toBeNull();
+            expect(screen.queryByText(segmentLine)).toBeNull();
+        });
+
+        it("shows each rare warning once, in the API's order, on its own line, and never the API's message, the object or a window-full message (D76, D77)", async () => {
+            const container = await searchWith(true, [
                 { code: "truncated:window", message: truncatedMessage },
                 { code: "opensearch:fields_ignored", message: ignoredMessage },
                 { code: "databases:none_accessible", message: noneAccessibleMessage },
+                { code: "opensearch:fields_ignored", message: ignoredMessage },
             ]);
-            await screen.findByText("Search notice");
-            expect(screen.getByText(`${ignoredText} ${noneAccessibleText}`)).toBeInTheDocument();
+            expect(noticeLines(container)).toEqual([ignoredText, noneAccessibleText]);
+            expect(toastHeaders(container)).toEqual([]);
             expect(screen.queryByText(new RegExp(ignoredMessage))).toBeNull();
             expect(screen.queryByText(/caller/)).toBeNull();
             expect(screen.queryByText(new RegExp(truncatedMessage))).toBeNull();
             expect(screen.queryByText(/\[object Object\]/)).toBeNull();
-            // The filled window is stated on the page instead.
+            // The filled window is stated under the results instead.
             expect(screen.getByText(truncatedLine)).toBeInTheDocument();
         });
 
-        it("toasts the API's message for a code the page does not know", async () => {
-            await searchWith(false, [{ code: "future:code", message: "A new kind of notice" }]);
-            await screen.findByText("Search notice");
-            expect(screen.getByText("A new kind of notice")).toBeInTheDocument();
+        it("shows the API's message in the Search notice for a code the page does not know", async () => {
+            const container = await searchWith(false, [
+                { code: "future:code", message: "A new kind of notice" },
+            ]);
+            expect(noticeLines(container)).toEqual(["A new kind of notice"]);
+            expect(toastHeaders(container)).toEqual([]);
         });
 
-        it("raises no toast for a truncated:window warning alone; the page states it", async () => {
-            await searchWith(true, [{ code: "truncated:window", message: truncatedMessage }]);
+        it("shows no Search notice for a truncated:window warning alone; the page states it", async () => {
+            const container = await searchWith(true, [
+                { code: "truncated:window", message: truncatedMessage },
+            ]);
             expect(screen.getByText(truncatedLine)).toBeInTheDocument();
             await new Promise((resolve) => setTimeout(resolve, 300));
+            expect(searchNotice(container)).toBeNull();
             expect(screen.queryByText("Search notice")).toBeNull();
             expect(screen.queryByText(truncatedMessage)).toBeNull();
+            // No notice, so the announcement is the count alone.
+            expect(countAnnouncement().textContent).toBe("Found 2+ results");
         });
 
-        it("raises no toast for a segments:window_full warning alone and states it on the page", async () => {
-            await searchWith(false, [{ code: "segments:window_full", message: segmentMessage }]);
+        it("shows no Search notice for a segments:window_full warning alone and states it on the page", async () => {
+            const container = await searchWith(false, [
+                { code: "segments:window_full", message: segmentMessage },
+            ]);
             expect(screen.getByText(segmentLine)).toBeInTheDocument();
             // A segment window is not a truncated answer: no whole-file line. The count is the route's
             // minimum (D75, approximate matching).
             expect(screen.queryByText(truncatedLine)).toBeNull();
             expect(countAnnouncement().textContent).toBe("Found 2+ results");
             await new Promise((resolve) => setTimeout(resolve, 300));
+            expect(searchNotice(container)).toBeNull();
             expect(screen.queryByText("Search notice")).toBeNull();
             expect(screen.queryByText(segmentMessage)).toBeNull();
         });
 
-        it("still toasts a databases:none_accessible warning, in words that name no database and never 'caller' (D76)", async () => {
-            await searchWith(false, [
-                { code: "databases:none_accessible", message: noneAccessibleMessage },
+        it("announces the count, then the notice's text, in the polite live region (D77)", async () => {
+            // The no-access answer: nothing found, an exact zero, and the one rare warning.
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            (searchNlp as jest.Mock).mockResolvedValue([
+                true,
+                {
+                    ...nlpEnvelope(false),
+                    hits: { total: { value: 0, relation: "eq" }, hits: [] },
+                    aggregationTotal: 0,
+                    warnings: [
+                        { code: "databases:none_accessible", message: noneAccessibleMessage },
+                    ],
+                },
             ]);
-            await screen.findByText("Search notice");
-            expect(screen.getByText(noneAccessibleText)).toBeInTheDocument();
-            expect(screen.queryByText(noneAccessibleMessage)).toBeNull();
-            expect(screen.queryByText(/caller/)).toBeNull();
-            expect(screen.queryByText(segmentLine)).toBeNull();
+            const { container } = renderContainer();
+            const input = await screen.findByPlaceholderText(
+                "Describe what you are looking for..."
+            );
+            await userEvent.type(input, "gearbox{Enter}");
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+            await screen.findByText("No matches");
+            const announcement = `Found 0 results. ${noneAccessibleText}`;
+            await waitFor(() => expect(countAnnouncement().textContent).toBe(announcement));
+            await expectPoliteAnnouncement(announcement.replace(/\.$/, ""));
+            expect(noticeLines(container)).toEqual([noneAccessibleText]);
+            expect(screen.getByText("0 results")).toBeInTheDocument();
+        });
+
+        it("dismissing hides the notice for that answer only; the next answer shows its notice again (D77)", async () => {
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            const answer = () => ({
+                ...nlpEnvelope(false),
+                warnings: [{ code: "databases:none_accessible", message: noneAccessibleMessage }],
+            });
+            (searchNlp as jest.Mock).mockImplementation(async () => [true, answer()]);
+            const { container } = renderContainer();
+            const input = await screen.findByPlaceholderText(
+                "Describe what you are looking for..."
+            );
+            await userEvent.type(input, "red truck");
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await screen.findByText("Truck");
+            expect(noticeLines(container)).toEqual([noneAccessibleText]);
+
+            dismissNotice(container);
+            await waitFor(() => expect(searchNotice(container)).toBeNull());
+            // The same answer stays on screen, and its notice stays dismissed.
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            expect(searchNotice(container)).toBeNull();
+            expect(screen.getByText("Truck")).toBeInTheDocument();
+
+            // A new search is a new answer: its notice shows.
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(2));
+            await waitFor(() => expect(noticeLines(container)).toEqual([noneAccessibleText]));
+
+            // Clear all filters drops the answer, and the next search's notice shows again.
+            dismissNotice(container);
+            await waitFor(() => expect(searchNotice(container)).toBeNull());
+            await userEvent.click(screen.getByRole("button", { name: "Clear all filters" }));
+            expect(searchNotice(container)).toBeNull();
+            await userEvent.type(
+                screen.getByPlaceholderText("Describe what you are looking for..."),
+                "red truck"
+            );
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await waitFor(() => expect(noticeLines(container)).toEqual([noneAccessibleText]));
+            // "Search cleared" is still a toast; the notice never is.
+            expect(toastHeaders(container)).not.toContain("Search notice");
+        });
+
+        it("never shows a Search notice for a keyword answer, and a mode switch brings the next natural-language notice back (D77)", async () => {
+            setFeatures(["VECTORSEARCH"]);
+            // A keyword answer carrying a warnings entry still shows no notice.
+            (searchAssets as jest.Mock).mockResolvedValue([
+                true,
+                {
+                    ...keywordRows,
+                    warnings: [
+                        { code: "databases:none_accessible", message: noneAccessibleMessage },
+                    ],
+                },
+            ]);
+            (searchNlp as jest.Mock).mockImplementation(async () => [
+                true,
+                {
+                    ...nlpEnvelope(false),
+                    warnings: [{ code: "opensearch:fields_ignored", message: ignoredMessage }],
+                },
+            ]);
+            const { container } = renderContainer();
+            await screen.findByText("Keyword Alpha");
+            await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2 results"));
+            expect(searchNotice(container)).toBeNull();
+
+            await userEvent.click(screen.getByTestId("nlp"));
+            const input = await screen.findByPlaceholderText(
+                "Describe what you are looking for..."
+            );
+            await userEvent.type(input, "red truck");
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await screen.findByText("Truck");
+            expect(noticeLines(container)).toEqual([ignoredText]);
+            dismissNotice(container);
+            await waitFor(() => expect(searchNotice(container)).toBeNull());
+
+            // Back to keyword: its answer has no notice.
+            await userEvent.click(screen.getByTestId("keyword"));
+            await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2), { timeout: 3000 });
+            await screen.findByText("Keyword Alpha");
+            expect(searchNotice(container)).toBeNull();
+
+            // And to natural language again: the mode switch re-runs the query, a new answer whose
+            // notice shows although the last one was dismissed.
+            await userEvent.click(screen.getByTestId("nlp"));
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(2), { timeout: 3000 });
+            await waitFor(() => expect(noticeLines(container)).toEqual([ignoredText]));
+            expect(toastHeaders(container)).toEqual([]);
         });
     });
 

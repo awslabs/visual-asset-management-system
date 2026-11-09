@@ -349,6 +349,19 @@ describe("Kiro steering mirrors", () => {
             expect(catalog).toContain('"' + id + '"');
     });
 
+    test("WEB_FRONTEND.md and web/CLAUDE.md both place the rare search warnings in the page, not a toast (D77)", () => {
+        const claude = readRepo(path.join("web", "CLAUDE.md"));
+        const kiro = readRepo(path.join(".kiro", "steering", "WEB_FRONTEND.md"));
+        for (const text of [claude, kiro]) {
+            expect(text).toContain(
+                "The rare natural-language warnings show in a dismissible **Search notice** Alert above the results"
+            );
+            expect(text).not.toContain(
+                "row-action confirmations and the rare natural-language warnings"
+            );
+        }
+    });
+
     test("WEB_DEVELOPMENT_WORKFLOW.md points at pages that exist", () => {
         const kiro = readRepo(path.join(".kiro", "steering", "WEB_DEVELOPMENT_WORKFLOW.md"));
         const table = kiro.slice(kiro.indexOf("### **Rule 16"), kiro.indexOf("### **Rule 17"));

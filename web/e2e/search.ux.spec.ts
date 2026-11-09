@@ -14,6 +14,7 @@ import {
     searchCountBadge,
     searchCountBadgeText,
     searchModeCase,
+    searchNotice,
     searchQueryBox,
     searchSubmitButton,
     searchViewSegment,
@@ -302,26 +303,32 @@ test.describe("Unified search — natural-language behaviour", () => {
         }
     });
 
-    test("the window notices and the warning toast appear exactly when the response says so", async ({
+    test("the window notices and the Search notice appear exactly when the response says so", async ({
         page,
     }) => {
         const mode = await openUnified(page);
         await enterNlpMode(page, mode);
         const { body } = await runNlpSearch(page, NLP_PROBE_QUERY);
         test.skip(!body?.hits, "No natural-language response body to compare against");
-        // Read the toasts first, as a snapshot: runNlpSearch returns 1.2 s after the answer, inside
-        // a toast's 5 s life, so 0 here means none was raised (a polled toHaveCount(0) would also
-        // pass once a raised toast had hidden).
-        const noticeToasts = await page.getByText("Search notice").count();
+        // Read the texts first, as a snapshot: runNlpSearch returns 1.2 s after the answer, inside
+        // a toast's 5 s life, so a toast raised for the answer is still on screen here (a polled
+        // toHaveCount(0) would also pass once a raised toast had hidden).
+        const noticeHeaders = await page.getByText("Search notice", { exact: true }).count();
         const completedToasts = await page.getByText("Search completed").count();
         const codes: string[] = (body.warnings ?? []).map((w: any) => w.code);
-        // Only the rare warnings are toasted; the two window-full codes never are, and the count
-        // is announced to screen readers rather than toasted.
+        // Only the rare warnings raise the Search notice, in the page above the results; the two
+        // window-full codes never do. One "Search notice" on the page is the notice itself, so no
+        // toast repeats it, and the count is announced to screen readers rather than toasted.
         const rare = codes.filter((c) => c !== "truncated:window" && c !== "segments:window_full");
-        expect(noticeToasts, `warning codes ${codes.join(", ") || "none"}`).toBe(
-            rare.length > 0 ? 1 : 0
-        );
+        const expectedNotices = rare.length > 0 ? 1 : 0;
+        expect(noticeHeaders, `warning codes ${codes.join(", ") || "none"}`).toBe(expectedNotices);
+        await expect(searchNotice(page)).toHaveCount(expectedNotices);
         expect(completedToasts).toBe(0);
+        if (expectedNotices) {
+            // The notice is dismissible, for the answer on screen.
+            await searchNotice(page).getByRole("button", { name: "Dismiss search notice" }).click();
+            await expect(searchNotice(page)).toHaveCount(0);
+        }
         // A filled window is stated on the page: a whole-file window (the answer is truncated) as
         // the "top N" line, a segment window alone as the scenes-or-passages line.
         const truncated = !!body.nlp?.truncated;

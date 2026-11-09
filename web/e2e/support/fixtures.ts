@@ -197,6 +197,16 @@ export function searchCountBadgeText(total: { value: number; relation?: string }
 }
 
 /**
+ * The Search view's Search notice: a dismissible Alert above the results holding the rare
+ * natural-language warnings, one line each, in the page's own words. Absent for an answer without
+ * one (the two window-full codes are stated under the results instead), for a keyword answer, and
+ * once dismissed for the answer on screen. It is in the page, never a toast.
+ */
+export function searchNotice(page: Page): Locator {
+    return page.getByTestId("search-notice");
+}
+
+/**
  * The search page h1, shared by every view: `<Assets> and Files`, or `<Assets> for <databaseId>` on
  * a database route. Matched on its tail so a deployment's asset synonym does not matter.
  */

@@ -42,7 +42,7 @@ import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
-import { rareNlpWarningText } from "./utils/nlpWarnings";
+import { rareNlpWarningText, rareNlpWarningTexts } from "./utils/nlpWarnings";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
@@ -76,6 +76,20 @@ export const REDUCED_ASSET_COLUMNS = [
 const resultCountMessage = (result: SearchResponse) => {
     const exactOne = getTotalResultCount(result) === 1 && !isTotalLowerBound(result);
     return `Found ${formatTotalResultCount(result)} ${exactOne ? "result" : "results"}`;
+};
+
+/**
+ * What a finished search announces to screen readers: its count, then, for a natural-language answer,
+ * the text of the Search notice shown above the results ("Found 0 results. You don't have access to
+ * any database this search covers. Ask your administrator for access."). The count alone when the
+ * answer has no rare warning, and always for a keyword answer.
+ */
+const searchAnnouncement = (result: SearchResponse, naturalLanguage: boolean) => {
+    const count = resultCountMessage(result);
+    const notice = naturalLanguage
+        ? rareNlpWarningText((result as Partial<NlpSearchResponse>).warnings)
+        : "";
+    return notice ? `${count}. ${notice}` : count;
 };
 
 const ModernSearchContainer: React.FC<
@@ -125,7 +139,7 @@ const ModernSearchContainer: React.FC<
     const searchState = useSearchState(initialFilters, databaseId);
     const searchAPI = useSearchAPI();
     const { preferences, updatePreferences, isLoaded: preferencesLoaded } = usePreferences();
-    const { toasts, showSuccess, showError, showWarning, removeToast } = useToasts();
+    const { toasts, showSuccess, showError, removeToast } = useToasts();
 
     // Which engine answers a search. Derived from the preference so it persists with the cookie and
     // is settled by the time the mount search runs (which waits for the preferences to load).
@@ -156,8 +170,15 @@ const ModernSearchContainer: React.FC<
     // language answer.
     const [answeredMode, setAnsweredMode] = useState<SearchMode | null>(null);
     // The count a finished search announces to screen readers through the polite live region below:
-    // "Found N results". Cleared when the next search starts, so the same count is announced again.
+    // "Found N results", followed by the Search notice's text when the answer has one. Cleared when
+    // the next search starts, so the same count is announced again.
     const [countAnnouncement, setCountAnnouncement] = useState("");
+    // The natural-language answer whose Search notice the user dismissed. The notice is hidden only
+    // while that answer is on screen; the next answer (a new search, Clear all filters, a mode or view
+    // switch) shows its own notice again.
+    const [dismissedNoticeAnswer, setDismissedNoticeAnswer] = useState<NlpSearchResponse | null>(
+        null
+    );
 
     // Initialize search query if provided
     useEffect(() => {
@@ -234,12 +255,9 @@ const ModernSearchContainer: React.FC<
             setNlpResult(result);
             setAnsweredMode("nlp");
             searchState.setResult(result);
-            // Each entry is `{ code, message }`; the user reads the page's own text for each rare
-            // code (rareNlpWarningText). A filled window is stated on the page instead.
-            const notice = rareNlpWarningText(result.warnings);
-            if (notice) {
-                showWarning("Search notice", notice);
-            }
+            // The answer's rare warnings are shown in the Search notice above the results, which
+            // reads them from the answer held here; nothing is toasted, so no toast covers the title
+            // row's controls. A filled window is stated under the results instead.
             // The announcement reads the count the badge and the table header show.
             return withNlpResultTotal(result);
         }
@@ -265,7 +283,7 @@ const ModernSearchContainer: React.FC<
             // An auto-refresh is not announced either. No toast: the badge in the title row shows
             // the count, and a toast would cover the title row's controls.
             if (result && !autoRefreshing) {
-                setCountAnnouncement(resultCountMessage(result));
+                setCountAnnouncement(searchAnnouncement(result, searchMode === "nlp"));
             }
         } catch (error: any) {
             console.error("Search error:", error);
@@ -420,7 +438,7 @@ const ModernSearchContainer: React.FC<
                 setCountAnnouncement("");
                 const result = await runSearch(searchState.buildSearchQuery(newPagination));
                 if (result) {
-                    setCountAnnouncement(resultCountMessage(result));
+                    setCountAnnouncement(searchAnnouncement(result, false));
                 }
             } catch (error: any) {
                 console.error("Search error:", error);
@@ -565,6 +583,19 @@ const ModernSearchContainer: React.FC<
     const totalResults = getTotalResultCount(displayedResult);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
     const pageCount = getPageCount(getPagedResultCount(displayedResult), preferences.pageSize);
+
+    // The Search notice above the results: the rare warnings of the natural-language answer on screen,
+    // in the page's own words. Derived from that answer, so it can't outlive it: a new search, Clear all
+    // filters or a mode switch replaces the answer, and a keyword answer never has one. Dismissing it
+    // hides it for that answer only.
+    const searchNotices = useMemo(
+        () =>
+            searchMode === "nlp" && answeredMode === "nlp" && nlpResult
+                ? rareNlpWarningTexts(nlpResult.warnings)
+                : [],
+        [searchMode, answeredMode, nlpResult]
+    );
+    const showSearchNotice = searchNotices.length > 0 && dismissedNoticeAnswer !== nlpResult;
 
     // The columns the list renders: the fallback set without OpenSearch (only the fields a
     // natural-language hit carries), the user's set otherwise, with relevance first in NLP mode.
@@ -894,6 +925,26 @@ const ModernSearchContainer: React.FC<
                                 <Alert type="info" statusIconAriaLabel="Info">
                                     Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
                                     results; refine your search
+                                </Alert>
+                            </Box>
+                        )}
+
+                        {/* The rare natural-language warnings, in the page rather than a toast: the
+                            toast stack sits over the title row's view switch and Clear all filters. */}
+                        {showSearchNotice && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="info"
+                                    header="Search notice"
+                                    statusIconAriaLabel="Info"
+                                    dismissible
+                                    dismissAriaLabel="Dismiss search notice"
+                                    onDismiss={() => setDismissedNoticeAnswer(nlpResult)}
+                                    data-testid="search-notice"
+                                >
+                                    {searchNotices.map((text) => (
+                                        <div key={text}>{text}</div>
+                                    ))}
                                 </Alert>
                             </Box>
                         )}
