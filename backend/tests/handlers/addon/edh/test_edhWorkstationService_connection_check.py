@@ -1,15 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The get and list routes notice a running desktop whose display session has ended (D21).
+"""The get and list routes notice a running desktop whose display session has ended.
 
-D20 records ``connectionUnavailableReason`` ``DISPLAY_SESSION_ENDED`` only from a record that carries EDH's
+``connectionUnavailableReason`` ``DISPLAY_SESSION_ENDED`` is recorded only from a record that carries EDH's
 connection link, and the get and list routes read EDH's token-free session-state route, which carries none. So a
 desktop whose DCV session ended while it kept running read Connectable until someone chose Connect. The get route
 now also makes the read Connect makes, EDH's per-user listing narrowed to the one session, for an ACTIVE row with a
 session id that EDH's state read reports running; the list route makes it for such rows whose last check
-(``connectionCheckedAt``) is absent or five minutes old, oldest first, at most two per request. The verdict is
-D20's ``connection_verdict``; the check's stamp is written with it. The link carries a DCV token EDH issues on this
+(``connectionCheckedAt``) is absent or five minutes old, oldest first, at most two per request. The verdict comes from
+``connection_verdict``; the check's stamp is written with it. The link carries a DCV token EDH issues on this
 read and is never returned, logged or stored. Every attempt writes the stamp: a read that fails, or that lists no
 record of the desktop, writes it alone and leaves the rest of the row as the state read left it, so a desktop whose
 check keeps failing waits out the interval and cannot take a list slot on every refresh. Connect and the desktop

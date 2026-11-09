@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The session sweep records a start EDH accepted and never finished (in-dev D16): a CREATING row whose
+"""The session sweep records a start EDH accepted and never finished: a CREATING row whose
 ``startAcceptedAt`` is half an hour old, and whose desktop EDH still lists pending or placing, records
 ``START_STALLED`` with a ``startFailure`` that names nothing EDH said -- and nothing else happens to it: the key is
 kept, the desktop is neither stopped, deleted nor orphaned, and the write is conditioned on the row as read, so a

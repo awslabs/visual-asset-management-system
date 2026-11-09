@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""A running workstation whose remote display session has ended, in the CLI (feature #536, D20).
+"""A running workstation whose remote display session has ended, in the CLI (feature #536).
 
 The service records `connectionUnavailableReason` DISPLAY_SESSION_ENDED on the workstation and refuses
 its connect with 409 and that code. `edh workstation get` prints the sentence the web shows under its

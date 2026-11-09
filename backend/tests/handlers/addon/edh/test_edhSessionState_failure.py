@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The launch-failure reason VAMS captures from EDH (in-dev D8).
+"""The launch-failure reason VAMS captures from EDH.
 
 EDH's per-user listing carries a desktop's last few events. The shared session-state module picks the
 newest ``placement_failed`` or ``session-failed`` event among them, parses the AWS error code and

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A start EDH accepts but never finishes (in-dev D16): the session-row rules for the stamp of an accepted start
+"""A start EDH accepts but never finishes: the session-row rules for the stamp of an accepted start
 (``startAcceptedAt``), the stall threshold and ``start_stall_due``, the ``START_STALLED`` code the merge keeps while
 the row stays CREATING and clears once EDH moves the desktop on, and the activity of a stalled row, which is no
 longer ``starting``. The new names are read off the module inside each test, so a module without them fails each

@@ -283,7 +283,7 @@ class TestStartInProgress:
         assert state.start_in_progress({"startRequestedAt": datetime.now(timezone.utc).isoformat()}) is True
 
     def test_the_window_is_seven_minutes(self):
-        # The launch worker's six-minute run and a minute for the hand-over (in-dev D10).
+        # The launch worker's six-minute run and a minute for the hand-over.
         assert state.START_IN_PROGRESS_SECONDS == 420
 
 

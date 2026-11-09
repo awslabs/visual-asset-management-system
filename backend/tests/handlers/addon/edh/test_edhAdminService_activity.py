@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The admin instance item carries ``activity``, derived as the workstation record derives it with EDH's live
-state and connectability laid over the joined row, and the row's ``startFailure`` (in-dev D10, D11); an admin stop
+state and connectability laid over the joined row, and the row's ``startFailure``; an admin stop
 stamps the row as the owner's stop does."""
 
 from datetime import datetime, timedelta, timezone

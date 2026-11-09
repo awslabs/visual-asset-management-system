@@ -3,10 +3,10 @@
 
 """Only connect and the Windows desktop sign-in may read EDH's per-user desktop list for a desktop that can run, which
 issues a connection token per desktop it renders, save the get and list routes' check of a running desktop's
-display session (in-dev D21, ``_check_display_session``), which reads it for an ACTIVE row EDH's state read
+display session (``_check_display_session``), which reads it for an ACTIVE row EDH's state read
 reports running, that row's own session only, and never returns, logs or stores the link. Every other workstation
 and catalog route reads desktop state through the token-free session-state route or not at all. The one other
-read of the per-user list is the launch-failure read (in-dev D8), which the list and get routes and the session
+read of the per-user list is the launch-failure read, which the list and get routes and the session
 sweep make for an ORPHANED row's own session only -- a desktop that never ran has no DCV session, so EDH issues no
 token for it -- and no other handler module names the per-user route or either wrapper.
 
@@ -78,7 +78,7 @@ from backend.tests.handlers.addon.edh.test_edhWorkstationService_session_lifecyc
 
 # The two routes that read EDH's per-user list, each for its one session.
 CONNECTION_ROUTES = {(API_EDH_WORKSTATION_CONNECT.path, GET), (API_EDH_WORKSTATION_OS_SIGN_IN.path, GET)}
-# The scenarios whose route checks the display session of the caller's running ACTIVE row (D21): each reads the
+# The scenarios whose route checks the display session of the caller's running ACTIVE row: each reads the
 # per-user list for that row's own session, once.
 CHECK_SCENARIOS = {"list_mixed_rows", "get_with_session"}
 # The functions of the service allowed to call the connection wrapper.
@@ -441,7 +441,7 @@ class TestTokenReads:
 
         assert response["statusCode"] == 200
         assert fakes.edh.calls_to(FAILURE_WRAPPER) == [(edh_uid_for(USER), SESSION_OWN)]
-        # The display-session check (D21) reads the running row's own session, never the orphaned one's.
+        # The display-session check reads the running row's own session, never the orphaned one's.
         assert fakes.edh.calls_to(CONNECTION_WRAPPER) == [(edh_uid_for(USER), SESSION_OTHER)]
 
     def test_the_wrapper_walk_finds_the_audit_key_and_the_three_calls(self):

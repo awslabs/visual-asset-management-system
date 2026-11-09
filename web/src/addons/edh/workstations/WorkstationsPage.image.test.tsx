@@ -4,7 +4,7 @@
  */
 
 /**
- * The image a workstation runs, on My Workstations (feature #536, D14): the record's own name wins
+ * The image a workstation runs, on My Workstations (feature #536): the record's own name wins
  * over the live catalog, so a workstation launched from a build the catalog no longer lists keeps
  * its name; a live workstation on an older build carries the `Newer image` badge; and the search
  * matches the name the cell shows.

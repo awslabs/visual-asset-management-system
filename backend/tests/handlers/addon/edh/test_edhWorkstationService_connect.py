@@ -102,7 +102,7 @@ class TestConnect:
 
     def test_a_row_already_connectable_is_not_rewritten(self, monkeypatch):
         """Control: a row that already records what EDH reports is answered with its check stamp written alone
-        (D21), neither its observed attributes nor its updatedAt rewritten."""
+        (the display-session check), neither its observed attributes nor its updatedAt rewritten."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.query.return_value = {"Items": [own_row()]}
 
@@ -178,7 +178,7 @@ class TestConnect:
         fakes.table.update_item.assert_not_called()
 
     def test_a_bootstrap_id_connects_to_the_desktop_of_its_session(self, monkeypatch):
-        """The bootstrap id keeps addressing the row once it has a session id (in-dev D22); EDH is read, and the
+        """The bootstrap id keeps addressing the row once it has a session id; EDH is read, and the
         response answers, by the session id."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.get_item.return_value = {"Item": own_row()}

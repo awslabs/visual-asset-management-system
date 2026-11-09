@@ -20,7 +20,7 @@ from vams_mcp.client import VamsClient
 from vams_mcp.config import Config
 
 README_TEXT = (Path(server.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
-# The capacity-display fixture the web and CLI tests read (feature #536, D17/D18/D19).
+# The capacity-display fixture the web and CLI tests read (feature #536).
 CAPACITY_CASES = json.loads(
     (Path(server.__file__).resolve().parents[3] / "web/src/addons/edh/capacityDisplayCases.json").read_text(
         encoding="utf-8"))

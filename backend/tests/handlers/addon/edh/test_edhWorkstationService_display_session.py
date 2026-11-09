@@ -1,14 +1,14 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Connect and the desktop sign-in of a running desktop whose DCV session has ended (D20).
+"""Connect and the desktop sign-in of a running desktop whose DCV session has ended.
 
 EDH lists such a desktop running with its fallback link (entry point and broker session id, no query). Connect
 and the desktop sign-in answer 409 ``DISPLAY_SESSION_ENDED`` with the sentence that says what to do instead of
 handing the dead link out, record the reason on the row and leave it ACTIVE; the record returns the reason
 until a connectable link, or a state other than running, clears it. The token-free state read the get and list
 routes make cannot see the session, so it keeps the reason while EDH still reports the desktop running; their own
-check of the display session (D21, ``test_edhWorkstationService_connection_check.py``) reads the link.
+check of the display session (``test_edhWorkstationService_connection_check.py``) reads the link.
 """
 
 import json
@@ -135,7 +135,7 @@ class TestTheRecordReturnsTheReason:
         body = response_body(response)
         assert (body["state"], body["connectionAvailable"], body["connectionUnavailableReason"], body["activity"]) == (
             "ACTIVE", False, "DISPLAY_SESSION_ENDED", None)
-        # The state read changes nothing; the display-session check (D21), whose listing has no record here,
+        # The state read changes nothing; the display-session check, whose listing has no record here,
         # writes its stamp alone.
         assert set(_written(fakes)) == {"connectionCheckedAt"}
 

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""When the list route asks EDH whether a running desktop's display session can still be connected to (D21).
+"""When the list route asks EDH whether a running desktop's display session can still be connected to.
 
 The token-free state read the list and get routes make carries no connection link, so it cannot see a DCV session
 that ended while the desktop kept running. Those routes therefore also make the read Connect makes, EDH's per-user

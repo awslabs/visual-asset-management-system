@@ -112,7 +112,7 @@ class TestOwnership:
 
         body = response_body(response)
         if action == "start":
-            # A start is handed to the launch worker and answered 202; EDH's start is the worker's (in-dev D10).
+            # A start is handed to the launch worker and answered 202; EDH's start is the worker's.
             assert response["statusCode"] == 202
             assert fakes.edh.calls_to(wrapper) == []
             fakes.lambda_client.invoke.assert_called_once()
@@ -164,7 +164,7 @@ class TestOwnership:
 
         assert response["statusCode"] == 200
         assert fakes.edh.calls_to("get_desktop_states") == [(edh_uid_for(USER), [SESSION_OWN])]
-        # The display-session check of a running desktop (D21) reads its one session too.
+        # The display-session check of a running desktop reads its one session too.
         assert fakes.edh.calls_to("get_desktop_connection") == [(edh_uid_for(USER), SESSION_OWN)]
 
     def test_an_unknown_session_is_not_found_without_an_audit_record(self, monkeypatch):
@@ -341,7 +341,7 @@ def _addressed_by_bootstrap_id(fakes, row):
 
 @pytest.mark.unit
 class TestBootstrapIdAfterTheSessionId:
-    """The bootstrap id keeps addressing the row once EDH has assigned its session id (in-dev D22): the route
+    """The bootstrap id keeps addressing the row once EDH has assigned its session id: the route
     answers the row, and whatever reaches EDH, the response or a log carries the row's session id, never the
     bootstrap id from the path. Ownership and Tier-2 apply as they do by session id."""
 

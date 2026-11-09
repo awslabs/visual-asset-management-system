@@ -14,8 +14,8 @@ import { BUSY_LOOK } from "../../../features/orchestration/components/BusyContro
 
 /**
  * Asserts that `dialog` is held open while its request is in flight: its close button carries
- * `aria-disabled="true"` and the busy look, and a click on it leaves the dialog open (D35); a mouse
- * press on the backdrop is cancelled, so it never moves focus to the page body (D33). With a dialog
+ * `aria-disabled="true"` and the busy look, and a click on it leaves the dialog open; a mouse
+ * press on the backdrop is cancelled, so it never moves focus to the page body. With a dialog
  * opened from another one, the backdrop checked is the topmost, the held dialog's own.
  */
 export async function expectHeldOpen(

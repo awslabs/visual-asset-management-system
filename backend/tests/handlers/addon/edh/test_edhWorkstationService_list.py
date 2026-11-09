@@ -64,7 +64,7 @@ def _items(response):
 
 
 def _update_values(fakes):
-    """The attribute values of the update the merge wrote: the first, since a display-session check (D21) that
+    """The attribute values of the update the merge wrote: the first, since a display-session check that
     follows it writes its own stamp."""
     merge_write = fakes.table.update_item.call_args_list[0]
     return [value for placeholder, value in merge_write[1]["ExpressionAttributeValues"].items()
@@ -130,7 +130,7 @@ class TestWorkstationList:
 
     def test_a_row_that_matches_edh_is_not_rewritten(self, monkeypatch):
         """Control: only what differs from the stored row is written, so an unchanged row costs no write of its
-        observed attributes; the one write is the display-session check's stamp (D21), alone."""
+        observed attributes; the one write is the display-session check's stamp, alone."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[_desktop(SESSION_OWN)]))
         fakes.table.query.return_value = {"Items": [own_row()]}
 

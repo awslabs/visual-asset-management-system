@@ -1286,7 +1286,7 @@ class TestARenewRacingARequestThatTakesTheKeyBack:
         response = _send(monkeypatch, run, writer,
                          inside=lambda: seen.setdefault("renew", response_body(run.call("renew"))))
 
-        # A start is handed to the launch worker and answered 202 (in-dev D10).
+        # A start is handed to the launch worker and answered 202.
         assert response["statusCode"] == (202 if writer == "start" else 200)
         assert seen["renew"]["sessionBootstrap"] == "provisioned"
         run.assert_every_minted_key_accounted_for()

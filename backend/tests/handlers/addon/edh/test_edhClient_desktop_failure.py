@@ -1,8 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""``EdhClient.get_desktop_failure``: the launch-failure reason EDH recorded for one of the caller's desktops
-(in-dev D8).
+"""``EdhClient.get_desktop_failure``: the launch-failure reason EDH recorded for one of the caller's desktops.
 
 The read asks EDH's per-user listing for the one session, active first and, when EDH answers no record of
 it, inactive (EDH deactivates a desktop whose placement failed within minutes); it never sends a third

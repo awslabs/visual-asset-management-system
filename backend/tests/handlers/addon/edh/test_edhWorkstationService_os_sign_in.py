@@ -238,7 +238,7 @@ class TestWindowsDesktopSignIn:
         assert response_body(response)["username"] == edh_uid_for(USER)
 
     def test_a_connection_string_that_does_not_parse_signs_no_one_in(self, monkeypatch):
-        # A link that does not parse is no link connect would connect to (D20): no account, no password.
+        # A link that does not parse is no link connect would connect to: no account, no password.
         desktop = _desktop(connection_string="https://[bad/?username=x", owner="vowner1234567890")
         fakes = _installed(monkeypatch, desktop=desktop)
 
@@ -285,7 +285,7 @@ class TestWindowsDesktopSignIn:
         fakes.client_factory.assert_not_called()
 
     def test_a_bootstrap_id_signs_in_to_the_desktop_of_its_session(self, monkeypatch):
-        """The bootstrap id keeps addressing the row once it has a session id (in-dev D22); EDH is read, the
+        """The bootstrap id keeps addressing the row once it has a session id; EDH is read, the
         response answers and the log names the session id."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.get_item.return_value = {"Item": _windows()}

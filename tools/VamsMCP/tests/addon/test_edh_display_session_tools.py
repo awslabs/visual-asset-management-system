@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""A running workstation whose remote display session has ended, in the MCP tools (feature #536, D20):
+"""A running workstation whose remote display session has ended, in the MCP tools (feature #536):
 the workstation tools return `connectionUnavailableReason` unchanged, a refused connect or Windows
 sign-in comes back as `EdhDisplaySessionEndedError` with `code` DISPLAY_SESSION_ENDED and the sentence,
 and the docstrings and README say so.

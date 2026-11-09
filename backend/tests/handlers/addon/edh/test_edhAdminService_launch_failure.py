@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The admin session views carry the launch-failure reason VAMS captured from EDH (in-dev D8).
+"""The admin session views carry the launch-failure reason VAMS captured from EDH.
 
 Each instance item, in the list and in the stale view, carries ``edhFailure`` from the joined VAMS row,
 or null when the row holds none or no row joins; the row's read stamp is never returned.

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The admin Sessions view and a start EDH accepted but never finished (in-dev D16): the instance item of a row the
+"""The admin Sessions view and a start EDH accepted but never finished: the instance item of a row the
 sweep recorded ``START_STALLED`` carries the code and its ``startFailure`` and reads no ``activity``, as the
 workstation record does, and an administrator's stop clears the code, the failure and the stamp as the owner's
 stop does."""

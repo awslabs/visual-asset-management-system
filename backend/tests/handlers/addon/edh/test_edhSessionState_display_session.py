@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A running desktop whose DCV session has ended is not connectable (D20).
+"""A running desktop whose DCV session has ended is not connectable.
 
 EDH's per-user listing asks the DCV broker for a connection token for each running desktop. When the broker
 holds no session for it, EDH logs a warning and lists the fallback link: its entry point and the broker session

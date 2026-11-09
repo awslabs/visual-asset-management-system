@@ -4,7 +4,7 @@
  */
 
 /**
- * The web half of the CLI/web check for a workstation's image (feature #536, D14): every record in
+ * The web half of the CLI/web check for a workstation's image (feature #536): every record in
  * workstationImageCases.json, which tools/VamsCLI/tests/addon/test_edh_workstation_image.py reads
  * too, shows the agreed image name and, only where agreed, the newer-image badge with its tooltip.
  * The CLI test asserts its Image column and `get` lines against the same file.

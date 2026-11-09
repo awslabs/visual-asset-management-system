@@ -456,7 +456,7 @@ def _start(monkeypatch, row, start_result, *, records=None, failure=None):
 class TestStartOfAReservationBoundDesktop:
     """The start route hands every start to the launch worker and reads no reservation: a start EDH refuses while
     the desktop's reservation is full is recorded RESERVATION_FULL by the worker (test_edhLaunchWorker_start.py),
-    not answered 409 here (in-dev D10, D11)."""
+    not answered 409 here."""
 
     @pytest.mark.parametrize("overrides", [{"capacityReservationId": CR_FULL},
                                            {"capacityReservationFallback": True,

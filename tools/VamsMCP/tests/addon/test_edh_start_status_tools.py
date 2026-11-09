@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The EDH workstation start status in the MCP tools (feature #536, D10/D11, D16): the start tool hands
+"""The EDH workstation start status in the MCP tools (feature #536): the start tool hands
 back the record the route accepts the start with (HTTP 202, `activity` `starting`) unchanged, the
 workstation reads pass `activity` and `startFailure` through, a start EDH accepted but never finished
 (`lastError` START_STALLED) among them, and the descriptions say so. The gate each tool sits behind is
@@ -118,7 +118,7 @@ def test_the_readme_states_the_asynchronous_start():
         assert fragment in README_TEXT, fragment
 
 
-# --- D16: a start EDH accepts but never finishes --------------------------------------------------
+# --- A start EDH accepts but never finishes -------------------------------------------------------
 
 STALLED = {**ACCEPTED, "state": "CREATING", "edhState": "pending", "activity": None,
            "lastError": "START_STALLED", "startFailure": {"observedAt": "2026-10-24T11:40:00Z"}}

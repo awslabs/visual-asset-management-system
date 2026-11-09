@@ -106,13 +106,13 @@ START_FAILED_MESSAGE = (
     "administrator.")
 # A start EDH accepted and has not finished after 30 minutes: the session sweep records lastError
 # START_STALLED on the row, which stays CREATING with no activity. The State column prints STALLED
-# (the web's badge reads Start stalled) and `get` prints the web's sentence (D16).
+# (the web's badge reads Start stalled) and `get` prints the web's sentence.
 START_STALLED_CODE = 'START_STALLED'
 STALLED_LABEL = 'STALLED'
 START_STALLED_MESSAGE = (
     "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if "
     "it stalls again, ask your administrator.")
-# A running workstation whose remote display session has ended (D20): the record carries
+# A running workstation whose remote display session has ended: the record carries
 # connectionUnavailableReason DISPLAY_SESSION_ENDED, `get` prints the sentence the web shows under its inert
 # Connect, and `connect` is refused (409) with it.
 DISPLAY_SESSION_ENDED_CODE = 'DISPLAY_SESSION_ENDED'
@@ -459,7 +459,7 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Bootstrap ID:    {result.get('bootstrapId', 'N/A')}")
     lines.append(f"  Name:            {result.get('name', 'N/A')}")
     # The phase, in the words of `list` and the web's badge (STARTING, STOPPING, STALLED); the record's
-    # own state stays in --json-output, and Activity below prints the record's activity (D25).
+    # own state stays in --json-output, and Activity below prints the record's activity.
     lines.append(f"  State:           {state_label(result)}")
     lines.append(f"  Activity:        {result.get('activity') or 'none'}")
     lines.append(f"  EDH State:       {result.get('edhState') or 'N/A'}")

@@ -337,7 +337,7 @@ class TestWorkstationList:
             assert 'InsufficientInstanceCapacity' not in result.output
             assert 'EDH failure' not in result.output
             orphan_row = next(line for line in result.output.splitlines() if 'b-orphan*' in line)
-            # The Image column (D14) names the image; a record without the image fields shows its id.
+            # The Image column names the image; a record without the image fields shows its id.
             assert orphan_row.split() == ['b-orphan*', 'Design', 'desk', 'ORPHANED', 'CAPACITY_UNAVAILABLE',
                                           '12', 'g5.2xlarge', 'linux', '2026-09-08T10:00:00Z']
 
@@ -435,8 +435,7 @@ class TestWorkstationCreate:
             assert 'not assigned yet' in result.output
             assert 'asynchronously' in result.output
             assert 'vamscli edh workstation get b-new' in result.output
-            # The bootstrap id keeps addressing the workstation after EDH assigns its session id
-            # (in-dev D22).
+            # The bootstrap id keeps addressing the workstation after EDH assigns its session id.
             assert 'The session id is assigned once EDH has created the' in result.output
             assert 'the bootstrap id keeps identifying this workstation' in result.output
             assert 'until then' not in result.output

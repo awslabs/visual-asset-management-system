@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The image a workstation runs, in the MCP tools (feature #536, D14): the workstation tools pass the
+"""The image a workstation runs, in the MCP tools (feature #536): the workstation tools pass the
 image fields (`imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion`,
 `imageLatest`) through unchanged, and their descriptions and the README name them. The gate each tool
 sits behind is held by `test_edh_tools.py`.

@@ -287,7 +287,7 @@ class TestStopAndDeactivate:
         assert fakes.table.update_item.call_args.kwargs["Key"] == {"bootstrapId": "b-1"}
         assert _state_written(fakes) == "STOPPED"
         # The row a user had connected to is not left reading connectable once it is stopped.
-        # The stop's stamp lets a read that still finds the desktop running report it stopping (in-dev D10).
+        # The stop's stamp lets a read that still finds the desktop running report it stopping.
         assert update_attribute_sets(fakes) == [{"state", "connectionAvailable", "stopRequestedAt"}]
         assert written_values(fakes, "connectionAvailable") == [False]
         body = response_body(response)
@@ -410,7 +410,7 @@ class TestStopAndDeactivate:
     ])
     def test_the_bootstrap_id_of_a_row_with_a_session_sends_edh_the_session_id(
             self, monkeypatch, action, wrapper, uid, state):
-        # The bootstrap id keeps addressing the row once EDH has assigned its session id (in-dev D22).
+        # The bootstrap id keeps addressing the row once EDH has assigned its session id.
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
 
         response = fakes.module.lambda_handler(

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The launch worker stamps the start of a stopped desktop EDH accepted (in-dev D16): ``startAcceptedAt``, in the
+"""The launch worker stamps the start of a stopped desktop EDH accepted: ``startAcceptedAt``, in the
 start-stamp form, on the CREATING row it records -- on EDH's answer and on a read of the desktop after a lost
 answer alike -- so the session sweep can tell a start that never finished. A desktop the read already finds
 running carries no stamp, a refused start writes none, and a new launch never writes it."""

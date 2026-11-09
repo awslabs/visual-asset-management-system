@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The capacity-reservation display in the CLI (feature #536, D17/D18/D19): the `Capacity:` line of
+"""The capacity-reservation display in the CLI (feature #536): the `Capacity:` line of
 `edh workstation get`, the STATE and LAUNCH columns of `edh catalog capacity-reservations`, the
 no-subnet note of `edh admin capacity-reservation list`, and the typed error of a launch into a
 reservation the role may view but not launch into (403 RESERVATION_NOT_PERMITTED).

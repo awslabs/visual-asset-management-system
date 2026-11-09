@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The image a workstation runs, in the CLI (feature #536, D14): the Image column of `edh workstation
+"""The image a workstation runs, in the CLI (feature #536): the Image column of `edh workstation
 list` with its ` (v<n> available)` suffix, the `Image:`, `Recipe:` and `Recipe version:` lines of
 `edh workstation get`, and the image fields carried unchanged by `--json-output`.
 

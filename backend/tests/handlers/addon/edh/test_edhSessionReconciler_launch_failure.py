@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The session sweep captures the reason EDH recorded for a failed launch (in-dev D8).
+"""The session sweep captures the reason EDH recorded for a failed launch.
 
 A row the sweep records ORPHANED -- EDH lists its desktop in ``error``, or EDH no longer has the desktop of a
 launch still CREATING -- or finds ORPHANED with a session id is given the failure EDH's per-user listing
