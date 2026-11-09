@@ -469,8 +469,28 @@ test.describe("compare mode: files without an extension (seeded viewer samples)"
         await expect(radio).toBeVisible({ timeout: 60_000 });
         await radio.click();
 
+        // The version's file list is paged (the seeded samples span several pages), so README need
+        // not be on page 1. Narrow the list with its "Find files" filter, then page through what is
+        // left in case the filter still matches more than one page (README.md, other READMEs).
+        const filter = page.getByLabel("Filter files").first();
+        await expect(filter).toBeVisible({ timeout: 60_000 });
+        await filter.fill(name);
         const row = rowOf(page, name);
-        await expect(row).toBeVisible({ timeout: 60_000 });
+        for (let pageNumber = 2; pageNumber <= 20; pageNumber++) {
+            const found = await row
+                .waitFor({ state: "visible", timeout: 5_000 })
+                .then(() => true)
+                .catch(() => false);
+            if (found) break;
+            const next = page
+                .getByRole("button", { name: new RegExp(`^Page ${pageNumber} of \\d+$`) })
+                .last();
+            if (!(await next.count())) break;
+            await next.click();
+        }
+        await expect(row, `${name} is not in the version's file list`).toBeVisible({
+            timeout: 30_000,
+        });
         const compare = row.getByRole("button", { name: "Compare", exact: true });
         await expect(compare).toBeVisible({ timeout: 30_000 });
         await compare.click();
