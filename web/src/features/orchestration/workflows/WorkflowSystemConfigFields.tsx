@@ -8,7 +8,11 @@ import type { InputFileArity, ConcurrencyRestriction, OutputLocationType } from 
 import InfoTooltip from "../components/InfoTooltip";
 import StringListInput from "../components/StringListInput";
 import AssetSpanControl from "../components/AssetSpanControl";
-import { metadataEnabled } from "../wizard/resolveRestrictions";
+import {
+    METADATA_LABELS,
+    OPT_IN_METADATA_HELP,
+    metadataEnabled,
+} from "../wizard/resolveRestrictions";
 
 interface WorkflowSystemConfigFieldsProps {
     inputFileArity: InputFileArity;
@@ -204,6 +208,20 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                         onChange={(v) => setMeta("fileAttributes", v)}
                         label="File attributes"
                         info="Include per-file attributes (the string-typed file attribute fields)."
+                    />
+                    {/* The two opt-in sections default OFF, and a run gathers one only for a step
+                        whose own pipeline or template also turns it on. */}
+                    <ToggleRow
+                        checked={metadataEnabled(metadataInputs, "assetFileMetadata")}
+                        onChange={(v) => setMeta("assetFileMetadata", v)}
+                        label={METADATA_LABELS.assetFileMetadata}
+                        info={`${OPT_IN_METADATA_HELP.assetFileMetadata} Gathered only for a pipeline that also turns it on.`}
+                    />
+                    <ToggleRow
+                        checked={metadataEnabled(metadataInputs, "metadataSchema")}
+                        onChange={(v) => setMeta("metadataSchema", v)}
+                        label={METADATA_LABELS.metadataSchema}
+                        info={`${OPT_IN_METADATA_HELP.metadataSchema} Gathered only for a pipeline that also turns it on.`}
                     />
                 </div>
             </div>

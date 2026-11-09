@@ -7,7 +7,7 @@ import boto3
 import json
 import base64
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -382,7 +382,7 @@ def create_metadata_schema(schema_data, claims_and_roles):
         composite_key = f"{schema_data['databaseId']}:{schema_data['metadataSchemaEntityType'].value}"
         
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Convert fields to JSON string for storage
@@ -499,7 +499,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
             updates['enabled'] = update_data['enabled']
         
         # Update metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         updates['dateModified'] = now
         updates['modifiedBy'] = username
@@ -599,7 +599,7 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles, databaseId=""):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return MetadataSchemaOperationResponseModel(
             success=True,
             message=f"Metadata schema deleted successfully",

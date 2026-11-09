@@ -171,6 +171,42 @@ class TestScrubberProjectsAttributes:
 
 
 @pytest.mark.unit
+class TestTheExpandedFlagReachesTheApi:
+    """A file record an assetFileMetadata expansion added is stored with expanded=True and reported
+    with expanded: true; every other row, and every row stored before the flag existed, reports
+    false."""
+
+    def test_the_record_stores_the_flag_only_on_an_expanded_row(self):
+        expanded = er.build_input_metadata_record(
+            "pe1", "db1", "a1", FILE_KEY, {"k": "v"}, "s3key", expanded=True)
+        selected = er.build_input_metadata_record("pe1", "db1", "a1", FILE_KEY, {"k": "v"}, "s3key")
+        assert expanded["expanded"] is True
+        assert "expanded" not in selected
+        # The row's identity does not depend on the flag.
+        assert expanded["databaseId:assetId:filePath"] == selected["databaseId:assetId:filePath"]
+        assert {k: v for k, v in expanded.items() if k != "expanded"} == selected
+
+    @pytest.mark.parametrize("stored, reported", [
+        ({"expanded": True}, True),
+        ({"expanded": False}, False),
+        ({}, False),
+    ], ids=["expanded", "stored-false", "stored-before-the-flag"])
+    def test_the_projection_reports_the_flag(self, stored, reported):
+        out = le._scrub_input_metadata({
+            "databaseId": "db1", "assetId": "a1", "filePath": FILE_KEY, "scope": "asset",
+            "metadata": {"k": "v"}, **stored})
+        assert out["expanded"] is reported
+
+    def test_the_model_reads_a_row_without_the_flag_as_not_expanded(self):
+        from backend.backend.models.executions import PipelineExecutionInputMetadataRecord
+        row = er.build_input_metadata_record("pe1", "db1", "a1", FILE_KEY, {"k": "v"}, "s3key")
+        assert PipelineExecutionInputMetadataRecord(**row).expanded is False
+        row = er.build_input_metadata_record("pe1", "db1", "a1", FILE_KEY, {"k": "v"}, "s3key",
+                                             expanded=True)
+        assert PipelineExecutionInputMetadataRecord(**row).expanded is True
+
+
+@pytest.mark.unit
 class TestPerStepGateIsObservableThroughTheApi:
     """THE ACCEPTANCE CRITERION — the #89 read-path counterpart.
 

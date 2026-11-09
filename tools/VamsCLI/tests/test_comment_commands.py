@@ -251,7 +251,8 @@ class TestCommentList:
             assert result.exit_code == 0
             assert 'first remark' in result.output
             mocks['api_client'].list_asset_comments.assert_called_once_with(
-                'my-asset', max_items=None, page_size=None, starting_token=None)
+                'my-asset', max_items=None, page_size=None, starting_token=None,
+                show_archived=False)
 
     def test_list_with_a_version_uses_the_version_route(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
@@ -260,7 +261,8 @@ class TestCommentList:
 
             assert result.exit_code == 0
             mocks['api_client'].list_asset_version_comments.assert_called_once_with(
-                'my-asset', 'v1', max_items=None, page_size=None, starting_token=None)
+                'my-asset', 'v1', max_items=None, page_size=None, starting_token=None,
+                show_archived=False)
             mocks['api_client'].list_asset_comments.assert_not_called()
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):

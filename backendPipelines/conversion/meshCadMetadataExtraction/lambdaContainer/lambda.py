@@ -12,6 +12,7 @@ from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
 from metadata_extractors import extract_cad_metadata, extract_mesh_metadata, get_handler_for_format
+from input_text import check_input_text
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -52,7 +53,7 @@ def _s3_client_for_bucket(bucket_name):
     return client
 
 
-def download(bucket_name, object_key, file_path):
+def download(bucket_name, object_key, file_path, version_id=""):
     """
     Download a file from S3.
     
@@ -60,22 +61,44 @@ def download(bucket_name, object_key, file_path):
         bucket_name: S3 bucket name
         object_key: S3 object key
         file_path: Local file path to save the downloaded file
+        version_id: the S3 version to read; empty reads the current object
         
     Returns:
         Path to the downloaded file or None if download failed
     """
     logger.info(
-        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, File Path: {}".format(
-            bucket_name, object_key, file_path
+        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
+            bucket_name, object_key, version_id or "current", file_path
         )
     )
+    kwargs = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
     try:
         with open(file_path, "wb") as data:
-            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data)
+            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data, **kwargs)
     except ClientError as e:
         logger.exception(e)
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise Exception(f"The input file {object_key} at version {version_id} no longer exists; "
+                            f"it was deleted after the run started.")
         raise Exception("Could not download input file from S3 bucket")
     return file_path
+
+
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+def input_version_id(entry):
+    """The S3 version id a manifest input file is read at, or "" to read the current object.
+
+    Mirrors ``manifestHelper.input_version_id``: the workflow records the version a run reads on each
+    input file. "null" is the version S3 reports for an object written while the bucket's versioning was
+    off and is passed through; "" (a file in an unversioned bucket) reads the current object."""
+    value = (entry or {}).get("versionId")
+    if not isinstance(value, str):
+        return ""
+    return value
 
 
 def upload(bucket_name, object_key, file_path):
@@ -205,7 +228,8 @@ def resolve_inputs_from_manifest(data):
     workflow manifest (inputManifestS3Location), falling back to the legacy top-level body fields
     when no manifest is present (direct/local invocations). Locations are carried as bucket +
     relative keys, so s3:// URIs are reconstructed here. Returns (input_s3_asset_file_path,
-    input_asset_relative_path, output_s3_asset_metadata_path).
+    input_asset_relative_path, output_s3_asset_metadata_path, input_version_id), the last being the
+    S3 version the run reads the input at ("" reads the current object).
 
     Mirrors ``manifestHelper.resolve_inputs`` + ``enforce_single_input_file``, which the pipelines
     with a ``lambda/`` code asset vendor; this pipeline is a container image, so it reads the same
@@ -222,11 +246,13 @@ def resolve_inputs_from_manifest(data):
         )
     input_path = ""
     relative_path = ""
+    version_id = ""
     if input_files:
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
             _record_bucket_region(first["bucket"], first.get("bucketRegion", ""))
+            version_id = input_version_id(first)
         relative_path = asset_relative_path(
             first.get("relativePath"), first.get("key", ""), first.get("assetRootS3Key", ""))
     input_path = input_path or data.get("inputS3AssetFilePath", "")
@@ -240,10 +266,10 @@ def resolve_inputs_from_manifest(data):
         output_path = f"s3://{outputs['bucket']}/{outputs['metadata']}"
         _record_bucket_region(outputs["bucket"], outputs.get("bucketRegion", ""))
     output_path = output_path or data.get("outputS3AssetMetadataPath", "")
-    return input_path, relative_path, output_path
+    return input_path, relative_path, output_path, version_id
 
 
-def extract_metadata(input_asset_relative_path, input_path, output_path):
+def extract_metadata(input_asset_relative_path, input_path, output_path, input_version=""):
     """
     Extract metadata from a CAD or mesh file.
 
@@ -251,6 +277,7 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
         input_asset_relative_path: the input file's path within its asset
         input_path: S3 URI of the input file
         output_path: S3 URI of the output directory
+        input_version: the S3 version of the input to read; empty reads the current object
 
     Returns:
         Dictionary with status code and message
@@ -283,7 +310,12 @@ def extract_metadata(input_asset_relative_path, input_path, output_path):
     try:
         # Download input file from S3
         temp_file = os.path.join(work_dir, f'input{file_extension}')
-        download(input_bucket, input_key, temp_file)
+        download(input_bucket, input_key, temp_file, **({"version_id": input_version} if input_version else {}))
+
+        # A mesh whose text is not UTF-8 fails here, with the input's own file name, before trimesh
+        # loads it.
+        if handler_type == 'mesh':
+            check_input_text(temp_file, file_extension, os.path.basename(input_key))
 
         # Extract metadata based on file type
         if handler_type == 'cad':
@@ -386,10 +418,10 @@ def lambda_handler(event, context):
 
     # Resolve the input file path, its asset-relative path, and the output-metadata path from the
     # workflow manifest (each input file is self-locating; legacy body fields are the fallback).
-    input_path, asset_relative_input_path, output_path = resolve_inputs_from_manifest(data)
+    input_path, asset_relative_input_path, output_path, version_id = resolve_inputs_from_manifest(data)
 
     # Extract metadata
-    result = extract_metadata(asset_relative_input_path, input_path, output_path)
+    result = extract_metadata(asset_relative_input_path, input_path, output_path, version_id)
 
     return result
 

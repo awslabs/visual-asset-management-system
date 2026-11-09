@@ -7,7 +7,7 @@ import json
 import uuid
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -21,12 +21,13 @@ from common.apiRoutes import (
     API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION, API_ASSET_VERSION_BY_ID,
     API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
 )
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
-from common.dynamodb import to_update_expr, query_all_items
+from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
+from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -198,7 +199,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -206,31 +208,38 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
         
     Raises:
-        VAMSGeneralErrorResponse: If asset not found or user doesn't have permissions
+        VAMSAuthorizationDeniedResponse: If the user doesn't have permissions
+        VAMSAssetNotFoundResponse: If the user has permissions and the asset is not found
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
-        
-        if not asset:
-            raise VAMSGeneralErrorResponse("Asset not found in database")
-        
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+            raise VAMSAuthorizationDeniedResponse()
 
-        # Check permissions against an annotated copy, so the returned record, which callers
-        # write back, carries no object type
+        # Authorize before existence, so a refused caller gets the same answer for a missing asset
+        # as for an existing one. A found record is checked as an annotated copy, so the returned
+        # record, which callers write back, carries no object type; for a missing one the request's
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
-            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+        if not casbin_enforcer.enforce(authorization_object, operation):
+            raise VAMSAuthorizationDeniedResponse()
+
+        if not asset:
+            raise VAMSAssetNotFoundResponse("Asset not found in database")
 
         return asset
     except Exception as e:
@@ -558,7 +567,7 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
     try:
         # Create partition key in the format {databaseId}:{assetId}:{assetVersionId}
         partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
 
         # Create individual records for each file
         with asset_file_versions_table.batch_writer() as batch:
@@ -631,7 +640,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -816,7 +825,7 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
         ClientError: When require_new is set and the version ID is already taken
     """
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
 
         # Create version record
         version_record = {
@@ -1183,7 +1192,7 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         
         # Composite key for querying all metadata/attributes for this asset
         composite_key = f"{databaseId}:{assetId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
         
         # Partition key for the version table
         version_pk = f"{databaseId}:{assetId}:{assetVersionId}"
@@ -1812,7 +1821,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     send_subscription_email(databaseId, assetId)
 
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
         message=f"Successfully created version {new_assetVersionId} with {len(files_to_version)} files",
@@ -1903,7 +1912,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
                 'relativeKey': relative_key,
                 'versionId': new_version_id,
                 'size': file.get('size'),
-                'lastModified': datetime.utcnow().isoformat(),
+                'lastModified': utc_now().isoformat(),
                 'etag': file.get('etag')
             }, None
         except Exception as e:
@@ -1953,7 +1962,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     send_subscription_email(databaseId, assetId)
     
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
         message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
@@ -1977,8 +1986,10 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     Returns:
         AssetVersionsListResponseModel with versions list and optional NextToken
     """
-    # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    # Get asset and verify permissions. showArchived also resolves an archived asset, whose
+    # versions stay keyed by its original database id.
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(query_params.get('showArchived', False)))
     
     # Build query parameters for DynamoDB using the table PK (databaseId:assetId is now the table PK)
     composite_key = f"{databaseId}:{assetId}"
@@ -2091,7 +2102,8 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         AssetVersionResponseModel with the version details
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(request_model.showArchived))
     
     # Get version information from asset
     version_info = None
@@ -2265,6 +2277,8 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2366,6 +2380,8 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2439,6 +2455,10 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2496,8 +2516,13 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message}, event=event)
         
+        show_archived = parse_show_archived(event.get('queryStringParameters') or {})
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Create request model with assetVersionId from path parameter
-        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'])
+        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'],
+                                                    showArchived=show_archived)
         
         # Process request
         response = get_asset_version_details(
@@ -2512,6 +2537,10 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2621,7 +2650,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
             ExpressionAttributeValues=values_map
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully updated version {assetVersionId}",
@@ -2634,6 +2663,8 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2726,7 +2757,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully archived version {assetVersionId}",
@@ -2739,6 +2770,8 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2823,7 +2856,7 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully unarchived version {assetVersionId}",
@@ -2836,6 +2869,8 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAuthorizationDeniedResponse:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

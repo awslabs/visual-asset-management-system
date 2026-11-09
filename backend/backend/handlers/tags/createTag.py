@@ -5,7 +5,7 @@
 
 import boto3
 import json
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
@@ -161,7 +161,7 @@ def create_tag(tag_data, claims_and_roles):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return TagOperationResponseModel(
             success=True,
             message=f"Tag {tag_name} created successfully",
@@ -243,7 +243,7 @@ def update_tag(tag_data, claims_and_roles):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return TagOperationResponseModel(
             success=True,
             message=f"Tag {tag_name} updated successfully",

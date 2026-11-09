@@ -607,6 +607,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('--prefix', help='Filter files by prefix')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
+@click.option('--show-archived', is_flag=True,
+              help='Also find an archived asset; its files are all archived and always listed')
 @click.option('--basic', is_flag=True, help='Skip expensive lookups for faster listing')
 @click.option('--page-size', type=int, help='Number of items per page')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
@@ -618,8 +620,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.pass_context
 @requires_setup_and_auth
 def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
-               basic: bool, page_size: int, max_items: int, starting_token: str, auto_paginate: bool,
-               asset_version_id: str, json_input: str, json_output: bool):
+               show_archived: bool, basic: bool, page_size: int, max_items: int, starting_token: str,
+               auto_paginate: bool, asset_version_id: str, json_input: str, json_output: bool):
     """List files in an asset.
 
     Examples:
@@ -647,6 +649,9 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
 
         # With filters
         vamscli file list -d my-db -a my-asset --prefix "models/" --include-archived
+
+        # List an archived asset's files
+        vamscli file list -d my-db -a my-asset --show-archived
     """
     try:
         # Parse JSON input if provided
@@ -657,6 +662,7 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         asset_id = json_data.get('asset_id', asset_id)
         prefix = json_data.get('prefix', prefix)
         include_archived = json_data.get('include_archived', include_archived)
+        show_archived = json_data.get('show_archived', show_archived)
         basic = json_data.get('basic', basic)
         page_size = json_data.get('page_size', page_size)
         max_items = json_data.get('max_items', max_items)
@@ -706,6 +712,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                     params['prefix'] = prefix
                 if include_archived:
                     params['includeArchived'] = 'true'
+                if show_archived:
+                    params['showArchived'] = 'true'
                 if basic:
                     params['basic'] = 'true'
                 if page_size:
@@ -722,6 +730,10 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 
                 # Aggregate items
                 items = result.get('items', [])
+                remaining_slots = max_total_items - total_fetched
+                page_had_more = len(items) > remaining_slots
+                if page_had_more:
+                    items = items[:remaining_slots]
                 all_items.extend(items)
                 total_fetched += len(items)
                 
@@ -731,6 +743,7 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 
                 # Check if we should continue
                 next_token = result.get('NextToken')
+                has_more_items = page_had_more or bool(next_token)
                 if not next_token or total_fetched >= max_total_items:
                     break
             
@@ -742,7 +755,7 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 'pageCount': page_count
             }
             
-            if total_fetched >= max_total_items and next_token:
+            if total_fetched >= max_total_items and has_more_items:
                 final_result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
             
         else:
@@ -755,6 +768,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 params['prefix'] = prefix
             if include_archived:
                 params['includeArchived'] = 'true'
+            if show_archived:
+                params['showArchived'] = 'true'
             if basic:
                 params['basic'] = 'true'
             if page_size:
@@ -1156,11 +1171,13 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to get info for')
 @click.option('--include-versions', is_flag=True, help='Include version history')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
-def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: str, include_versions: bool, json_input: str, json_output: bool):
+def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: str, include_versions: bool,
+              show_archived: bool, json_input: str, json_output: bool):
     """Get detailed information about a specific file.
     
     Examples:
@@ -1169,6 +1186,9 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
         
         # Get file info with version history
         vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
+
+        # Get info about a file of an archived asset
+        vamscli file info -d my-db -a my-asset -p "/model.gltf" --show-archived
         
         # Get info with JSON input
         vamscli file info --json-input '{"database_id": "my-db", "asset_id": "my-asset", "file_path": "/model.gltf"}'
@@ -1182,6 +1202,7 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
         asset_id = json_data.get('asset_id', asset_id)
         file_path = json_data.get('file_path', file_path)
         include_versions = json_data.get('include_versions', include_versions)
+        show_archived = json_data.get('show_archived', show_archived)
         
         # Validate required arguments
         if not database_id:
@@ -1201,6 +1222,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
             'filePath': file_path,
             'includeVersions': 'true' if include_versions else 'false'
         }
+        if show_archived:
+            params['showArchived'] = 'true'
         
         output_status(f"Retrieving file information for '{file_path}'...", json_output)
         

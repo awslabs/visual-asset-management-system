@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { BusyButton } from "../components/BusyControls";
 
 /** File name for a downloaded result: the execution id, made safe for a file system. */
 export function resultFileName(executionId: string): string {
@@ -62,15 +63,15 @@ export const ResultDownloadButton: React.FC<ResultDownloadButtonProps> = ({
     };
     return (
         <>
-            <button
-                type="button"
+            <BusyButton
+                busy={busy}
+                busyLabel="Downloading…"
                 className={className}
                 onClick={onDownload}
-                disabled={busy}
                 data-testid={testId}
             >
-                {busy ? "Downloading…" : "Download"}
-            </button>
+                Download
+            </BusyButton>
             {failed && (
                 <span role="alert" className="text-sm text-vams-error">
                     The download failed.

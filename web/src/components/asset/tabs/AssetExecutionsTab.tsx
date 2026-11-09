@@ -6,6 +6,7 @@
 import React from "react";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import ExecutionsBoard from "../../../features/orchestration/executions/ExecutionsBoard";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 
 interface AssetExecutionsTabProps {
     databaseId: string;
@@ -23,9 +24,16 @@ export const AssetExecutionsTab: React.FC<AssetExecutionsTabProps> = ({
     assetId,
     isActive,
 }) => {
+    // An archived asset's executions are listed, but no workflow can be launched on it
+    const assetArchived = useAssetArchived();
     return (
         <ErrorBoundary componentName="Asset Executions">
-            {isActive && <ExecutionsBoard scope={{ kind: "asset", databaseId, assetId }} />}
+            {isActive && (
+                <ExecutionsBoard
+                    scope={{ kind: "asset", databaseId, assetId }}
+                    allowExecute={!assetArchived}
+                />
+            )}
         </ErrorBoundary>
     );
 };

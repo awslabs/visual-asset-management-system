@@ -2,7 +2,7 @@
 
 import boto3
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -98,7 +98,7 @@ def create_role(role_data, claims_and_roles):
             'id': str(uuid.uuid4()),
             'roleName': role_data['roleName'],
             'description': role_data['description'],
-            'createdOn': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            'createdOn': utc_now().strftime("%Y-%m-%dT%H:%M:%S"),
             'source': role_data.get('source'),
             'sourceIdentifier': role_data.get('sourceIdentifier'),
             'mfaRequired': role_data.get('mfaRequired', False)
@@ -111,7 +111,7 @@ def create_role(role_data, claims_and_roles):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return RoleOperationResponseModel(
             success=True,
             message=f"Role {role_data['roleName']} created successfully",
@@ -184,7 +184,7 @@ def update_role(role_data, claims_and_roles):
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return RoleOperationResponseModel(
             success=True,
             message=f"Role {role_data['roleName']} updated successfully",

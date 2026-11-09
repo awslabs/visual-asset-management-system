@@ -86,7 +86,7 @@ def _real_modules():
         os.path.join(backend_root, "handlers", "authz", "__init__.py"), encoding="utf-8"
     ).read()
     tree = ast.parse(authz_source)
-    wanted = ("_generate_criteria_object_rules", "_escape_rule_value")
+    wanted = ("_usable_criteria", "_generate_criteria_object_rules", "_escape_rule_value")
     methods = [
         node
         for cls in tree.body
@@ -99,6 +99,16 @@ def _real_modules():
         f"{[m.name for m in methods]} -- the method was renamed or moved"
     )
     segments = [textwrap.dedent(ast.get_source_segment(authz_source, m)) for m in methods]
+    # The operator list _usable_criteria reads from module scope, as written in the module.
+    operator_lists = [
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_RULE_OPERATORS" for target in node.targets
+        )
+    ]
+    assert len(operator_lists) == 1, "expected one module-level _RULE_OPERATORS in handlers/authz"
+    _REAL["authz_rule_operators"] = operator_lists[0]
     namespace = {
         "PERMISSION_CONSTRAINT_FIELDS": _REAL["constants"].PERMISSION_CONSTRAINT_FIELDS,
         "get_constraint_fields_for_object_type": (
@@ -106,9 +116,11 @@ def _real_modules():
         ),
         "logger": type("_Quiet", (), {"info": staticmethod(lambda *a, **k: None)})(),
         "staticmethod": staticmethod,
+        "_RULE_OPERATORS": _REAL["authz_rule_operators"],
     }
     exec(compile("\n\n".join(segments), "<authz-rule-builder>", "exec"), namespace)
     _REAL["build_rules"] = namespace["_generate_criteria_object_rules"]
+    _REAL["usable"] = namespace["_usable_criteria"]
     _REAL["escape"] = namespace["_escape_rule_value"]
     return _REAL
 
@@ -116,9 +128,13 @@ def _real_modules():
 class _RuleBuilder:
     """Minimal host for the extracted methods (they only use ``self._escape_rule_value``)."""
 
-    def __init__(self, build, escape):
+    def __init__(self, build, escape, usable):
         self._build = build
         self._escape_rule_value = escape
+        self._usable = usable
+
+    def _usable_criteria(self, criteria, object_type=None):
+        return self._usable(self, criteria, object_type)
 
     def _generate_criteria_object_rules(self, criteria, object_type=None):
         return self._build(self, criteria, object_type)
@@ -130,7 +146,7 @@ def _service():
     escape = real["escape"]
     # _escape_rule_value is a @staticmethod in the class; the extracted function is plain, so bind it
     # unbound-style.
-    return _RuleBuilder(real["build_rules"], escape)
+    return _RuleBuilder(real["build_rules"], escape, real["usable"])
 
 
 class _Obj:

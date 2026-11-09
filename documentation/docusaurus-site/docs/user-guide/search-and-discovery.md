@@ -177,7 +177,7 @@ Column preferences are saved to your browser and persist across sessions.
 
 -   **Sorting** is performed server-side. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
 -   **Pagination** controls appear at the bottom of the results. Page sizes of 10, 25, 50, or 100 are available through preferences. Navigate between pages using the pagination controls.
--   The total result count is displayed in the table header. When the count is approximate (more results exist than can be precisely counted), a `+` suffix is shown.
+-   The total result count is displayed in the table header. A `+` suffix means the count is a minimum: either more results exist than can be precisely counted, or some of your permission rules can only be counted as a minimum (see [Counts and permissions](../api/search.md#counts-and-permissions)).
 
 ## Direct URL navigation to files
 

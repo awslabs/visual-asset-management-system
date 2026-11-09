@@ -17,7 +17,7 @@ from common.validators import trim_name
 from models.pipelines import reject_control_characters
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="WorkflowV2Models")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("fileUpload",)
 CONCURRENCY_RESTRICTIONS = ("none", "perAsset", "perInputFile", "perInputFileVersion")

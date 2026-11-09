@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { fetchMetadata } from "../../../services/MetadataService";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 import {
     EntityType,
     FileMetadataType,
@@ -42,6 +43,7 @@ export const useMetadataFetch = (
     >(undefined);
     const [attributeCount, setAttributeCount] = useState<number | undefined>(undefined);
     const [metadataCount, setMetadataCount] = useState<number | undefined>(undefined);
+    const assetArchived = useAssetArchived();
 
     // Fetch counts for the OTHER file type (not the current one being displayed)
     const fetchOtherFileTypeCount = useCallback(
@@ -68,7 +70,8 @@ export const useMetadataFetch = (
                     databaseId,
                     filePath,
                     otherType,
-                    assetVersionId
+                    assetVersionId,
+                    assetArchived
                 );
 
                 if (otherType === "attribute") {
@@ -87,7 +90,7 @@ export const useMetadataFetch = (
                 // Don't set error state for count fetching failures
             }
         },
-        [entityType, entityId, databaseId, filePath, mode, assetVersionId]
+        [entityType, entityId, databaseId, filePath, mode, assetVersionId, assetArchived]
     );
 
     const refetch = useCallback(async () => {
@@ -130,7 +133,8 @@ export const useMetadataFetch = (
                 databaseId,
                 filePath,
                 fileType,
-                assetVersionId
+                assetVersionId,
+                assetArchived
             );
 
             //console.log("[useMetadataFetch] Response:", response);
@@ -178,6 +182,7 @@ export const useMetadataFetch = (
         fileType,
         mode,
         assetVersionId,
+        assetArchived,
         fetchOtherFileTypeCount,
     ]);
 
@@ -185,7 +190,7 @@ export const useMetadataFetch = (
     useEffect(() => {
         refetch();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [entityType, entityId, databaseId, filePath, fileType, mode, assetVersionId]);
+    }, [entityType, entityId, databaseId, filePath, fileType, mode, assetVersionId, assetArchived]);
 
     return {
         data,

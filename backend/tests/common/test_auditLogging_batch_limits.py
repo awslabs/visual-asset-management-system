@@ -487,3 +487,62 @@ class TestBulkDownloadEchoIsNotReplicatedPerEntry:
         assert len(oracle.accepted_events) == len(messages)
         assert all("--- [event: {" in event["message"] for event in oracle.accepted_events), (
             "a small echo was elided; the denial records lost their per-entry event context")
+
+
+@pytest.mark.unit
+class TestDeferredAuthorizationAudit:
+    """``deferred_authorization_audit`` collects the authorization entries of a block and writes them
+    together when it ends: every entry kept, in order, in one call per PutLogEvents batch rather than
+    one per entry. Search uses it for the refused per-hit checks."""
+
+    CLAIMS = {"tokens": ["u1"], "roles": ["searcher"], "mfaEnabled": True}
+
+    def _refuse(self, n):
+        auditLogging.log_authorization(self.CLAIMS, False, {"action": "GET", "obj": {"assetName": f"asset-{n}"}})
+
+    def test_entries_inside_the_block_are_written_once_it_ends_in_one_call(self):
+        oracle = _CloudWatchOracle()
+        with patch.object(auditLogging, "cloudwatch_logs", oracle), \
+                patch.object(auditLogging, "mask_sensitive_data", mask_sensitive_data):
+            with auditLogging.deferred_authorization_audit():
+                for n in range(2000):
+                    self._refuse(n)
+                assert oracle.attempts == 0
+        assert oracle.attempts == 1
+        messages = [e["message"] for e in oracle.accepted_events]
+        assert len(messages) == 2000
+        assert all(m.startswith("[AUTHORIZATION][authorized: False]") for m in messages)
+        assert [json.loads(m[m.index(" {") + 1:m.index(" --- ")])["obj"]["assetName"] for m in messages] == [
+            f"asset-{n}" for n in range(2000)]
+
+    def test_entries_are_written_when_the_block_raises(self):
+        oracle = _CloudWatchOracle()
+        with patch.object(auditLogging, "cloudwatch_logs", oracle), \
+                patch.object(auditLogging, "mask_sensitive_data", mask_sensitive_data):
+            with pytest.raises(RuntimeError):
+                with auditLogging.deferred_authorization_audit():
+                    self._refuse(1)
+                    self._refuse(2)
+                    raise RuntimeError("search failed")
+        assert len(oracle.accepted_events) == 2
+
+    def test_a_nested_block_writes_with_the_outer_one(self):
+        oracle = _CloudWatchOracle()
+        with patch.object(auditLogging, "cloudwatch_logs", oracle), \
+                patch.object(auditLogging, "mask_sensitive_data", mask_sensitive_data):
+            with auditLogging.deferred_authorization_audit():
+                self._refuse(1)
+                with auditLogging.deferred_authorization_audit():
+                    self._refuse(2)
+                assert oracle.attempts == 0
+        assert oracle.attempts == 1
+        assert len(oracle.accepted_events) == 2
+
+    def test_outside_a_block_each_entry_is_written_as_it_is_recorded(self):
+        oracle = _CloudWatchOracle()
+        with patch.object(auditLogging, "cloudwatch_logs", oracle), \
+                patch.object(auditLogging, "mask_sensitive_data", mask_sensitive_data):
+            self._refuse(1)
+            assert oracle.attempts == 1
+            self._refuse(2)
+        assert oracle.attempts == 2

@@ -13,6 +13,8 @@ provided logger.py, which broke collection of any handler that audits).
 Keep the exported names in sync with backend/customLogging/auditLogging.py.
 """
 
+import contextlib
+
 
 def _noop(*args, **kwargs):
     """Generic no-op stand-in for all audit log functions."""
@@ -23,6 +25,12 @@ def _noop(*args, **kwargs):
 log_authentication = _noop
 log_authorization = _noop
 log_authorization_api = _noop
+
+
+@contextlib.contextmanager
+def deferred_authorization_audit():
+    """No-op stand-in: there is nothing to collect when log_authorization writes nothing."""
+    yield
 log_authorization_gateway = _noop
 log_file_upload = _noop
 log_file_download = _noop

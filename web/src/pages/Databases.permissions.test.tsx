@@ -10,11 +10,12 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import * as APIService from "../services/APIService";
 import Databases from "./Databases";
 import { __resetCache } from "../features/orchestration/permissions/useAllowedRoutes";
+import { PERMISSIONS_FAILED_REASON } from "../features/orchestration/permissions/routeDisabledReason";
 import {
     ADMIN_ROUTES,
     DATABASE_READONLY_ROUTES,
@@ -83,6 +84,26 @@ describe("Databases page actions by role", () => {
             ).not.toBeInTheDocument();
         }
     );
+
+    it("says the permissions check failed, and retries it when Create is pressed", async () => {
+        mockFetchAllowedApiRoutes
+            .mockResolvedValueOnce([false, "Internal Server Error"])
+            .mockResolvedValueOnce(allowedRoutesResponse(ADMIN_ROUTES));
+        render(
+            <MemoryRouter>
+                <Databases />
+            </MemoryRouter>
+        );
+        await waitFor(() => expect(screen.getByText("db1")).toBeInTheDocument());
+        const create = screen.getByRole("button", { name: `Create ${Synonyms.Database}` });
+        await waitFor(() => expect(create).toHaveAccessibleDescription(PERMISSIONS_FAILED_REASON));
+        expect(create).toHaveAttribute("aria-disabled", "true");
+
+        fireEvent.click(create);
+
+        await waitFor(() => expect(create).not.toHaveAttribute("aria-disabled"));
+        expect(mockFetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
 
     it("the administrator sees Create enabled and the Edit and Delete Selected actions", async () => {
         const create = await renderAs(ADMIN_ROUTES);

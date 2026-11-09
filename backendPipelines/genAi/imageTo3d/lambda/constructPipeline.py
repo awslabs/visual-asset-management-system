@@ -4,6 +4,7 @@
 import json
 import os
 from customLogging.logger import safeLogger
+import inputViews
 import manifestHelper
 
 logger = safeLogger(service="ConstructImageTo3dPipeline")
@@ -27,20 +28,21 @@ def _bucket_and_dir(s3_uri):
     return bucket, _as_dir(key)
 
 
-def bucket_regions(event) -> dict:
+def bucket_regions(event, views) -> dict:
     """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
     vamsExecute Lambda resolved from the manifest. The container addresses each registered bucket in
     that Region. A bucket in the deployment Region (an empty Region, or an event from an older
-    Lambda) is left out, as is the auxiliary bucket: requests for those use the default client."""
+    Lambda) is left out, as is the auxiliary bucket: requests for those use the default client. The
+    input buckets are those of the views the run reads (``inputViews.views_from_event``), which
+    include the primary."""
     input_region = event.get("inputBucketRegion") or ""
     output_region = event.get("outputBucketRegion") or ""
-    input_uris = [event.get("inputS3AssetFilePath")] + list(event.get("inputS3AssetFilePaths") or [])
-    output_uris = [event.get(path_key) for path_key in
-                   ("outputS3AssetFilesPath", "outputS3AssetMetadataPath", "outputS3AssetResultsPath")]
+    input_buckets = [view["bucket"] for view in views]
+    output_buckets = [manifestHelper.parse_s3_uri(event.get(path_key) or "")[0] for path_key in
+                      ("outputS3AssetFilesPath", "outputS3AssetMetadataPath", "outputS3AssetResultsPath")]
     regions = {}
-    for uris, region in ((input_uris, input_region), (output_uris, output_region)):
-        for uri in uris:
-            bucket, _key = manifestHelper.parse_s3_uri(uri or "")
+    for buckets, region in ((input_buckets, input_region), (output_buckets, output_region)):
+        for bucket in buckets:
             if bucket and region:
                 regions[bucket] = region
     return regions
@@ -71,6 +73,10 @@ def lambda_handler(event, context):
     input_metadata_s3_location = event.get("inputMetadataS3Location", "")
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     external_sfn_task_token = event.get("externalSfnTaskToken", "")
+    # Every view the run reads, each with its own version. A malformed view raises MalformedInputView,
+    # which the state machine's catch routes to PipelineEndTask, so the run fails with that message
+    # rather than reconstructing from fewer views or reading a view at another version.
+    views = inputViews.views_from_event(event)
 
     input_bucket, input_key = manifestHelper.parse_s3_uri(input_s3_asset_file_uri)
     input_root, input_extension = os.path.splitext(input_key)
@@ -95,6 +101,9 @@ def lambda_handler(event, context):
             "bucketName": input_bucket,
             "objectKey": input_key,
             "fileExtension": input_extension,
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         # Every view of the subject, in manifest order, for a model that reconstructs from several.
         # ADDITIVE: inputFile above stays the primary and is what asset identity, the relative output
@@ -102,15 +111,12 @@ def lambda_handler(event, context):
         # run carries one entry here, and the container falls back to inputFile when the list is absent.
         "inputFiles": [
             {
-                "bucketName": bucket,
-                "objectKey": key,
-                "fileExtension": os.path.splitext(key)[1],
+                "bucketName": view["bucket"],
+                "objectKey": view["key"],
+                "fileExtension": os.path.splitext(view["key"])[1],
+                **({"versionId": view["versionId"]} if view["versionId"] else {}),
             }
-            for bucket, key in (
-                manifestHelper.parse_s3_uri(uri)
-                for uri in (event.get("inputS3AssetFilePaths") or [input_s3_asset_file_uri])
-            )
-            if bucket and key
+            for view in views
         ],
         "outputFiles": {
             "bucketName": output_bucket,
@@ -136,7 +142,7 @@ def lambda_handler(event, context):
         "inputConfigurationS3Location": input_configuration_s3_location,
         # The Region of each asset bucket outside the deployment Region; the container registers it
         # before its first S3 call.
-        "bucketRegions": bucket_regions(event),
+        "bucketRegions": bucket_regions(event, views),
     }
 
     logger.info(f"Definition: {definition}")

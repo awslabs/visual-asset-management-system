@@ -13,6 +13,11 @@ import {
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
 import { useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
+import {
+    ARCHIVED_TRANSFER_REASON,
+    ARCHIVED_WRITE_REASON,
+    useAssetArchived,
+} from "../../../context/ArchivedAssetContext";
 import { createFolder, fetchAsset, fetchFileInfo } from "../../../services/APIService";
 import { FileInfoPanelProps, FileManagerContextType } from "../types/FileManagerTypes";
 import {
@@ -75,16 +80,25 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // fail. A fetched record without the flag is not distributable, as the API treats it; the null
     // held before the fetch resolves is not.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
+    // An archived asset's files carry delete markers, so the same affordances are hidden for it,
+    // and its writes are hidden through the read-only state the file manager sets for it.
+    const assetArchived = useAssetArchived();
+    const transfersUnavailable = isNotDistributable || assetArchived;
     // The viewer registry is initialized lazily. Without this the eye icons below would never
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { loading: permissionsLoading, can: canCallRoute } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        can: canCallRoute,
+    } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
     const uploadDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         canCallRoute("POST", "/uploads"),
         `Your role does not allow uploading files to this ${Synonyms.asset}.`
     );
@@ -165,6 +179,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     assetId,
                     fileKey: selectedItem.keyPrefix,
                     includeVersions: false,
+                    showArchived: assetArchived,
                 });
 
                 if (success && fileInfo) {
@@ -262,7 +277,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         selectedItem.keyPrefix !== "/" &&
         selectedItem.relativePath !== "/" &&
         selectedItem.level > 0 &&
-        !selectedItem.isArchived;
+        (!selectedItem.isArchived || assetArchived);
 
     // State for modals
     const [createFolderModalVisible, setCreateFolderModalVisible] = useState(false);
@@ -556,35 +571,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         assetVersionId={state.assetVersionId}
                     />
 
-                    <div
-                        className="file-info-header"
-                        style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            width: "100%",
-                        }}
-                    >
-                        <div
-                            style={{
-                                flexShrink: 1,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                marginRight: "16px",
-                                maxWidth: "50%",
-                            }}
-                        >
+                    <div className="file-info-header">
+                        <div className="file-info-title">
                             <Header variant="h3">{selectedItems.length} files selected</Header>
                         </div>
-                        <div
-                            className="file-actions"
-                            style={{
-                                flexShrink: 0,
-                                display: "flex",
-                                flexWrap: "nowrap",
-                                minWidth: "fit-content",
-                            }}
-                        >
+                        <div className="file-actions">
                             <SpaceBetween direction="horizontal" size="xs">
                                 {!hasSelectedFolders && (
                                     <>
@@ -662,10 +653,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     databaseId={databaseId!}
                                                     assetId={assetId!}
                                                     inputFiles={automationInputFiles}
-                                                    disabledReason={automationDisabled}
+                                                    disabledReason={
+                                                        assetArchived
+                                                            ? ARCHIVED_WRITE_REASON
+                                                            : automationDisabled
+                                                    }
                                                 />
 
-                                                {!isNotDistributable && (
+                                                {!transfersUnavailable && (
                                                     <ButtonDropdown
                                                         items={[
                                                             {
@@ -694,7 +689,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     </ButtonDropdown>
                                                 )}
 
-                                                {!isNotDistributable && (
+                                                {!transfersUnavailable && (
                                                     <Button
                                                         iconName="external"
                                                         variant={"primary"}
@@ -718,7 +713,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             admits the selection's count, shape and types. A viewer covering only part
                             of a mixed selection would open and then fail on the files it cannot read. */}
                         {!hasSelectedFolders &&
-                            !isNotDistributable &&
+                            !transfersUnavailable &&
                             viewerRegistryReady &&
                             (() => {
                                 const names = selectedItems.map((i: any) => i.name);
@@ -1125,38 +1120,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }}
                 />
 
-                <div
-                    className="file-info-header"
-                    style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        width: "100%",
-                    }}
-                >
-                    <div
-                        style={{
-                            flexShrink: 1,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            marginRight: "16px",
-                            maxWidth: "50%",
-                        }}
-                    >
+                <div className="file-info-header">
+                    <div className="file-info-title">
                         {selectedItem.isArchived && (
                             <div className="archived-file-label">ARCHIVED</div>
                         )}
                         <Header variant="h3">{selectedItem.displayName}</Header>
                     </div>
-                    <div
-                        className="file-actions"
-                        style={{
-                            flexShrink: 0,
-                            display: "flex",
-                            flexWrap: "nowrap",
-                            minWidth: "fit-content",
-                        }}
-                    >
+                    <div className="file-actions">
                         {isFolder ? (
                             <SpaceBetween direction="horizontal" size="xs">
                                 {/* Show operations dropdown for all folders, with different options based on level */}
@@ -1209,10 +1180,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     databaseId={databaseId!}
                                     assetId={assetId!}
                                     inputFiles={automationInputFiles}
-                                    disabledReason={automationDisabled}
+                                    disabledReason={
+                                        assetArchived ? ARCHIVED_WRITE_REASON : automationDisabled
+                                    }
                                 />
 
-                                {!isNotDistributable && (
+                                {!transfersUnavailable && (
                                     <ButtonDropdown
                                         items={[
                                             {
@@ -1331,10 +1304,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             databaseId={databaseId!}
                                             assetId={assetId!}
                                             inputFiles={automationInputFiles}
-                                            disabledReason={automationDisabled}
+                                            disabledReason={
+                                                assetArchived
+                                                    ? ARCHIVED_WRITE_REASON
+                                                    : automationDisabled
+                                            }
                                         />
 
-                                        {!isNotDistributable && (
+                                        {!transfersUnavailable && (
                                             <ButtonDropdown
                                                 items={[
                                                     {
@@ -1363,7 +1340,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             </ButtonDropdown>
                                         )}
 
-                                        {!isNotDistributable && (
+                                        {!transfersUnavailable && (
                                             <Button
                                                 iconName="external"
                                                 variant={"primary"}
@@ -1397,6 +1374,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             </Alert>
                         )}
 
+                        {assetArchived && !selectedItem.isPermanentlyDeleted && (
+                            <Alert type="info" statusIconAriaLabel="Info">
+                                {ARCHIVED_TRANSFER_REASON}
+                            </Alert>
+                        )}
+
                         {selectedItem.isPermanentlyDeleted && (
                             <Alert type="error" statusIconAriaLabel="Error">
                                 This file has been permanently deleted. All S3 versions have been
@@ -1416,7 +1399,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 {!isFolder &&
                                     selectedItem.level > 0 &&
                                     !selectedItem.isPermanentlyDeleted &&
-                                    !isNotDistributable &&
+                                    !transfersUnavailable &&
                                     viewerRegistryReady &&
                                     isViewableExtension(extensionOfFilename(selectedItem.name)) && (
                                         <span
@@ -1483,7 +1466,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         {/* Show preview thumbnail for the top-level Asset Node */}
                         {selectedItem.relativePath === "/" &&
                             selectedItem.level === 0 &&
-                            !isNotDistributable && (
+                            !transfersUnavailable && (
                                 <div className="file-info-item">
                                     <div className="file-info-label">Preview:</div>
                                     <AssetPreviewThumbnail
@@ -1614,7 +1597,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         )}
 
                         {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
-                        {!isFolder && selectedItem.level > 0 && !isNotDistributable && (
+                        {!isFolder && selectedItem.level > 0 && !transfersUnavailable && (
                             <>
                                 {/* Check if file has a preview file or is a previewable format */}
                                 {(() => {

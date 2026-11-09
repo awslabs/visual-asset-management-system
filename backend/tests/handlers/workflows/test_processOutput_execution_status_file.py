@@ -40,6 +40,7 @@ for _k, _v in {
     "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
     "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
+    "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
 }.items():
     os.environ.setdefault(_k, _v)
 
@@ -351,10 +352,23 @@ class TestAStatusFileTheStepCannotUse:
         kw, _reads = _run_asset_path(
             _staged(b'{"status": "FAILED", "error": "E", "cause": "\xff\xfe"}'), ranges=ranges)
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"].startswith(po.EXECUTION_STATUS_FILE_UNREADABLE)
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
         reads = _status_reads(ranges)
         assert len(reads) == 2, reads
         assert reads[1] == f"bytes=0-{po.EXECUTION_STATUS_FILE_MAX_BYTES}", reads
+
+    def test_the_results_only_path_records_bytes_that_are_not_utf8_in_one_sentence(self):
+        kw, _reads = _run_results_only(
+            _staged(b'{"status": "FAILED", "error": "E", "cause": "\xff\xfe"}'))
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == po.EXECUTION_STATUS_FILE_UNREADABLE
+
+    def test_another_unreadable_results_file_still_records_its_own_failure(self):
+        objects = _staged(FAILED_STATUS)
+        objects[SUMMARY_KEY] = b"\xff\xfe not text"
+        kw, _reads = _run_asset_path(objects)
+        assert kw["execution_status"] == "FAILED"
+        assert kw["execution_error"] == EXPECTED_ERROR + " Reading a pipeline results file failed."
 
     def test_a_leading_byte_order_mark_is_accepted(self):
         """Editors and some Windows tools write a UTF-8 BOM; the content after it is the object."""

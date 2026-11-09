@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 
 const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -46,7 +47,9 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading audio file:", response);
-                        throw new Error("Failed to download audio file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download audio file")
+                        );
                     } else {
                         // Presigned URL — log the key, not the signed URL.
                         console.log("Successfully loaded audio file:", assetKey);

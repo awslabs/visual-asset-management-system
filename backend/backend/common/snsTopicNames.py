@@ -17,17 +17,9 @@ _DISALLOWED_TOPIC_CHARS = re.compile(r'[^a-zA-Z0-9_-]')
 
 
 def sanitize_asset_id_for_sns_topic(asset_id: str) -> str:
-    """Return the asset-ID segment used in an SNS topic name.
-
-    Already-safe IDs are unchanged so existing topics keep their names. When
-    replacement changes the ID, append a short digest of the raw ID so IDs that
-    only differ in replaced characters (a.b vs a-b vs "a b") do not share a
-    topic.
-    """
+    """Return a topic-safe asset ID with a digest of the complete raw ID."""
     safe = _DISALLOWED_TOPIC_CHARS.sub('-', asset_id)
-    if safe == asset_id:
-        return safe
-    digest = hashlib.sha256(asset_id.encode('utf-8')).hexdigest()[:10]
+    digest = hashlib.sha256(asset_id.encode('utf-8')).hexdigest()[:16]
     return f"{safe}-{digest}"
 
 
@@ -35,22 +27,7 @@ def asset_sns_topic_name(database_id: str, asset_id: str) -> str:
     """Build the full SNS topic name for an asset within a database namespace."""
     prefix = f"AssetTopic{database_id}-"
     segment = sanitize_asset_id_for_sns_topic(asset_id)
-    budget = SNS_TOPIC_NAME_MAX_LEN - len(prefix)
-    if budget < 1:
-        # databaseId alone overflows the limit; still return a legal name.
-        return prefix[:SNS_TOPIC_NAME_MAX_LEN]
-    if len(segment) <= budget:
-        return prefix + segment
-
-    # Prefer keeping the collision-breaking digest suffix when present.
-    digest_suffix_len = 11  # '-' + 10 hex chars
-    if (
-        segment != asset_id
-        and len(segment) >= digest_suffix_len
-        and segment[-digest_suffix_len] == '-'
-        and budget > digest_suffix_len
-    ):
-        digest_suffix = segment[-digest_suffix_len:]
-        head_budget = budget - digest_suffix_len
-        return prefix + segment[:head_budget] + digest_suffix
-    return prefix + segment[:budget]
+    digest_suffix_len = 17  # '-' + 16 hex chars
+    digest_suffix = segment[-digest_suffix_len:]
+    readable_name = prefix + segment[:-digest_suffix_len]
+    return readable_name[:SNS_TOPIC_NAME_MAX_LEN - digest_suffix_len] + digest_suffix

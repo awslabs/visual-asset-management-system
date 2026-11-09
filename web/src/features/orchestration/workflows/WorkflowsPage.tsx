@@ -14,7 +14,14 @@ import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import RowActionsButton from "../components/RowActionsButton";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
+import LoadMoreButton from "../components/LoadMoreButton";
 import ExecuteWorkflowModal from "../executions/ExecuteWorkflowModal";
+import {
+    controlNamed,
+    rowActionsFor,
+    rowActionsTrigger,
+    useRemovedRowRef,
+} from "../components/useReturnFocus";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import type { Workflow } from "../types";
@@ -22,6 +29,11 @@ import type { Workflow } from "../types";
 interface WorkflowsPageProps {
     databaseId?: string;
 }
+
+/** The accessible name of the list's search box (FilterBar's SearchInput). */
+const SEARCH_LABEL = "Search";
+
+const workflowKey = (workflow: Workflow) => `${workflow.databaseId}:${workflow.workflowId}`;
 
 const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const navigate = useNavigate();
@@ -34,6 +46,13 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const [archiveConfirmWorkflow, setArchiveConfirmWorkflow] = useState<Workflow | null>(null);
     const [executeWorkflow, setExecuteWorkflow] = useState<Workflow | null>(null);
     const [dbPickerOpen, setDbPickerOpen] = useState(false);
+    // The archive and execute dialogs open from a row's menu, so they return focus to that row's
+    // actions button, or to the search box once an archive has taken the row off the list.
+    const pageRef = React.useRef<HTMLDivElement>(null);
+    const archivedKeyRef = useRemovedRowRef<string>(archiveConfirmWorkflow);
+    const rowActionsOr = (workflow: Workflow) =>
+        rowActionsTrigger(pageRef.current, workflowKey(workflow)) ??
+        controlNamed(pageRef.current, SEARCH_LABEL);
     // How the list is grouped/sorted: by category (default) or by database.
     const [groupBy, setGroupBy] = useState<"category" | "database">("category");
 
@@ -122,6 +141,8 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 databaseId: workflow.databaseId,
                 workflowId: workflow.workflowId,
             });
+            // The list re-reads without archived workflows unless they are included.
+            if (!includeArchived) archivedKeyRef.current = workflowKey(workflow);
             setArchiveConfirmWorkflow(null);
             toast.success("Workflow archived", {
                 description: workflow.workflowName || workflow.workflowId,
@@ -272,6 +293,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                     items={contextMenuItems}
                     trigger={
                         <RowActionsButton
+                            {...rowActionsFor(workflowKey(workflow))}
                             aria-label={`Actions for ${workflow.workflowName}`}
                             className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
                         />
@@ -285,7 +307,10 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const canCreateWorkflow = can("POST", "/database/{databaseId}/workflows");
 
     return (
-        <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
+        <div
+            ref={pageRef}
+            className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full"
+        >
             <div className="flex items-center justify-between">
                 <h1 className="text-text-primary">Workflows</h1>
                 {canCreateWorkflow && (
@@ -406,13 +431,11 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
 
             {!loading && hasNextPage && !filterActive && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -420,8 +443,14 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <ArchiveConfirmDialog
                     entityName={archiveConfirmWorkflow.workflowName}
                     open={!!archiveConfirmWorkflow}
+                    busy={archiveWorkflow.isPending}
                     onConfirm={() => handleArchive(archiveConfirmWorkflow)}
                     onCancel={() => setArchiveConfirmWorkflow(null)}
+                    returnFocusTo={() =>
+                        archivedKeyRef.current === workflowKey(archiveConfirmWorkflow)
+                            ? controlNamed(pageRef.current, SEARCH_LABEL)
+                            : rowActionsOr(archiveConfirmWorkflow)
+                    }
                 />
             )}
 
@@ -429,6 +458,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <ExecuteWorkflowModal
                     open={!!executeWorkflow}
                     onClose={() => setExecuteWorkflow(null)}
+                    returnFocusTo={() => rowActionsOr(executeWorkflow)}
                     presetWorkflow={{
                         databaseId: executeWorkflow.databaseId,
                         workflowId: executeWorkflow.workflowId,

@@ -17,15 +17,17 @@ interface NewSearchPageProps {}
 const NewSearchPage: React.FC<NewSearchPageProps> = () => {
     const { databaseId } = useParams();
     usePageTitle(databaseId || null, `${Synonyms.Asset} and File Search`);
-    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
     const assetActionDisabledReasons = {
         create: routeDisabledReason(
             permissionsLoading,
+            permissionsFailed,
             can("POST", "/assets"),
             `Your role does not allow creating ${Synonyms.assets}.`
         ),
         delete: routeDisabledReason(
             permissionsLoading,
+            permissionsFailed,
             can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
             `Your role does not allow archiving or deleting ${Synonyms.assets}.`
         ),

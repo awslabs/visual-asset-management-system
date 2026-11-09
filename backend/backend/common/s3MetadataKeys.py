@@ -136,6 +136,22 @@ CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
 )
 
 
+def folder_marker_metadata(database_id: str, asset_id: str) -> dict:
+    """Return the user metadata for a folder marker that VAMS writes under an asset's prefix.
+
+    These are the three keys the bucket-sync handler checks before it stamps an object. A folder
+    marker written without them is stamped by copying it onto itself, and that copy is one more
+    ObjectCreated event through the bucket-sync queue. ``direct`` is the change source the stamp has
+    always given a folder marker, so the stored metadata is the same as before; no version-history
+    row is written for a folder marker, so the value is never shown.
+    """
+    return {
+        DATABASE_ID_METADATA_KEY: database_id,
+        ASSET_ID_METADATA_KEY: asset_id,
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_DIRECT,
+    }
+
+
 def normalize_history_file_path(file_path: str) -> str:
     """Return the asset-relative file path with exactly one leading slash."""
     return "/" + (file_path or "").lstrip("/")

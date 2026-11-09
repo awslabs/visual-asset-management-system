@@ -212,7 +212,7 @@ def _coerce_and_check(tag_type, value, enum_values):
     if tag_type == TAG_TYPE_ENUM:
         text = "" if value is None else str(value)
         if not enum_values or text not in [str(v) for v in enum_values]:
-            return None, f"must be one of {enum_values}"
+            return None, f"must be one of: {', '.join(str(v) for v in enum_values or [])}"
         return text, None
 
     return None, f"unknown type '{tag_type}'"

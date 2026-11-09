@@ -198,17 +198,23 @@ def _is_true(value) -> bool:
     return str(value or "").strip().lower() == "true"
 
 
-def download_input_image(input_file: dict) -> Path:
-    """Fetch one input photo into the local input directory."""
+def download_input_image(input_file: dict, local_subdir: str = "") -> Path:
+    """Fetch one input photo into the local input directory, or into ``local_subdir`` below it. The
+    file keeps its own name either way, since the view a photo shows is read from its file name."""
     bucket = input_file.get("bucketName", "")
     object_key = input_file.get("objectKey", "")
     if not bucket or not object_key:
         raise ValueError("The pipeline definition's inputFile needs a bucketName and an objectKey")
 
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
-    local_path = INPUT_DIR / Path(object_key).name
-    logger.info(f"Downloading the input image: s3://{bucket}/{object_key} -> {local_path}")
-    if s3.download(bucket, object_key, str(local_path)) is None:
+    local_dir = INPUT_DIR / local_subdir if local_subdir else INPUT_DIR
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_path = local_dir / Path(object_key).name
+    # The version the run was launched on; no argument reads the current object.
+    version_id = input_file.get("versionId") or ""
+    version = {"version_id": version_id} if version_id else {}
+    logger.info(f"Downloading the input image: s3://{bucket}/{object_key} "
+                f"(version {version_id or 'current'}) -> {local_path}")
+    if s3.download(bucket, object_key, str(local_path), **version) is None:
         raise RuntimeError(f"Failed to download s3://{bucket}/{object_key}")
     return local_path
 
@@ -239,8 +245,11 @@ def download_input_images(definition: dict) -> list:
     additive, so a definition written before it existed -- or a direct container invocation -- falls back
     to the single ``inputFile`` and behaves exactly as it did.
 
-    Duplicate object keys are dropped rather than downloaded twice: two manifest entries can name the same
-    file, and a view list holding the same image twice would condition the model on it twice.
+    A repeated entry (the same object key at the same version) is dropped rather than downloaded twice: two
+    manifest entries can name the same file, and a view list holding the same image twice would condition
+    the model on it twice. One file selected at two versions is two inputs, and so is downloaded twice; an
+    entry whose file name is already taken locally goes into a subdirectory named by its position, so
+    neither download overwrites the other.
     """
     entries = definition.get("inputFiles") or []
     if not entries:
@@ -255,14 +264,18 @@ def download_input_images(definition: dict) -> list:
             "The pipeline definition carried no usable input file: every entry was missing a bucketName "
             "or an objectKey.")
 
-    paths, seen = [], set()
-    for entry in usable:
+    paths, seen, local_names = [], set(), set()
+    for index, entry in enumerate(usable):
         key = entry["objectKey"]
-        if key in seen:
+        identity = (key, entry.get("versionId") or "")
+        if identity in seen:
             logger.warning(f"Skipping a repeated input file: {key}")
             continue
-        seen.add(key)
-        paths.append(download_input_image(entry))
+        seen.add(identity)
+        name = Path(key).name
+        local_subdir = str(index) if name in local_names else ""
+        local_names.add(name)
+        paths.append(download_input_image(entry, local_subdir=local_subdir))
     if len(paths) > 1:
         logger.info(f"Downloaded {len(paths)} views: "
                     f"{', '.join(Path(path).name for path in paths)}")

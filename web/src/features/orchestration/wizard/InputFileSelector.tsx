@@ -168,6 +168,16 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
         value.relativeFileKey
     );
 
+    const currentVersion = (versions || []).find((v) => v.isLatest);
+    // A row can arrive already pinned to a version that is not listed among the older ones: the file
+    // manager pins a file run from a browsed asset version even when that version is still current,
+    // and a deferred row has no list yet. It gets its own option so the selector shows what is sent.
+    const pinnedVersionId = value.versionId || "";
+    const pinnedIsUnlisted =
+        !!pinnedVersionId &&
+        !(versions || []).some((v) => !v.isLatest && v.versionId === pinnedVersionId);
+    const pinnedIsCurrent = !!currentVersion && currentVersion.versionId === pinnedVersionId;
+
     // Default file selection: whole asset when allowed, else empty (forces an explicit file pick).
     const defaultFileKey = allowWholeAsset ? "/" : "";
     // Selecting a new database resets the downstream asset/file/version selection.
@@ -286,18 +296,35 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
                         className={selectClass}
                         disabled={versionsLoading && !versions}
                     >
-                        {/* Empty is the default, so a run reads whatever is current at launch rather
-                            than a version pinned when the form was filled in. */}
+                        {/* Empty is the default and the only way to take the current version, so a
+                            run reads whatever is current at launch and a re-run takes the current
+                            version again. Only an older version chosen below, or a version the row
+                            arrived pinned to, is sent and pinned. */}
                         <option value="">
-                            {versionsLoading && !versions ? "Loading versions…" : "Latest"}
+                            {versionsLoading && !versions
+                                ? "Loading versions…"
+                                : currentVersion
+                                ? `Current${
+                                      currentVersion.lastModified
+                                          ? ` — ${currentVersion.lastModified}`
+                                          : ""
+                                  } (${currentVersion.versionId})`
+                                : "Latest"}
                         </option>
-                        {(versions || []).map((v) => (
-                            <option key={v.versionId} value={v.versionId}>
-                                {v.isLatest ? "Current" : v.versionId}
-                                {v.lastModified ? ` — ${v.lastModified}` : ""}
-                                {v.isLatest ? ` (${v.versionId})` : ""}
+                        {pinnedIsUnlisted && (
+                            <option value={pinnedVersionId}>
+                                {pinnedVersionId}
+                                {pinnedIsCurrent ? " — current version, pinned" : " — pinned"}
                             </option>
-                        ))}
+                        )}
+                        {(versions || [])
+                            .filter((v) => !v.isLatest)
+                            .map((v) => (
+                                <option key={v.versionId} value={v.versionId}>
+                                    {v.versionId}
+                                    {v.lastModified ? ` — ${v.lastModified}` : ""}
+                                </option>
+                            ))}
                     </select>
                 </label>
             )}

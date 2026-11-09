@@ -513,11 +513,34 @@ Restores a previously archived asset record, making it active again. The asset's
 
 ---
 
+### Reading an archived asset
+
+An archived asset stays readable until it is unarchived or permanently deleted. Its versions, file versions, metadata, relationships, and comments are kept under the asset's original database ID, and each read route below finds the archived asset when the request carries `showArchived=true`:
+
+| Route                                                                                           | Reads                                                                                                                             |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /database/{databaseId}/assets/{assetId}`                                                   | The asset record, with `status: archived`, `archivedAt`, `archivedBy`, and `archivedReason`.                                      |
+| `GET /database/{databaseId}/assets/{assetId}/listFiles`                                         | The file list. Archiving the asset archives every file, so the list always includes archived files, each with `isArchived: true`. |
+| `GET /database/{databaseId}/assets/{assetId}/fileInfo`                                          | One file's details.                                                                                                               |
+| `GET /database/{databaseId}/assets/{assetId}/getVersions` and `.../getVersion/{assetVersionId}` | The asset's versions.                                                                                                             |
+| `GET /database/{databaseId}/assets/{assetId}/metadata` and `.../metadata/file`                  | Asset and file metadata.                                                                                                          |
+| `GET /database/{databaseId}/assets/{assetId}/asset-links`                                       | The asset's relationships.                                                                                                        |
+| `GET /asset-links/{assetLinkId}/metadata`                                                       | The metadata of a link whose linked asset is archived.                                                                            |
+| `GET /comments/assets/{assetId}` and `.../assetVersionId/{assetVersionId}`                      | The asset's comments.                                                                                                             |
+
+`showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
+
+An archived asset is read-only. Write routes ignore `showArchived` and refuse every change to an archived asset, its files, versions, metadata, relationships, and comments, until it is restored with [Unarchive Asset](#unarchive-asset). Authorization evaluates the stored archived record, whose `databaseId` reads `{databaseId}#deleted`. A permission constraint on `databaseId` with the `equals` operator therefore does not match an archived asset, while a wildcard, `starts_with`, or `contains` constraint can. With `showArchived=true`, authorization is decided before the asset's existence, so a caller who may not read the database's archived assets is refused for an id that does not exist exactly as for an archived one.
+
+---
+
 ### Delete Asset
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAsset`
 
 Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
+
+Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.

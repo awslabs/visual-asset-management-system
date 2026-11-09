@@ -463,9 +463,20 @@ resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
 resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
+resolved["inputVersionId"]                          # S3 version of the first input file ("" for none)
 ```
 
-Two behaviors are worth knowing:
+Three behaviors are worth knowing:
+
+-   **Read the input at its recorded version.** Each manifest input file carries the S3 `versionId` the
+    run reads it at: the version selected at launch, or the one current when the run started.
+    `inputVersionId` is the first file's, and `manifestHelper.input_version_id(entry)` returns any
+    entry's; both are `""` when there is no version to send (a folder selection or an unversioned
+    bucket). An object written while the bucket's versioning was off has the version id `"null"`, which
+    Amazon S3 accepts on a read like any other. Pass a non-empty value as `VersionId` on every
+    read of the input file. A read without it returns whatever is current when your compute starts,
+    which is a different file whenever a newer version was uploaded in between. Your role needs
+    `s3:GetObjectVersion` on the asset bucket for such a read.
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
@@ -516,6 +527,113 @@ Read the envelope through the accessors rather than by indexing it:
 -   Database metadata is input only. A pipeline writes metadata back to assets and files; there is no
     database metadata output.
 
+#### Opt-in sections: per-file records for whole-asset runs, and the metadata schema
+
+Two `metadataInputs` keys add content the envelope does not otherwise carry. Both default to
+`false`; a step receives a section only when the workflow and that step's own pipeline (or chosen
+template's `overrides`) both turn it on, and with both keys off the envelope is exactly the shape
+shown above.
+
+A chosen template's `overrides.metadataInputs` replaces the pipeline's whole map, and a key the
+template's map leaves out reads at its default, not at the pipeline's value. A template whose map
+does not name `assetFileMetadata` and `metadataSchema` therefore turns both off for a step that uses
+it. A workflow response's `aggregateWorkflowPipelineMetadataInputs` is computed from the pipelines' own
+maps without template overrides (`includesTemplateOverrides: false`), so it does not show a section a
+template turns on or off.
+
+-   **`assetFileMetadata`** — for a whole-asset (`/`) or folder (`/folder/`) selection, the asset
+    group's `files` also lists one record for each current file under the selection, marked
+    `"expanded": true`, with the file's `metadata` and/or `attributes` as `fileMetadata` and
+    `fileAttributes` allow. The group gains a `fileExpansion` block that says whether the list is
+    complete:
+
+    ```json
+    "fileExpansion": {
+        "selections": ["/"],
+        "expandedFileCount": 500,
+        "omittedFileCount": 1240,
+        "omittedFileCountExact": true
+    }
+    ```
+
+    Archived files, folder markers, and generated preview files (`*.previewFile.*`) are not listed.
+    At most 500 files are expanded per selection, the first ones in key order, and the selected and
+    expanded file records of one execution together stay within its 1,000-file input limit. A cut is
+    also returned to the caller as an execute warning. `file_metadata_for` and `file_attributes_for`
+    read an expanded record like any other file record.
+
+-   **`metadataSchema`** — a top-level `metadataSchemas` list carries, per involved database, the
+    aggregated schema fields that apply there (the database's own schemas and the `GLOBAL` ones) and
+    the database's `restrictMetadataOutsideSchemas` flag:
+
+    ```json
+    "metadataSchemas": [
+        {
+            "databaseId": "engineering",
+            "restrictMetadataOutsideSchemas": true,
+            "assetMetadata": [
+                {
+                    "metadataFieldKeyName": "category",
+                    "metadataFieldValueType": "inline_controlled_list",
+                    "required": true,
+                    "controlledListKeys": ["part", "scene"],
+                    "defaultMetadataFieldValue": "part",
+                    "metadataSchemaMultiFieldConflict": false
+                }
+            ],
+            "fileMetadata": [
+                {
+                    "metadataFieldKeyName": "material",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": [".glb", ".usd"]
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "number",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": []
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": true,
+                    "fileKeyTypeRestriction": [".obj"]
+                }
+            ],
+            "fileAttributes": []
+        }
+    ]
+    ```
+
+    A file field is listed once per file-extension reach, because VAMS validates a file only against
+    the schemas whose file type restriction admits it: an entry with an empty
+    `fileKeyTypeRestriction` covers every file that no other entry of the same field lists, and an
+    entry listing extensions covers files with those extensions. To find a field's definition for a
+    file, take the entry of that field whose `fileKeyTypeRestriction` lists the file's extension, or
+    else the entry with an empty list; if neither exists, the field does not apply to that file. A
+    file with no extension, such as `README` or `rev.2/LICENSE`, takes the entry with an empty list,
+    or none, because VAMS validates it only against schemas with no file type restriction (see
+    [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching)).
+    In the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file.
+    With `restrictMetadataOutsideSchemas` on, VAMS limits a file's metadata, or its attributes, to the
+    fields this rule gives that file, and only when it gives at least one; a file that no field reaches
+    accepts any key. A field that two schemas reaching the same files define differently is reported for those
+    files with `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`,
+    optional).
+    The list carries at most 20 databases. A database whose schema the user running the workflow may
+    not read is left out, and the launch carries a warning, so treat a missing entry as "no schema
+    available" rather than "no schema defined".
+
 The entities a run captures follow from its own selection: every input file's asset, every asset the
 execution named purely as a metadata source, and every distinct database of those assets. A run with
 no input files captures the single database the execution named. Naming metadata sources is optional
@@ -553,6 +671,24 @@ or `replace_all`. Only keys ending in `.metadata.json` or `.attribute.json` are 
 differently-named file is ignored silently, which looks like a pipeline that simply produced no
 metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
 read as file-level, with its target path taken from the file name.
+
+:::note[Write-back and schema restrictions]
+A database's `restrictMetadataOutsideSchemas` setting applies to user and API metadata writes, not to
+pipeline write-back. A pipeline can write keys that no metadata schema declares. Once stored, those
+keys pass the restriction on later user and API edits of the same record, including value changes, so
+a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
+the schema does not declare.
+
+Write-back is not checked against schema value types or controlled lists either. A stored value the
+schema would refuse does not block later user edits of other fields, but a user who changes that value
+must give one the schema accepts.
+
+Write-back is also exempt from the limit of 500 metadata records per entity, so a pipeline can store
+more than 500 records on an asset or file. While a record holds more than 500, user and API creates and
+`update` requests on it are refused, even ones that change only existing keys. Keep the number of keys
+a pipeline writes within the limit, or have users trim the record with a `replace_all` of 500 items or
+fewer or with deletes.
+:::
 
 :::tip[A pipeline can annotate a file it produces in the same run]
 Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
@@ -1190,14 +1326,14 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
+| Field                         | Purpose                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                                                                                                                                                                                                                 |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                                                                                                                                                                                                                       |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata), each defaulting to `true`, plus the opt-in `assetFileMetadata` and `metadataSchema` sections, defaulting to `false` (see [Opt-in sections](#opt-in-sections-per-file-records-for-whole-asset-runs-and-the-metadata-schema)). |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                                                                                                                                                                                                                         |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                                                                                                                                                                                                                   |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                                                                                                                                                                                                                 |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and

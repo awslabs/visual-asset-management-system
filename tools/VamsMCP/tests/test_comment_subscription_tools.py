@@ -94,7 +94,7 @@ def test_list_asset_comments_forwards_both_bound_parameters(mock_client):
     server.list_asset_comments("a1", max_items=5, page_size=2)
     call = mock_client.api.list_asset_comments.call_args
     assert call.args == ("a1",)
-    assert call.kwargs == {"max_items": 5, "page_size": 2}
+    assert call.kwargs == {"max_items": 5, "page_size": 2, "show_archived": False}
 
 
 def test_list_asset_comments_flags_a_result_that_reached_max_items(mock_client):
@@ -147,7 +147,7 @@ def test_list_asset_version_comments_scopes_to_one_version(mock_client):
     result = server.list_asset_version_comments("a1", "v1", max_items=10)
     call = mock_client.api.list_asset_version_comments.call_args
     assert call.args == ("a1", "v1")
-    assert call.kwargs == {"max_items": 10, "page_size": None}
+    assert call.kwargs == {"max_items": 10, "page_size": None, "show_archived": False}
     assert result["count"] == 2
     # Not the asset-wide route, which would also return the other versions' comments.
     assert not mock_client.api.list_asset_comments.called

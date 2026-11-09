@@ -19,32 +19,35 @@ import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { appLayoutLabels } from "./common/helpers/labels";
 import { addonRouteTable } from "./addons/addonRoutes";
 import { customRouteTable } from "./custom/customRoutes";
+import { isChunkLoadError, lazyWithRetry, reloadPage } from "./utils/chunkLoadRecovery";
 
-const Databases = React.lazy(() => import("./pages/Databases"));
-const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
-const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
-const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
-const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
-const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
-const WorkflowBuilderPage = React.lazy(() => import("./pages/WorkflowBuilderPage"));
-const PipelineBuilderPage = React.lazy(() => import("./pages/PipelineBuilderPage"));
-const TemplateListPage = React.lazy(() => import("./pages/TemplateListPage"));
-const TemplateBuilderPage = React.lazy(() => import("./pages/TemplateBuilderPage"));
-const WorkflowTriggersPage = React.lazy(() => import("./pages/WorkflowTriggersPage"));
-const ExecutionsPage = React.lazy(() => import("./pages/ExecutionsPage"));
-const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
-const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
-const Tags = React.lazy(() => import("./pages/Tag/Tags"));
-const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
-const Roles = React.lazy(() => import("./pages/auth/Roles"));
-const UserRoles = React.lazy(() => import("./pages/auth/UserRoles"));
-const CognitoUsers = React.lazy(() => import("./pages/auth/CognitoUsers"));
-const ApiKeys = React.lazy(() => import("./pages/auth/ApiKeys"));
-const ModifyAssetsUploadsPage = React.lazy(() => import("./pages/AssetUpload/ModifyAssetsUploads"));
-const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
-const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
-const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
-const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
+const Databases = lazyWithRetry(() => import("./pages/Databases"));
+const SearchPage = lazyWithRetry(() => import("./pages/search/SearchPage"));
+const AssetUploadPage = lazyWithRetry(() => import("./pages/AssetUpload/AssetUpload"));
+const ViewAsset = lazyWithRetry(() => import("./components/asset/ViewAsset"));
+const PipelinesPage2 = lazyWithRetry(() => import("./pages/PipelinesPage2"));
+const WorkflowsPage2 = lazyWithRetry(() => import("./pages/WorkflowsPage2"));
+const WorkflowBuilderPage = lazyWithRetry(() => import("./pages/WorkflowBuilderPage"));
+const PipelineBuilderPage = lazyWithRetry(() => import("./pages/PipelineBuilderPage"));
+const TemplateListPage = lazyWithRetry(() => import("./pages/TemplateListPage"));
+const TemplateBuilderPage = lazyWithRetry(() => import("./pages/TemplateBuilderPage"));
+const WorkflowTriggersPage = lazyWithRetry(() => import("./pages/WorkflowTriggersPage"));
+const ExecutionsPage = lazyWithRetry(() => import("./pages/ExecutionsPage"));
+const ExecutionDetail = lazyWithRetry(() => import("./pages/ExecutionDetail"));
+const Constraints = lazyWithRetry(() => import("./pages/auth/Constraints"));
+const Tags = lazyWithRetry(() => import("./pages/Tag/Tags"));
+const Subscriptions = lazyWithRetry(() => import("./pages/Subscription/Subscriptions"));
+const Roles = lazyWithRetry(() => import("./pages/auth/Roles"));
+const UserRoles = lazyWithRetry(() => import("./pages/auth/UserRoles"));
+const CognitoUsers = lazyWithRetry(() => import("./pages/auth/CognitoUsers"));
+const ApiKeys = lazyWithRetry(() => import("./pages/auth/ApiKeys"));
+const ModifyAssetsUploadsPage = lazyWithRetry(
+    () => import("./pages/AssetUpload/ModifyAssetsUploads")
+);
+const MetadataSchema = lazyWithRetry(() => import("./pages/MetadataSchema"));
+const ViewFile = lazyWithRetry(() => import("./components/single/ViewFile"));
+const AssetIngestion = lazyWithRetry(() => import("./components/single/AssetIngestion"));
+const AssetDownloadsPage = lazyWithRetry(() => import("./pages/AssetDownload"));
 
 export interface RouteOption {
     path: string;
@@ -253,8 +256,37 @@ function CenterSpinner() {
 /**
  * Rendered in place of a page whose render threw. Sits inside AppLayout's content slot so
  * the header, side navigation and footer stay on screen and the user keeps a way out.
+ * A page whose code chunk could not be downloaded gets its own message; its Reload clears the
+ * automatic-reload guard so the reload can recover it again later.
  */
-export function PageErrorPanel({ onHome }: { onHome: () => void }) {
+export function PageErrorPanel({
+    onHome,
+    error = null,
+}: {
+    onHome: () => void;
+    error?: Error | null;
+}) {
+    if (isChunkLoadError(error)) {
+        return (
+            <Box padding="l">
+                <Alert
+                    type="error"
+                    statusIconAriaLabel="Error"
+                    header="This page could not be downloaded"
+                    action={
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Button onClick={onHome}>Go to Home</Button>
+                            <Button onClick={() => reloadPage()}>Reload</Button>
+                        </SpaceBetween>
+                    }
+                >
+                    Part of the application could not be downloaded, usually because the network
+                    connection was interrupted or the application was updated. Reload the page to
+                    try again.
+                </Alert>
+            </Box>
+        );
+    }
     return (
         <Box padding="l">
             <Alert
@@ -445,7 +477,12 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                                 // Without a boundary here an uncaught error in any page
                                 // unmounts the whole root and leaves a blank screen.
                                 <ErrorBoundary
-                                    fallback={<PageErrorPanel onHome={() => navigate("/")} />}
+                                    fallback={(error) => (
+                                        <PageErrorPanel
+                                            onHome={() => navigate("/")}
+                                            error={error}
+                                        />
+                                    )}
                                 >
                                     <Suspense fallback={<CenterSpinner />}>
                                         <Page />

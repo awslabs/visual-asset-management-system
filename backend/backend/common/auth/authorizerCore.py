@@ -21,7 +21,6 @@ import requests
 import urllib.request
 from collections import OrderedDict
 from typing import Dict, Any, Optional, List
-from aws_lambda_powertools import Logger
 import boto3
 from boto3.dynamodb.conditions import Key as DDBKey
 from botocore.config import Config as BotoConfig
@@ -40,9 +39,43 @@ from common.auth.apiEvent import strip_custom_domain_base_path
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import normalize_userid
+from customLogging.logger import safeLogger
 
-# Configure AWS Lambda Powertools logger
-logger = Logger()
+logger = safeLogger()
+
+# Failure kinds an unauthorized authenticate_request result carries in "failure" (issue #1212).
+# UNAUTHENTICATED means the credential itself did not authenticate (missing, malformed,
+# expired, badly signed, unknown, disabled): signing in again or presenting a new credential
+# can fix it, so the REST authorizer answers it with API Gateway's 401. Every other denial is
+# FORBIDDEN and stays a 403 Deny: a blocked IP, a credential that authenticated but carries
+# no roles, a configuration fault, a key-set outage, an unexpected error. An outage or a
+# configuration fault must not tell clients to re-authenticate, and a result without a
+# failure kind is read as FORBIDDEN, so the default stays a Deny.
+FAILURE_UNAUTHENTICATED = "unauthenticated"
+FAILURE_FORBIDDEN = "forbidden"
+
+
+class TokenVerificationUnavailableError(Exception):
+    """The authorizer could not evaluate a token, as opposed to rejecting it.
+
+    Raised by the JWT verifiers when the signing key set cannot be fetched (JWKS or
+    discovery failure) or when the verifier is missing its configuration. Neither says
+    anything about the caller's token, so authenticate_request maps it to FAILURE_FORBIDDEN
+    instead of the 401 a rejected token gets.
+    """
+
+
+class ApiKeyLookupUnavailableError(Exception):
+    """The API key table could not be read and no cached record exists for the key.
+
+    Kept distinct from a "not found" result (None) so a DynamoDB outage is answered with a
+    403 Deny rather than the 401 an unknown key gets (issue #1212).
+    """
+
+
+def _denied(reason: str, failure: str) -> dict:
+    return {"authorized": False, "context": None, "reason": reason, "failure": failure}
+
 
 # Environment Variables - Retrieved at module load time
 AWS_REGION = os.environ.get('AWS_REGION')
@@ -96,6 +129,12 @@ USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
 # leaving a floor of about 30 seconds rather than 5. A value below the authorizer cache
 # shortens nothing an operator can observe; a value above it puts the role cache back in
 # charge of the window.
+#
+# A roleless API key is still a Deny (403), so the window above applies to it. A credential
+# that does not authenticate at all is not answered with a policy: the REST authorizer
+# raises "Unauthorized" (401, issue #1212). Either way the cache key is the Authorization
+# header, so a new or refreshed credential is a new key and is never answered from an
+# earlier result for a different credential.
 USER_ROLES_EMPTY_CACHE_TTL = 5  # seconds before a cached EMPTY role list expires
 
 # Upper bound on entries held in each of the two per-request caches below.
@@ -145,6 +184,7 @@ def _cache_store(cache: OrderedDict, key: str, value: dict, max_entries: int) ->
         cache.popitem(last=False)
     cache[key] = value
 
+
 def _get_api_key_table():
     global _dynamodb_resource, _api_key_table
     if _api_key_table is None:
@@ -189,7 +229,9 @@ def _lookup_api_key_by_hash(key_hash: str):
     # Cache miss or expired — query DynamoDB GSI
     api_key_table = _get_api_key_table()
     if not api_key_table:
-        return None
+        # Not a "no such key" answer: the lookup could not run, so the caller must not read
+        # it as an unknown key (a 401) -- see ApiKeyLookupUnavailableError.
+        raise ApiKeyLookupUnavailableError("API key table not available")
 
     try:
         response = api_key_table.query(
@@ -209,8 +251,11 @@ def _lookup_api_key_by_hash(key_hash: str):
         return record
     except Exception as e:
         logger.error(f"Failed to query API key by hash: {str(e)}")
-        # On error, return cached record if available (even if expired), else None
-        return cached['record'] if cached else None
+        # On error, return the cached record if available (even if expired). With nothing
+        # cached the key's status is unknown, which is not the same as "not found".
+        if cached:
+            return cached['record']
+        raise ApiKeyLookupUnavailableError("API key lookup failed") from e
 
 def _lookup_user_roles(user_id: str) -> List[str]:
     """
@@ -487,39 +532,56 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
     Verify an API key by hashing it and looking up the hash via per-key cache.
     Each key is cached individually for API_KEY_CACHE_TTL seconds after first lookup.
     Invalid keys are cached as None to prevent DynamoDB DDOS.
-    Returns a synthetic claims dict if valid, None otherwise.
+    Returns a synthetic claims dict if valid, a denial dict ({'denied': True, 'reason',
+    'failure'}) if the key matched but may not be used or could not be checked, and None
+    when no key matches (the caller then falls through to the JWT path, which rejects it).
+
+    Failure kinds (issue #1212): a disabled key, an expired key, an unreadable expiry and a
+    key with no userId are FAILURE_UNAUTHENTICATED, the same 401 an unknown key gets, so the
+    status code does not reveal which keys exist. A key that authenticates but whose user
+    has no roles, and every case where the lookup itself could not run, are
+    FAILURE_FORBIDDEN.
     """
     try:
         user_roles_table = _get_user_roles_table()
         if not user_roles_table:
-            logger.warning("API key user roles table not available, skipping API key auth")
-            return None
+            logger.warning("API key user roles table not available, denying API key auth")
+            return {'denied': True, 'reason': 'API key verification unavailable',
+                    'failure': FAILURE_FORBIDDEN}
 
         # Hash the incoming key
         key_hash = hashlib.sha256(raw_key.encode('utf-8')).hexdigest()
 
         # Look up from cache (cache misses do NOT trigger refresh)
-        api_key_record = _lookup_api_key_by_hash(key_hash)
+        try:
+            api_key_record = _lookup_api_key_by_hash(key_hash)
+        except ApiKeyLookupUnavailableError as e:
+            logger.error(f"API key lookup unavailable: {str(e)}")
+            return {'denied': True, 'reason': 'API key verification unavailable',
+                    'failure': FAILURE_FORBIDDEN}
         if not api_key_record:
             return None  # No match — fall through to JWT
 
         # Check isActive
         if api_key_record.get('isActive') != 'true':
             logger.info(f"API key is disabled: {api_key_record.get('apiKeyId')}")
-            return {'denied': True, 'reason': 'API key is disabled'}
+            return {'denied': True, 'reason': 'API key is disabled',
+                    'failure': FAILURE_UNAUTHENTICATED}
 
         # Check expiration
         expires_at = api_key_record.get('expiresAt', '')
         if expires_at:
             expiry_denial = _api_key_expiry_denial(expires_at, api_key_record.get('apiKeyId'))
             if expiry_denial:
-                return {'denied': True, 'reason': expiry_denial}
+                return {'denied': True, 'reason': expiry_denial,
+                        'failure': FAILURE_UNAUTHENTICATED}
 
         # Look up userId roles
         user_id = api_key_record.get('userId', '')
         if not user_id:
             logger.error(f"API key has no userId: {api_key_record.get('apiKeyId')}")
-            return {'denied': True, 'reason': 'API key has no userId configured'}
+            return {'denied': True, 'reason': 'API key has no userId configured',
+                    'failure': FAILURE_UNAUTHENTICATED}
 
         # Roles come from the same per-user helper the JWT path uses, so the two cannot
         # drift. It pages the query to exhaustion -- one query returns at most 1 MB, and a
@@ -528,7 +590,8 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
         role_names = _lookup_user_roles(user_id)
         if not role_names:
             logger.info(f"No roles found for API key userId: {user_id}")
-            return {'denied': True, 'reason': f'No roles for API key user {user_id}'}
+            return {'denied': True, 'reason': f'No roles for API key user {user_id}',
+                    'failure': FAILURE_FORBIDDEN}
 
         # Build synthetic claims context
         claims = {
@@ -544,18 +607,27 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
 
     except Exception as e:
         logger.error(f"API key verification error: {str(e)}")
-        return None  # Fall through to JWT on error
+        # An unexpected error says nothing about the key, so it denies as FORBIDDEN rather
+        # than falling through to the JWT path, where a vams_ value is always rejected and
+        # would read as an unauthenticated (401) credential.
+        return {'denied': True, 'reason': 'API key verification error',
+                'failure': FAILURE_FORBIDDEN}
 
 
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify Cognito JWT token using joserfc library
-    """
-    try:
-        if not USER_POOL_ID or not APP_CLIENT_ID:
-            logger.error("Missing Cognito configuration")
-            return None
 
+    Returns the claims of a token that verifies and None for a token that is rejected
+    (malformed, unknown kid after a refetch, bad signature, expired, wrong aud, iss or
+    token_use). Raises TokenVerificationUnavailableError when the token could not be
+    evaluated at all: missing Cognito configuration or a JWKS fetch failure (issue #1212).
+    """
+    if not USER_POOL_ID or not APP_CLIENT_ID or not COGNITO_BASE_URL:
+        logger.error("Missing Cognito configuration")
+        raise TokenVerificationUnavailableError("Missing Cognito configuration")
+
+    try:
         # Get the kid from the headers prior to verification
         token_obj = joserfc_jws.extract_compact(token.encode())
         headers = token_obj.protected
@@ -566,7 +638,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             return None
 
         # Get the public keys
-        keys = get_cognito_keys(AWS_REGION, USER_POOL_ID)
+        keys = _fetch_key_set(get_cognito_keys, AWS_REGION, USER_POOL_ID)
 
         # Search for the kid in the downloaded public keys. A kid the cached set does not
         # contain is what an issuer signing-key rotation looks like, so refetch once
@@ -574,7 +646,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         key_record = _key_for_kid(keys, kid)
         if key_record is None:
             logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
-            keys = get_cognito_keys(AWS_REGION, USER_POOL_ID, force_refresh=True)
+            keys = _fetch_key_set(get_cognito_keys, AWS_REGION, USER_POOL_ID, force_refresh=True)
             key_record = _key_for_kid(keys, kid)
 
         if key_record is None:
@@ -608,11 +680,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             return None
 
         # Additional validations
-        # Verify issuer using configurable base URL
-        if not COGNITO_BASE_URL:
-            logger.error("Missing COGNITO_BASE_URL environment variable")
-            return None
-
+        # Verify issuer using the configurable base URL (presence checked on entry)
         expected_issuer = f"{COGNITO_BASE_URL}/{USER_POOL_ID}"
         if claims.get('iss') != expected_issuer:
             logger.error(f'Invalid token issuer. Expected: {expected_issuer}, Got: {claims.get("iss")}')
@@ -627,20 +695,40 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         logger.info(f'Cognito token successfully verified for user: {claims.get("sub", "unknown")}')
         return claims
 
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Cognito JWT verification error: {str(e)}")
         return None
 
 
+def _fetch_key_set(fetch, *args, **kwargs) -> List[Dict[str, Any]]:
+    """Call a key-set fetcher, turning any failure into TokenVerificationUnavailableError.
+
+    A JWKS or discovery failure is an outage, not a verdict on the caller's token, so it
+    must not reach the verifiers' catch-all and be reported as a rejected token. The fetcher
+    is passed in (rather than called by name here) so it is resolved from the module at call
+    time.
+    """
+    try:
+        return fetch(*args, **kwargs)
+    except Exception as e:
+        raise TokenVerificationUnavailableError(f"Signing key set unavailable: {str(e)}") from e
+
+
 def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify External IDP JWT token using PyJWT library
-    """
-    try:
-        if not JWT_ISSUER_URL or not JWT_AUDIENCE:
-            logger.error("Missing External IDP configuration")
-            return None
 
+    Same contract as verify_cognito_jwt: claims for a verified token, None for a rejected
+    one, TokenVerificationUnavailableError when the token could not be evaluated (missing
+    configuration, or a discovery/JWKS failure).
+    """
+    if not JWT_ISSUER_URL or not JWT_AUDIENCE:
+        logger.error("Missing External IDP configuration")
+        raise TokenVerificationUnavailableError("Missing External IDP configuration")
+
+    try:
         # Get the signing key for token verification
         signing_key = get_signing_key_for_external_token(token, JWT_ISSUER_URL)
         if not signing_key:
@@ -679,6 +767,8 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     except pyjwt.InvalidTokenError as e:
         logger.error(f"Invalid token: {str(e)}")
         return None
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"External JWT verification error: {str(e)}")
         return None
@@ -753,15 +843,16 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
             logger.error("Token header missing 'kid' field")
             return None
 
-        # Get the public keys
-        keys = get_external_keys(jwt_issuer_url)
+        # Get the public keys. A fetch failure raises TokenVerificationUnavailableError,
+        # which passes through to the caller: it is an outage, not a rejected token.
+        keys = _fetch_key_set(get_external_keys, jwt_issuer_url)
 
         # Find the key with matching kid, refetching once (rate-limited) when the cached set
         # does not carry it — the shape an issuer signing-key rotation takes.
         key = _key_for_kid(keys, kid)
         if key is None:
             logger.info(f"Public key for kid {kid} not in the cached key set; refetching JWKS")
-            keys = get_external_keys(jwt_issuer_url, force_refresh=True)
+            keys = _fetch_key_set(get_external_keys, jwt_issuer_url, force_refresh=True)
             key = _key_for_kid(keys, kid)
 
         if key is None:
@@ -770,6 +861,8 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
 
         return construct_public_key_from_jwk(key)
 
+    except TokenVerificationUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Error getting signing key: {str(e)}")
         return None
@@ -955,6 +1048,13 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     Returns a provider-neutral result dict:
         {"authorized": bool, "context": dict|None, "reason": str|None}
 
+    An unauthorized result also carries "failure": FAILURE_UNAUTHENTICATED when the
+    credential did not authenticate (missing or malformed header, rejected JWT, an unknown,
+    disabled or expired API key), or FAILURE_FORBIDDEN for every other denial (IP not
+    allowed, an API key whose user has no roles, a misconfigured AUTH_MODE, a key-set or
+    lookup outage). A caller must treat a missing failure kind as FAILURE_FORBIDDEN. The
+    "reason" is internal (audit and logs only) and is never sent to the client.
+
     An ignored-path bypass additionally carries "ignoredPath": True. It is the one
     authorized result that establishes no identity, so a caller building an IAM policy
     can scope it to the ignored paths rather than to the whole API.
@@ -968,7 +1068,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     client_ip = resolve_client_ip(event, fronted=fronted)
     if not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
         logger.info(f"IP {client_ip} not in allowed ranges")
-        return {"authorized": False, "context": None, "reason": "IP address not authorized"}
+        return _denied("IP address not authorized", FAILURE_FORBIDDEN)
 
     # Step 2: Check for ignored paths, on the stage-relative path (_resolve_request_path:
     # methodArn first, then requestContext.http.path, then the top-level "path").
@@ -983,7 +1083,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     if not authorization_header:
         logger.info("Authorization header not found")
-        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+        return _denied("Token missing or invalid format", FAILURE_UNAUTHENTICATED)
 
     # Step 4: API key path
     api_key_value = None
@@ -997,7 +1097,8 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         if api_key_result is not None:
             if api_key_result.get('denied'):
                 logger.info(f"API key denied: {api_key_result.get('reason')}")
-                return {"authorized": False, "context": None, "reason": api_key_result.get('reason', 'API key denied')}
+                return _denied(api_key_result.get('reason', 'API key denied'),
+                               api_key_result.get('failure') or FAILURE_FORBIDDEN)
             # Valid API key — build context
             context = {}
             for key, value in api_key_result.items():
@@ -1011,19 +1112,25 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     token = extract_token_from_header(event)
     if not token:
         logger.info("Token not found in Authorization header")
-        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+        return _denied("Token missing or invalid format", FAILURE_UNAUTHENTICATED)
 
-    if AUTH_MODE == 'cognito':
-        claims = verify_cognito_jwt(token)
-    elif AUTH_MODE == 'external':
-        claims = verify_external_jwt(token)
-    else:
-        logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
-        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+    try:
+        if AUTH_MODE == 'cognito':
+            claims = verify_cognito_jwt(token)
+        elif AUTH_MODE == 'external':
+            claims = verify_external_jwt(token)
+        else:
+            logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
+            return _denied("Invalid authorizer configuration", FAILURE_FORBIDDEN)
+    except TokenVerificationUnavailableError as e:
+        # The token was not evaluated, so this is not a verdict on it: deny as FORBIDDEN so
+        # an outage or a configuration fault does not tell clients to sign in again.
+        logger.error(f"Token verification unavailable: {str(e)}")
+        return _denied("Token verification unavailable", FAILURE_FORBIDDEN)
 
     if not claims:
         logger.error("Token verification failed")
-        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+        return _denied("Token verification failed", FAILURE_UNAUTHENTICATED)
 
     logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
 

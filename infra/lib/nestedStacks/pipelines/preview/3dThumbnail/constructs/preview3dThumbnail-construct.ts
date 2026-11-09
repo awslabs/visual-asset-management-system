@@ -348,6 +348,8 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                         TASK_TOKEN: sfn.JsonPath.taskToken,
                         AWS_REGION: region,
                         VAMS_COMPUTE_TIER: tier,
+                        // the task's memory, which a Fargate container cannot read from its cgroup
+                        VAMS_TASK_MEMORY_MIB: String(Config.fargateMemoryMiB(sizing.memoryGiB)),
                     },
                 },
             })

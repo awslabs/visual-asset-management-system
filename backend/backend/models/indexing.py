@@ -9,7 +9,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DualIndexingModels")
+logger = safeLogger()
 
 # Index request limits. These records are built from S3/DynamoDB values by the
 # indexer Lambdas rather than from an API caller, so the bounds are generous and

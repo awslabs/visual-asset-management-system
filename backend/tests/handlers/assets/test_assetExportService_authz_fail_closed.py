@@ -27,6 +27,7 @@ into the unauthorized bucket. The tests below pin that behaviour so a later clea
 that drops the ``and casbin_enforcer`` guard, or the ``else None`` ternary, is caught.
 """
 
+import json
 import importlib.util
 import os
 import sys
@@ -220,12 +221,13 @@ class TestTier2GetAssetWithPermissions:
 
         denying.return_value.enforce.assert_called_once()
 
-    def test_missing_asset_raises_before_any_enforcement(self):
-        """Control: a missing asset raises without consulting an enforcer.
+    def test_missing_asset_is_authorized_before_it_is_reported_missing(self):
+        """Control: a missing asset is decided by the enforcer first, then reported missing.
 
-        All three denial paths in this helper raise the same exception type, so
-        without this the not-found case is indistinguishable from a denial and a
-        regression that answered "unauthorized" for every missing asset would pass.
+        The refusal is decided before existence (the request's identifiers stand in for the
+        missing record), so a refused caller cannot tell a missing asset from an existing one.
+        An authorized caller then gets the not-found error, which is not the denial type, so a
+        regression that answered "unauthorized" for every missing asset would fail here.
         """
         m = _load_asset_export_service()
         table = MagicMock()
@@ -234,11 +236,13 @@ class TestTier2GetAssetWithPermissions:
 
         with patch.object(m, "asset_table", table), \
                 patch.object(m, "CasbinEnforcer", allowing):
-            with pytest.raises(m.VAMSGeneralErrorResponse):
+            with pytest.raises(m.VAMSGeneralErrorResponse) as raised:
                 m.get_asset_with_permissions(_DB, _ASSET, "GET", {"tokens": ["alice"]})
 
-        allowing.assert_not_called()
-
+        assert not isinstance(raised.value, m.VAMSAuthorizationDeniedResponse)
+        evaluated = allowing.return_value.enforce.call_args.args[0]
+        assert (evaluated["databaseId"], evaluated["assetId"], evaluated["object__type"]) == (
+            _DB, _ASSET, "asset")
 
 def _run_process_asset_batch(identifiers, claims_and_roles, enforcer):
     """Run process_asset_batch offline. Returns (result, spies).
@@ -432,21 +436,17 @@ class TestExportRouteAuthorization:
         assert response["statusCode"] == 403
         export_spy.assert_not_called()
 
-    def test_tier2_denial_is_400_and_does_not_export(self):
-        """A Tier-2 denial through the real helper surfaces as 400, with no export.
-
-        The empty-token guard raises the same VAMSGeneralErrorResponse the Casbin
-        denial raises, so a Tier-2 denial stays a 400 and no CLI or web consumer has
-        to change. Pinning it means a later move to 403 cannot land silently.
-        """
+    def test_tier2_denial_is_403_and_does_not_export(self):
+        """A Tier-2 denial through the real helper answers 403, as the asset GET does, with no
+        export (issue #959)."""
         response, export_spy = _invoke_export(
             authorizer={"cognito:username": "alice"},
             enforcer=_enforcer(object_allowed=False),
             stub_tier2=False)
 
-        assert response["statusCode"] == 400, (
-            f"Tier-2 export denial returned {response['statusCode']}; if this moved to "
-            f"403, update the VamsCLI asset export tests to match")
+        assert response["statusCode"] == 403, (
+            f"Tier-2 export denial returned {response['statusCode']}")
+        assert json.loads(response["body"]) == {"message": "Not Authorized"}
         export_spy.assert_not_called()
 
     def test_permitted_caller_passes_through_real_tier2(self):

@@ -7,7 +7,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="RoleModels")
+logger = safeLogger()
 
 # Bounds on constraint collections. Each criterion becomes a clause in the Casbin
 # obj_rule expression evaluated on every authorization check, and each unique
@@ -125,7 +125,7 @@ class ConstraintCriteriaModel(BaseModel, extra='ignore'):
                     "character")
         return value
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_criteria_value(cls, values):
         """Bound each criteria value and require it to be a usable regex.
 
@@ -197,6 +197,26 @@ class GetConstraintsRequestModel(BaseModel, extra='ignore'):
     startingToken: Optional[str] = Field(None, max_length=MAX_LIST_TOKEN_LENGTH)
 
 
+def _validate_constraint_criteria_value(field_name: str, value) -> None:
+    """Run REGEX validation on a constraint value.
+
+    List values must be checked element-wise: str(list) yields "['a', 'b']", which
+    fails REGEX even when every element is a valid OBJECT_NAME / ID string.
+    """
+    values = value if isinstance(value, list) else [value]
+    for item in values:
+        (valid, message) = validate({
+            field_name: {
+                'value': item if isinstance(item, str) else str(item),
+                'validator': 'REGEX',
+                'allowGlobalKeyword': True
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
+
 class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     """Request model for creating/updating a constraint"""
     identifier: str = Field(min_length=1, max_length=256, regex=object_name_pattern)
@@ -214,7 +234,7 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate constraint fields"""
         # Import here to avoid circular dependency
@@ -297,17 +317,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaAndValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaAndValue', criteria.value)
         
         # Validate criteriaOr operators and values
         for criteria in criteria_or:
@@ -316,17 +327,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
             
-            # Validate regex pattern in value
-            (valid, message) = validate({
-                'criteriaOrValue': {
-                    'value': criteria.value if isinstance(criteria.value, str) else str(criteria.value),
-                    'validator': 'REGEX',
-                    'allowGlobalKeyword': True
-                }
-            })
-            if not valid:
-                logger.error(message)
-                raise ValueError(message)
+            # Validate regex pattern in value (per list element — see #838)
+            _validate_constraint_criteria_value('criteriaOrValue', criteria.value)
         
         # Validate groupPermissions
         for group_perm in values.get('groupPermissions', []):
@@ -517,7 +519,7 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
         """The template header, from ``metadata`` or ``template``."""
         return self.metadata or self.template
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_template_import(cls, values):
         """Validate template import request"""
         from common.constants import (
@@ -659,7 +661,7 @@ class CreateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -751,7 +753,7 @@ class UpdateRoleRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate role fields"""
         # Import here to avoid circular dependency
@@ -874,7 +876,7 @@ class CreateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -920,7 +922,7 @@ class UpdateUserRolesRequestModel(BaseModel, extra='ignore'):
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
     _trim_role_names = validator('roleName', pre=True, each_item=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored
@@ -964,7 +966,7 @@ class DeleteUserRolesRequestModel(BaseModel, extra='ignore'):
 
     _trim_ids = validator('userId', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         """Validate user role fields"""
         # The user-role row keys on this id, so the normalized form is what is validated and stored

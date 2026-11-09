@@ -30,9 +30,9 @@ PipelineStatus = objects.PipelineStatus
 OUTPUT_DIR_KEY = "dbM/xidM/scan.laz/preview/PotreeViewer/"
 
 
-def fake_popen(returncode, writes=()):
-    """Stand in for a converter subprocess: write ``writes`` (absolute paths), then exit with
-    ``returncode``."""
+def fake_popen(returncode, writes=(), output="", content="point cloud bytes"):
+    """Stand in for a converter subprocess: write ``writes`` (absolute paths) with ``content``, then
+    exit with ``returncode``, printing ``output`` (what ``communicate`` returns)."""
 
     class _Popen:
         def __init__(self, cmd, *args, **kwargs):
@@ -40,10 +40,16 @@ def fake_popen(returncode, writes=()):
             for path in writes:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w", encoding="utf-8") as handle:
-                    handle.write("point cloud bytes")
+                    handle.write(content)
+            self.returncode = None
 
         def wait(self):
+            self.returncode = returncode
             return returncode
+
+        def communicate(self, *args, **kwargs):
+            self.returncode = returncode
+            return output, None
 
     return _Popen
 
@@ -183,12 +189,82 @@ class TestPdalStage:
         """PDAL exits non-zero: no delete, stage FAILED. Unfixed, the exit status is discarded and
         the hardcoded output list carries the stage past the delete."""
         harness = StageHarness(self._module(), tmp_path)
-        result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(1))
+        result = harness.run(make_stage("PDAL", "xidM/scan.ply"), fake_popen(1))
 
         assert result.status == PipelineStatus.FAILED
         assert "exited with code 1" in result.errorMessage
         harness.delete.assert_not_called()
         harness.upload.assert_not_called()
+
+    def test_unreadable_e57_names_the_cause_and_carries_pdal_text(self, tmp_path):
+        """#1203: PDAL 2.7.0 failed on a valid E57 and the run reported only an exit code; the PDAL
+        text ("PDAL: E57 exception") reached nobody but the container log. The stage now names an
+        unreadable E57 and carries PDAL's own last line. Unfixed, the message is the generic exit-code
+        text and the PDAL output is not captured at all."""
+        harness = StageHarness(self._module(), tmp_path)
+        laz = os.path.join(harness.output_dir, "scan.laz")
+        popen = fake_popen(1, writes=[laz], content="",
+                           output="Warning: something earlier\nPDAL: E57 exception\n")
+        result = harness.run(make_stage("PDAL", "xidM/scan.e57"), popen)
+
+        assert result.status == PipelineStatus.FAILED
+        assert result.errorMessage == "E57 file could not be read by the converter: PDAL: E57 exception"
+        harness.upload.assert_not_called()
+
+    def test_failed_read_leaves_no_zero_byte_output(self, tmp_path):
+        """#1203: PDAL opens the LAZ writer before reading, so a failed read leaves a 0-byte .laz. The
+        converter result must not list it, and it is removed from the output directory. Unfixed, the
+        0-byte file is reported as the stage's output file."""
+        module = self._module()
+        out_dir = str(tmp_path / "out")
+        os.makedirs(out_dir)
+        laz = os.path.join(out_dir, "scan.laz")
+        with patch.object(module.subprocess, "Popen",
+                          fake_popen(1, writes=[laz], content="", output="PDAL: E57 exception")):
+            response = module.allconvert_pdalconversion_pipeline(str(tmp_path / "scan.e57"), out_dir)
+
+        assert response["returncode"] == 1
+        assert response["output_files"] == []
+        assert not os.path.exists(laz)
+
+    def test_exit_zero_with_zero_byte_output_fails(self, tmp_path):
+        """A clean exit that wrote an empty file is not a conversion: no upload, stage FAILED."""
+        harness = StageHarness(self._module(), tmp_path)
+        laz = os.path.join(harness.output_dir, "scan.laz")
+        result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(0, writes=[laz], content=""))
+
+        assert result.status == PipelineStatus.FAILED
+        assert "Failed to convert to LAS/LAZ format" in result.errorMessage
+        harness.upload.assert_not_called()
+        assert not os.path.exists(laz)
+
+    def test_long_pdal_text_is_bounded(self, tmp_path):
+        """The message heads the Step Functions task failure `error` (256 characters, after its
+        "Pipeline Failure: " prefix), so PDAL's text is cut to fit."""
+        harness = StageHarness(self._module(), tmp_path)
+        result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(1, output="PDAL: " + "x" * 2000))
+
+        assert result.errorMessage.startswith("E57 file could not be read by the converter: PDAL: x")
+        assert len("Pipeline Failure: " + result.errorMessage) <= 256
+
+    def test_command_keeps_the_las_1_2_format_3_output_shape(self, tmp_path):
+        """PDAL 2.10 writes LAS 1.4 / point format 7 by default; the stage pins the LAS 1.2 / format 3
+        shape PDAL 2.7.0 wrote, so the PotreeConverter input does not change."""
+        module = self._module()
+        seen = {}
+        base = fake_popen(0)
+
+        class _Recording(base):
+            def __init__(self, cmd, *args, **kwargs):
+                seen["cmd"] = cmd
+                super().__init__(cmd, *args, **kwargs)
+
+        with patch.object(module.subprocess, "Popen", _Recording):
+            module.allconvert_pdalconversion_pipeline(str(tmp_path / "scan.e57"), str(tmp_path))
+
+        assert seen["cmd"][:2] == ["pdal", "translate"]
+        assert "--writers.las.minor_version=2" in seen["cmd"]
+        assert "--writers.las.dataformat_id=3" in seen["cmd"]
 
     def test_exit_zero_without_a_written_file_fails(self, tmp_path):
         """Exit 0 but no .laz on disk: the hardcoded output name must not be reported. Unfixed, the
@@ -201,17 +277,17 @@ class TestPdalStage:
         harness.delete.assert_not_called()
         harness.upload.assert_not_called()
 
-    def test_successful_conversion_uploads_then_replaces(self, tmp_path):
-        """No-regression: a real conversion still uploads the .laz, and reaches the destination through
-        a listing rather than a prefix clear. The removal ORDER is pinned separately, in
-        test_pdal_destination_replace_order.py."""
+    def test_successful_conversion_uploads_and_removes_nothing(self, tmp_path):
+        """No-regression: a real conversion still uploads the .laz. The stage removes nothing from its
+        destination (#1028); the POTREE stage alone replaces the viewer folder. Pinned in
+        test_pdal_destination_replace_order.py and test_potree_run_isolation.py."""
         harness = StageHarness(self._module(), tmp_path)
         writes = [os.path.join(harness.output_dir, "scan.laz")]
         result = harness.run(make_stage("PDAL", "xidM/scan.e57"), fake_popen(0, writes))
 
         assert result.status == PipelineStatus.COMPLETE
         harness.delete.assert_not_called()
-        harness.list_existing.assert_called_once_with("aux-bkt", OUTPUT_DIR_KEY)
+        harness.list_existing.assert_not_called()
         harness.upload.assert_called_once_with(
             "aux-bkt", os.path.join(OUTPUT_DIR_KEY, "scan.laz"),
             os.path.join(harness.output_dir, "scan.laz"))

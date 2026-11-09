@@ -26,9 +26,10 @@ export default function Databases() {
     const [showMapThumbnails, setShowMapThumbnails] = useState(false);
     // Create is disabled, and Edit and Delete Selected are hidden, for a role whose API route
     // permissions do not allow them.
-    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
     const createDisabledReason = routeDisabledReason(
         permissionsLoading,
+        permissionsFailed,
         can("POST", "/database"),
         `Your role does not allow creating ${Synonyms.databases}.`
     );

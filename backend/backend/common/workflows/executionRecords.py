@@ -84,14 +84,22 @@ def derive_output_types(has_file: bool, has_metadata: bool, has_result: bool) ->
 # Every reader resolves an omitted key through this table rather than through plain truthiness, which
 # would read a partial map as opting OUT of everything it does not mention.
 #
-# All four default ON, matching build_pipeline_system_config / build_workflow_system_config: a
-# configuration that says nothing about a metadata type gets it. Add a new key here in the same change
-# that adds it to the builders, and the readers stay correct for every record written before it.
+# The four metadata TYPES default ON, matching build_pipeline_system_config /
+# build_workflow_system_config: a configuration that says nothing about a metadata type gets it. The two
+# OPT-IN keys default OFF, because they add content the envelope never carried before they existed —
+# assetFileMetadata expands a whole-asset or folder selection into one record per file under it, and
+# metadataSchema adds the involved databases' metadata schemas. Defaulting them off is what keeps every
+# record written before they existed, and every run that does not ask, producing exactly the envelope it
+# produced before. Add a new key here in the same change that adds it to the builders, and the readers
+# stay correct for every record written before it.
+METADATA_INPUT_OPT_IN_KEYS = ("assetFileMetadata", "metadataSchema")
 METADATA_INPUT_DEFAULTS = {
     "assetMetadata": True,
     "fileMetadata": True,
     "fileAttributes": True,
     "databaseMetadata": True,
+    "assetFileMetadata": False,
+    "metadataSchema": False,
 }
 
 
@@ -145,6 +153,19 @@ def pipeline_composite_key(pipeline_database_id: str, pipeline_id: str) -> str:
 def input_file_composite_key(database_id: str, asset_id: str, file_key: str) -> str:
     """Clean 'databaseId:assetId:/normalizedFileKey'."""
     return f"{database_id}:{asset_id}:{normalize_file_key(file_key)}"
+
+
+def workflow_input_sort_key(database_id: str, asset_id: str, file_key: str, version_id: str = "") -> str:
+    """WorkflowExecutionInputs sort key: 'databaseId:assetId:/normalizedFileKey', plus '#versionId' when
+    the run resolved a version, so one launch over two versions of a file records two rows.
+
+    A versionless input (folder, whole asset, unversioned bucket) keeps the bare composite, which is also
+    the shape rows written before the version was part of the key carry; readers use the row's
+    inputAssetFileKey and versionId attributes, never the sort key, so both shapes read alike. The suffix
+    cannot be confused with a key: an S3 VersionId never contains '#', and a versionless input in a
+    versioned bucket is a folder or whole-asset key ending in '/'."""
+    composite = input_file_composite_key(database_id, asset_id, file_key)
+    return f"{composite}#{version_id}" if version_id else composite
 
 
 def orchestration_event_prefix(event_source_prefix: str, execution_id: str,
@@ -413,30 +434,106 @@ def build_metadata_envelope(metadata):
     }
 
 
-def build_metadata_file_record(file_key, metadata=None, attributes=None):
+def build_metadata_file_record(file_key, metadata=None, attributes=None, expanded=False):
     """One uniform file/asset record for the v2 grouped metadata envelope.
 
     file_key '/' is the asset-level record; '/name.ext' a file; '/folder/' a folder (folders carry
     metadata=None). 'attributes' (file attributes) is omitted when None so asset/folder records stay
-    minimal. metadata is preserved verbatim (the VAMS-scoped dict) or None."""
+    minimal. metadata is preserved verbatim (the VAMS-scoped dict) or None.
+
+    'expanded' marks a record the run added by expanding a whole-asset or folder selection
+    (metadataInputs.assetFileMetadata) rather than one for a file the caller selected. The key is
+    written only on such a record, so every other record keeps exactly the shape it always had; it is
+    what lets a step whose own gate does not ask for the expansion receive the selection's records
+    without the expanded ones (narrow_metadata_envelope)."""
     record = {
         "fileKey": normalize_file_key(file_key),
         "metadata": metadata if metadata is not None else None,
     }
     if attributes is not None:
         record["attributes"] = attributes
+    if expanded:
+        record["expanded"] = True
     return record
 
 
-def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=None):
+def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=None,
+                               file_expansion=None):
     """One assets[] entry for the v2 grouped metadata envelope: asset identity + assetData + its
-    ordered file/asset records (each from build_metadata_file_record)."""
-    return {
+    ordered file/asset records (each from build_metadata_file_record).
+
+    'file_expansion' (build_metadata_file_expansion) describes the whole-asset or folder expansion the
+    run performed for this asset; the key is present only on a group the run expanded, so a reader can
+    tell a complete file list from a capped one without the execute response."""
+    group = {
         "databaseId": database_id or "",
         "assetId": asset_id or "",
         "assetData": asset_data or {},
         "files": files or [],
     }
+    if file_expansion is not None:
+        group["fileExpansion"] = file_expansion
+    return group
+
+
+def build_metadata_file_expansion(selections, expanded_file_count, omitted_file_count=0,
+                                  omitted_file_count_exact=True):
+    """The 'fileExpansion' block of an expanded asset group.
+
+    - selections: the asset-relative selection keys the run expanded ('/' for the whole asset, or
+      folder keys ending in '/'), in selection order.
+    - expandedFileCount: how many file records the expansion added to the group's 'files'.
+    - omittedFileCount: how many current files under those selections the expansion left out at its
+      caps; 0 when it took every file.
+    - omittedFileCountExact: False when the listing itself stopped at its scan bound, so the omitted
+      count is a lower bound rather than the exact number."""
+    return {
+        "selections": [normalize_file_key(s) for s in selections or []],
+        "expandedFileCount": int(expanded_file_count or 0),
+        "omittedFileCount": int(omitted_file_count or 0),
+        "omittedFileCountExact": bool(omitted_file_count_exact),
+    }
+
+
+def build_metadata_schema_entry(database_id, restrict_metadata_outside_schemas=False,
+                                asset_metadata=None, file_metadata=None, file_attributes=None):
+    """One metadataSchemas[] entry for the v2 grouped metadata envelope: the aggregated metadata schema
+    fields (the database's own schemas and the GLOBAL ones) that apply in one database, per entity
+    type, plus the database's restrictMetadataOutsideSchemas flag.
+
+    Each field list holds build_metadata_schema_field(...) dicts. An entity type with no schema field
+    is an empty list, so an entry always names all three types."""
+    return {
+        "databaseId": database_id or "",
+        "restrictMetadataOutsideSchemas": bool(restrict_metadata_outside_schemas),
+        "assetMetadata": list(asset_metadata or []),
+        "fileMetadata": list(file_metadata or []),
+        "fileAttributes": list(file_attributes or []),
+    }
+
+
+def build_metadata_schema_field(field_name, definition, file_key_type_restriction=None):
+    """One field of a metadataSchemas[] entry, from an aggregated schema field definition
+    (metadataSchemaValidation.aggregate_schema_fields).
+
+    Carries what a pipeline needs to fill the field rather than invent a key beside it: the name, the
+    value type, whether it is required, its controlled-list values, its default value, and (file entity
+    types only, so file_key_type_restriction is None for asset metadata) the file extensions it applies
+    to, an empty list meaning every file. A field that several schemas define differently is reported
+    with VAMS's conflict resolution (string, optional, no default) and the conflict flag set."""
+    definition = definition or {}
+    field = {
+        "metadataFieldKeyName": field_name,
+        "metadataFieldValueType": definition.get("metadataFieldValueType") or "string",
+        "required": bool(definition.get("required", False)),
+        "controlledListKeys": list(definition.get("controlledListKeys") or []),
+        "defaultMetadataFieldValue": definition.get("defaultMetadataFieldValue"),
+        "metadataSchemaMultiFieldConflict": bool(
+            definition.get("metadataSchemaMultiFieldConflict", False)),
+    }
+    if file_key_type_restriction is not None:
+        field["fileKeyTypeRestriction"] = list(file_key_type_restriction)
+    return field
 
 
 def build_metadata_database_group(database_id, metadata=None):
@@ -449,7 +546,7 @@ def build_metadata_database_group(database_id, metadata=None):
     }
 
 
-def build_grouped_metadata_envelope(assets, databases=None):
+def build_grouped_metadata_envelope(assets, databases=None, metadata_schemas=None):
     """The v2 grouped-by-asset input-metadata file envelope (schemaVersion-stamped). 'assets' is a
     list of build_metadata_asset_group(...) dicts — one per involved asset. Asset-level metadata is
     the fileKey '/' record within an asset group; file metadata/attributes are per-file records.
@@ -458,14 +555,31 @@ def build_grouped_metadata_envelope(assets, databases=None):
     of 'assets' (database metadata belongs to no asset) — one per database the run captured metadata
     from. The key is present only when the list is non-empty, exactly as it would be for an empty
     'assets', so its absence — rather than an empty list — means the run captured no database
-    metadata."""
+    metadata.
+
+    'metadataSchemas' is a list of build_metadata_schema_entry(...) dicts, one per involved database
+    whose schema the run read (metadataInputs.metadataSchema). Present only when non-empty, on the same
+    rule as 'databases': a run that did not ask for schemas, or could read none, carries no key."""
     envelope = {
         "schemaVersion": METADATA_SCHEMA_VERSION_GROUPED,
         "assets": assets or [],
     }
     if databases:
         envelope["databases"] = list(databases)
+    if metadata_schemas:
+        envelope["metadataSchemas"] = list(metadata_schemas)
     return envelope
+
+
+def _envelope_carries_file_expansion(envelope):
+    """True when any asset group of a v2 envelope carries a whole-asset or folder expansion."""
+    for group in (envelope or {}).get("assets", []) or []:
+        if "fileExpansion" in (group or {}):
+            return True
+        for record in (group or {}).get("files", []) or []:
+            if (record or {}).get("expanded"):
+                return True
+    return False
 
 
 def narrow_metadata_envelope(envelope, metadata_inputs):
@@ -486,7 +600,16 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     fileMetadata/fileAttributes clear the per-file records, and databaseMetadata drops the top-level
     'databases' key entirely (its absence is what a run with no database metadata already looks
     like). Asset identity, assetData, and the file-record skeleton are preserved so a reader still
-    resolves the same subjects. Returns the envelope unchanged when every type is enabled."""
+    resolves the same subjects.
+
+    The two opt-in keys remove whole sections rather than clearing content, because the section IS
+    the opt-in: assetFileMetadata off removes the records a whole-asset or folder expansion added
+    (those marked 'expanded') and each group's 'fileExpansion' block, keeping the records of the files
+    the caller selected; metadataSchema off drops the top-level 'metadataSchemas' key. Both default off,
+    so a step whose gate does not name them never receives them — and an envelope that carries neither
+    section is not narrowed on their account.
+
+    Returns the envelope unchanged when the gate removes nothing from it."""
     body = envelope or {}
     if not isinstance(body, dict):
         return body
@@ -494,15 +617,24 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     want_file = metadata_input_enabled(metadata_inputs, "fileMetadata")
     want_attr = metadata_input_enabled(metadata_inputs, "fileAttributes")
     want_database = metadata_input_enabled(metadata_inputs, "databaseMetadata")
-    if want_asset and want_file and want_attr and want_database:
+    drop_expansion = (not metadata_input_enabled(metadata_inputs, "assetFileMetadata")
+                      and _envelope_carries_file_expansion(body))
+    drop_schemas = (not metadata_input_enabled(metadata_inputs, "metadataSchema")
+                    and "metadataSchemas" in body)
+    if (want_asset and want_file and want_attr and want_database
+            and not drop_expansion and not drop_schemas):
         return body
 
     narrowed = dict(body)
     assets = []
     for group in body.get("assets", []) or []:
         group_copy = dict(group or {})
+        if drop_expansion:
+            group_copy.pop("fileExpansion", None)
         files = []
         for record in group_copy.get("files", []) or []:
+            if drop_expansion and (record or {}).get("expanded"):
+                continue
             record_copy = dict(record or {})
             is_asset_level = normalize_file_key(record_copy.get("fileKey")) == "/"
             if is_asset_level:
@@ -519,6 +651,8 @@ def narrow_metadata_envelope(envelope, metadata_inputs):
     narrowed["assets"] = assets
     if not want_database:
         narrowed.pop("databases", None)
+    if drop_schemas:
+        narrowed.pop("metadataSchemas", None)
     return narrowed
 
 
@@ -771,6 +905,105 @@ def build_workflow_execution_record(
     return record
 
 
+# A fileUpload trigger launch refused by the workflow's concurrency restriction is recorded as ONE
+# SKIPPED execution per blocking run and lock key, however many launches that run refuses: the record
+# counts them (skippedLaunchCount) and lists the files they named, up to MAX_SKIP_RECORD_INPUT_ROWS input
+# rows. SKIPPED is terminal from the moment it is written: the record has no state machine, no pipeline
+# rows and no locks, so no abort, reconcile, log capture or terminal writer ever acts on it.
+EXECUTION_STATUS_SKIPPED = "SKIPPED"
+MAX_SKIP_RECORD_INPUT_ROWS = 100
+# How many of the skipped files the details view's `skip` block names; the rest are read through the
+# details files route (collection=input), which pages the same input rows.
+MAX_SKIP_DETAIL_FILES = 20
+# Fixed namespace of the skip-record id (uuid5), so every writer derives the same id for one blocking
+# run and lock key: concurrent skips and SQS redeliveries land on the same record.
+SKIP_RECORD_ID_NAMESPACE = uuid.UUID("6f1c0d52-8a7e-4b9a-9b51-3c0f6e7a9d24")
+# The main-row attributes only a skip record carries. A row without them is not a skip record, and
+# every read path treats their absence as "not skipped".
+SKIP_RECORD_ATTRIBUTES = ("skippedLaunchCount", "lastSkippedDate", "skipScope", "skipReason",
+                          "blockingExecutionId")
+
+
+def skip_record_execution_id(lock_key: str, holder_execution_id: str) -> str:
+    """The execution id of the skip record for one lock key and the run holding it (32 lowercase hex
+    characters, the same shape new_guid emits, so the GUID validator and every key builder accept it).
+    A uuid5 never equals a uuid4, so the id cannot collide with a real execution."""
+    return uuid.uuid5(SKIP_RECORD_ID_NAMESPACE, f"{lock_key}|{holder_execution_id}").hex
+
+
+def is_skip_record(main_item) -> bool:
+    """True for a main row written by the skip writer."""
+    return (main_item or {}).get("executionStatus", "") == EXECUTION_STATUS_SKIPPED
+
+
+def build_skip_record_update(execution_id, workflow_database_id, workflow_id, workflow_arn,
+                             skipped_at, skip_scope, skip_reason, blocking_execution_id,
+                             first_skipped_at=None):
+    """The UpdateItem arguments (minus the table) that create or extend a skip record's main row.
+
+    One atomic call: every attribute a launched run's main row carries is SET only if absent
+    (if_not_exists), so the first skip fixes the record's identity, start and stop date, while
+    lastSkippedDate is overwritten and skippedLaunchCount is ADDed to on every skip. The row is created
+    when missing, so two concurrent writers on one id both land on one record with a count of two.
+    ReturnValues ALL_NEW hands back the row as it now stands (the first-skip date the input rows reuse,
+    and the count that decides whether this skip's files are still listed).
+
+    first_skipped_at is the start and stop date the record keeps (the date its configuration and input
+    rows were first written with, so all of the record's rows agree); skipped_at, the time of THIS
+    refusal, is lastSkippedDate. It defaults to skipped_at."""
+    first_skipped_at = first_skipped_at or skipped_at
+    base = build_workflow_execution_record(
+        execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
+        workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=first_skipped_at,
+        execution_status=EXECUTION_STATUS_SKIPPED, triggered_by_user_id="SYSTEM_USER",
+        trigger_type="File-Upload", execution_log_group_arn="")
+    # Terminal from the first write: the stop date is the first skip, like the start date.
+    base["executionStopDate"] = first_skipped_at
+    base["skipScope"] = skip_scope or ""
+    base["skipReason"] = skip_reason or ""
+    base["blockingExecutionId"] = blocking_execution_id or ""
+    key_names = ("workflowExecutionId", "workflowDatabaseId:workflowId")
+    names, values, sets = {}, {}, []
+    for index, (attribute, value) in enumerate(
+            (a, v) for a, v in base.items() if a not in key_names):
+        names[f"#a{index}"] = attribute
+        values[f":a{index}"] = value
+        sets.append(f"#a{index} = if_not_exists(#a{index}, :a{index})")
+    names["#lastSkipped"] = "lastSkippedDate"
+    values[":lastSkipped"] = skipped_at
+    sets.append("#lastSkipped = :lastSkipped")
+    names["#count"] = "skippedLaunchCount"
+    values[":one"] = 1
+    return {
+        "Key": {name: base[name] for name in key_names},
+        "UpdateExpression": "SET " + ", ".join(sets) + " ADD #count :one",
+        "ExpressionAttributeNames": names,
+        "ExpressionAttributeValues": values,
+        "ReturnValues": "ALL_NEW",
+    }
+
+
+def skip_list_fields(main_item) -> dict:
+    """The optional list-item fields of a skip record: the count, the lock scope and the fixed reason.
+    Empty for any other row, so an execution recorded before skip records existed lists unchanged. The
+    blocking run's id is deliberately not listed (the details view gates it on its own read check)."""
+    if not is_skip_record(main_item):
+        return {}
+    return {
+        "skippedLaunchCount": stored_int(main_item.get("skippedLaunchCount")),
+        "skipScope": main_item.get("skipScope", "") or "",
+        "skipReason": main_item.get("skipReason", "") or "",
+    }
+
+
+def stored_int(value) -> int:
+    """A stored DynamoDB number (Decimal) as an int; 0 for anything absent or unreadable."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_pipeline_execution_record(
     pipeline_execution_id, workflow_execution_id, pipeline_database_id, pipeline_id,
     end_state_pipeline, s3_asset_bucket, s3_aux_bucket, output_prefixes,
@@ -847,7 +1080,7 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
-    s3_bucket="", asset_root_s3_key="", version_id="",
+    s3_bucket="", asset_root_s3_key="", version_id="", version_pinned=False,
 ):
     """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
 
@@ -859,11 +1092,16 @@ def build_workflow_execution_input_record(
 
     versionId is the concrete S3 VersionId the run read for this file (resolved at launch), captured
     so the execution's history shows the exact version used, not the time-relative "latest". Empty
-    for folder/whole-asset selections (no single version)."""
+    for folder/whole-asset selections (no single version). It is part of the sort key when set
+    (workflow_input_sort_key), so two versions of one file are two rows.
+
+    versionPinned records whether the caller named that version: a re-run reads a pinned version
+    again and takes the file's current version otherwise. Rows written before the attribute existed
+    lack it and read as not pinned."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
-        "databaseId:assetId:inputAssetFileKey": input_file_composite_key(
-            database_id, asset_id, input_asset_file_key),  # SK
+        "databaseId:assetId:inputAssetFileKey": workflow_input_sort_key(
+            database_id, asset_id, input_asset_file_key, version_id or ""),  # SK
         "databaseId:assetId": f"{database_id}:{asset_id}",  # GSI PK
         "assetId": asset_id,
         "databaseId": database_id,
@@ -871,6 +1109,7 @@ def build_workflow_execution_input_record(
         "s3Bucket": s3_bucket,
         "assetRootS3Key": asset_root_s3_key,
         "versionId": version_id or "",
+        "versionPinned": bool(version_pinned and version_id),
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,
@@ -928,7 +1167,7 @@ def metadata_envelope_rows(envelope):
                 attributes = (record or {}).get("attributes")
                 if not metadata and not attributes:
                     continue
-                yield {
+                row = {
                     "databaseId": database_id,
                     "assetId": asset_id,
                     "filePath": (record or {}).get("fileKey", "/"),
@@ -936,6 +1175,10 @@ def metadata_envelope_rows(envelope):
                     "attributes": attributes or {},
                     "scope": "asset",
                 }
+                # Only an expansion record carries the flag, so every other row keeps its shape.
+                if (record or {}).get("expanded"):
+                    row["expanded"] = True
+                yield row
         return
     # Legacy flat shape: {"VAMS": {"assetMetadata": {...}}} carries asset metadata only.
     legacy = (payload.get("VAMS") or {}).get("assetMetadata") or {}
@@ -969,15 +1212,24 @@ def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_a
         the databases of a pipeline's own files would under-report what the step can read.
       - An asset row naming no asset (the legacy flat envelope's single row) belongs to every pipeline:
         it is attributable to no asset, so no per-pipeline input set can include or exclude it.
+      - An EXPANDED per-file row (a file a whole-asset or folder selection was expanded into) belongs
+        to the pipeline that received the selection covering it: the asset's '/' selection, or a folder
+        selection the file's path sits under. That pipeline was handed the file's record through the
+        expansion even though the file itself is not one of its inputs.
     """
     received_files = set()
     received_assets = set()
+    # (databaseId, assetId) -> the whole-asset/folder selection keys this pipeline received, which
+    # decide which expanded rows describe something it read.
+    received_selections = {}
     for item in pipeline_inputs or []:
         database_id = (item or {}).get("databaseId", "")
         asset_id = (item or {}).get("assetId", "")
         received_assets.add((database_id, asset_id))
-        received_files.add(
-            (database_id, asset_id, normalize_file_key((item or {}).get("relativeFileKey", "/"))))
+        file_key = normalize_file_key((item or {}).get("relativeFileKey", "/"))
+        received_files.add((database_id, asset_id, file_key))
+        if file_key.endswith("/"):
+            received_selections.setdefault((database_id, asset_id), []).append(file_key)
     source_assets = {((s or {}).get("databaseId", ""), (s or {}).get("assetId", ""))
                      for s in metadata_source_assets or []}
 
@@ -1003,13 +1255,23 @@ def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_a
             continue
         if (row["databaseId"], row["assetId"], row["filePath"]) in received_files:
             yield row
+            continue
+        if row.get("expanded") and any(
+                row["filePath"].startswith(selection)
+                for selection in received_selections.get(entity, ())):
+            yield row
 
 
 def build_input_metadata_record(
     pipeline_execution_id, database_id, asset_id, file_path, metadata,
-    source_input_metadata_file_s3_key, scope="asset", attributes=None,
+    source_input_metadata_file_s3_key, scope="asset", attributes=None, expanded=False,
 ):
     """PipelineExecutionInputMetadataStorageTable row ('/' filePath = asset-level).
+
+    expanded marks a file record metadataInputs.assetFileMetadata added by expanding a whole-asset or
+    folder selection (metadata_envelope_rows sets it): context for the step, not one of its input
+    files. It is stored only on such a row, so every other row keeps its shape, and a reader treats a
+    row without it (including every row written before the flag existed) as not expanded.
 
     scope discriminates what the metadata describes: 'asset' for an asset/file row, 'database' for the
     metadata-source database's own metadata (empty assetId, '/' filePath, so its SK is
@@ -1030,7 +1292,7 @@ def build_input_metadata_record(
      (attributes_body, attributes_truncated)) = truncate_collection_budget(
         [to_dynamodb_numerics(metadata or {}), to_dynamodb_numerics(attributes or {})],
         total_limit=MAX_TEXT_FIELD_BYTES)
-    return {
+    record = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{fp}",  # SK
         "assetId": asset_id,
@@ -1043,6 +1305,9 @@ def build_input_metadata_record(
         "attributesTruncated": attributes_truncated,
         "sourceInputMetadataFileS3Key": source_input_metadata_file_s3_key or "",
     }
+    if expanded:
+        record["expanded"] = True
+    return record
 
 
 def build_input_configuration_record(
@@ -1132,19 +1397,86 @@ def build_output_file_record(
     }
 
 
+OUTPUT_METADATA_TYPE_METADATA = "metadata"
+OUTPUT_METADATA_TYPE_ATTRIBUTE = "attribute"
+OUTPUT_METADATA_TYPES = (OUTPUT_METADATA_TYPE_METADATA, OUTPUT_METADATA_TYPE_ATTRIBUTE)
+
+
 def build_output_metadata_record(
     pipeline_execution_id, target_file_path, metadata_key, metadata_value,
-    source_metadata_file_relative_path,
+    source_metadata_file_relative_path, metadata_type=OUTPUT_METADATA_TYPE_METADATA,
 ):
-    """PipelineExecutionOutputMetadataStorageTable row ('/' target = asset-level)."""
+    """PipelineExecutionOutputMetadataStorageTable row ('/' target = asset-level).
+
+    The sort-key value names the metadata type, so a key written to one file as both file metadata and
+    a file attribute is two rows. Rows recorded before that carry 'targetFilePath:metadataKey' as the
+    value and no metadataType; read their type with output_metadata_type()."""
+    if metadata_type not in OUTPUT_METADATA_TYPES:
+        raise ValueError(f"metadata_type must be one of {OUTPUT_METADATA_TYPES}")
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
-        "targetFilePath:metadataKey": f"{target_file_path}:{metadata_key}",  # SK
+        "targetFilePath:metadataKey": f"{target_file_path}:{metadata_type}:{metadata_key}",  # SK
         "targetFilePath": target_file_path,
         "metadataKey": metadata_key,
         "metadataValue": metadata_value,
+        "metadataType": metadata_type,
         "sourceMetadataFileRelativePath": source_metadata_file_relative_path or "",
     }
+
+
+def output_metadata_type(row):
+    """The metadata type of a stored output-metadata row. A row recorded before the type was stored is
+    read from its source file name: attributes only ever come from '<file>.attribute.json'."""
+    stored = row.get("metadataType") or ""
+    if stored:
+        return stored
+    source = row.get("sourceMetadataFileRelativePath") or ""
+    if source.endswith(".attribute.json"):
+        return OUTPUT_METADATA_TYPE_ATTRIBUTE
+    return OUTPUT_METADATA_TYPE_METADATA
+
+
+def is_legacy_output_metadata_row(row):
+    """True for an output-metadata row recorded before the type was part of its sort key."""
+    return not (row.get("metadataType") or "")
+
+
+def typed_output_metadata_row_key(row):
+    """The primary key the typed row for the same (targetFilePath, metadataKey, type) carries, for any
+    output-metadata row. For a legacy row this is the key of the row a newer write of the same entry
+    would have recorded."""
+    return {
+        "pipelineExecutionId": row.get("pipelineExecutionId", ""),
+        "targetFilePath:metadataKey": (f"{row.get('targetFilePath', '')}:"
+                                       f"{output_metadata_type(row)}:{row.get('metadataKey', '')}"),
+    }
+
+
+def drop_superseded_output_metadata_rows(rows, typed_row_exists=None):
+    """`rows` without the legacy rows a typed row of the same entry supersedes.
+
+    An output-processing step retried across the upgrade records one entry twice: the old code's row
+    (no type in its sort key) and the new code's typed row. The typed row is always the newer write, so
+    it is kept and the legacy row dropped. The twin is looked for in `rows` first; `typed_row_exists`,
+    when given, answers for the legacy rows whose twin is not in `rows`: it receives those rows and
+    returns the (pipelineExecutionId, sort-key value) pairs of their typed twins that exist, as
+    typed_output_metadata_row_key builds them. Legacy rows without a typed
+    twin, which is every row of an execution recorded wholly before the upgrade, are kept."""
+    typed_present = {
+        (row.get("pipelineExecutionId", ""), row.get("targetFilePath:metadataKey", ""))
+        for row in rows if not is_legacy_output_metadata_row(row)
+    }
+
+    def _twin(row):
+        key = typed_output_metadata_row_key(row)
+        return key["pipelineExecutionId"], key["targetFilePath:metadataKey"]
+
+    unmatched = [row for row in rows
+                 if is_legacy_output_metadata_row(row) and _twin(row) not in typed_present]
+    if unmatched and typed_row_exists is not None:
+        typed_present |= set(typed_row_exists(unmatched) or ())
+    return [row for row in rows
+            if not (is_legacy_output_metadata_row(row) and _twin(row) in typed_present)]
 
 
 def build_output_result_record(
@@ -1196,9 +1528,13 @@ def build_workflow_configuration_record(
     input_metadata_file_s3_key="",
     execution_start_date="",
     metadata_source_assets=None, metadata_source_databases=None,
-    output_types=None,
+    output_types=None, pipeline_execution_parameters=None,
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration').
+
+    pipeline_execution_parameters is set only on a SKIPPED record's row: the per-pipeline template
+    parameters the refused trigger launch named (the trigger's defaultTemplateIds), which a re-run
+    replays because the record has no pipeline rows to read them from. Absent on every other row.
 
     metadata_source_assets is the run's resolved [{databaseId, assetId}] metadata-source selection and
     input_metadata_database_id the source database the CALLER named — the selection a re-run replays.
@@ -1264,6 +1600,8 @@ def build_workflow_configuration_record(
         # attribute existed resolves to [] everywhere (no migration).
         "outputTypes": list(output_types or []),
     }
+    if pipeline_execution_parameters:
+        record["pipelineExecutionParameters"] = to_dynamodb_numerics(pipeline_execution_parameters)
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely
     # (DynamoDB indexes sparsely), so results-only executions never appear in an asset's history and

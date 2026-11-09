@@ -11,7 +11,7 @@ from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
 
-logger = safeLogger(service_name="S3Common")
+logger = safeLogger()
 
 # Presigned URLs for us-east-1 buckets carry the regional endpoint rather than the global one, so a
 # URL signed for one Region is never redirected to another. Set before any S3 client is built.
@@ -591,3 +591,28 @@ def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):
         if not validateUnallowedFileExtensionAndContentType(obj['Key'], respHeader['ContentType']):
             return False
     return True
+
+
+# Response overrides signed into every presigned GetObject URL that serves an asset or preview file
+# to a client. An SVG upload is usually stored as application/octet-stream (browsers and the CLI
+# send no SVG type), and a browser renders an SVG in <img> only when it arrives as image/svg+xml. The
+# URL therefore asks S3 to answer with that type. It also asks for an attachment disposition, so
+# opening the link directly downloads the file and no script inside the SVG runs at the bucket's
+# origin; an <img> ignores the disposition and renders the image. response-* overrides are signed
+# query parameters, so they work the same for KMS-encrypted and cross-account buckets, and the
+# stored object and its metadata are never changed.
+SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
+SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
+
+
+def presigned_get_object_params(params: dict) -> dict:
+    """Return a copy of GetObject ``params`` with the response overrides the object key needs.
+
+    A key whose final name ends in ``.svg`` (any case) gets ``ResponseContentType`` image/svg+xml and
+    ``ResponseContentDisposition`` attachment. Every other key is returned unchanged.
+    """
+    signed = dict(params)
+    if str(signed.get('Key') or '').lower().endswith('.svg'):
+        signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
+        signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    return signed

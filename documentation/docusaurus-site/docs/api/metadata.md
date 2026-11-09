@@ -68,6 +68,7 @@ Retrieves metadata items for the specified asset, one page at a time. When more 
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token from a previous response.                                                      |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the metadata of an archived asset. Default: `false`.                      |
 
 **Response:**
 
@@ -315,6 +316,7 @@ Retrieves metadata for a specific file within an asset.
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token.                                                                               |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the file metadata of an archived asset. Default: `false`.                 |
 
 **Response:**
 
@@ -645,6 +647,7 @@ Retrieves metadata items for the specified asset link, one page at a time.
 | `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken` | query    | string  | No       | Continuation token.                                                                               |
+| `showArchived`  | query    | boolean | No       | When `true`, also reads the metadata of a link whose linked asset is archived. Default: `false`.  |
 
 **Response:**
 
@@ -748,18 +751,20 @@ Updates metadata items for an asset link.
 | `metadata`   | array  | Yes      | List of metadata items to update.        |
 | `updateType` | string | No       | `"update"` (default) or `"replace_all"`. |
 
+When the database of either linked asset sets `restrictMetadataOutsideSchemas` and an `assetLinkMetadata` schema applies, both update types refuse a key that is new to the link and not defined by the schema, as create does. A key already stored on the link passes, including when its value changes. Pipeline write-backs are not restricted.
+
 **Response:**
 
 Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                             |
+| ------ | --------------------------------------- |
+| `400`  | Invalid parameters or validation error. |
+| `403`  | Not authorized.                         |
+| `404`  | Asset link not found.                   |
+| `500`  | Internal server error.                  |
 
 ---
 
@@ -800,7 +805,9 @@ Returns a bulk operation response.
 
 ## Metadata Schemas
 
-A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` accepts only metadata keys an applicable schema declares.
+A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` refuses a user or API write that adds a metadata key no applicable schema declares. A key already stored on the record passes, including when its value changes, and pipeline write-backs are not restricted.
+
+On a user or API create or update, value types and controlled lists are checked for the keys the write adds or changes, and for schema defaults it adds. A stored value the schema would refuse (for example one a pipeline wrote back) does not refuse a write that leaves it unchanged, including a `replace_all` that sends it back as read, and changing it to the type the schema declares is not refused as a type change. Required fields and `dependsOnFieldKeyName` dependencies are checked on the whole record as it will be after the write.
 
 A schema is scoped to one database and one entity type. Use `GLOBAL` as the `databaseId` for a schema that applies across every database. Schemas are authorized with the `metadataSchema` object type on `databaseId`, `metadataSchemaName`, and `metadataSchemaEntityType`.
 
@@ -949,7 +956,7 @@ POST /metadataschema
 | `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each written with its leading dot (`.glb`). Accepted only for `fileMetadata` and `fileAttribute` entity types. |
 | `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                                   |
 
-Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
+Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. A file with no extension is validated only against schemas with no file type restriction. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
 
 #### Request body example
 
@@ -1143,6 +1150,8 @@ Bulk operations can partially succeed. Check both `successCount` and `failureCou
 | Maximum key length                  | 256 characters | Maximum length of a `metadataKey`.                                                   |
 | Maximum items per REPLACE_ALL       | 500            | Maximum metadata items in a single `replace_all` operation.                          |
 | Maximum `pageSize` and `maxItems`   | 1,000          | Largest value either metadata pagination parameter may carry on a read.              |
+
+The record limits apply to user and API writes. Pipeline write-backs are exempt and can store more than 500 records on an entity. While an entity holds more than 500 records, a create or `update` request on it returns `400`, even one that changes only existing keys; a `replace_all` of 500 items or fewer and delete requests are accepted.
 
 :::note[Paging a metadata read]
 `pageSize` and `maxItems` each size a single response, and the page served is the smaller of the two. `pageSize` defaults to 100 and `maxItems` to 1,000, so a read with no pagination parameters returns 100 records. A value above the maximum in the table above is rejected with `400` rather than reduced to it, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. When records remain beyond the page, the response carries a `NextToken`; pass it as `startingToken` to read the next page, and repeat until no `NextToken` is returned — the whole set is reachable that way whatever the page size.

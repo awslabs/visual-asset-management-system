@@ -13,6 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import {
     storageResources,
+    METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
     WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { Service, IAMArn, Partition } from "../helper/service-helper";
@@ -131,9 +132,283 @@ function executionLockReleaseStatements(storageResources: storageResources) {
  * instead. The function waits for the policy, since its code calls the lock table once deployed.
  */
 function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
-    const policy = new iam.Policy(fun, EXECUTION_LOCK_POLICY_ID, { statements });
+    attachHandlerPolicy(fun, EXECUTION_LOCK_POLICY_ID, statements);
+}
+
+/** Attaches statements to a handler's role as a policy of their own (see attachExecutionLockPolicy). */
+function attachHandlerPolicy(fun: lambda.Function, id: string, statements: iam.PolicyStatement[]) {
+    const policy = new iam.Policy(fun, id, { statements });
     fun.role!.attachInlinePolicy(policy);
     fun.node.defaultChild!.node.addDependency(policy);
+}
+
+/**
+ * handlers/workflows/executionService.py runs as two functions with two roles. EXECUTION_SERVICE_ROUTES
+ * names the routes each serves (the handler answers 404 for any other): the execution service serves
+ * every execution route but permanent delete, and the permanent-delete function serves that one route
+ * and is the only role that can delete execution rows.
+ */
+export const EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES";
+export const EXECUTION_SERVICE_ROUTE_SET_SERVICE = "service";
+export const EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE = "permanentDelete";
+
+/** Index of PipelineExecutionsStorageTable on workflowExecutionId: an execution's pipeline rows. */
+export const PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX = "PipelineExecByWorkflowExecGSI";
+/** Index of PipelineTemplateTagSchemaStorageTable on the owning template. */
+export const TAG_SCHEMA_BY_TEMPLATE_INDEX = "TagSchemaByTemplateGSI";
+
+/** The seven per-pipeline-execution tables, keyed by pipelineExecutionId. */
+function pipelineExecutionSubTables(storageResources: storageResources): dynamodb.Table[] {
+    const dynamo = storageResources.dynamo;
+    return [
+        dynamo.pipelineExecutionInputFilesStorageTable,
+        dynamo.pipelineExecutionInputMetadataStorageTable,
+        dynamo.pipelineExecutionInputConfigurationStorageTable,
+        dynamo.pipelineExecutionOutputFilesStorageTable,
+        dynamo.pipelineExecutionOutputMetadataStorageTable,
+        dynamo.pipelineExecutionOutputResultsStorageTable,
+        dynamo.pipelineExecutionLogsStorageTable,
+    ];
+}
+
+/** One statement allowing `actions` on `resources` (table ARNs or index ARNs). */
+function dynamoStatement(actions: string[], resources: string[]): iam.PolicyStatement {
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: actions.map((action) => `dynamodb:${action}`),
+        resources,
+    });
+}
+
+/**
+ * The indexes the execution service queries, by table: the asset and global listings (the main table's
+ * by-workflow, by-group and by-date indexes, the inputs' by-asset and the configuration rows'
+ * by-output-asset index), an execution's pipeline rows, and the file versions an execution produced.
+ */
+export const EXECUTION_SERVICE_QUERIED_INDEXES = {
+    workflowExecutionsStorageTableV2: [
+        "WorkflowExecutionsByWorkflowGSI",
+        "WorkflowExecutionsByGroupGSI",
+        "WorkflowExecutionsByDateGSI",
+    ],
+    workflowExecutionInputsStorageTable: ["WorkflowExecInputsByAssetGSI"],
+    workflowExecutionConfigurationStorageTable: [
+        "WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
+    ],
+    pipelineExecutionsStorageTable: [PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX],
+    assetFileVersionHistoryStorageTable: ["WorkflowExecutionIdIndex"],
+} as const;
+
+/** Construct id of the customer managed policy that carries the execution service's table reads. */
+export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
+
+/**
+ * The execution service's table reads: GetItem, BatchGetItem and Query, the only read calls it makes,
+ * on every table it reads and on the indexes it queries by exact ARN (not the `index/*`
+ * Table.grantReadData() adds). Carried by a customer managed policy (see buildExecutionServiceFunction).
+ */
+export function executionServiceTableReadStatements(
+    storageResources: storageResources
+): iam.PolicyStatement[] {
+    const dynamo = storageResources.dynamo;
+    const indexes = EXECUTION_SERVICE_QUERIED_INDEXES as Record<string, readonly string[]>;
+    const readTables: [string, dynamodb.Table][] = [
+        ["assetStorageTable", dynamo.assetStorageTable],
+        ["workflowExecutionsStorageTableV2", dynamo.workflowExecutionsStorageTableV2],
+        ["workflowExecutionInputsStorageTable", dynamo.workflowExecutionInputsStorageTable],
+        [
+            "workflowExecutionConfigurationStorageTable",
+            dynamo.workflowExecutionConfigurationStorageTable,
+        ],
+        ["pipelineExecutionsStorageTable", dynamo.pipelineExecutionsStorageTable],
+        // Every per-pipeline table but the input files, which only permanent delete reads.
+        ...pipelineExecutionSubTables(storageResources)
+            .filter((t) => t !== dynamo.pipelineExecutionInputFilesStorageTable)
+            .map((t) => ["", t] as [string, dynamodb.Table]),
+        // Definition tables (V2) are read only to cross-fetch human-readable workflow/pipeline
+        // names + descriptions for the detail view.
+        ["workflowStorageTableV2", dynamo.workflowStorageTableV2],
+        ["pipelineStorageTableV2", dynamo.pipelineStorageTableV2],
+        ["assetFileVersionHistoryStorageTable", dynamo.assetFileVersionHistoryStorageTable],
+    ];
+    return [
+        dynamoStatement(
+            ["BatchGetItem", "GetItem", "Query"],
+            readTables.flatMap(([field, table]) => [
+                table.tableArn,
+                ...(indexes[field] ?? []).map((name) => `${table.tableArn}/index/${name}`),
+            ])
+        ),
+    ];
+}
+
+/**
+ * The only rows the execution service writes: the lazy status reconcile and the abort update the main
+ * row and mark the pipeline rows. Permanent delete has its own function. The lock table's calls are in
+ * the role's lock policy. backend/tests/handlers/workflows/test_execution_service_route_split.py records
+ * every write the service's routes make.
+ */
+export function executionServiceTableWriteStatements(
+    storageResources: storageResources
+): iam.PolicyStatement[] {
+    const dynamo = storageResources.dynamo;
+    return [
+        dynamoStatement(
+            ["UpdateItem"],
+            [
+                dynamo.workflowExecutionsStorageTableV2.tableArn,
+                dynamo.pipelineExecutionsStorageTable.tableArn,
+            ]
+        ),
+    ];
+}
+
+/**
+ * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
+ * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
+ * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
+ * default policy update; statements moving out of the default policy are therefore never missing on
+ * upgrade. The function waits for it as well.
+ */
+function attachManagedHandlerPolicy(
+    fun: lambda.Function,
+    id: string,
+    statements: iam.PolicyStatement[]
+) {
+    const policy = new iam.ManagedPolicy(fun, id, { statements });
+    fun.role!.addManagedPolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
+}
+
+/**
+ * Every DynamoDB call the permanent-delete route makes, each table named once with only the actions it
+ * receives, on table ARNs and the one index the route queries:
+ * - the main row: read by key and deleted; the configuration row: read and deleted;
+ * - the workflow input rows and the seven per-pipeline tables: queried by partition key and deleted
+ *   through a batch writer (IAM's BatchWriteItem does not separate puts from deletes);
+ * - the pipeline rows: listed through their by-execution index and deleted one by one;
+ * - the authorization reads: the workflow definition by key and the run's assets by key.
+ * backend/tests/handlers/workflows/test_execution_service_route_split.py records the route's calls
+ * against this same list.
+ */
+export function executionPermanentDeleteDynamoStatements(
+    storageResources: storageResources
+): iam.PolicyStatement[] {
+    const dynamo = storageResources.dynamo;
+    return [
+        dynamoStatement(
+            ["Query", "DeleteItem"],
+            [dynamo.workflowExecutionsStorageTableV2.tableArn]
+        ),
+        dynamoStatement(
+            ["GetItem", "DeleteItem"],
+            [dynamo.workflowExecutionConfigurationStorageTable.tableArn]
+        ),
+        dynamoStatement(
+            ["Query", "BatchWriteItem"],
+            [
+                dynamo.workflowExecutionInputsStorageTable.tableArn,
+                ...pipelineExecutionSubTables(storageResources).map((t) => t.tableArn),
+            ]
+        ),
+        dynamoStatement(["DeleteItem"], [dynamo.pipelineExecutionsStorageTable.tableArn]),
+        dynamoStatement(
+            ["Query"],
+            [
+                `${dynamo.pipelineExecutionsStorageTable.tableArn}/index/${PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX}`,
+                dynamo.assetStorageTable.tableArn,
+            ]
+        ),
+        dynamoStatement(["GetItem"], [dynamo.workflowStorageTableV2.tableArn]),
+    ];
+}
+
+/**
+ * Every DynamoDB call the execute handler makes, each table named once with only the actions it
+ * receives, on table ARNs and the one index the handler queries:
+ * - the launch inputs: the workflow and pipeline definitions by key, the assets and their bucket rows
+ *   by key, the default bucket by a filtered scan, the template rows by key and by pipeline, and the
+ *   tag schema by its template index;
+ * - the execution records: the main row (and its UpdateItem, which the skip record of a launch refused
+ *   by a concurrency restriction is written with), the workflow input and configuration rows, the
+ *   pipeline rows and their configuration snapshots, and the input-metadata rows through a batch writer.
+ * The lock table's calls are in the role's lock policy, and the metadata schema reads in a policy of
+ * their own. backend/tests/handlers/workflows/test_execute_workflow_dynamodb_calls.py records the
+ * handler's calls against this same list.
+ */
+export function executeWorkflowDynamoStatements(
+    storageResources: storageResources
+): iam.PolicyStatement[] {
+    const dynamo = storageResources.dynamo;
+    return [
+        dynamoStatement(
+            ["GetItem"],
+            [dynamo.workflowStorageTableV2.tableArn, dynamo.pipelineStorageTableV2.tableArn]
+        ),
+        dynamoStatement(
+            ["Query"],
+            [
+                dynamo.assetStorageTable.tableArn,
+                `${dynamo.pipelineTemplateTagSchemaStorageTable.tableArn}/index/${TAG_SCHEMA_BY_TEMPLATE_INDEX}`,
+            ]
+        ),
+        dynamoStatement(["Query", "Scan"], [dynamo.s3AssetBucketsStorageTable.tableArn]),
+        dynamoStatement(["GetItem", "Query"], [dynamo.pipelineTemplatesStorageTable.tableArn]),
+        dynamoStatement(
+            ["GetItem", "PutItem", "UpdateItem"],
+            [dynamo.workflowExecutionsStorageTableV2.tableArn]
+        ),
+        dynamoStatement(
+            ["PutItem"],
+            [
+                dynamo.workflowExecutionInputsStorageTable.tableArn,
+                dynamo.workflowExecutionConfigurationStorageTable.tableArn,
+                dynamo.pipelineExecutionsStorageTable.tableArn,
+                dynamo.pipelineExecutionInputConfigurationStorageTable.tableArn,
+            ]
+        ),
+        dynamoStatement(
+            ["BatchWriteItem"],
+            [dynamo.pipelineExecutionInputMetadataStorageTable.tableArn]
+        ),
+    ];
+}
+
+/** The Step Functions execution ARN patterns a VAMS workflow execution runs under. */
+function workflowExecutionArnPatterns(config: Config.Config): string[] {
+    return [
+        IAMArn("*" + config.name + "*").statemachineExecution,
+        IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
+    ];
+}
+
+/** Construct id of the policy that carries the execute handler's metadata schema reads. */
+export const EXECUTE_METADATA_SCHEMA_READ_POLICY_ID = "MetadataSchemaReadPolicy";
+
+/**
+ * The reads the execute handler makes for metadataInputs.metadataSchema, and nothing more: a Query on
+ * the schema table's database/entity-type index for each involved database and entity type, and a
+ * GetItem on the database table for that database's restrictMetadataOutsideSchemas flag. Each is
+ * granted on the one index ARN or the table ARN, not on `index/*` as Table.grantReadData() would add.
+ * Attached as a policy of its own, like the lock statements, so the role's default policy and its
+ * overflow split are the same as before. The customer managed key permissions come from
+ * kmsKeyLambdaPermissionAddToResourcePolicy, which the execute handler already applies.
+ */
+function executeMetadataSchemaReadStatements(storageResources: storageResources) {
+    return [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storageResources.dynamo.metadataSchemaStorageTableV2.tableArn}/index/${METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX}`,
+            ],
+        }),
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [storageResources.dynamo.databaseStorageTable.tableArn],
+        }),
+    ];
 }
 
 export function buildExecutionServiceFunction(
@@ -164,27 +439,21 @@ export function buildExecutionServiceFunction(
         // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The log group each execution
         // was launched against is read from that execution's own record (executionLogGroupArn), so
         // no log group ARN is set here; the read scope is granted on the role policy below.
-        environment: {},
+        // Permanent delete is served by its own function (buildExecutionPermanentDeleteFunction).
+        environment: { [EXECUTION_SERVICE_ROUTES_ENV]: EXECUTION_SERVICE_ROUTE_SET_SERVICE },
     });
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort + permanent-delete
-    // Permanent-delete removes an execution's rows across every sub-table, so the execution
-    // sub-tables are read/WRITE.
-    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED + delete
-    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
-    // Definition tables (V2) are read only to cross-fetch human-readable workflow/pipeline
-    // names + descriptions for the detail view.
-    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadData(fun);
+    // The table reads are the role's largest statement (about two dozen table and index ARNs, each
+    // carrying the stack name), so they sit in a managed policy of their own and the inline policies
+    // keep their headroom under IAM's quota in every partition (infra/CLAUDE.md, IAM inline policy
+    // budget).
+    attachManagedHandlerPolicy(
+        fun,
+        EXECUTION_SERVICE_TABLE_READ_POLICY_ID,
+        executionServiceTableReadStatements(storageResources)
+    );
+    for (const statement of executionServiceTableWriteStatements(storageResources)) {
+        fun.addToRolePolicy(statement);
+    }
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -400,6 +669,60 @@ export function buildExecutionServiceFunction(
 }
 
 /**
+ * Permanent delete of an execution's DynamoDB rows (DELETE /workflows/executions/{executionId}/permanent),
+ * on its own role. The same handler module as the execution service, serving only this route, so the
+ * role that can delete every execution row is reachable through one admin-gated route alone and the
+ * execution service's role holds no delete.
+ */
+export function buildExecutionPermanentDeleteFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const fun = new lambda.Function(scope, "executionPermanentDelete", {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: "handlers.workflows.executionService.lambda_handler",
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
+        environment: {
+            [EXECUTION_SERVICE_ROUTES_ENV]: EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE,
+        },
+    });
+    for (const statement of executionPermanentDeleteDynamoStatements(storageResources)) {
+        fun.addToRolePolicy(statement);
+    }
+    // The in-progress guard: a row not yet terminal is deleted only once its Step Functions execution
+    // is confirmed stopped.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:DescribeExecution"],
+            resources: workflowExecutionArnPatterns(config),
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+
+    return fun;
+}
+
+/**
  * The launch handler's timeout. It is also passed to the handler, which takes over a lock row older
  * than this (plus a margin) whose holder wrote no execution record: that launch died mid-way.
  */
@@ -453,23 +776,20 @@ export function buildExecuteWorkflowV2Function(
         },
     });
 
-    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
-    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
+    for (const statement of executeWorkflowDynamoStatements(storageResources)) {
+        fun.addToRolePolicy(statement);
+    }
     // Concurrency locks: taken before the state machine starts (a conflicting row whose holder has no
     // main execution row, read above, may be taken over), released when a launch fails after acquiring.
     attachExecutionLockPolicy(fun, [
         onExecutionLocksTable(storageResources, EXECUTION_LOCK_ACQUIRE_ACTIONS),
     ]);
+    // metadataInputs.metadataSchema: the schema records and each schema database's restrict flag.
+    attachHandlerPolicy(
+        fun,
+        EXECUTE_METADATA_SCHEMA_READ_POLICY_ID,
+        executeMetadataSchemaReadStatements(storageResources)
+    );
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 

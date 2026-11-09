@@ -294,12 +294,14 @@ class TestErrorHelpersDoNotInterpolateTheBody:
             response = helper(body=dict(body))
 
         assert response["statusCode"] == status
-        assert spy.error.call_count == 1
-        message = spy.error.call_args.args[0]
+        # general_error() logs a 4xx below ERROR; the other helpers log every response at ERROR.
+        logged = spy.warning if name == "general_error" else spy.error
+        assert logged.call_count == 1
+        message = logged.call_args.args[0]
         # A rendered body brings the dict's own braces with it, so their absence pins the plain message.
         assert _SECRET not in message and "{" not in message
 
-        extra = spy.error.call_args.kwargs["extra"]
+        extra = logged.call_args.kwargs["extra"]
         assert extra["statusCode"] == status
         masked = mask_sensitive_data(extra)
         assert masked["errorBody"]["apiKey"] == REDACTED

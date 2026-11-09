@@ -60,7 +60,8 @@ vamscli execution list --triggered-by user@example.com --json-output
 | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
 | `--workflow-database-id`          | Filter by workflow database ID                                                                         |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)                                     |
+| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
+| `--exclude-status`                | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
 | `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
 | `--group-id`                      | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
@@ -95,6 +96,13 @@ read live and can change without a redeploy, so they may differ from what the ru
 marker says. A number with no marker means the workflow no longer records a current version (for
 example, the workflow was deleted), and a run started before versions were recorded shows
 `not recorded`.
+
+A `SKIPPED` execution records file-upload trigger launches the workflow's concurrency restriction
+refused. `execution list` and `workflow list-executions` print its `Skipped launches` count and
+`Skip reason`, and `execution details` prints a `Skipped launches` section with the reason, the
+first and last refusal, the first files and, only when you may read it, `Blocked by` with the
+blocking execution's id. `--json-output` carries the API fields unchanged (`skippedLaunchCount`,
+`skipScope`, `skipReason`, and the `skip` block).
 
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run
@@ -173,12 +181,24 @@ Found 2 row(s):
   my-database:-/  scope=database  2 entries  [convert-to-glb]
 ```
 
-An `output` row prints the output file the metadata applies to and the key/value written against it:
+An `input` row marked `(expanded)` (`"expanded": true` with `--json-output`) is a file record that
+`metadataInputs.assetFileMetadata` added by expanding a whole-asset or folder selection. The step
+received it as context, and the file is not one of its input files:
+
+```text
+  my-database:a1b2c3/models/part.glb  scope=asset  3 entries  (expanded)  [describe-asset]
+```
+
+An `output` row prints the output file the metadata applies to, whether it was written as file metadata
+or as a file attribute (`type=`), and the key/value written against it. A step that writes one key to a
+file as both prints two rows:
 
 ```text
 Collection: output
-Found 1 row(s):
-  /models/building.gltf  triangleCount=18204  [3d-conversion-pipeline]
+Found 3 row(s):
+  /models/building.gltf  type=metadata  triangleCount=18204  [3d-conversion-pipeline]
+  /models/building.gltf  type=metadata  units=mm  [3d-conversion-pipeline]
+  /models/building.gltf  type=attribute  units=m  [3d-conversion-pipeline]
 ```
 
 The metadata key/value pairs of an input row are reported as an entry count rather than printed; use
@@ -393,6 +413,16 @@ execution ID); optionally reuse or assign an execution group.
 vamscli execution rerun my-execution-id
 vamscli execution rerun my-execution-id --execution-group-id batch-2026-02
 ```
+
+A re-run reads an input file at the version the original execution named (`versionId` in the
+`--input-files` selection), and takes the file's current version when the original selected it
+without one. A version is pinned only when someone chose it: a `versionId` given to
+`vamscli workflow execute` or the API, or a version picked in the web: an older version chosen in
+the execute wizard, or a file run from the file manager while an asset version is browsed, even
+when that version is still the current one. A web launch from the current asset view and a
+`fileUpload` trigger launch are not pinned, so their re-runs take the current version. An execution recorded before v2.7.0 re-runs every file on its current version. If a
+named version has since been deleted, the re-run is refused the way an execute naming that version
+is.
 
 A re-run reconstructs the original run's metadata sources along with its input files, so it reads the
 same metadata the first run did. It reports the same warnings an execute does — a database whose

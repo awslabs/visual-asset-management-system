@@ -6,10 +6,13 @@
 import { test, expect } from "@playwright/test";
 import {
     collectPageErrors,
+    expectNoPageOverflowX,
+    expectReachable,
     firstCardId,
     gotoOrchestration,
     openCardMenu,
     searchBox,
+    VIEWPORTS,
 } from "./support/fixtures";
 
 /**
@@ -227,3 +230,66 @@ test.describe("Workflow builder — create", () => {
         });
     });
 });
+
+/**
+ * The builder fits the viewport at phone and laptop widths: the step rail compacts below `sm`, and
+ * the trigger table scrolls inside its own box, so the page never scrolls sideways and each trigger
+ * row's Edit and Delete are reachable. Walks an existing workflow's steps with Next and never saves.
+ */
+for (const [name, viewport] of [
+    ["phone", VIEWPORTS.phone],
+    ["laptop", VIEWPORTS.laptop],
+] as const) {
+    test.describe(`Workflow builder — fits a ${name} viewport`, () => {
+        test.use({ viewport });
+
+        test("the create wizard does not scroll sideways", async ({ page }) => {
+            await page.goto("/#/databases/GLOBAL/workflows/create", {
+                waitUntil: "domcontentloaded",
+            });
+            const heading = page.getByRole("heading", { name: "Create Workflow", level: 1 });
+            await heading.waitFor({ state: "visible", timeout: 30_000 }).catch(() => undefined);
+            test.skip(
+                !(await heading.isVisible()),
+                "The create route is not allowed for this user"
+            );
+            await expect(page.locator("[aria-current='step']")).toBeVisible();
+            await expectNoPageOverflowX(page, "create workflow, first step");
+        });
+
+        test("every edit step fits, and trigger rows keep Edit and Delete reachable", async ({
+            page,
+        }) => {
+            await gotoOrchestration(page, "workflows", "Workflows");
+            const id = await firstCardId(page);
+            test.skip(!id, "No workflows in this environment");
+            const items = await openCardMenu(page, id!);
+            const edit = items.filter({ hasText: "Edit" });
+            if ((await edit.count()) === 0) {
+                await page.keyboard.press("Escape");
+                test.skip(true, "The user may not edit this workflow");
+            }
+            await edit.first().click();
+            await expect(
+                page.getByRole("heading", { name: /^(Edit|View) Workflow$/, level: 1 })
+            ).toBeVisible({ timeout: 30_000 });
+
+            const next = page.getByRole("button", { name: "Next" });
+            for (let step = 0; step < 5; step++) {
+                const current = await page.locator("[aria-current='step']").innerText();
+                await expectNoPageOverflowX(page, `edit workflow, step "${current.trim()}"`);
+
+                const editTrigger = page.getByRole("button", { name: /^Edit trigger / });
+                if ((await editTrigger.count()) > 0) {
+                    await expectReachable(editTrigger.first(), "a trigger row's Edit");
+                    const del = page.getByRole("button", { name: /^Delete trigger / });
+                    if ((await del.count()) > 0) {
+                        await expectReachable(del.first(), "a trigger row's Delete");
+                    }
+                }
+                if (!(await next.isVisible()) || !(await next.isEnabled())) break;
+                await next.click();
+            }
+        });
+    });
+}

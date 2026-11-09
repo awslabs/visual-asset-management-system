@@ -1006,12 +1006,12 @@ class TestDefaultOutputPathExtensionValidator:
         _validate_default_output_path_extension(None)        # no systemConfig at all
 
     def test_traversal_is_rejected(self):
-        with pytest.raises(ValueError, match="must not contain '\.\.'"):
+        with pytest.raises(ValueError, match=r"must not contain '\.\.'"):
             self._validate("/../escape/")
 
     def test_backslashes_are_rejected(self):
         with pytest.raises(ValueError, match="backslashes"):
-            self._validate("\windows\path")
+            self._validate(r"\windows\path")
 
     def test_a_non_string_is_rejected(self):
         for value in (123, True, ["/a/"], {"a": 1}):

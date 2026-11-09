@@ -17,7 +17,7 @@ from models.metadata import (
     MAX_PAGINATION_TOKEN_LENGTH,
 )
 
-logger = safeLogger(service_name="MetadataSchemaModels")
+logger = safeLogger()
 
 #######################
 # Request Bounds

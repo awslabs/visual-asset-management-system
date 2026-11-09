@@ -321,3 +321,52 @@ describe("FileDetailsPanel — Upload Files action", () => {
         expect(upload).not.toBeDisabled();
     });
 });
+
+describe("FileDetailsPanel — toolbar at phone width", () => {
+    // jsdom applies no stylesheet or media query, so the stylesheet is the contract. The header layout
+    // must live in classes, because an inline style would beat the phone media query.
+    const css = require("fs").readFileSync(
+        require("path").join(__dirname, "FileDetailsPanel.css"),
+        "utf-8"
+    ) as string;
+    const mediaStart = css.indexOf("@media (max-width: 687px)");
+    const phone = css.slice(mediaStart, css.indexOf("\n}\n", mediaStart));
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCan.mockReturnValue(true);
+    });
+
+    it("sets the header and toolbar layout by class, not inline style", async () => {
+        renderPanel(root);
+        const upload = await screen.findByRole("button", { name: "Upload Files" });
+        const actions = upload.closest(".file-actions") as HTMLElement;
+        const header = upload.closest(".file-info-header") as HTMLElement;
+        expect(actions).not.toBeNull();
+        expect(header).not.toBeNull();
+        for (const el of [actions, header, header.querySelector(".file-info-title")]) {
+            expect(el).not.toBeNull();
+            const style = (el as HTMLElement).style;
+            expect(style.flexWrap).toBe("");
+            expect(style.flexShrink).toBe("");
+            expect(style.minWidth).toBe("");
+            expect(style.maxWidth).toBe("");
+        }
+    });
+
+    it("wraps the header and lets the toolbar shrink and wrap below the xs breakpoint", () => {
+        expect(mediaStart).toBeGreaterThan(-1);
+        expect(phone).toMatch(/\.file-info-header\s*{[^}]*flex-wrap:\s*wrap/);
+        expect(phone).toMatch(/\.file-actions\s*{[^}]*flex-wrap:\s*wrap/);
+        expect(phone).toMatch(/\.file-actions\s*{[^}]*min-width:\s*0/);
+        expect(phone).toMatch(/\.file-actions\s*{[^}]*max-width:\s*100%/);
+        expect(phone).toMatch(/\.file-info-title\s*{[^}]*max-width:\s*100%/);
+    });
+
+    it("keeps the toolbar on one line beside the title from xs up", () => {
+        const base = css.slice(0, mediaStart);
+        expect(base).toMatch(/\.file-actions\s*{[^}]*flex-wrap:\s*nowrap/);
+        expect(base).toMatch(/\.file-actions\s*{[^}]*flex-shrink:\s*0/);
+        expect(base).toMatch(/\.file-info-title\s*{[^}]*max-width:\s*50%/);
+    });
+});

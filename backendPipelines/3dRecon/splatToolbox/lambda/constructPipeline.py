@@ -96,7 +96,10 @@ def construct_splattoolbox_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
-            "fileExtension": input_s3_asset_extension
+            "fileExtension": input_s3_asset_extension,
+            # The S3 version the container reads the input at. Written only when there is one, so a
+            # no-version definition stays exactly what an image built before the field parses.
+            **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         },
         "outputFiles": {
             "bucketName": output_bucket,

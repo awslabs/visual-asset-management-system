@@ -8,12 +8,12 @@ import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
 from common.dynamodb import (
@@ -260,19 +260,49 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
     method_allowed_on_api = False
 
-    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
-    if asset_object is None:
-        response["statusCode"] = 404
-        response["body"] = json.dumps({"message": "Asset not found"})
+    show_archived = parse_show_archived(queryParameters)
+    if show_archived is None:
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": SHOW_ARCHIVED_INVALID_MESSAGE})
         return response
 
-    asset_object.update({"object__type": "asset"})
+    if show_archived:
+        # showArchived also resolves an archived asset; its comments stay keyed by assetId.
+        # Authorization is decided before existence, so a refused caller cannot tell an archived
+        # asset from a missing or ambiguous one.
+        lookup_error = None
+        try:
+            asset_object = get_asset_object_from_id(None, pathParameters["assetId"], include_archived=True)
+        except VAMSGeneralErrorResponse as error:
+            asset_object, lookup_error = None, error
+        authorization_object = asset_authorization_object(
+            asset_object, None, pathParameters["assetId"], include_archived=True)
+        if len(claims_and_roles["tokens"]) == 0 or \
+                not CasbinEnforcer(claims_and_roles).enforce(authorization_object, "GET"):
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+        if lookup_error is not None:
+            raise lookup_error
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
+        method_allowed_on_api = True
+    else:
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+        if asset_object is None:
+            response["statusCode"] = 404
+            response["body"] = json.dumps({"message": "Asset not found"})
+            return response
 
-    # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset_object, "GET"):
-            method_allowed_on_api = True
+        asset_object.update({"object__type": "asset"})
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "GET"):
+                method_allowed_on_api = True
 
     if method_allowed_on_api:
         if "assetVersionId:commentId" not in pathParameters:

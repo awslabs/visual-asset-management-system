@@ -256,7 +256,11 @@ def _run_preview_stage(
             logger.info(f"Input size: {os.path.getsize(local_filepath) / 1024 ** 3:.3f} GiB")
     else:
         # Check file size in S3 before downloading
-        file_size = s3.get_object_size(stage_input.bucketName, stage_input.objectKey)
+        try:
+            file_size = s3.get_object_size(stage_input.bucketName, stage_input.objectKey,
+                                           **_input_version(stage_input))
+        except s3.InputVersionMissingError as e:
+            return _error_response(stage, str(e))
         if file_size is None:
             logger.warning(
                 "Unable to determine file size via HEAD request. "
@@ -294,7 +298,11 @@ def _run_preview_stage(
             ) or os.path.join(local_input_dir, os.path.basename(stage_input.objectKey))
             os.makedirs(os.path.dirname(input_target), exist_ok=True)
             with timer.phase("download"):
-                local_filepath = s3.download(stage_input.bucketName, stage_input.objectKey, input_target)
+                try:
+                    local_filepath = s3.download(stage_input.bucketName, stage_input.objectKey, input_target,
+                                                 **_input_version(stage_input))
+                except s3.InputVersionMissingError as e:
+                    return _error_response(stage, str(e))
 
     # Verify download
     if not streamed and (local_filepath is None or not os.path.isfile(local_filepath)):
@@ -331,7 +339,8 @@ def _run_preview_stage(
         with timer.phase("load"):
             if streamed:
                 pv_data = pointcloud_handler.load_stream(
-                    s3.iter_object_bytes(stage_input.bucketName, stage_input.objectKey), ext,
+                    s3.iter_object_bytes(stage_input.bucketName, stage_input.objectKey,
+                                         **_input_version(stage_input)), ext,
                     max_points=budgets.points)
             else:
                 pv_data = _load_file(local_filepath, ext,
@@ -692,6 +701,12 @@ def _success_response(stage: PipelineStage, message=None) -> PipelineStage:
     logger.info(message)
     stage.status = PipelineStatus.COMPLETE
     return stage
+
+
+def _input_version(stage_input: StageInput) -> dict:
+    """The ``version_id`` argument for a read of the stage input: the version the run was launched on,
+    or no argument (the current object) when the definition carries none."""
+    return {"version_id": stage_input.versionId} if stage_input.versionId else {}
 
 
 def _error_response(stage: PipelineStage, message=None) -> PipelineStage:

@@ -178,12 +178,14 @@ def asset():
 @click.option('-d', '--database-id', required=True, help='Database ID')
 @click.option('-a', '--asset-id', required=True, help='Asset ID')
 @click.option('--asset-version-id', help='Filter metadata by a specific asset version')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: str, page_size: int, starting_token: str, json_output: bool):
+def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: str, show_archived: bool,
+         page_size: int, starting_token: str, json_output: bool):
     """
     List all metadata for an asset.
 
@@ -192,6 +194,7 @@ def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: 
         vamscli metadata asset list -d my-db -a my-asset --json-output
         vamscli metadata asset list -d my-db -a my-asset --page-size 100
         vamscli metadata asset list -d my-db -a my-asset --asset-version-id ver123
+        vamscli metadata asset list -d my-db -a my-archived-asset --show-archived
     """
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
@@ -201,7 +204,8 @@ def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: 
         output_status("Retrieving asset metadata...", json_output)
 
         result = fetch_all_metadata_pages(
-            lambda ps, token: api_client.get_asset_metadata_v2(database_id, asset_id, ps, token, asset_version_id),
+            lambda ps, token: api_client.get_asset_metadata_v2(database_id, asset_id, ps, token, asset_version_id,
+                                                               show_archived=show_archived),
             page_size, starting_token
         )
 
@@ -379,13 +383,14 @@ def file():
 @click.option('--type', 'metadata_type', type=click.Choice(['metadata', 'attribute']), required=True,
               help='Type: metadata or attribute')
 @click.option('--asset-version-id', help='Filter metadata by a specific asset version')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, metadata_type: str,
-         asset_version_id: str, page_size: int, starting_token: str, json_output: bool):
+         asset_version_id: str, show_archived: bool, page_size: int, starting_token: str, json_output: bool):
     """
     List all metadata or attributes for a file.
 
@@ -393,6 +398,7 @@ def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, me
         vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata
         vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type attribute --json-output
         vamscli metadata file list -d my-db -a my-asset --file-path "models/file.gltf" --type metadata --asset-version-id ver123
+        vamscli metadata file list -d my-db -a my-archived-asset --file-path "models/file.gltf" --type metadata --show-archived
     """
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
@@ -402,7 +408,8 @@ def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, me
         output_status(f"Retrieving file {metadata_type}...", json_output)
 
         result = fetch_all_metadata_pages(
-            lambda ps, token: api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, ps, token, asset_version_id),
+            lambda ps, token: api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, ps, token,
+                                                              asset_version_id, show_archived=show_archived),
             page_size, starting_token
         )
         
@@ -575,18 +582,21 @@ def asset_link():
 
 @asset_link.command()
 @click.option('--asset-link-id', required=True, help='Asset link ID')
+@click.option('--show-archived', is_flag=True, help='Also find a linked asset that is archived')
 @click.option('--page-size', default=100, type=int, help='Page size for pagination (default: 100, maximum 1000)')
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, asset_link_id: str, page_size: int, starting_token: str, json_output: bool):
+def list(ctx: click.Context, asset_link_id: str, show_archived: bool, page_size: int, starting_token: str,
+         json_output: bool):
     """
     List all metadata for an asset link.
     
     Examples:
         vamscli metadata asset-link list --asset-link-id abc123-def456-ghi789
         vamscli metadata asset-link list --asset-link-id abc123-def456-ghi789 --json-output
+        vamscli metadata asset-link list --asset-link-id abc123-def456-ghi789 --show-archived
     """
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
@@ -596,7 +606,8 @@ def list(ctx: click.Context, asset_link_id: str, page_size: int, starting_token:
         output_status("Retrieving asset link metadata...", json_output)
 
         result = fetch_all_metadata_pages(
-            lambda ps, token: api_client.get_asset_link_metadata_v2(asset_link_id, ps, token),
+            lambda ps, token: api_client.get_asset_link_metadata_v2(asset_link_id, ps, token,
+                                                                    show_archived=show_archived),
             page_size, starting_token
         )
         

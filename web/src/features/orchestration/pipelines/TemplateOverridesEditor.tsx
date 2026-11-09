@@ -11,18 +11,32 @@ import AssetSpanControl, {
     scopeWithSpan,
 } from "../components/AssetSpanControl";
 import type { InputFileArity } from "../types";
-import { METADATA_LABELS, metadataEnabled } from "../wizard/resolveRestrictions";
+import {
+    METADATA_LABELS,
+    OPT_IN_METADATA_HELP,
+    metadataEnabled,
+} from "../wizard/resolveRestrictions";
 import type { MetadataKey } from "../wizard/resolveRestrictions";
 
 /**
  * The metadata-input keys a template may override, in the order the editor shows them: widest entity
  * first, so the rows read database -> asset -> file as the containment they describe.
  */
-const METADATA_OVERRIDE_FIELDS: { key: MetadataKey; label: string }[] = [
+const METADATA_OVERRIDE_FIELDS: { key: MetadataKey; label: string; info?: string }[] = [
     { key: "databaseMetadata", label: METADATA_LABELS.databaseMetadata },
     { key: "assetMetadata", label: METADATA_LABELS.assetMetadata },
     { key: "fileMetadata", label: METADATA_LABELS.fileMetadata },
     { key: "fileAttributes", label: METADATA_LABELS.fileAttributes },
+    {
+        key: "assetFileMetadata",
+        label: METADATA_LABELS.assetFileMetadata,
+        info: OPT_IN_METADATA_HELP.assetFileMetadata,
+    },
+    {
+        key: "metadataSchema",
+        label: METADATA_LABELS.metadataSchema,
+        info: OPT_IN_METADATA_HELP.metadataSchema,
+    },
 ];
 
 /**
@@ -80,14 +94,16 @@ const seedFilters = (inherited?: { allow?: string[]; exclude?: string[] }) => ({
     exclude: [...(inherited?.exclude || [])],
 });
 
-const MetaRow: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({
-    checked,
-    onChange,
-    label,
-}) => (
+const MetaRow: React.FC<{
+    checked: boolean;
+    onChange: (v: boolean) => void;
+    label: string;
+    info?: string;
+}> = ({ checked, onChange, label, info }) => (
     <label className="flex items-center gap-2 text-sm text-text-primary">
         <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
         {label}
+        {info && <InfoTooltip text={info} />}
     </label>
 );
 
@@ -239,11 +255,12 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                 />
                 {has("metadataInputs") && (
                     <div className="space-y-1 pl-1">
-                        {/* Every key reads through metadataEnabled, which defaults an omitted one ON
-                            to match the record builders — an override map that omits a key keeps
-                            providing that metadata, and binding the raw value would render it as
-                            opted out and then persist that opt-out on the next save. */}
-                        {METADATA_OVERRIDE_FIELDS.map(({ key, label }) => (
+                        {/* Every key reads through metadataEnabled, which resolves an omitted key to
+                            the record builders' default: ON for the four metadata types, OFF for
+                            assetFileMetadata and metadataSchema. An override map that omits a type
+                            keeps providing that metadata, and binding the raw value would render it
+                            as opted out and then persist that opt-out on the next save. */}
+                        {METADATA_OVERRIDE_FIELDS.map(({ key, label, info }) => (
                             <MetaRow
                                 key={key}
                                 checked={metadataEnabled(metadata, key)}
@@ -251,6 +268,7 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                                     setKey("metadataInputs", { ...metadata, [key]: v })
                                 }
                                 label={label}
+                                info={info}
                             />
                         ))}
                     </div>

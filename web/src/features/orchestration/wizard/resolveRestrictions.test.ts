@@ -7,6 +7,7 @@ import {
     resolveRestrictions,
     stepsFromWorkflow,
     isOpenAllowList,
+    metadataEnabled,
     summarizeRestrictions,
 } from "./resolveRestrictions";
 
@@ -454,5 +455,29 @@ describe("summarizeRestrictions", () => {
             []
         );
         expect(summarizeRestrictions(r)).toBe("2 file types · 1 or more files · results only");
+    });
+});
+
+describe("opt-in metadata inputs (assetFileMetadata, metadataSchema)", () => {
+    it("default OFF when a map omits them, unlike the four metadata types", () => {
+        expect(metadataEnabled({}, "assetFileMetadata")).toBe(false);
+        expect(metadataEnabled(undefined, "metadataSchema")).toBe(false);
+        expect(metadataEnabled({ metadataSchema: true }, "metadataSchema")).toBe(true);
+        expect(metadataEnabled({}, "fileMetadata")).toBe(true);
+    });
+
+    it("reach a step only when the workflow gate and the step both turn them on", () => {
+        const step = { systemConfig: { metadataInputs: { assetFileMetadata: true } } };
+        const on = resolveRestrictions({ metadataInputs: { assetFileMetadata: true } }, [step]);
+        expect(on.metadataInputKeys).toContain("assetFileMetadata");
+        const gatedOff = resolveRestrictions({ metadataInputs: {} }, [step]);
+        expect(gatedOff.metadataInputKeys).not.toContain("assetFileMetadata");
+        expect(gatedOff.metadataGatedOff).toEqual([
+            "Per-file metadata for whole-asset and folder runs",
+        ]);
+        const notAsked = resolveRestrictions({ metadataInputs: { metadataSchema: true } }, [
+            { systemConfig: { metadataInputs: {} } },
+        ]);
+        expect(notAsked.metadataInputKeys).not.toContain("metadataSchema");
     });
 });

@@ -2,12 +2,14 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 import boto3
 import json
 import uuid
 from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
 from common.resourceNames import get_table_name, ResourceKeys
@@ -33,6 +35,7 @@ from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import outputPathExtension as ope
+from common.workflows import executionLogCapture as elc
 from common.workflows import executionLocks as el
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
@@ -255,7 +258,7 @@ def create_external_upload_record(asset_id, database_id, upload_type, baseFileKe
         upload_id = f"y{str(uuid.uuid4())}"
         
         # Calculate expiration time (7 days from now)
-        now = datetime.utcnow()
+        now = utc_now()
         expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
         
         # Create upload record
@@ -711,10 +714,11 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
     return None
 
 
-def _record_applied_metadata(collected, target_file_path, source_key, entries):
+def _record_applied_metadata(collected, target_file_path, source_key, entries, metadata_type):
     """Append one output-metadata descriptor per applied key onto `collected`, capped at
     MAX_RECORDED_OUTPUT_METADATA_ROWS for the whole execution. target_file_path is '/' for
-    asset-level metadata and the asset-relative path (leading slash) for file-level."""
+    asset-level metadata and the asset-relative path (leading slash) for file-level; metadata_type
+    ('metadata' or 'attribute') keeps a key written to one file as both kinds in two rows."""
     for entry in entries:
         if len(collected) >= MAX_RECORDED_OUTPUT_METADATA_ROWS:
             logger.warning(
@@ -725,6 +729,7 @@ def _record_applied_metadata(collected, target_file_path, source_key, entries):
             "targetFilePath": target_file_path,
             "metadataKey": entry["metadataKey"],
             "metadataValue": entry["metadataValue"],
+            "metadataType": metadata_type,
             "sourceMetadataFileRelativePath": source_key,
         })
 
@@ -820,7 +825,10 @@ def _collect_result_outputs(bucket_name, results_path_key, objects_found):
             content = _read_result_content(bucket_name, result_key, obj.get('Size'))
         except Exception as e:
             logger.exception(f"Error reading result file {result_key}: {e}")
-            failures.append("Reading a pipeline results file failed.")
+            # The status object's own reader records why it could not be used, so a failed read of
+            # it here adds no second summary.
+            if result_key != results_path_key + EXECUTION_STATUS_RESULTS_FILENAME:
+                failures.append("Reading a pipeline results file failed.")
             continue
         content_bytes += len(content.encode("utf-8"))
         # Path relative to the results folder, asset-relative with a leading slash.
@@ -921,32 +929,76 @@ def _log_group_name_from_arn(log_group_arn):
     return name
 
 
-def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
-    """Best-effort fetch of CloudWatch log events for ONE workflow execution.
+# Bounds on the completion-time log read: FilterLogEvents calls, and seconds spent following
+# nextToken. Well inside the 15-minute function timeout.
+EXECUTION_LOG_CAPTURE_MAX_PAGES = 50
+EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
+# Seconds the log refresh after the completion write may spend waiting for CloudWatch Logs to
+# ingest the run's events, also well inside the function timeout.
+EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
 
-    Returns the full recent execution log (not just errors), captured for every
-    completed run. All workflow state machines log to a single shared group; Step
-    Functions STANDARD logging writes a per-execution log stream named for the execution
-    (its name == our executionId) and tags every event with execution_arn. We scope the
-    read to this execution by filtering on the execution id, so the shared group does not
-    leak other executions' logs into this record. Returns (text, stream_name); ('', '')
-    on any failure or when logging is not configured (logs are non-critical)."""
+
+def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow_id,
+                           execution_start_date, stored_log):
+    """After the completion write, re-read the run's log until two full reads agree on its events
+    (common.workflows.executionLogCapture), and store that read when it differs from the one the
+    completion write stored. Runs after the status is recorded, so the wait never delays the run
+    showing as finished. Best-effort: logs and returns on failure."""
+    log_group_name = _log_group_name_from_arn(workflow_execution_log_group_arn)
+    if not log_group_name or not workflow_execution_id:
+        return
+    try:
+        text, _stream = elc.capture_settled_execution_log(
+            logs_client, log_group_name, workflow_execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
+            sleep=_settle_sleep,
+        )
+        if text and text != (stored_log or ""):
+            eo.refresh_main_row_log(dynamodb, workflow_execution_database_v2, workflow_execution_id,
+                                    workflow_database_id, workflow_id, text)
+    except Exception as e:
+        logger.info(f"Could not refresh the stored execution log (non-critical): {e}")
+
+
+def _settle_sleep(seconds):
+    time.sleep(seconds)
+
+
+def _execution_start_date(workflow_execution_id, workflow_database_id, workflow_id):
+    """The main row's executionStartDate, which anchors the log read; "" when it cannot be read."""
+    try:
+        item = dynamodb.Table(workflow_execution_database_v2).get_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(
+                     workflow_database_id, workflow_id)},
+            ProjectionExpression="executionStartDate",
+        ).get("Item") or {}
+        return item.get("executionStartDate", "") or ""
+    except Exception as e:
+        logger.info(f"Could not read the execution start date (non-critical): {e}")
+        return ""
+
+
+def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date=""):
+    """Best-effort capture of ONE workflow execution's CloudWatch log for its execution record.
+
+    All workflow state machines log to one shared group, so the read is scoped to this execution by
+    its id, anchored on its start date, and follows nextToken past empty pages
+    (common.workflows.executionLogCapture). The text keeps the newest events within the stored bound
+    and is redacted. Returns (text, stream_name); ('', '') on any failure or when logging is not
+    configured (logs are non-critical)."""
     log_group_name = _log_group_name_from_arn(log_group_arn)
     if not log_group_name or not execution_id:
         return "", ""
     try:
-        # filterPattern matches the execution id within events (it appears in the
-        # execution_arn / execution name that includeExecutionData emits), scoping the
-        # result to just this execution's events within the shared group.
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name,
-            filterPattern=f'"{execution_id}"',
-            limit=limit_events,
+        return elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_CAPTURE_BUDGET_SECONDS,
         )
-        events = resp.get('events', [])
-        text = "\n".join(e.get('message', '') for e in events)
-        stream = events[0].get('logStreamName', '') if events else ''
-        return text, stream
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return "", ""
@@ -1045,6 +1097,7 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                     target_file_path=m.get("targetFilePath", "/"),
                     metadata_key=m.get("metadataKey", ""), metadata_value=m.get("metadataValue", ""),
                     source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
+                    metadata_type=m.get("metadataType") or er.OUTPUT_METADATA_TYPE_METADATA,
                 ))
 
     # Output results (structured pipeline result files)
@@ -1198,7 +1251,10 @@ def _process_results_only(event):
         log_group_arn = workflow_execution_log_group_arn
         workflow_execution_id = event.get('workflowExecutionId', '')
         end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
-        execution_log, stream_name = _fetch_execution_logs(log_group_arn, workflow_execution_id)
+        execution_start_date = _execution_start_date(
+            workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''))
+        execution_log, stream_name = _fetch_execution_logs(
+            log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
         status, error_summary = _terminal_status(output_failures)
         record_execution_outputs(
             dynamo=dynamodb,
@@ -1214,6 +1270,10 @@ def _process_results_only(event):
             log_group_arn=log_group_arn, log_stream_name=stream_name,
             execution_status=status, execution_error=error_summary,
         )
+        if workflow_execution_id and end_state_pipeline_execution_id:
+            _refresh_execution_log(
+                workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''),
+                execution_start_date, execution_log)
     except Exception as e:
         logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
 
@@ -1597,7 +1657,8 @@ def lambda_handler(event, context):
                                 output_failures.append(_metadata_write_back_failure(applied))
                             else:
                                 _record_applied_metadata(
-                                    collected_output_metadata, "/", asset_metadata_file['Key'], applied)
+                                    collected_output_metadata, "/", asset_metadata_file['Key'], applied,
+                                    er.OUTPUT_METADATA_TYPE_METADATA)
                         except Exception as e:
                             logger.exception(f"Error processing asset metadata: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1633,7 +1694,7 @@ def lambda_handler(event, context):
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
-                                        file_obj['Key'], applied)
+                                        file_obj['Key'], applied, er.OUTPUT_METADATA_TYPE_METADATA)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1668,7 +1729,7 @@ def lambda_handler(event, context):
                                 else:
                                     _record_applied_metadata(
                                         collected_output_metadata, "/" + file_path.lstrip("/"),
-                                        file_obj['Key'], applied)
+                                        file_obj['Key'], applied, er.OUTPUT_METADATA_TYPE_ATTRIBUTE)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1714,9 +1775,11 @@ def lambda_handler(event, context):
                 end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
                 # Full execution log for this run, captured on completion regardless of
                 # success/failure (stored on the main row's executionLog field).
+                execution_start_date = _execution_start_date(
+                    workflow_execution_id, event.get('workflowDatabaseId', ''),
+                    event.get('workflowId', ''))
                 execution_log, stream_name = _fetch_execution_logs(
-                    log_group_arn, workflow_execution_id
-                )
+                    log_group_arn, workflow_execution_id, execution_start_date=execution_start_date)
                 # Attribute to the end-state pipeline only the output files new or version-changed
                 # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
                 prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])
@@ -1746,6 +1809,10 @@ def lambda_handler(event, context):
                     log_group_arn=log_group_arn, log_stream_name=stream_name,
                     execution_status=status, execution_error=error_summary,
                 )
+                if workflow_execution_id and end_state_pipeline_execution_id:
+                    _refresh_execution_log(
+                        workflow_execution_id, event.get('workflowDatabaseId', ''),
+                        event.get('workflowId', ''), execution_start_date, execution_log)
             except Exception as e:
                 # Output recording is non-critical to the upload pipeline; log and continue.
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")

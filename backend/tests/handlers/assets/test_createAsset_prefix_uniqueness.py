@@ -90,4 +90,4 @@ class TestPrefixUniqueness:
             s3_external,
         )
         assert response.assetId == "asset-1"
-        m.create_prefix_folder.assert_called_once_with("bucket", "asset-1/")
+        m.create_prefix_folder.assert_called_once_with("bucket", "asset-1/", "testdb1", "asset-1")

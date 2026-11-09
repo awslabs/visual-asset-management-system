@@ -220,10 +220,20 @@ class VamsClient:
 
     @staticmethod
     def trim_search_results(raw: Dict[str, Any], max_hits: int = 50) -> Dict[str, Any]:
-        """Reduce a raw OpenSearch response to a compact, agent-friendly shape."""
+        """Reduce a raw OpenSearch response to a compact, agent-friendly shape.
+
+        ``total`` stays the numeric ``hits.total.value``. ``total_is_lower_bound`` is True when the
+        API reports ``hits.total.relation == "gte"`` (the true total is at least ``total``), and
+        ``total_display`` is the total as text with a trailing '+' in that case (e.g. "120+").
+        """
         hits_container = raw.get("hits", {}) if isinstance(raw, dict) else {}
         total = hits_container.get("total", {})
         total_value = total.get("value") if isinstance(total, dict) else total
+        total_is_lower_bound = isinstance(total, dict) and total.get("relation") == "gte"
+        if total_value is None:
+            total_display = None
+        else:
+            total_display = f"{total_value}+" if total_is_lower_bound else f"{total_value}"
         hits = hits_container.get("hits", []) or []
 
         compact = []
@@ -239,6 +249,8 @@ class VamsClient:
 
         return {
             "total": total_value,
+            "total_is_lower_bound": total_is_lower_bound,
+            "total_display": total_display,
             "returned": len(compact),
             "results": compact,
         }

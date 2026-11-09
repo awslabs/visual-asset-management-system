@@ -316,8 +316,8 @@ def update_database(database_id, update_data, claims_and_roles=None):
             raise
         
         # Create response
-        from datetime import datetime
-        timestamp = datetime.utcnow().isoformat()
+        from common.timestamps import utc_now
+        timestamp = utc_now().isoformat()
         
         return UpdateDatabaseResponseModel(
             success=True,

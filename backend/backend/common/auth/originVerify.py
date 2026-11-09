@@ -31,7 +31,7 @@ from botocore.config import Config as BotoConfig
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="OriginVerify")
+logger = safeLogger()
 
 ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify"
 CURRENT_KEY = "current"

@@ -145,6 +145,63 @@ describe("ExecutionsBoard", () => {
         expect(screen.getAllByText("db-1").length).toBeGreaterThan(0);
     });
 
+    it.each([
+        ["an empty object", {}],
+        ["a message only", { message: "no rows" }],
+        ["a null Items", { Items: null }],
+    ])("renders an empty list, not an error, for a page with %s", (_label, page) => {
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: { pages: [page], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("No executions found.")).toBeInTheDocument();
+    });
+
+    it("keeps the rows of the other pages when one page has no Items", () => {
+        const { useExecutions } = require("../api/queries");
+        const row: Execution = {
+            workflowExecutionId: "exec-kept",
+            workflowId: "wf-1",
+            workflowDatabaseId: "db-1",
+            executionStatus: "SUCCEEDED",
+            triggeredByUserId: "user-1",
+            triggerType: "manual",
+            executionStartDate: "2026-07-18T10:00:00Z",
+        };
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [row] }, {}], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("exec-kept")).toBeInTheDocument();
+    });
+
     it("sorts non-terminal rows (RUNNING) above terminal rows", () => {
         const { useExecutions } = require("../api/queries");
         const mockExecutions: Execution[] = [

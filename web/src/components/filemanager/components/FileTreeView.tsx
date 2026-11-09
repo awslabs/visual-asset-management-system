@@ -7,6 +7,7 @@ import {
     FileManagerContextType,
 } from "../types/FileManagerTypes";
 import Synonyms from "../../../synonyms";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 import "./FileTreeView.css";
 
 // Create a context that will be overridden by the main component
@@ -223,6 +224,8 @@ export function DirectoryTree({}: DirectoryTreeProps) {
         throw new Error("DirectoryTree must be used within a FileManagerContext.Provider");
     }
     const { state, dispatch } = context;
+    // Every file of an archived asset is archived, so its listing always shows them
+    const assetArchived = useAssetArchived();
 
     // Show loading progress for streaming phases
     // Only show spinner during active loading phases, not during transition phases
@@ -309,6 +312,7 @@ export function DirectoryTree({}: DirectoryTreeProps) {
                                     })
                                 }
                                 checked={state.showArchived}
+                                disabled={assetArchived}
                             >
                                 Show archived files
                             </Toggle>

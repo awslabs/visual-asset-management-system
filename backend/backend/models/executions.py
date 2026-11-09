@@ -15,7 +15,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
@@ -53,12 +53,46 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
+    # concurrency restriction refused (one row per blocking run and lock key; see
+    # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
+    # existed lack them, which reads as "not skipped": a count of 0 and empty strings.
+    skippedLaunchCount: Optional[int] = 0
+    lastSkippedDate: Optional[str] = ""
+    skipScope: Optional[str] = ""
+    skipReason: Optional[str] = ""
+    blockingExecutionId: Optional[str] = ""
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
         if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
         return v
+
+
+class ExecutionSkipFileModel(BaseModel, extra='ignore'):
+    """One file a refused trigger launch named, in the details view's `skip` block (the same scrubbed
+    shape as a details inputFiles row)."""
+    databaseId: str = ""
+    assetId: str = ""
+    inputAssetFileKey: str = ""
+    versionId: str = ""
+
+
+class ExecutionSkipDetailsModel(BaseModel, extra='ignore'):
+    """The details view's optional `skip` block, sent only for a SKIPPED execution.
+
+    blockingExecutionId is the run that held the lock. It is set only when the caller passes the read
+    check on that run; otherwise it is omitted, whether the run is unreadable or gone, so the block
+    never reveals that a run the caller cannot read exists."""
+    reason: str = ""
+    scope: str = ""
+    count: int = 0
+    firstSkippedDate: str = ""
+    lastSkippedDate: str = ""
+    files: List[ExecutionSkipFileModel] = []
+    filesTruncated: bool = False
+    blockingExecutionId: Optional[str] = None
 
 
 class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -149,6 +183,9 @@ class PipelineExecutionInputMetadataRecord(
     attributes: Optional[Dict[str, Any]] = {}
     attributesTruncated: Optional[bool] = False
     sourceInputMetadataFileS3Key: Optional[str] = ""
+    # True on a file record an assetFileMetadata expansion added (context, not an input file); stored
+    # only on such a row, so a row without it reads as not expanded.
+    expanded: Optional[bool] = False
 
 
 class PipelineExecutionInputConfigurationRecord(BaseModel, extra='ignore'):
@@ -208,6 +245,8 @@ class PipelineExecutionOutputMetadataRecord(
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
+    # 'metadata' or 'attribute'; empty on a row recorded before the type was stored.
+    metadataType: Optional[str] = ""
     sourceMetadataFileRelativePath: Optional[str] = ""
 
 
@@ -239,8 +278,9 @@ class WorkflowExecutionInputRecord(
     The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
     declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
-    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
-    # without the partition is absent from that listing.
+    # Sort key ('db:asset:/key', plus '#versionId' when a version was resolved), and the by-asset GSI
+    # partition backing an asset's execution-input history. A row without the partition is absent
+    # from that listing.
     databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
         "", alias="databaseId:assetId:inputAssetFileKey")
     databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
@@ -253,6 +293,9 @@ class WorkflowExecutionInputRecord(
     assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
+    # Whether the caller named versionId at launch (a re-run reads it again) or it was resolved as
+    # the current version (a re-run takes the current version). Absent on older rows: not pinned.
+    versionPinned: Optional[bool] = False
     executionStartDate: Optional[str] = ""
     workflowId: Optional[str] = ""
     workflowDatabaseId: Optional[str] = ""
@@ -298,6 +341,9 @@ class WorkflowExecutionConfigurationRecord(
     # Result order). Written [] at launch and UPDATEd at completion/failure. A row written before the
     # attribute existed resolves to [] on read (no migration), which is the default here.
     outputTypes: Optional[List[str]] = []
+    # SKIPPED records only: the refused trigger launch's per-pipeline template parameters, which a
+    # re-run replays (the record has no pipeline rows). Absent on every other row.
+    pipelineExecutionParameters: Optional[Dict[str, Any]] = {}
 
 
 #######################
@@ -537,7 +583,7 @@ class ExecuteWorkflowRequestV2Model(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         trigger = values.get("triggerType")
         if trigger not in EXECUTE_TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {EXECUTE_TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(EXECUTE_TRIGGER_TYPES)}")
         # Output-target ids, when supplied, must be valid. outputAssetId uses the ASSET_ID rule
         # (filename pattern, dots/spaces allowed, up to 256 chars) — the same rule the asset handlers
         # use — NOT the strict database ID pattern, which would reject a legitimately-named output
@@ -604,6 +650,59 @@ class ListExecutionsRequestModel(BaseModel, extra='ignore'):
         return values
 
 
+# Every main-row executionStatus a list can return, in display order. SKIPPED is the record of
+# file-upload trigger launches a concurrency restriction refused.
+EXECUTION_LIST_STATUSES = ("NEW", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "SKIPPED")
+EXCLUDE_STATUS_UNKNOWN_MESSAGE = (
+    "excludeStatus must be one status, or a comma-separated list of statuses, from: "
+    + ", ".join(EXECUTION_LIST_STATUSES) + ".")
+EXCLUDE_STATUS_CONFLICT_MESSAGE = "excludeStatus cannot exclude the status that the status filter selects."
+
+
+class ExecutionListStatusFilterModel(BaseModel, extra='ignore'):
+    """The status query parameters of the asset and global execution lists.
+
+    `status` is the existing exact-match filter and is passed through unvalidated, as before.
+    `excludeStatus` (optional) names one status or a comma-separated list of them; every value must be
+    one of EXECUTION_LIST_STATUSES, and it may not exclude the status `status` selects. Parsed into
+    `excludedStatuses` (deduplicated, in the order given); empty when the parameter is absent."""
+    status: Optional[str] = ""
+    excludeStatus: Optional[str] = ""
+    excludedStatuses: List[str] = []
+
+    @root_validator(skip_on_failure=True)
+    def validate_exclude_status(cls, values):
+        raw = (values.get('excludeStatus') or '').strip()
+        excluded = []
+        if raw:
+            for part in raw.split(','):
+                value = part.strip()
+                if value not in EXECUTION_LIST_STATUSES:
+                    raise ValueError(EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+                if value not in excluded:
+                    excluded.append(value)
+        status = (values.get('status') or '').strip()
+        if status and status in excluded:
+            raise ValueError(EXCLUDE_STATUS_CONFLICT_MESSAGE)
+        values['excludedStatuses'] = excluded
+        return values
+
+
+def parse_list_status_filter(query_params):
+    """(excluded statuses, error message) for a list request's query parameters. The message is one of
+    the two fixed texts above, never the caller's value."""
+    params = query_params or {}
+    try:
+        model = ExecutionListStatusFilterModel(
+            status=params.get('status') or '', excludeStatus=params.get('excludeStatus') or '')
+    except ValueError as error:
+        text = str(error)
+        message = (EXCLUDE_STATUS_CONFLICT_MESSAGE if EXCLUDE_STATUS_CONFLICT_MESSAGE in text
+                   else EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+        return [], message
+    return list(model.excludedStatuses), ""
+
+
 class RerunExecutionRequestModel(BaseModel, extra='ignore'):
     """Re-run reconstructs the execute request from stored records; the caller may optionally reuse
     the original executionGroupId or supply a new one."""
@@ -657,7 +756,7 @@ class DetailMetadataPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_METADATA_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_METADATA_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_METADATA_COLLECTIONS)}")
         # pipelineId narrows the read to one step's rows and is compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):
@@ -719,7 +818,7 @@ class DetailFilesPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_FILE_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_FILE_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_FILE_COLLECTIONS)}")
         # pipelineId narrows the read to one step's output rows, compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):

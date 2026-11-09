@@ -136,7 +136,7 @@ def run_container(container, monkeypatch, tmp_path):
         monkeypatch.setattr(container.manifest_io, "fetch_input_configuration",
                             lambda *args, **kwargs: {})
 
-        def download(s3_uri, local_path):
+        def download(s3_uri, local_path, version_id=""):
             # The stub WRITES: a recorder alone would leave every "the file was there" assertion
             # below satisfied by nothing.
             record.downloads.append(s3_uri)

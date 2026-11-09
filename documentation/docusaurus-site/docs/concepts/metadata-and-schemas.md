@@ -166,6 +166,8 @@ All create, update, and delete operations accept bulk payloads. A bulk operation
 
 Each entity can store up to **500 metadata records**. This limit applies per entity instance (for example, per asset, per file, or per database). The `replace_all` update mode is also capped at 500 items per operation.
 
+The limit applies to user and API writes. Pipeline write-backs are exempt, so a pipeline can store more than 500 records on an entity. While an entity holds more than 500 records, a user or API create or `update` on it is refused, even one that changes only existing keys. A `replace_all` of 500 items or fewer is accepted and removes the keys it does not list, and deletes are accepted, so either brings the entity back under the limit.
+
 ## Asset metadata versioning
 
 Asset metadata is saved as part of asset version snapshots. When you create an asset version, the current metadata state is captured. You can retrieve metadata as it existed at any previous version by passing the `assetVersionId` parameter to the metadata GET endpoint.

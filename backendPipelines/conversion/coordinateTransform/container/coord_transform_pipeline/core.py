@@ -232,10 +232,13 @@ def _run_transform_stage(
         local_input_path = os.path.join(input_dir, input_filename)
 
         if not local_test:
+            # The run's launch version; no argument reads the current object.
+            version = {"version_id": stage_input.versionId} if stage_input.versionId else {}
             downloaded = s3.download(
                 stage_input.bucketName,
                 stage_input.objectKey,
                 local_input_path,
+                **version,
             )
             if downloaded is None:
                 raise RuntimeError(

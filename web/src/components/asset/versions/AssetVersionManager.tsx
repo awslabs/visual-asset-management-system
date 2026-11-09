@@ -27,6 +27,7 @@ import { RevertVersionModal } from "./components/RevertVersionModal";
 import { EditVersionModal } from "./components/EditVersionModal";
 import { ArchiveVersionModal } from "./components/ArchiveVersionModal";
 import { useAssetVersions } from "./hooks/useAssetVersions";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 import AssetVersionComparison, { EnhancedAssetVersionComparison } from "./AssetVersionComparison";
 
 // TypeScript interfaces
@@ -141,6 +142,7 @@ export const AssetVersionContext = createContext<AssetVersionContextType | undef
 
 export const AssetVersionManager: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
+    const assetArchived = useAssetArchived();
 
     // State for modals
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -573,32 +575,39 @@ export const AssetVersionManager: React.FC = () => {
                     <Header
                         variant="h2"
                         actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                {compareMode && versionToCompare && (
+                            // An archived asset's versions are listed read-only: comparing reads its
+                            // files and creating a version writes, both of which need it unarchived
+                            assetArchived ? undefined : (
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    {compareMode && versionToCompare && (
+                                        <Button
+                                            onClick={handleCompareWithCurrent}
+                                            variant={compareWithCurrent ? "primary" : "normal"}
+                                        >
+                                            Compare with Current Files
+                                        </Button>
+                                    )}
+                                    {compareMode ? (
+                                        <Button onClick={toggleCompareMode} variant="primary">
+                                            Exit Compare Mode
+                                        </Button>
+                                    ) : (
+                                        <Button
+                                            onClick={toggleComparisonOptions}
+                                            variant={showComparisonOptions ? "primary" : "normal"}
+                                            iconName="copy"
+                                        >
+                                            Compare Versions
+                                        </Button>
+                                    )}
                                     <Button
-                                        onClick={handleCompareWithCurrent}
-                                        variant={compareWithCurrent ? "primary" : "normal"}
+                                        onClick={() => setShowCreateModal(true)}
+                                        variant="primary"
                                     >
-                                        Compare with Current Files
+                                        Create New Version
                                     </Button>
-                                )}
-                                {compareMode ? (
-                                    <Button onClick={toggleCompareMode} variant="primary">
-                                        Exit Compare Mode
-                                    </Button>
-                                ) : (
-                                    <Button
-                                        onClick={toggleComparisonOptions}
-                                        variant={showComparisonOptions ? "primary" : "normal"}
-                                        iconName="copy"
-                                    >
-                                        Compare Versions
-                                    </Button>
-                                )}
-                                <Button onClick={() => setShowCreateModal(true)} variant="primary">
-                                    Create New Version
-                                </Button>
-                            </SpaceBetween>
+                                </SpaceBetween>
+                            )
                         }
                     >
                         Asset Versions

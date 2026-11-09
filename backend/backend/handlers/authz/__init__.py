@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import copy
 import boto3
 from botocore.config import Config
 import os
@@ -73,6 +74,12 @@ _PLAIN_OBJECT_TYPE_NAME = re.compile(r"[A-Za-z0-9_]+")
 # (CasbinEnforcerService.enforce, _evaluated_database_id).
 #
 ARCHIVED_DATABASE_ID_SUFFIX = "#deleted"
+
+# The operators CasbinEnforcerService._generate_criteria_object_rules emits a clause for. A criterion
+# with any other operator is left out of its policy line.
+_RULE_OPERATORS = (
+    "equals", "contains", "does_not_contain", "starts_with", "ends_with", "is_one_of", "is_not_one_of",
+)
 
 # Tracks users and their policy_text (which could span multiple roles)
 #
@@ -423,6 +430,12 @@ class CasbinEnforcer:
         
         return result
 
+    def effective_object_policies(self, object_type, action):
+        """The caller's policy lines for ``action`` on ``object_type`` as data, or None
+        (CasbinEnforcerService.effective_object_policies). Search turns them into index filters; the
+        per-object enforce() check stays authoritative."""
+        return self.service_object.effective_object_policies(object_type, action)
+
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         """Enforce API authorization with audit logging"""
         claims_and_roles = request_to_claims(lambdaEvent)
@@ -479,6 +492,11 @@ class CasbinEnforcerService:
         self._mfaEnabled = mfa_enabled
         self._dateTime_Cached = datetime.now()
         self._enforcer = None
+        # The policy as structured lines (see effective_object_policies), and the policy text the
+        # enforcer was actually built from. The lines are served only while the two agree.
+        self._pending_structured_policy = None
+        self._structured_policy = None
+        self._enforcer_policy_text = None
 
         try:
             self._user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
@@ -729,8 +747,14 @@ class CasbinEnforcerService:
                 escaped.append("\\U%08x" % code)
         return "".join(escaped)
 
-    def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
-        obj_rule = []
+    def _usable_criteria(self, policyCriteria, object_type=None):
+        """The criteria a policy line is built from: those on a known field in the object type's
+        field matrix with an operator the rule generator emits a clause for, in stored order.
+
+        The single filter both the policy text (_generate_criteria_object_rules) and the structured
+        lines search translates into index filters (effective_object_policies) are built from.
+        """
+        usable = []
         valid_fields = get_constraint_fields_for_object_type(object_type) if object_type else None
         for criterion in policyCriteria:
             # Skip deprecated or unknown fields that are not in PERMISSION_CONSTRAINT_FIELDS
@@ -744,6 +768,16 @@ class CasbinEnforcerService:
                 logger.info(f"Skipping out-of-matrix field for objectType {object_type}: {criterion['field']}")
                 continue
 
+            # An operator the generator does not know emits no clause.
+            if criterion['operator'] not in _RULE_OPERATORS:
+                continue
+
+            usable.append(criterion)
+        return usable
+
+    def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
+        obj_rule = []
+        for criterion in self._usable_criteria(policyCriteria, object_type):
             field = criterion['field']
             operator = criterion['operator']
 
@@ -777,8 +811,8 @@ class CasbinEnforcerService:
             # it belongs only where under-matching is the hazard. Applying '(?s)' to `equals` would
             # widen an allow rule instead of tightening it.
             #
-            # Clauses stay None for an operator this generator does not know, so an unrecognized
-            # operator is skipped rather than emitting a rule.
+            # _usable_criteria admits only the operators handled below, so clauses is always set;
+            # the None check is a guard should the two lists ever drift apart.
             clauses = None
             negated = False
             if operator == "equals":
@@ -895,12 +929,17 @@ class CasbinEnforcerService:
             policy_text = POLICY_TEXT_DENY_ALL
             logger.info("Failed to determine policy_text after multiple attempts. Denying all access.")
         else:
+            structured = getattr(self, "_pending_structured_policy", None)
+            if structured is not None and structured.get("policy_text") == policy_text:
+                self._structured_policy = structured
             if not policy_text:
                 # No role grants and no permissions: every check denies. Recorded as an
                 # explicit deny-all so it caches like any other result.
                 #
                 logger.info("No effective role assignments for this user. Denying all access.")
                 policy_text = POLICY_TEXT_DENY_ALL
+                if getattr(self, "_structured_policy", None) is not None:
+                    self._structured_policy = {**self._structured_policy, "policy_text": policy_text}
             # Cache the user-specific policies for future calls (also done on enforce() calls)
             #
             casbin_user_policy_map[self._user_id] = policy_text
@@ -995,6 +1034,12 @@ class CasbinEnforcerService:
         policy_text = ""
         new_line = "\n"
 
+        # The same policy as structured lines, for effective_object_policies. Recorded on the
+        # service only once the text it mirrors is the text the enforcer is built from.
+        role_subjects = [f"""'role::{user_role["roleName"]}'""" for user_role in user_roles_from_table]
+        structured_lines = []
+        self._pending_structured_policy = None
+
         # Append roles
         for user_role in user_roles_from_table:
             policy_text = (
@@ -1024,13 +1069,17 @@ class CasbinEnforcerService:
                 #Generate object rules
                 obj_rule_And = []
                 obj_rule_Or = []
+                usable_And = []
+                usable_Or = []
                 if "criteriaAnd" in policy:
+                    usable_And = self._usable_criteria(policy["criteriaAnd"], object_type=policy.get("objectType"))
                     obj_rule_And = self._generate_criteria_object_rules(
-                        policy["criteriaAnd"], object_type=policy.get("objectType")
+                        usable_And, object_type=policy.get("objectType")
                     )
                 if "criteriaOr" in policy:
+                    usable_Or = self._usable_criteria(policy["criteriaOr"], object_type=policy.get("objectType"))
                     obj_rule_Or = self._generate_criteria_object_rules(
-                        policy["criteriaOr"], object_type=policy.get("objectType")
+                        usable_Or, object_type=policy.get("objectType")
                     )
 
                 # Combine AND and OR criteria into a single rule expression:
@@ -1055,6 +1104,10 @@ class CasbinEnforcerService:
                             f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                             f"""p, 'role::{group_permission["groupId"]}', {combined_obj_rule}, {group_permission["permission"]}, {group_permission["permissionType"] or 'allow'}"""
                         )
+                        structured_lines.append(self._structured_line(
+                            f"""'role::{group_permission["groupId"]}'""", policy, usable_And, usable_Or,
+                            group_permission["permission"], group_permission["permissionType"],
+                        ))
 
                 if "userPermissions" in policy:
                     for user_permission in policy["userPermissions"]:
@@ -1062,12 +1115,34 @@ class CasbinEnforcerService:
                             f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                             f"""p, user::{user_permission["userId"]}, {combined_obj_rule}, {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
                         )
+                        structured_lines.append(self._structured_line(
+                            f"""user::{user_permission["userId"]}""", policy, usable_And, usable_Or,
+                            user_permission["permission"], user_permission["permissionType"],
+                        ))
         
         #logger.info(f"Generated policy_text with {len(policy_text)} characters")
         if len(policy_text) < 100:
             logger.warning(f"Policy text seems too short: {len(policy_text)} characters")
-        
+
+        self._pending_structured_policy = {
+            "policy_text": policy_text,
+            "subjects": [f"user::{self._user_id}"] + role_subjects,
+            "lines": structured_lines,
+        }
         return policy_text
+
+    @staticmethod
+    def _structured_line(subject, policy, criteria_and, criteria_or, permission, permission_type):
+        """One emitted policy line as data: the fields the policy text writes, with each value as the
+        policy reader yields it (whitespace-trimmed tokens), and the usable criteria it was built from."""
+        return {
+            "subject": str(subject).strip(),
+            "objectType": policy.get("objectType"),
+            "criteriaAnd": copy.deepcopy(criteria_and),
+            "criteriaOr": copy.deepcopy(criteria_or),
+            "action": str(permission).strip(),
+            "effect": str(permission_type or 'allow').strip(),
+        }
 
     # Creates a Casbin enforcer object from the policy_text.
     # Note: if the policy_text is invalid, then this method will attempt to create a Casbin enforcer object with a
@@ -1075,8 +1150,10 @@ class CasbinEnforcerService:
     # (None) and automatically deny all requests.
     #
     def _create_casbin_enforcer(self, policy_text):
+        self._enforcer_policy_text = None
         try:
             self._enforcer = self._create_casbin_enforcer_helper(policy_text)
+            self._enforcer_policy_text = policy_text
         except Exception as e:
             logger.info("Casbin Enforcer policy_text is invalid. Denying all access.")
             logger.exception(e)
@@ -1135,6 +1212,46 @@ class CasbinEnforcerService:
                 database_id = database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]
             return {**obj, "databaseId": database_id}
         return obj
+
+    def effective_object_policies(self, object_type, action):
+        """The policy lines that can decide ``action`` on an object of ``object_type`` for this user,
+        as data, or None when they cannot be given.
+
+        Each entry is ``{"effect": "allow"|"deny", "criteriaAnd": [...], "criteriaOr": [...]}``,
+        with the usable criteria the line's rule was generated from, in policy order. A line is
+        included when the matcher can select it for this user and request: its subject is the user
+        or one of the user's role groupings, its action is ``action``, and its object-type check is
+        ``object_type`` written as a plain type name. A line whose stored type is not a plain name
+        carries no usable criterion for it (the field matrix of such a type is empty) and so is never
+        emitted. A line whose effect is neither allow nor deny contributes nothing to the decision and
+        is left out.
+
+        None -- callers must then rely on enforce() alone -- when the enforcer was not built from the
+        policy these lines describe: the policy came from the shared policy-text cache, the policy
+        build failed and the enforcer denies all, or the policy text failed to load.
+        """
+        structured = getattr(self, "_structured_policy", None)
+        enforcer_policy_text = getattr(self, "_enforcer_policy_text", None)
+        if (getattr(self, "_enforcer", None) is None or structured is None
+                or enforcer_policy_text is None
+                or structured.get("policy_text") != enforcer_policy_text):
+            return None
+        subjects = set(structured["subjects"])
+        lines = []
+        for line in structured["lines"]:
+            if line["subject"] not in subjects or line["action"] != action:
+                continue
+            if line["effect"] not in ("allow", "deny"):
+                continue
+            if not (isinstance(line["objectType"], str) and line["objectType"] == object_type
+                    and _PLAIN_OBJECT_TYPE_NAME.fullmatch(object_type)):
+                continue
+            lines.append({
+                "effect": line["effect"],
+                "criteriaAnd": copy.deepcopy(line["criteriaAnd"]),
+                "criteriaOr": copy.deepcopy(line["criteriaOr"]),
+            })
+        return lines
 
     def enforce(self, obj, act):
         """

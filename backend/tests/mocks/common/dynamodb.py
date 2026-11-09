@@ -124,12 +124,32 @@ def to_update_expr(record, op="SET"):
     return keys_map, values_map, expr
 
 
-def get_asset_object_from_id(database_id, asset_id):
+def _load_real_dynamodb():
+    """The real common/dynamodb.py, loaded by path. Its archived-asset helpers take the caller's
+    table handle and build plain dicts, so the mock re-exports them rather than a copy that can
+    drift; a handler test still sees the reads its table stub answers."""
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend', 'common', 'dynamodb.py')
+    spec = importlib.util.spec_from_file_location('_real_common_dynamodb_for_mock', os.path.abspath(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_real_dynamodb = _load_real_dynamodb()
+ARCHIVED_ASSET_DATABASE_SUFFIX = _real_dynamodb.ARCHIVED_ASSET_DATABASE_SUFFIX
+get_asset_record = _real_dynamodb.get_asset_record
+asset_authorization_object = _real_dynamodb.asset_authorization_object
+
+
+def get_asset_object_from_id(database_id, asset_id, include_archived=False):
     """
     Mock implementation of the get_asset_object_from_id function for testing purposes.
     
     Args:
         asset_id: The ID of the asset to retrieve
+        include_archived: Accepted for signature parity with the real helper
         
     Returns:
         Dictionary containing the asset object with the given ID

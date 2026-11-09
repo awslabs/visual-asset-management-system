@@ -76,7 +76,7 @@ The owning database is the one you are creating within — pipelines created fro
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Lambda**        | **Lambda Resource ID** — the function VAMS invokes, by ARN or name. Leave it blank to have VAMS create a new function for the pipeline.                                                                          |
 | **SQS**           | **Queue URL** — the full Amazon SQS queue URL. Required.                                                                                                                                                         |
-| **EventBridge**   | **Event Bus ARN**, **Source**, and **Detail Type** — all three required.                                                                                                                                         |
+| **EventBridge**   | **Source** and **Detail Type** (required), plus **Event Bus ARN**. Leave the event bus empty to publish to the account's default event bus.                                                                      |
 | **DeadlineCloud** | **Farm ID** and **Queue ID** (required), **Job Template** (required), plus **Storage Profile ID**, **Priority**, **Max Retries Per Task**, **Max Failed Tasks Count**, and **Template Type** (`JSON` or `YAML`). |
 
 `DeadlineCloud` is available only when the deployment enables it; the fields are shown but disabled otherwise.

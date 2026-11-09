@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { BusyButton } from "./BusyControls";
 
 interface RefreshButtonProps {
     onClick: () => void;
@@ -16,19 +17,21 @@ interface RefreshButtonProps {
  * Icon-only refresh control for the orchestration list toolbars, sitting next to the search box —
  * the Cloudscape-free counterpart of the `iconName="refresh"` button the rest of the app uses. Force
  * a refetch of the current list's data (auto-refresh via TanStack Query still applies independently).
+ * While a read is in flight it keeps focus and its name, and says it is busy through `aria-busy`
+ * alongside `aria-disabled` (see `BusyButton`); a press then does nothing.
  */
 const RefreshButton: React.FC<RefreshButtonProps> = ({
     onClick,
     busy = false,
     ariaLabel = "Refresh",
 }) => (
-    <button
-        type="button"
+    <BusyButton
+        busy={busy}
         onClick={onClick}
-        disabled={busy}
+        aria-busy={busy || undefined}
         aria-label={ariaLabel}
         title={ariaLabel}
-        className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-border-input bg-surface text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-border-input bg-surface text-text-primary hover:bg-surface-hover"
     >
         <svg
             className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}
@@ -52,7 +55,7 @@ const RefreshButton: React.FC<RefreshButtonProps> = ({
                 strokeLinejoin="round"
             />
         </svg>
-    </button>
+    </BusyButton>
 );
 
 export default RefreshButton;

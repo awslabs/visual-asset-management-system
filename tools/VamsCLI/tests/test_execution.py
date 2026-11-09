@@ -639,6 +639,40 @@ class TestExecutionDetailsMetadata:
             assert 'scope=asset' in result.output
             assert '[p1]' in result.output
 
+    def test_a_row_a_whole_asset_expansion_added_is_marked(self, cli_runner, generic_command_mocks):
+        # The expanded file was context for the step, not one of its inputs; a row without the flag
+        # (from a service that predates it) reads as not expanded.
+        rows = [
+            {'pipelineId': 'p1', 'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/',
+             'scope': 'asset', 'metadata': {'k': 'v'}, 'attributes': {}, 'expanded': False},
+            {'pipelineId': 'p1', 'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/m.glb',
+             'scope': 'asset', 'metadata': {'k': 'v'}, 'attributes': {}, 'expanded': True},
+            {'pipelineId': 'p1', 'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/x.glb',
+             'scope': 'asset', 'metadata': {'k': 'v'}},
+        ]
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': rows, 'collection': 'input'}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'metadata', 'e1'])
+            assert result.exit_code == 0, result.output
+            lines = {line.split()[0]: line for line in result.output.splitlines()
+                     if line.startswith('  db1:')}
+            assert set(lines) == {'db1:a1/', 'db1:a1/m.glb', 'db1:a1/x.glb'}
+            assert '(expanded)' in lines['db1:a1/m.glb']
+            assert '(expanded)' not in lines['db1:a1/']
+            assert '(expanded)' not in lines['db1:a1/x.glb']
+
+    def test_json_output_carries_the_expanded_flag(self, cli_runner, generic_command_mocks):
+        rows = [{'pipelineId': 'p1', 'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/m.glb',
+                 'scope': 'asset', 'metadata': {}, 'attributes': {'u': 'mm'}, 'expanded': True}]
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': rows, 'collection': 'input'}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'metadata', 'e1', '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)['Items'][0]['expanded'] is True
+
     def test_output_collection_renders_the_output_row_shape(self, cli_runner, generic_command_mocks):
         """The output collection's rows have different fields (targetFilePath/metadataKey/
         metadataValue), so rendering them with the input columns would print only '?'."""
@@ -654,6 +688,30 @@ class TestExecutionDetailsMetadata:
                 'params']['collection'] == 'output'
             assert '/out.glb' in result.output
             assert 'triangles=1200' in result.output
+
+    def test_output_rows_sharing_a_key_are_told_apart_by_type(self, cli_runner, generic_command_mocks):
+        """A key written to one file as both file metadata and a file attribute is two rows; the
+        table must show which is which, and --json-output must carry the field unchanged."""
+        items = [
+            {'targetFilePath': '/out.glb', 'metadataKey': 'units', 'metadataValue': 'mm',
+             'metadataType': 'metadata', 'pipelineId': 'p1'},
+            {'targetFilePath': '/out.glb', 'metadataKey': 'units', 'metadataValue': 'm',
+             'metadataType': 'attribute', 'pipelineId': 'p1'},
+        ]
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': items, 'collection': 'output'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output'])
+            assert result.exit_code == 0
+            assert 'type=metadata  units=mm' in result.output
+            assert 'type=attribute  units=m' in result.output
+
+            json_result = cli_runner.invoke(cli, [
+                'execution', 'details', 'metadata', 'e1', '--collection', 'output', '--json-output'])
+            assert json_result.exit_code == 0
+            parsed = json.loads(json_result.output)
+            assert [i['metadataType'] for i in parsed['Items']] == ['metadata', 'attribute']
 
     def test_input_database_collection_passed_through(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:

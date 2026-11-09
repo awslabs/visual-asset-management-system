@@ -40,7 +40,7 @@ def _file_info(monkeypatch, base_key, file_path):
     s3_client.list_objects_v2.return_value = {"Contents": []}
     monkeypatch.setattr(af, "s3_client", s3_client)
     monkeypatch.setattr(af, "get_asset_with_permissions",
-                        lambda databaseId, assetId, op, claims: {"assetId": assetId})
+                        lambda databaseId, assetId, op, claims, include_archived=False: {"assetId": assetId})
     monkeypatch.setattr(af, "get_asset_s3_location", lambda asset: (BUCKET, base_key))
     monkeypatch.setattr(af, "is_file_archived", lambda bucket, key, version_id=None: False)
     return af.get_file_info("db1", "xabc", file_path, False, CLAIMS)

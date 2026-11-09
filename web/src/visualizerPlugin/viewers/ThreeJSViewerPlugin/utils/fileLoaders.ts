@@ -8,9 +8,19 @@
  * Handles loading various 3D file formats
  */
 
+import { createLoadingManager, isolatedUrlModifier } from "./assetDependencyResolver";
+import { checkUsdzSize, isUsdzBytes } from "./usdDependencies";
+
 export interface LoaderResult {
     object: any; // THREE.Object3D or THREE.Group
     animations?: any[]; // THREE.AnimationClip[]
+    /** Referenced files that were not loaded, one human-readable line each. */
+    warnings?: string[];
+}
+
+export interface LoadFileOptions {
+    /** Materials for an OBJ file, from its material libraries (an MTLLoader MaterialCreator). */
+    materials?: any;
 }
 
 /**
@@ -19,6 +29,15 @@ export interface LoaderResult {
  * config/viewerConfig.json, or the registry never offers this viewer for it.
  */
 export const OCCT_FORMATS = ["stp", "step", "iges", "igs", "brep"];
+
+/**
+ * USD formats routed to three.js's USDLoader, without the leading dot. Every entry must also
+ * appear in the `threejs-viewer` entry's `supportedExtensions` in config/viewerConfig.json.
+ */
+export const USD_FORMATS = ["usd", "usda", "usdc", "usdz"];
+
+/** Mesh formats three.js loads directly, without the leading dot. */
+export const THREE_MESH_FORMATS = ["gltf", "glb", "obj", "fbx", "stl", "ply", "dae", "3ds", "3mf"];
 
 /**
  * True for the CAD setup messages loadFile throws when the browser or deployment cannot run the
@@ -46,8 +65,7 @@ export function getFileExtension(fileKey: string): string {
  */
 export function isSupportedThreeFormat(fileKey: string): boolean {
     const ext = getFileExtension(fileKey);
-    const supportedFormats = ["gltf", "glb", "obj", "fbx", "stl", "ply", "dae", "3ds", "3mf"];
-    return supportedFormats.includes(ext);
+    return THREE_MESH_FORMATS.includes(ext) || USD_FORMATS.includes(ext);
 }
 
 /**
@@ -78,10 +96,11 @@ function isEvalBlockedError(error: any): boolean {
 export async function loadGLTF(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    GLTFLoader: any
+    GLTFLoader: any,
+    manager?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
-        const loader = new GLTFLoader();
+        const loader = new GLTFLoader(manager);
 
         loader.parse(
             arrayBuffer,
@@ -108,11 +127,16 @@ export async function loadGLTF(
 export async function loadOBJ(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    OBJLoader: any
+    OBJLoader: any,
+    manager?: any,
+    materials?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const loader = new OBJLoader();
+            const loader = new OBJLoader(manager);
+            if (materials) {
+                loader.setMaterials(materials);
+            }
             const text = new TextDecoder().decode(arrayBuffer);
             const object = loader.parse(text);
             resolve({ object });
@@ -128,11 +152,12 @@ export async function loadOBJ(
 export async function loadFBX(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    FBXLoader: any
+    FBXLoader: any,
+    manager?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const loader = new FBXLoader();
+            const loader = new FBXLoader(manager);
             const object = loader.parse(arrayBuffer, "");
             resolve({ object });
         } catch (error: any) {
@@ -168,6 +193,27 @@ export async function loadSTL(
 }
 
 /**
+ * WebGL has no 64-bit float vertex attributes, and PLYLoader keeps `double` properties as
+ * Float64Array. Each such attribute is replaced by a Float32Array copy.
+ */
+export function convertFloat64Attributes(geometry: any, THREE: any): void {
+    const attributes = geometry?.attributes || {};
+    Object.keys(attributes).forEach((name) => {
+        const attribute = attributes[name];
+        if (attribute?.array instanceof Float64Array) {
+            geometry.setAttribute(
+                name,
+                new THREE.BufferAttribute(
+                    new Float32Array(attribute.array),
+                    attribute.itemSize,
+                    attribute.normalized
+                )
+            );
+        }
+    });
+}
+
+/**
  * Load PLY file
  */
 export async function loadPLY(
@@ -180,6 +226,7 @@ export async function loadPLY(
         try {
             const loader = new PLYLoader();
             const geometry = loader.parse(arrayBuffer);
+            convertFloat64Attributes(geometry, THREE);
 
             // Create mesh with default material
             const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
@@ -199,13 +246,14 @@ export async function loadPLY(
 export async function loadCollada(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    ColladaLoader: any
+    ColladaLoader: any,
+    manager?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const loader = new ColladaLoader();
+            const loader = new ColladaLoader(manager);
             const text = new TextDecoder().decode(arrayBuffer);
-            const collada = loader.parse(text);
+            const collada = loader.parse(text, "");
             resolve({ object: collada.scene });
         } catch (error: any) {
             reject(new Error(`Failed to load COLLADA: ${error.message || error}`));
@@ -219,12 +267,13 @@ export async function loadCollada(
 export async function load3DS(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    TDSLoader: any
+    TDSLoader: any,
+    manager?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const loader = new TDSLoader();
-            const object = loader.parse(arrayBuffer);
+            const loader = new TDSLoader(manager);
+            const object = loader.parse(arrayBuffer, "");
             resolve({ object });
         } catch (error: any) {
             reject(new Error(`Failed to load 3DS: ${error.message || error}`));
@@ -238,11 +287,12 @@ export async function load3DS(
 export async function load3MF(
     arrayBuffer: ArrayBuffer,
     fileName: string,
-    ThreeMFLoader: any
+    ThreeMFLoader: any,
+    manager?: any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
-            const loader = new ThreeMFLoader();
+            const loader = new ThreeMFLoader(manager);
             const object = loader.parse(arrayBuffer);
             resolve({ object });
         } catch (error: any) {
@@ -252,13 +302,58 @@ export async function load3MF(
 }
 
 /**
- * Load file based on extension
+ * Load a USD file (.usd, .usda, .usdc or .usdz). A .usdz is size-checked before it is parsed.
+ * Resolves once the scene and its textures are ready.
+ */
+export async function loadUSD(
+    arrayBuffer: ArrayBuffer,
+    fileName: string,
+    USDLoader: any,
+    manager?: any,
+    unzipSync?: (data: Uint8Array, opts: any) => any
+): Promise<LoaderResult> {
+    return new Promise((resolve, reject) => {
+        try {
+            if (!USDLoader) {
+                throw new Error("this viewer bundle has no USD loader");
+            }
+            const bytes = new Uint8Array(arrayBuffer);
+            if (isUsdzBytes(bytes) && unzipSync) {
+                checkUsdzSize(bytes, unzipSync);
+            }
+            const loader = new USDLoader(manager);
+            loader.parse(
+                arrayBuffer,
+                "",
+                (group: any) => {
+                    console.log(
+                        `USD loaded: ${fileName}, animations: ${group?.animations?.length || 0}`
+                    );
+                    resolve({ object: group, animations: group?.animations || [] });
+                },
+                (error: any) => {
+                    reject(new Error(`Failed to load USD: ${error?.message || error}`));
+                }
+            );
+        } catch (error: any) {
+            reject(new Error(`Failed to load USD: ${error?.message || error}`));
+        }
+    });
+}
+
+/**
+ * Load file based on extension.
+ *
+ * `manager` is the three.js LoadingManager every loader requests referenced files through. When
+ * none is given, one that answers every external URL with a placeholder is used, so a loader never
+ * fetches a referenced file by URL on its own.
  */
 export async function loadFile(
     arrayBuffer: ArrayBuffer,
     extension: string,
     fileName: string,
-    manager?: any
+    manager?: any,
+    options: LoadFileOptions = {}
 ): Promise<LoaderResult> {
     // Check if this is an OCCT format
     if (OCCT_FORMATS.includes(extension.toLowerCase())) {
@@ -333,26 +428,35 @@ export async function loadFile(
         ColladaLoader,
         TDSLoader,
         ThreeMFLoader,
+        USDLoader,
+        fflate,
     } = bundle;
+
+    const loadingManager = manager ?? createLoadingManager(THREE, isolatedUrlModifier);
 
     switch (extension) {
         case "gltf":
         case "glb":
-            return loadGLTF(arrayBuffer, fileName, GLTFLoader);
+            return loadGLTF(arrayBuffer, fileName, GLTFLoader, loadingManager);
         case "obj":
-            return loadOBJ(arrayBuffer, fileName, OBJLoader);
+            return loadOBJ(arrayBuffer, fileName, OBJLoader, loadingManager, options.materials);
         case "fbx":
-            return loadFBX(arrayBuffer, fileName, FBXLoader);
+            return loadFBX(arrayBuffer, fileName, FBXLoader, loadingManager);
         case "stl":
             return loadSTL(arrayBuffer, fileName, STLLoader, THREE);
         case "ply":
             return loadPLY(arrayBuffer, fileName, PLYLoader, THREE);
         case "dae":
-            return loadCollada(arrayBuffer, fileName, ColladaLoader);
+            return loadCollada(arrayBuffer, fileName, ColladaLoader, loadingManager);
         case "3ds":
-            return load3DS(arrayBuffer, fileName, TDSLoader);
+            return load3DS(arrayBuffer, fileName, TDSLoader, loadingManager);
         case "3mf":
-            return load3MF(arrayBuffer, fileName, ThreeMFLoader);
+            return load3MF(arrayBuffer, fileName, ThreeMFLoader, loadingManager);
+        case "usd":
+        case "usda":
+        case "usdc":
+        case "usdz":
+            return loadUSD(arrayBuffer, fileName, USDLoader, loadingManager, fflate?.unzipSync);
         default:
             throw new Error(`Unsupported file format: ${extension}`);
     }

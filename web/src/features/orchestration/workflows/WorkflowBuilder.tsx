@@ -20,6 +20,8 @@ import TriggersEditor from "./TriggersEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { BusyButton } from "../components/BusyControls";
+import { useFocusHandOff } from "../components/useFocusHandOff";
 import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
 import TriggerDraftsEditor from "./TriggerDraftsEditor";
 import { TRIGGER_ROUTE, withCurrentPipelineTemplates } from "./triggerDraft";
@@ -543,9 +545,13 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }
     };
 
-    const isSaveDisabled = isSystemWorkflow
-        ? state.saving
-        : state.validationErrors.length > 0 || state.saving;
+    // Unavailable for a reason other than a save in flight; a save in flight keeps Save focusable,
+    // reading "Saving...".
+    const isSaveDisabled = !isSystemWorkflow && state.validationErrors.length > 0;
+    // A create answered with warnings and no workflow id withdraws Save and offers Continue; focus
+    // Save held moves there.
+    const continueRef = useRef<HTMLButtonElement>(null);
+    const saveRef = useFocusHandOff<HTMLButtonElement>(() => continueRef.current);
 
     // Wizard steps. Each section is one step; Review is last. Triggers are optional in both modes:
     // when editing they are written live; when creating they are drafted and written once the
@@ -992,14 +998,14 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             {/* Wizard navigation. Save is only on the final (Review) step. */}
             <div className="flex justify-between gap-2">
-                <button onClick={handleCancel} className={btnSecondary}>
+                <BusyButton busy={state.saving} onClick={handleCancel} className={btnSecondary}>
                     Cancel
-                </button>
+                </BusyButton>
                 <div className="flex gap-2">
                     {stepIndex > 0 && (
-                        <button onClick={goBack} className={btnSecondary}>
+                        <BusyButton busy={state.saving} onClick={goBack} className={btnSecondary}>
                             Back
-                        </button>
+                        </BusyButton>
                     )}
                     {stepIndex < WIZARD_STEPS.length - 1 && (
                         <button onClick={goNext} disabled={!stepValid} className={btnPrimary}>
@@ -1013,16 +1019,20 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 the create path where a second submit would create a second
                                 workflow. Continue only leaves the form. */}
                             {(!savedWithWarnings || mode === "edit") && (
-                                <button
+                                <BusyButton
+                                    ref={saveRef}
                                     onClick={handleSave}
+                                    busy={state.saving}
+                                    busyLabel="Saving..."
                                     disabled={isSaveDisabled}
                                     className={btnPrimary}
                                 >
-                                    {state.saving ? "Saving..." : "Save"}
-                                </button>
+                                    Save
+                                </BusyButton>
                             )}
                             {savedWithWarnings && (
                                 <button
+                                    ref={continueRef}
                                     onClick={() => navigate(`/databases/${databaseId}/workflows`)}
                                     className={mode === "edit" ? btnSecondary : btnPrimary}
                                 >

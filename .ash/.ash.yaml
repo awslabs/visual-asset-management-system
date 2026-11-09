@@ -36,7 +36,10 @@ reporters:
 # inside a Markdown code sample renders on the documentation site, and grype reports a workflow
 # action without a line. Each entry names the rule, the file and the line, and states why the value
 # is not a secret or why the finding does not apply. ASH lists an entry that no longer matches a
-# finding in `reports/ash.unused-suppressions.md`, so a line that moves shows up there.
+# finding in `reports/ash.unused-suppressions.md`, so a line that moves shows up there, and
+# `infra/test/ci/ciWorkflow.test.ts` fails when a pinned line no longer holds a value of the kind its
+# rule detects. detect-secrets reports a value once per file, at its first line, so a value repeated
+# further down the file needs no entry of its own.
 global_settings:
     suppressions:
         # Recorded DynamoDB stream events used as test fixtures. The value is the stream record's
@@ -103,43 +106,43 @@ global_settings:
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/files.md
-          line_start: 51
-          line_end: 51
+          line_start: 52
+          line_end: 52
           reason: S3 ETag (MD5 of an empty object) in a response example, not a secret
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/overview.md
-          line_start: 162
-          line_end: 162
+          line_start: 164
+          line_end: 164
           reason: pagination token (base64 of an example JSON key) in a response example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 996
-          line_end: 996
+          line_start: 1054
+          line_end: 1054
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1285
-          line_end: 1285
+          line_start: 1351
+          line_end: 1351
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1463
-          line_end: 1463
+          line_start: 1531
+          line_end: 1531
           reason: example pipeline execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1489
-          line_end: 1489
+          line_start: 1557
+          line_end: 1557
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1499
-          line_end: 1499
+          line_start: 1567
+          line_end: 1567
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 2104
-          line_end: 2104
+          line_start: 2178
+          line_end: 2178
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
           path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
@@ -148,8 +151,8 @@ global_settings:
           reason: username:password placeholder in a proxy URL example, not a credential
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/deployment/configuration-reference.md
-          line_start: 1474
-          line_end: 1475
+          line_start: 1516
+          line_end: 1517
           reason: CDK construct paths and example role names in a configuration example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/developer/physna-integration.md
@@ -158,8 +161,8 @@ global_settings:
           reason: your-physna-client-secret placeholder in a configuration example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/pipelines/custom-pipelines.md
-          line_start: 1591
-          line_end: 1591
+          line_start: 1768
+          line_end: 1768
           reason: example workflow execution identifier in a payload example, not a secret
 
         # grype matches the action tag `v4` as version 4.0.0, inside the advisory's affected range

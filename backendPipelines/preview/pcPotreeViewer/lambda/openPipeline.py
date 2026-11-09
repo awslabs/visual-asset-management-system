@@ -202,6 +202,8 @@ def lambda_handler(event, context):
         # hands them to the container, which signs each bucket's requests for its Region.
         "inputBucketRegion": event.get("inputBucketRegion", ""),
         "outputBucketRegion": event.get("outputBucketRegion", ""),
+        # The S3 version of the input the run reads (empty reads the current object).
+        "inputVersionId": event.get("inputVersionId", ""),
         "externalSfnTaskToken": external_sfn_task_token
     }
 

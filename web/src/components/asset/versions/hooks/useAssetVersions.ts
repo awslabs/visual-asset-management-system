@@ -6,8 +6,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchAllAssetVersions, fetchAssetVersion } from "../../../../services/AssetVersionService";
 import { AssetVersion, AssetVersionDetails } from "../AssetVersionManager";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 export const useAssetVersions = (databaseId: string, assetId: string) => {
+    const assetArchived = useAssetArchived();
     // State for versions list
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
@@ -182,6 +184,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                     databaseId,
                     assetId,
                     assetVersionId: `${versionToLoad.Version}`,
+                    showArchived: assetArchived,
                 });
 
                 console.log("useAssetVersions - fetchAssetVersion response:", success, response);
@@ -211,7 +214,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                 console.error("Error loading version details:", err);
             }
         },
-        [databaseId, assetId]
+        [databaseId, assetId, assetArchived]
     );
 
     // Initial load

@@ -20,6 +20,7 @@ import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionManager";
 import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
@@ -36,6 +37,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+    const assetArchived = useAssetArchived();
 
     // State for unarchive loading
     const [unarchiveLoading, setUnarchiveLoading] = useState<string | null>(null);
@@ -479,6 +481,11 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             ),
         },
     ];
+    // An archived asset's versions are listed without their comparison and action columns: each
+    // action either writes or reads the files, which need the asset unarchived
+    const tableColumns = assetArchived
+        ? columns.filter((column) => column.id !== "compare" && column.id !== "actions")
+        : columns;
 
     // Handle selection
     const handleSelectionChange = (selectedItems: AssetVersion[]) => {
@@ -512,7 +519,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         <>
             <Table
                 trackBy="Version"
-                columnDefinitions={columns}
+                columnDefinitions={tableColumns}
                 items={versions}
                 loading={loading}
                 loadingText="Loading asset versions"

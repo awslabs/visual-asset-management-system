@@ -27,8 +27,8 @@ A terminal release finds the rows to delete two ways and deletes the union: the 
 input rows under the workflow's current restriction (strongly consistent, so it holds even right after
 the launch), and the keys the holder index (WorkflowExecutionLocksByHolderGSI, partition key
 workflowExecutionId) lists for the execution. The index covers the rows the input rows cannot rebuild:
-the workflow's restriction edited or the workflow deleted while the run was going, and two versions of
-one file in one perInputFileVersion launch, which share a single input row.
+the workflow's restriction edited or the workflow deleted while the run was going, and a run launched
+before the input rows carried the version, whose two versions of one file share a single input row.
 """
 
 import time
@@ -40,7 +40,7 @@ from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="ExecutionLocks")
+logger = safeLogger()
 
 CONCURRENCY_PER_ASSET = "perAsset"
 CONCURRENCY_PER_INPUT_FILE = "perInputFile"

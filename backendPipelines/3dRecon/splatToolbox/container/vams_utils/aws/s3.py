@@ -41,6 +41,42 @@ def register_bucket_regions(bucket_regions):
             _bucket_regions[bucket_name] = region
 
 
+# The S3 version the run reads its input at, by (bucket, key). The upstream `main.py` downloads
+# S3_INPUT with a bare `download_file`, so the routing client below adds the version to every read of
+# a registered object; any other object is read as it is now.
+_input_versions = {}
+
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+def register_input_version(bucket_name, object_key, version_id):
+    """Record the version the run reads ``bucket_name``/``object_key`` at; an empty version records
+    nothing, so the object is read as it is now."""
+    if bucket_name and object_key and version_id:
+        _input_versions[(bucket_name, object_key)] = version_id
+
+
+def input_version_for(bucket_name, object_key):
+    """The registered version of an object, or "" to read it as it is now."""
+    return _input_versions.get((bucket_name, object_key), "")
+
+
+def input_version_missing_cause(bucket_name, object_key, version_id):
+    """The failure cause when ``version_id`` of the object no longer exists, else "". Another error is
+    left for the download itself to report."""
+    if not version_id:
+        return ""
+    try:
+        client_for_bucket(bucket_name).head_object(Bucket=bucket_name, Key=object_key, VersionId=version_id)
+    except ClientError as e:
+        if str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            return (f"The input file {object_key} at version {version_id} no longer exists; "
+                    f"it was deleted after the run started.")
+    return ""
+
+
 def client_for_bucket(bucket_name):
     """The S3 client for the Region a bucket was registered in; the default client otherwise."""
     region = _bucket_regions.get(bucket_name)
@@ -58,6 +94,28 @@ def client_for_bucket(bucket_name):
 _TRANSFER_BUCKET_POSITION = {'download_file': 0, 'download_fileobj': 0,
                              'upload_file': 1, 'upload_fileobj': 1, 'copy': 1}
 
+# Reads that take a VersionId: the transfer downloads through ExtraArgs, the API operations directly.
+_TRANSFER_DOWNLOADS = ('download_file', 'download_fileobj')
+_VERSIONED_READS = ('get_object', 'head_object')
+
+
+def _with_input_version(name, args, kwargs):
+    """``kwargs`` with the registered input version added to a read of a registered object. A call
+    that already names a version, and every other call, are passed through unchanged."""
+    if name in _TRANSFER_DOWNLOADS:
+        bucket = kwargs.get('Bucket', args[0] if len(args) > 0 else None)
+        key = kwargs.get('Key', args[1] if len(args) > 1 else None)
+        version_id = input_version_for(bucket, key)
+        extra_args = dict(kwargs.get('ExtraArgs') or {})
+        if version_id and 'VersionId' not in extra_args:
+            extra_args['VersionId'] = version_id
+            return dict(kwargs, ExtraArgs=extra_args)
+    elif name in _VERSIONED_READS and 'VersionId' not in kwargs:
+        version_id = input_version_for(kwargs.get('Bucket'), kwargs.get('Key'))
+        if version_id:
+            return dict(kwargs, VersionId=version_id)
+    return kwargs
+
 
 class _RegionRoutingPaginator:
     """A paginator whose paginate() runs on the client for the Region of its Bucket."""
@@ -74,8 +132,9 @@ class RegionRoutingClient:
     """An S3 client whose every call runs on the client for the Region of the bucket it names
     (client_for_bucket), so code that was written against one `boto3.client('s3')` -- the upstream
     `main.py`, which downloads S3_INPUT and uploads to S3_OUTPUT with one -- reaches a bucket in
-    another Region without relying on botocore's redirect-on-error. A call that names no bucket, and
-    attribute reads such as `meta` and `exceptions`, go to the default client."""
+    another Region without relying on botocore's redirect-on-error. A read of an object registered
+    with `register_input_version` reads that version. A call that names no bucket, and attribute
+    reads such as `meta` and `exceptions`, go to the default client."""
 
     @staticmethod
     def _bucket_from_call(name, args, kwargs):
@@ -97,7 +156,7 @@ class RegionRoutingClient:
 
         def call(*args, **kwargs):
             target = client_for_bucket(self._bucket_from_call(name, args, kwargs))
-            return getattr(target, name)(*args, **kwargs)
+            return getattr(target, name)(*args, **_with_input_version(name, args, kwargs))
         return call
 
 

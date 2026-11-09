@@ -160,18 +160,23 @@ _THROTTLED = ClientError({"Error": {"Code": "ThrottlingException", "Message": "R
 def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist_error=None,
          write_error=None, start_error=None, tokens=("user1",), event=None,
          resolved_version="v-resolved", real_stop=False, stop_error=None, describe=None,
-         main_table=None):
+         main_table=None, inputs_table=None, config_table=None):
     """Drive lambda_handler through a launch; returns (response, sfn mock, logger mock, stop spy).
     `tokens` is the identity request_to_claims answers with and `event` replaces the default REST-shaped
     event (a lambdaCrossCall event, say), so the trigger-dispatched path can be driven through the same
     harness. With `real_stop` the handler's own stop helper runs against the Step Functions mock (its
     StopExecution raising `stop_error`, its DescribeExecution answering or raising `describe`) and the
-    stop spy is None. `main_table` stands in for the main execution table when given."""
+    stop spy is None. `main_table` stands in for the main execution table when given, and `inputs_table`
+    for the workflow-input table, and `config_table` for the workflow configuration table."""
     def _table(name):
         if name == ewv2.workflow_execution_locks_table:
             return lock_table
         if main_table is not None and name == ewv2.workflow_execution_database_v2:
             return main_table
+        if inputs_table is not None and name == ewv2.workflow_execution_inputs_table:
+            return inputs_table
+        if config_table is not None and name == ewv2.workflow_execution_configuration_table:
+            return config_table
         return MagicMock()
 
     def _start(**kw):

@@ -233,6 +233,9 @@ A workflow may carry several triggers of one base type, so the listing serves on
 reports a `NextToken` while more remain. Without `--auto-paginate` the human output prints that token
 so it can be followed with `--starting-token`; the two flags cannot be combined.
 
+`workflow trigger set` is refused on an archived workflow; run `workflow unarchive` first.
+`workflow trigger delete` still works on an archived workflow.
+
 ---
 
 ## workflow execute
@@ -308,6 +311,7 @@ vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-pagi
 | `-a, --asset-id`         | Asset to list executions for (required)                                     |
 | `-w, --workflow-id`      | Filter to one workflow; works on its own                                    |
 | `--workflow-database-id` | Filter to workflows in one database; accepts `GLOBAL`. Works on its own too |
+| `--exclude-status`       | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`)           |
 | `--auto-paginate`        | Fetch every page rather than the first                                      |
 | `--page-size`            | Items per page (max 50)                                                     |
 | `--max-items`            | Cap on total items fetched; only meaningful with `--auto-paginate`          |

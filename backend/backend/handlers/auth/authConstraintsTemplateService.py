@@ -7,7 +7,7 @@ import boto3
 import json
 import re
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -221,8 +221,8 @@ def _transform_to_denormalized_format(constraint_data):
         'groupPermissions': json.dumps(constraint_data.get('groupPermissions', [])),
         'userPermissions': json.dumps(constraint_data.get('userPermissions', [])),
         # Metadata
-        'dateCreated': constraint_data.get('dateCreated', datetime.utcnow().isoformat()),
-        'dateModified': datetime.utcnow().isoformat(),
+        'dateCreated': constraint_data.get('dateCreated', utc_now().isoformat()),
+        'dateModified': utc_now().isoformat(),
         'createdBy': constraint_data.get('createdBy', 'SYSTEM_USER'),
         'modifiedBy': constraint_data.get('modifiedBy', 'SYSTEM_USER'),
     }
@@ -275,7 +275,7 @@ def build_constraint_data(constraint, role_name, claims_and_roles):
         Dictionary in API constraint format ready for DynamoDB
     """
     constraint_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
 
     # Map template groupPermissions to API format
@@ -384,7 +384,7 @@ def import_template_constraints(template_data, claims_and_roles):
         logger.info(f"Successfully wrote {len(denormalized_items)} denormalized items for constraint {constraint_id}")
         created_constraint_ids.append(constraint_id)
 
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     template_header = template_data.get('metadata') or template_data.get('template') or {}
     template_name = template_header.get('name') or 'unknown'
 

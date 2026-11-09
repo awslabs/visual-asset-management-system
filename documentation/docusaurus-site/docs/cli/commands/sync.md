@@ -76,7 +76,7 @@ An AWS WAF block (`Request Blocked`), a permission denial or an expired token wh
 :::
 
 :::tip[Ignore Patterns]
-When a `.vamsignore` file exists in the sync directory root (or a file is supplied via `--ignore-file`), its patterns exclude matching files on both sides of the comparison. Patterns use gitignore syntax: `*.log`, `build/`, `**/temp`, and negation with `!important.log`. Add `.vamsignore` itself to the patterns to keep it out of the asset.
+When a `.vamsignore` file exists in the sync directory root (or a file is supplied via `--ignore-file`), its patterns exclude matching files on both sides of the comparison. Patterns use gitignore syntax: `*.log`, `build/`, `**/temp`, and negation with `!important.log`. Unlike git, a negation can re-include a file inside an excluded directory: `build/` followed by `!build/keep.txt` syncs `build/keep.txt`. Add `.vamsignore` itself to the patterns to keep it out of the asset.
 :::
 
 :::note[Files Excluded from Sync]

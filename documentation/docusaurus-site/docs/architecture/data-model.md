@@ -384,6 +384,16 @@ bounds how often a status read polls Step Functions). Deliberately carries no ou
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
+A `SKIPPED` main row records the `fileUpload` trigger launches a concurrency lock refused. Its id is a
+uuid5 of the lock key and the blocking execution's id, so every refusal by one blocking execution on one
+lock lands on the same record. Each refusal writes the record's configuration row first (the trigger's
+output target and its `pipelineExecutionParameters`, which a re-run replays; kept from the first
+refusal), then its workflow-input rows (the refused launches' files, for the first 100 refusals), and
+last the main row, with one `UpdateItem` that sets the identity fields only if absent and adds one to
+`skippedLaunchCount`. The main row also carries `lastSkippedDate`, `skipScope`, `skipReason` and
+`blockingExecutionId`, and has no ARNs; the record has no pipeline or lock rows. Rows written before skip
+records existed carry none of these attributes and read as not skipped.
+
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 
@@ -442,6 +452,14 @@ only one of them pins a version:
     single run can read files from several assets in different buckets — and the concrete S3 `versionId`
     the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
     version is what makes the history show the exact bytes used rather than the time-relative "latest".
+    The sort key is `databaseId:assetId:inputAssetFileKey` with `#versionId` appended when the run
+    resolved a version, so a run that reads two versions of one file records one row per version. Rows
+    written before v2.7.0 carry the key without the version suffix and read the same way.
+    `versionPinned` records whether the caller named that version at launch (`true`) or the run resolved
+    the file's current version (`false`). A `fileUpload` trigger launch (`SYSTEM_USER`) names the
+    uploaded version so the run reads it, but records `false`: nobody chose that version. A re-run reads a pinned version again and takes the current
+    version of every other file. Rows written before v2.7.0 have no `versionPinned` and re-run on the
+    current version. The attribute is internal and is not returned by the execution APIs.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
     carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
     `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is

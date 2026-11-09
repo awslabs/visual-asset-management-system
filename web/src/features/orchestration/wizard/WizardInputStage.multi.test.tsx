@@ -284,11 +284,13 @@ describe("WizardInputStage multi-file arity", () => {
         await userEvent.click(editButtons()[1]);
         expect(queries().useFileVersions).toHaveBeenCalledWith("db1", "asset-a", "/a-two.glb");
         expect(queries().useFileVersions).not.toHaveBeenCalledWith("db1", "asset-a", "/a-one.glb");
-        const options = Array.from(
+        // The current version is the unpinned first option, named by its id in the label.
+        const labels = Array.from(
             screen.getByLabelText("File version").querySelectorAll("option")
-        ).map((o) => o.getAttribute("value"));
-        expect(options).toContain("/a-two.glb-v2");
-        expect(options).not.toContain("/a-one.glb-v2");
+        ).map((o) => o.textContent || "");
+        expect(labels.join("|")).toContain("/a-two.glb-v2");
+        expect(labels.join("|")).toContain("/a-two.glb-v1");
+        expect(labels.join("|")).not.toContain("/a-one.glb");
     });
 
     it("pins a version on one row without touching the other", async () => {

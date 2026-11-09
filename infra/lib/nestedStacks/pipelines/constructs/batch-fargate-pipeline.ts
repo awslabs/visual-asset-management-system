@@ -85,6 +85,12 @@ const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
 
 export class BatchFargatePipelineConstruct extends Construct {
     public readonly batchJobDefinition: batch.IJobDefinition;
+    /**
+     * The job definition's physical name (base name plus hash) as a literal string. A submit by this
+     * name, without a revision, runs the latest ACTIVE revision, so a run that spans a deploy which
+     * replaced the definition still submits its later jobs.
+     */
+    public readonly batchJobDefinitionPhysicalName: string;
     public readonly batchJobQueue: batch.JobQueue;
 
     constructor(parent: Construct, name: string, props: BatchFargatePipelineConstructProps) {
@@ -126,6 +132,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 props.batchJobDefinitionName,
                 10
             );
+        this.batchJobDefinitionPhysicalName = batchJobName;
 
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,

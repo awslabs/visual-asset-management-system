@@ -208,7 +208,7 @@ def list(ctx: click.Context, json_output: bool):
 6. Comment `# Setup/auth already validated by decorator` at top of command body
 7. Catch only `BusinessLogicError` subclasses in commands; never catch `GlobalInfrastructureError`
 8. A destructive command refuses to run without `--confirm`. Its extra "Are you sure you want to proceed?" question (text mode only; `--json-output` never asks) goes through `confirm_destructive_action()` in `utils/confirmation.py`, which asks only when stdin is an interactive terminal and otherwise treats the required `--confirm` as the confirmation. Never call `click.confirm` after a `--confirm` gate: with no terminal on stdin (a script, a pipe, CI, a connector) it reads end of input and aborts with `Operation cancelled by user.`, so `--confirm` alone could never complete the command. `CliRunner`'s stdin is not a terminal, so a test of the prompt itself takes the `interactive_stdin` fixture; `tests/test_destructive_confirmation.py` covers every site.
-9. A `helpful_message` must fit every error its `except` clause catches. Where the API can also answer with a system-record refusal (a 400 on a system pipeline or workflow, which names what stays editable), pass `None` when `is_system_record_refusal(e)` (`utils/system_records.py`) is true, as `pipeline create`, `pipeline template create` and `workflow trigger set` do.
+9. A `helpful_message` must fit every error its `except` clause catches. Where the API can also answer with a system-record refusal (a 400 on a system pipeline or workflow, which names what stays editable), pass `None` when `is_system_record_refusal(e)` (`utils/system_records.py`) is true, as `pipeline create` and `pipeline template create` do. Where a hint fits only one of the API's 400s, show it only for that 400 and pass `None` otherwise, as `workflow trigger set` does for its trigger-type hint (only after the API's `Unsupported trigger type` 400).
 
 ### 3. API Client Patterns
 
@@ -225,8 +225,8 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
--   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
--   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
+-   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
+-   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
 -   HTTP status to exception mapping in response handlers:
     -   `404` --> `NotFoundError` variants
     -   `409` --> `AlreadyExistsError` variants

@@ -115,7 +115,24 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def download_from_s3(s3_uri: str, local_path: Path) -> None:
+# The error text the AWS CLI prints when the requested version no longer exists: NoSuchVersion on a
+# GET, 404/405 for a deleted key or a delete marker. Any other failure (a 400 such as a wrong Region
+# or a 403) is reported with the CLI's own message.
+_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(405)", "MethodNotAllowed")
+
+
+def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") -> list:
+    """The AWS CLI command that downloads the input file. With a version it reads that exact version
+    (`aws s3 cp` cannot take one); without one it is the plain copy of the current object. The key is
+    everything after the bucket, exactly as `aws s3 cp` reads it."""
+    if not version_id:
+        return ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)]
+    bucket, _, key = s3_uri[len("s3://"):].partition("/")
+    return ["aws", "s3api", "get-object", "--bucket", bucket, "--key", key, "--version-id", version_id,
+            str(local_path), *manifest_io.s3_region_args(s3_uri)]
+
+
+def download_from_s3(s3_uri: str, local_path: Path, version_id: str = "") -> None:
     """
     Download file from S3 using AWS CLI.
 
@@ -127,10 +144,14 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)],
+        input_download_command(s3_uri, local_path, version_id),
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
+        if version_id and any(marker in (result.stderr or "") for marker in _MISSING_VERSION_MARKERS):
+            raise RuntimeError(
+                f"The input file {s3_uri} at version {version_id} no longer exists; it was deleted "
+                f"after the run started.")
         raise RuntimeError(f"S3 download failed: {result.stderr}")
     logger.info(f"Downloaded {local_path.stat().st_size} bytes from S3")
 
@@ -266,6 +287,8 @@ def main():
         cosmos_prompt = definition.get("cosmosPrompt")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")
+        # The S3 version the input file is read at, recorded at launch; "" reads the current object.
+        input_version_id = definition.get("inputVersionId") or ""
         output_s3_asset_files_path = definition.get("outputS3AssetFilesPath")
         asset_id = definition.get("assetId")
 
@@ -378,7 +401,7 @@ def main():
             input_filename = Path(parse_s3_uri(input_s3_asset_file_path)[1]).name
             input_file_path = INPUT_DIR / input_filename
 
-            download_from_s3(input_s3_asset_file_path, input_file_path)
+            download_from_s3(input_s3_asset_file_path, input_file_path, input_version_id)
 
         # Step 3: Run inference
         logger.info("=" * 80)

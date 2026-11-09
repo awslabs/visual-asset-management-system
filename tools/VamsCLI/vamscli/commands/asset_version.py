@@ -484,7 +484,8 @@ def revert(ctx: click.Context, database: str, asset: str, version: str, comment:
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
-@click.option('--show-archived', is_flag=True, help='Include archived versions in results (hidden by default)')
+@click.option('--show-archived', is_flag=True,
+              help='Include archived versions in results (hidden by default), and also find an archived asset')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -659,10 +660,11 @@ def list(ctx: click.Context, database: str, asset: str, page_size: Optional[int]
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('-a', '--asset', required=True, help='Asset ID to get version details for')
 @click.option('-v', '--version', required=True, help='Version ID to retrieve details for')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def get(ctx: click.Context, database: str, asset: str, version: str, json_output: bool):
+def get(ctx: click.Context, database: str, asset: str, version: str, show_archived: bool, json_output: bool):
     """
     Get details for a specific asset version.
     
@@ -672,6 +674,7 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
     Examples:
         vamscli asset-version get -d my-db -a my-asset -v 1
         vamscli asset-version get -d my-db -a my-asset -v 2 --json-output
+        vamscli asset-version get -d my-db -a my-archived-asset -v 1 --show-archived
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -682,7 +685,7 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
         output_status(f"Retrieving details for version '{version}' of asset '{asset}' in database '{database}'...", json_output)
         
         # Get the version details
-        result = api_client.get_asset_version(database, asset, version)
+        result = api_client.get_asset_version(database, asset, version, show_archived=show_archived)
 
         output_result(
             result,

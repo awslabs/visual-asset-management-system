@@ -7,7 +7,8 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -22,7 +23,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -257,9 +258,16 @@ def send_subscription_email(database_id, asset_id):
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def _current_version_key(asset):
-    """Primary key of the asset's current-version row in the versions table"""
+    """Primary key of the asset's current-version row in the versions table.
+
+    An archived record is stored under "<databaseId>#deleted" while its versions stay keyed by
+    the original database id, so the suffix is removed from the key.
+    """
+    database_id = str(asset['databaseId'])
+    while database_id.endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        database_id = database_id[:-len(ARCHIVED_ASSET_DATABASE_SUFFIX)]
     return {
-        'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
+        'databaseId:assetId': f"{database_id}:{asset['assetId']}",
         'assetVersionId': asset['currentVersionId']
     }
 
@@ -521,7 +529,7 @@ def build_asset_archive_history_record(database_id, asset_id, relative_file_path
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -1042,28 +1050,13 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         The asset details or None if not found
     """
     try:
-        # If showArchived is False, we only look in the active assets table
-        # If showArchived is True, we first look in the active table, then try the archived suffix
-        db_id = databaseId
-        response = asset_table.get_item(Key={'databaseId': db_id, 'assetId': assetId})
-        item = response.get('Item')
-        
-        # If not found and showArchived is True, try with the archived suffix
-        if not item and showArchived:
-            archived_db_id = f"{databaseId}#deleted"
-            response = asset_table.get_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-            item = response.get('Item')
-            
-            # If found in archived, add status field if not present
-            if item and 'status' not in item:
-                item['status'] = 'archived'
-        
-        return item
+        # The live record first; with showArchived, the archived record when no live one exists
+        return get_asset_record(asset_table, databaseId, assetId, include_archived=showArchived)
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles, include_archived=False):
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
@@ -1080,6 +1073,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         assetId: The asset ID from the request
         action: The Casbin action for the operation (GET / PUT / DELETE)
         claims_and_roles: User claims and roles for authorization
+        include_archived: The read also resolves archived assets, so a missing asset's stand-in
+            carries the archived database id
 
     Returns:
         True if the caller is authorized for the operation
@@ -1087,15 +1082,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     if len(claims_and_roles["tokens"]) == 0:
         return False
 
-    if asset:
-        authorization_object = {**asset, 'object__type': 'asset'}
-    else:
-        authorization_object = {
-            'databaseId': databaseId,
-            'assetId': assetId,
-            'object__type': 'asset'
-        }
-
+    authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                      include_archived=include_archived)
     return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
 
 def get_assets(databaseId, query_params, showArchived=False):
@@ -1414,7 +1402,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         )
 
         # Create response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1476,7 +1464,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     
     try:
         # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Archive asset files in S3, recording assetArchive provenance per file
@@ -1585,7 +1573,7 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
 
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         files_restored = 0
 
@@ -1768,9 +1756,9 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Log the error but continue with deletion process
                 logger.warning(f"Error deleting subscription record for asset {assetId}: {e}")
 
-        #send email for asset file change
-        send_subscription_email(databaseId, assetId)
-        
+        # Subscribers are notified when the asset is archived. A permanent delete sends no
+        # email: its topic and subscription record are already gone at this point.
+
         original_db_id = databaseId.replace("#deleted", "")
 
         # 1. Delete all S3 objects (assets files and preview)
@@ -1970,7 +1958,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return AssetOperationResponseModel(
             success=True,
             message=f"Asset {assetId} permanently deleted from all systems",
@@ -2044,7 +2032,8 @@ def handle_get_request(event):
             # Check authorization before existence, so a refused caller cannot use the
             # not-found response to learn which assets exist
             if not authorize_single_asset(asset, path_parameters['databaseId'],
-                                          path_parameters['assetId'], "GET", claims_and_roles):
+                                          path_parameters['assetId'], "GET", claims_and_roles,
+                                          include_archived=show_archived):
                 return authorization_error()
 
             if not asset:

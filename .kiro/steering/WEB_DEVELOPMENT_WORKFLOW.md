@@ -29,7 +29,7 @@ web/
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table (core + add-on + custom), React.lazy, permission filtering
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -181,7 +181,7 @@ web/
 #### **Step 3: Page and Route Setup**
 
 -   [ ] **Create thin page wrapper**: In `src/pages/`
--   [ ] **Add lazy import**: `React.lazy(() => import("./pages/MyPage"))` in `routes.tsx`
+-   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
 -   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
 
@@ -269,11 +269,11 @@ window.location.href = "/databases/mydb/assets";
 
 ### **Rule 4: Lazy Load All Pages in routes.tsx**
 
-Every page component in `routes.tsx` MUST be lazy-loaded with `React.lazy`:
+Every page component in `routes.tsx` MUST be lazy-loaded with `lazyWithRetry` (`src/utils/chunkLoadRecovery.ts`), which retries a chunk that failed to download and then reloads the page once:
 
 ```typescript
 // CORRECT
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // INCORRECT -- defeats code splitting
 import MyPage from "./pages/MyPage";
@@ -345,6 +345,8 @@ npm run build
 # INCORRECT
 yarn install
 ```
+
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
 
 #### Keep the platform-specific native bindings in `optionalDependencies`
 
@@ -532,6 +534,8 @@ const data = result[1];
 
 A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
 
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
+
 ### **Authentication: Dual-Mode System**
 
 The app supports Cognito and External OAuth2 modes. The auth orchestrator is `src/FedAuth/Auth.tsx`:
@@ -650,7 +654,7 @@ export default MyPage;
 Then in `routes.tsx`:
 
 ```typescript
-const MyPage = React.lazy(() => import("./pages/MyPage"));
+const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 // In routeTable array:
 {
@@ -919,7 +923,7 @@ npm run prettier-fix
 1. **Importing apiClient in components/pages** -- use service layer files
 2. **Importing Cloudscape from barrel export** -- use individual subpaths (new imports; see Rule 2)
 3. **Using BrowserRouter** -- must use HashRouter
-4. **Eagerly importing pages** -- must use React.lazy
+4. **Eagerly importing pages** -- must use lazyWithRetry
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer
 6. **Using Amplify Cache** -- use appCache
 7. **Manually getting auth tokens** -- use getDualValidAccessToken

@@ -68,6 +68,7 @@ vamscli metadata asset list [OPTIONS]
 | `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
 | `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                              |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -145,6 +146,7 @@ vamscli metadata file list [OPTIONS]
 | `--file-path`         | TEXT    | Yes      | Relative file path                                    |
 | `--type`              | CHOICE  | Yes      | `metadata` or `attribute`                             |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -221,6 +223,7 @@ vamscli metadata asset-link list [OPTIONS]
 | Option             | Type    | Required | Description                                           |
 | ------------------ | ------- | -------- | ----------------------------------------------------- |
 | `--asset-link-id`  | TEXT    | Yes      | Asset link ID                                         |
+| `--show-archived`  | FLAG    | No       | Also find a linked asset that is archived             |
 | `--page-size`      | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token` | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`    | FLAG    | No       | Output raw JSON response                              |
@@ -435,7 +438,7 @@ vamscli metadata-schema create -d my-database -e fileMetadata -n "File fields" -
 ```
 
 :::note[File type restriction]
-`--file-key-type-restriction` takes each extension with its leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only; an entry without the dot, with a second dot or with a path separator is rejected with a `400`. The extension is read from the file's name, so a dot in a folder name is not an extension and a file with no extension is matched by every enabled schema for its entity type. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
+`--file-key-type-restriction` takes each extension with its leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only; an entry without the dot, with a second dot or with a path separator is rejected with a `400`. The extension is read from the file's name, so a dot in a folder name is not an extension, and a file with no extension is validated only against schemas with no file type restriction. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
 :::
 
 ---

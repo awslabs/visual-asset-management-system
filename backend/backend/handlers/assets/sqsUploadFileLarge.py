@@ -8,7 +8,7 @@ import boto3
 import json
 import logging
 from typing import Dict, Any, List
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -742,7 +742,7 @@ def log_processing_metrics(correlation_ids: Dict[str, str], step: str, duration:
             'asset_id': correlation_ids.get('assetId'),
             'database_id': correlation_ids.get('databaseId'),
             'file_size': correlation_ids.get('fileSize'),
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': utc_now().isoformat()
         }
         
         logger.info(f"STRUCTURED_METRICS: {json.dumps(metrics_data)}")
@@ -983,7 +983,7 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
     Returns:
         True if processing was successful, False otherwise
     """
-    start_time = datetime.utcnow()
+    start_time = utc_now()
     correlation_str = format_correlation_ids(correlation_ids)
     
     try:
@@ -997,32 +997,32 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         
         # Step 1: Complete multipart upload at temporary location
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")
-        step1_start = datetime.utcnow()
+        step1_start = utc_now()
         
         if not complete_multipart_upload_for_large_file(file_info, correlation_ids):
             logger.error(f"Step 1 failed: multipart upload completion - {correlation_str}")
             return False
             
-        step1_duration = (datetime.utcnow() - step1_start).total_seconds()
+        step1_duration = (utc_now() - step1_start).total_seconds()
         logger.info(f"Step 1 completed in {step1_duration:.2f}s - {correlation_str}")
             
         # Step 2: Validate file content and move to final location
         logger.info(f"Step 2: Validating and moving file - {correlation_str}")
-        step2_start = datetime.utcnow()
+        step2_start = utc_now()
         
         if not validate_and_move_large_file(file_info, correlation_ids):
             logger.error(f"Step 2 failed: file validation and movement - {correlation_str}")
             return False
             
-        step2_duration = (datetime.utcnow() - step2_start).total_seconds()
+        step2_duration = (utc_now() - step2_start).total_seconds()
         logger.info(f"Step 2 completed in {step2_duration:.2f}s - {correlation_str}")
             
-        total_duration = (datetime.utcnow() - start_time).total_seconds()
+        total_duration = (utc_now() - start_time).total_seconds()
         logger.info(f"Large file processing completed successfully in {total_duration:.2f}s - {correlation_str}")
         return True
         
     except Exception as e:
-        total_duration = (datetime.utcnow() - start_time).total_seconds()
+        total_duration = (utc_now() - start_time).total_seconds()
         logger.exception(f"Unexpected error processing large file after {total_duration:.2f}s - {correlation_str}: {e}")
         
         # Attempt cleanup on failure

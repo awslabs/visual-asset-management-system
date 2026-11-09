@@ -4,8 +4,10 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import Dialog, { DialogFooter } from "./Dialog";
+import { BUSY_LOOK } from "./BusyControls";
 
 describe("Dialog layout", () => {
     it("defaults to the medium width and offers a large one", () => {
@@ -84,5 +86,86 @@ describe("Dialog close button", () => {
         expect(close.className).toContain("text-text-secondary");
         expect(close.className).toContain("hover:text-text-primary");
         expect(close.className).not.toMatch(/text-gray-/);
+    });
+});
+
+// Radix starts listening for a press outside the dialog one task after it opens.
+const outsidePressArmed = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+describe("Dialog backdrop", () => {
+    it("cancels a mouse press on the backdrop, so focus stays in the dialog", () => {
+        render(
+            <Dialog open onOpenChange={jest.fn()} title="T" footer={<button>Ok</button>}>
+                <p>body</p>
+            </Dialog>
+        );
+        // jsdom does not move focus on a mouse press, so the cancelled default is what is asserted.
+        expect(fireEvent.mouseDown(screen.getByTestId("dialog-overlay"))).toBe(false);
+    });
+
+    it("still closes a dialog that is not held on a click outside", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onOpenChange = jest.fn();
+        render(
+            <Dialog open onOpenChange={onOpenChange} title="T">
+                <p>body</p>
+            </Dialog>
+        );
+        await outsidePressArmed();
+        await user.click(screen.getByTestId("dialog-overlay"));
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+});
+
+describe("Dialog held while busy", () => {
+    const Held: React.FC<{ busy: boolean; onOpenChange: (open: boolean) => void }> = ({
+        busy,
+        onOpenChange,
+    }) => (
+        <Dialog
+            open
+            onOpenChange={onOpenChange}
+            title="T"
+            busy={busy}
+            footer={<button>Deleting...</button>}
+        >
+            <p>body</p>
+        </Dialog>
+    );
+
+    it("stays open on Escape, a click outside and its close button, which looks and reads unavailable", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onOpenChange = jest.fn();
+        render(<Held busy onOpenChange={onOpenChange} />);
+        await outsidePressArmed();
+        const close = screen.getByRole("button", { name: "Close dialog" });
+        expect(close).toHaveAttribute("aria-disabled", "true");
+        expect(close).not.toBeDisabled();
+        expect(close).toHaveClass(...BUSY_LOOK.split(" "));
+
+        screen.getByRole("button", { name: "Deleting..." }).focus();
+        await user.keyboard("{Escape}");
+        await user.click(screen.getByTestId("dialog-overlay"));
+        await user.click(close);
+        expect(onOpenChange).not.toHaveBeenCalledWith(false);
+        expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("closes as before once the request is answered", async () => {
+        const user = userEvent.setup({ delay: null });
+        const onOpenChange = jest.fn();
+        const { rerender } = render(<Held busy onOpenChange={onOpenChange} />);
+        rerender(<Held busy={false} onOpenChange={onOpenChange} />);
+        await outsidePressArmed();
+        const close = screen.getByRole("button", { name: "Close dialog" });
+        expect(close).not.toHaveAttribute("aria-disabled");
+        await user.click(close);
+        expect(onOpenChange).toHaveBeenLastCalledWith(false);
+        onOpenChange.mockClear();
+        await user.keyboard("{Escape}");
+        expect(onOpenChange).toHaveBeenLastCalledWith(false);
+        onOpenChange.mockClear();
+        await user.click(screen.getByTestId("dialog-overlay"));
+        expect(onOpenChange).toHaveBeenLastCalledWith(false);
     });
 });

@@ -11,12 +11,13 @@ able to stop it — it keeps running and billing behind a 200 "Execution aborted
 
 The distinction the sweep has to draw is between the two ways a row becomes terminal:
 
-* it finished ON ITS OWN (SUCCEEDED / FAILED / TIMED_OUT) — its sub-processes ended with it, and
-  issuing stop calls would attach "may still be running" warnings to work that completed;
-* a previous abort stamped it ABORTED — its sub-processes were meant to be stopped, so anything
-  now on the row is either already stopped (the stop calls are no-ops) or an orphan.
+* it finished ON ITS OWN (SUCCEEDED / FAILED) — its sub-processes ended with it, and issuing stop
+  calls would attach "may still be running" warnings to work that completed;
+* VAMS stamped it stopped — ABORTED by a previous abort, or ABORTED / TIMED_OUT by a read that
+  observed the run stopped outside VAMS — so its sub-processes were never stopped or were meant to
+  be, and anything now on the row is either already stopped (the stop calls are no-ops) or an orphan.
 
-So ABORTED rows are swept on a retry and the others are not. The stop calls are idempotent by
+So ABORTED and TIMED_OUT rows are swept on a retry and the others are not. The stop calls are idempotent by
 construction: StopExecution on a finished execution, TerminateJob on a finished job and
 UpdateJob(CANCELED) on a finished Deadline job are all accepted rather than reported.
 
@@ -117,6 +118,17 @@ class TestARetriedAbortReachesAnOrphanOnAnAbortedRow:
             "a Batch job left on an ABORTED row keeps running and billing with no in-product "
             f"remedy: {_terminated(terminate)}")
 
+    def test_a_job_on_a_row_a_read_marked_timed_out_is_terminated(self):
+        # A read that observes a run timed out outside VAMS marks its unfinished steps TIMED_OUT and
+        # stops none of their sub-processes; the abort is what stops them.
+        response, terminate, _status = _abort(
+            [[_pipeline_row([ORPHAN_JOB], status="TIMED_OUT")],
+             [_pipeline_row([ORPHAN_JOB], status="TIMED_OUT")]],
+            main_status="TIMED_OUT")
+
+        assert response["statusCode"] == 200
+        assert _terminated(terminate) == ["job-orphan"]
+
     def test_the_retry_does_not_move_the_rows_stop_date(self):
         """The row already stopped; a retry catches up on sub-processes, it does not re-date the run."""
         _response, _terminate, status = _abort(
@@ -143,7 +155,7 @@ class TestARetriedAbortReachesAnOrphanOnAnAbortedRow:
 class TestARowThatFinishedOnItsOwnIsStillLeftAlone:
     """Control. Sweeping these would report "may still be running" for completed work."""
 
-    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT"])
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED"])
     def test_no_stop_is_issued_and_no_warning_is_produced(self, status):
         response, terminate, _status = _abort(
             [[_pipeline_row([ORPHAN_JOB], status=status)],

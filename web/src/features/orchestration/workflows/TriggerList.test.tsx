@@ -194,4 +194,28 @@ describe("TriggerList route check", () => {
             screen.getByRole("button", { name: "Delete trigger fileUpload#nightly" })
         ).toBeInTheDocument();
     });
+
+    it("scrolls the trigger table inside its own box and lets the header wrap", () => {
+        // jsdom has no layout, so the classes are the contract: without the scroll box a phone-width
+        // page widens to the table and pushes Edit and Delete off-screen.
+        renderList({ triggers: [nightly] });
+        const table = screen.getByRole("table");
+        expect(table.parentElement).toHaveClass("overflow-x-auto");
+        const heading = screen.getByRole("heading", { name: "Triggers" });
+        expect(heading.parentElement).toHaveClass("flex-wrap");
+    });
+
+    it("lets a keyboard user reach the scroll box when the role has no row actions", async () => {
+        renderList({ triggers: [nightly], canSet: false, canDelete: false });
+        expect(screen.queryAllByRole("button")).toHaveLength(0);
+        const box = screen.getByRole("region", { name: "Triggers" });
+        expect(box).toContainElement(screen.getByRole("table"));
+        await userEvent.tab();
+        expect(box).toHaveFocus();
+    });
+
+    it("adds no extra tab stop when the rows hold Edit and Delete", () => {
+        renderList({ triggers: [nightly] });
+        expect(screen.getByRole("region", { name: "Triggers" })).not.toHaveAttribute("tabindex");
+    });
 });

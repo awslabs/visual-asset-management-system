@@ -11,10 +11,19 @@ import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
-import { isCadSupportError, loadFile } from "./utils/fileLoaders";
-import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
+import Alert from "@cloudscape-design/components/alert";
+import { isCadSupportError } from "./utils/fileLoaders";
+import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
+import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
+import { downloadStatusMessage } from "../../core/streamFailure";
+
+/** Referenced files listed by name in the notice before the rest are counted. */
+const NOTICE_LISTED_FILES = 10;
 
 /**
  * Lays the loaded files out in a row, or returns them to their authored placement.
@@ -87,8 +96,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
+    // Referenced files (textures, material libraries, USD layers) that were not loaded.
+    const [unloadedReferences, setUnloadedReferences] = useState<string[]>([]);
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
@@ -110,6 +122,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         versionId,
         assetVersionId,
     });
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(loadTargetKey);
     // Render loop handle and the in-flight download, both torn down on unmount.
     const animationFrameRef = useRef<number | null>(null);
     const downloadAbortRef = useRef<AbortController | null>(null);
@@ -325,6 +340,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the scene is ready, so this run's renderer is held here: cleanup releases it after a
         // load that failed or was cancelled too.
         let runRenderer: any = null;
+        // One resolver per file. Held per run, like the renderer, so cleanup revokes the blob URLs
+        // they created whether the load succeeded, failed or was cancelled.
+        const runResolvers: AssetDependencyResolver[] = [];
 
         const loadAssets = async () => {
             try {
@@ -336,6 +354,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 await ThreeJSDependencyManager.loadThreeJS();
                 if (cancelled) return;
 
+                setUnloadedReferences([]);
                 setLoadingMessage("Initializing 3D scene...");
                 const THREE = (window as any).THREE;
 
@@ -377,8 +396,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 const loadedGroups: any[] = [];
                 const errors: Array<{ file: string; error: string }> = [];
                 const allAnimations: any[] = [];
-                const allBlobUrls: string[] = [];
-                const fileDependencyCounts = new Map<string, number>(); // Track dependency count per file
+                const unloaded: string[] = [];
 
                 // Get authorization header for streaming endpoint
                 const authHeader = await getDualAuthorizationHeader();
@@ -438,48 +456,48 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         });
 
                         if (!response.ok) {
-                            throw new Error(`Failed to load: ${fileName} (${response.status})`);
+                            // A refused download (401/403/404/410) is named from the API's status
+                            // (#1211); any other status keeps this file's own message.
+                            throw new Error(
+                                downloadStatusMessage(
+                                    response.status,
+                                    `Failed to load: ${fileName} (${response.status})`
+                                )
+                            );
                         }
 
-                        let arrayBuffer = await response.arrayBuffer();
+                        const arrayBuffer = await response.arrayBuffer();
                         console.log(`Downloaded: ${fileName} (${arrayBuffer.byteLength} bytes)`);
 
-                        // For GLTF files, pre-load dependencies
-                        // Note: Dependencies are loaded without versionId - they are part of the same asset version
-                        if (fileExtension === "gltf") {
-                            setLoadingMessage(`Resolving dependencies for ${fileName}...`);
-                            const depResult = await preloadGLTFDependencies(
-                                arrayBuffer,
-                                {
-                                    assetId: fileAssetId,
-                                    databaseId: fileDatabaseId,
-                                    baseFileKey: fileKey,
-                                    apiEndpoint: config.api,
-                                    assetVersionId: assetVersionId,
-                                },
-                                (current, total) => {
-                                    setLoadingMessage(
-                                        `Loading dependencies for ${fileName} (${current}/${total})...`
-                                    );
-                                }
-                            );
-                            arrayBuffer = depResult.gltfArrayBuffer;
-                            allBlobUrls.push(...depResult.blobUrls);
+                        // Referenced files come from the same asset version as this file, so the
+                        // resolver passes assetVersionId but never the file's own S3 versionId.
+                        const resolver = new AssetDependencyResolver({
+                            assetId: fileAssetId,
+                            databaseId: fileDatabaseId,
+                            apiEndpoint: config.api,
+                            assetVersionId: assetVersionId,
+                            signal: downloadAbortRef.current?.signal,
+                            getAuthHeader: () => Promise.resolve(authHeader),
+                        });
+                        runResolvers.push(resolver);
 
-                            // Track dependency count for this file
-                            const depCount = depResult.blobUrls.length;
-                            if (depCount > 0) {
-                                fileDependencyCounts.set(fileName, depCount);
-                                console.log(`Loaded ${depCount} dependencies for ${fileName}`);
-                            }
-                        }
-
-                        // Load file using appropriate loader
                         setLoadingMessage(`Processing ${fileName}...`);
-                        const result = await loadFile(arrayBuffer, fileExtension, fileName);
+                        const result = await loadWithDependencies({
+                            arrayBuffer,
+                            extension: fileExtension,
+                            fileKey,
+                            fileName,
+                            resolver,
+                            onProgress: setLoadingMessage,
+                        });
+                        if (cancelled) return;
 
                         if (!result.object) {
                             throw new Error("Failed to parse file");
+                        }
+
+                        if (result.warnings && result.warnings.length > 0) {
+                            unloaded.push(...result.warnings);
                         }
 
                         // Store animations if present
@@ -495,10 +513,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         fileGroup.name = fileName;
                         fileGroup.userData.sourceFile = fileKey;
 
-                        // Store dependency count if available
-                        const depCount = fileDependencyCounts.get(fileName);
-                        if (depCount !== undefined) {
-                            fileGroup.userData.dependencyCount = depCount;
+                        if (result.dependencyCount > 0) {
+                            fileGroup.userData.dependencyCount = result.dependencyCount;
+                            console.log(
+                                `Loaded ${result.dependencyCount} referenced files for ${fileName}`
+                            );
                         }
 
                         fileGroup.add(result.object);
@@ -513,6 +532,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         // it.
                         // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error loading ${fileKey}:`, fileError);
+                        if (Array.isArray(fileError?.warnings)) {
+                            unloaded.push(...fileError.warnings);
+                        }
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
@@ -524,7 +546,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (allAnimations.length > 0) {
                     setAnimations(allAnimations);
                     const mixer = new THREE.AnimationMixer(scene);
-                    const clock = new THREE.Clock();
+                    // THREE.Clock is deprecated; Timer advances only when update() is called.
+                    const clock = new THREE.Timer();
 
                     // Play first animation by default (but paused)
                     const action = mixer.clipAction(allAnimations[0]);
@@ -542,6 +565,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (cancelled) return;
                 if (errors.length > 0) setFileErrors(errors);
+                setUnloadedReferences(Array.from(new Set(unloaded)));
 
                 // If no files loaded, show the actual error message
                 if (loadedGroups.length === 0) {
@@ -705,7 +729,6 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     fileGroups: loadedGroups,
                     controls: mouseControls,
                     clickHandler: handleCanvasClick,
-                    blobUrls: allBlobUrls,
                 };
 
                 const animate = () => {
@@ -715,13 +738,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     animationFrameRef.current = requestAnimationFrame(animate);
 
                     // Update animation mixer if animations are playing
-                    if (
-                        animationMixerRef.current &&
-                        animationClockRef.current &&
-                        !animationPausedRef.current
-                    ) {
-                        const delta = animationClockRef.current.getDelta();
-                        animationMixerRef.current.update(delta);
+                    if (animationMixerRef.current && animationClockRef.current) {
+                        // Advanced every frame, so resuming does not replay the paused interval.
+                        animationClockRef.current.update();
+                        if (!animationPausedRef.current) {
+                            animationMixerRef.current.update(animationClockRef.current.getDelta());
+                        }
                     }
 
                     renderer.render(scene, camera);
@@ -769,7 +791,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             downloadAbortRef.current = null;
 
             if (viewerInstanceRef.current) {
-                const { renderer, controls, clickHandler, blobUrls } = viewerInstanceRef.current;
+                const { renderer, controls, clickHandler } = viewerInstanceRef.current;
 
                 if (clickHandler && renderer?.domElement) {
                     renderer.domElement.removeEventListener("click", clickHandler);
@@ -780,14 +802,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
 
                 controls?.dispose();
-
-                // Cleanup blob URLs
-                if (blobUrls && blobUrls.length > 0) {
-                    cleanupBlobUrls(blobUrls);
-                    console.log(`Cleaned up ${blobUrls.length} blob URLs`);
-                }
             }
             viewerInstanceRef.current = null;
+
+            // Blob URLs for referenced files, revoked whatever the load outcome.
+            runResolvers.forEach((resolver) => resolver.revokeAll());
+            runResolvers.length = 0;
 
             if (runRenderer?.domElement?.parentNode) {
                 runRenderer.domElement.parentNode.removeChild(runRenderer.domElement);
@@ -1301,6 +1321,49 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         console.log("All materials reset to original");
     };
 
+    // Referenced files that were not loaded: shown over the scene, and over the error screen when
+    // nothing could be drawn.
+    const referencesNotice =
+        unloadedReferences.length > 0 && !isLoading ? (
+            <div
+                style={{
+                    position: "absolute",
+                    bottom: "8px",
+                    left: "8px",
+                    maxWidth: "min(560px, calc(100% - 16px))",
+                    zIndex: VIEWER_LAYER.notice,
+                }}
+                data-testid="threejs-unloaded-references"
+            >
+                <Alert
+                    type="info"
+                    dismissible
+                    dismissAriaLabel="Dismiss referenced files notice"
+                    onDismiss={() => setUnloadedReferences([])}
+                    header={`${unloadedReferences.length} referenced file${
+                        unloadedReferences.length === 1 ? " was" : "s were"
+                    } not loaded`}
+                >
+                    {/* Focusable so keyboard users can reach and scroll the list. */}
+                    <div
+                        tabIndex={0}
+                        role="region"
+                        aria-label="Referenced files that were not loaded"
+                        style={{ maxHeight: "120px", overflowY: "auto" }}
+                    >
+                        <ul style={{ margin: 0, paddingLeft: "18px" }}>
+                            {unloadedReferences.slice(0, NOTICE_LISTED_FILES).map((line) => (
+                                <li key={line}>{line}</li>
+                            ))}
+                        </ul>
+                        {unloadedReferences.length > NOTICE_LISTED_FILES && (
+                            <div>and {unloadedReferences.length - NOTICE_LISTED_FILES} more</div>
+                        )}
+                    </div>
+                </Alert>
+            </div>
+        ) : null;
+
     if (error) {
         // Keyed apart from the viewer root below so React does not reuse the scene container for
         // this panel: the renderer's canvas is appended to that container outside React, and a
@@ -1333,8 +1396,9 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }}
                 >
                     {error}
-                    {/* A CAD setup message is about the deployment or browser, not the file. */}
-                    {!isCadSupportError(error) && (
+                    {/* A CAD setup message is about the deployment or browser, not the file, and
+                        a USD scene with nothing to draw is a supported format. */}
+                    {!isCadSupportError(error) && error !== USD_NO_GEOMETRY_MESSAGE && (
                         <>
                             <br />
                             <br />
@@ -1344,6 +1408,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         </>
                     )}
                 </div>
+                {referencesNotice}
             </div>
         );
     }
@@ -1372,7 +1437,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -1420,10 +1485,13 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 </div>
             )}
 
+            {referencesNotice}
+
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <ThreeJSPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
@@ -1457,6 +1525,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     animations={animations}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 
@@ -1474,7 +1543,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -1484,6 +1553,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -1493,7 +1563,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>ThreeJS Viewer</div>

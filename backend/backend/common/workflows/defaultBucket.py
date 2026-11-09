@@ -18,7 +18,7 @@ from boto3.dynamodb.conditions import Attr
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DefaultBucket")
+logger = safeLogger()
 
 
 class DefaultBucketNotFoundError(Exception):

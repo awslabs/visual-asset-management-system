@@ -569,10 +569,12 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
 @click.option('-d', '--database-id', required=True, help='Database ID containing the asset')
 @click.option('--asset-id', required=True, help='Asset ID to get links for')
 @click.option('--tree-view', is_flag=True, help='Display children as a tree structure')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: bool, json_output: bool):
+def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: bool, show_archived: bool,
+               json_output: bool):
     """
     List all asset links for a specific asset.
     
@@ -583,6 +585,7 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
         vamscli asset-links list -d my-database --asset-id my-asset
         vamscli asset-links list -d my-database --asset-id my-asset --tree-view
         vamscli asset-links list -d my-database --asset-id my-asset --json-output
+        vamscli asset-links list -d my-database --asset-id my-archived-asset --show-archived
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -593,7 +596,8 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
         output_status(f"Retrieving asset links for '{asset_id}' in database '{database_id}'...", json_output)
         
         # Get asset links
-        result = api_client.get_asset_links_for_asset(database_id, asset_id, tree_view)
+        result = api_client.get_asset_links_for_asset(database_id, asset_id, tree_view,
+                                                      show_archived=show_archived)
         
         def format_list_result(data):
             """Format list result for CLI display."""

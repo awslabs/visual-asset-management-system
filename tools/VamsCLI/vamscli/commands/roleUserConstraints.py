@@ -150,6 +150,10 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
             # Extract items from message wrapper (backend wraps response in message field)
             message_data = page_result.get('message', page_result)
             items = message_data.get('Items', [])
+            remaining_slots = max_total_items - total_fetched
+            page_had_more = len(items) > remaining_slots
+            if page_had_more:
+                items = items[:remaining_slots]
             all_items.extend(items)
             total_fetched += len(items)
             
@@ -159,6 +163,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
             
             # Check if we should continue
             next_token = message_data.get('NextToken')
+            has_more_items = page_had_more or bool(next_token)
             if not next_token or total_fetched >= max_total_items:
                 break
         
@@ -170,7 +175,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
             'pageCount': page_count
         }
         
-        if total_fetched >= max_total_items and next_token:
+        if total_fetched >= max_total_items and has_more_items:
             result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
         
     else:
@@ -699,6 +704,10 @@ def list_constraints(ctx: click.Context, page_size: Optional[int], max_items: Op
             
             # Get items
             items = page_result.get('Items', [])
+            remaining_slots = max_total_items - total_fetched
+            page_had_more = len(items) > remaining_slots
+            if page_had_more:
+                items = items[:remaining_slots]
             all_items.extend(items)
             total_fetched += len(items)
             
@@ -708,6 +717,7 @@ def list_constraints(ctx: click.Context, page_size: Optional[int], max_items: Op
             
             # Check if we should continue
             next_token = page_result.get('NextToken')
+            has_more_items = page_had_more or bool(next_token)
             if not next_token or total_fetched >= max_total_items:
                 break
         
@@ -719,7 +729,7 @@ def list_constraints(ctx: click.Context, page_size: Optional[int], max_items: Op
             'pageCount': page_count
         }
         
-        if total_fetched >= max_total_items and next_token:
+        if total_fetched >= max_total_items and has_more_items:
             result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
         
     else:
@@ -1329,6 +1339,10 @@ def list_user_roles(ctx: click.Context, page_size: Optional[int], max_items: Opt
             
             # Get items
             items = page_result.get('Items', [])
+            remaining_slots = max_total_items - total_fetched
+            page_had_more = len(items) > remaining_slots
+            if page_had_more:
+                items = items[:remaining_slots]
             all_items.extend(items)
             total_fetched += len(items)
             
@@ -1338,6 +1352,7 @@ def list_user_roles(ctx: click.Context, page_size: Optional[int], max_items: Opt
             
             # Check if we should continue
             next_token = page_result.get('NextToken')
+            has_more_items = page_had_more or bool(next_token)
             if not next_token or total_fetched >= max_total_items:
                 break
         
@@ -1349,7 +1364,7 @@ def list_user_roles(ctx: click.Context, page_size: Optional[int], max_items: Opt
             'pageCount': page_count
         }
         
-        if total_fetched >= max_total_items and next_token:
+        if total_fetched >= max_total_items and has_more_items:
             result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
         
     else:

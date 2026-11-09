@@ -171,6 +171,12 @@ A mesh (glTF, OBJ, FBX, STL, PLY mesh, STEP, USD) is framed on its full bounding
 
 A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-limit fallback of an animated preview) shows the front three-quarter view: 45° around the orbit and 25° above it.
 
+### Mesh Colours
+
+A mesh is drawn with its UV texture, else its per-vertex colours, else its per-face colours, else in light blue. Per-face colours come from STEP, 3MF and COLLADA files and from a coloured or textured mesh decimated to the triangle budget, which keeps its colours as per-face colours. They are drawn as per-vertex colours on a copy of the mesh whose faces share no vertices: each face's colour is set on its own corners, and each corner keeps the smooth-shading normal of the original mesh. So no colour blends across a face edge, and the faces shade as smoothly as on the original mesh. VTK draws per-face colours directly through a buffer texture, which Mesa 26's software OpenGL renders as an empty frame. Per-vertex colours draw on every Mesa version.
+
+The copy holds three vertices per triangle. A 36-frame orbit of a mesh coloured per face peaks at about 0.75 GiB plus 350 to 475 bytes per triangle (about 130 bytes without the copy): at the 20 million triangle budget of a 4 vCPU, 16 GiB task, about 8.5 GiB instead of 3 GiB. Such a mesh therefore has its own triangle cap, `(60% of the memory limit - 0.75 GiB) / 475 bytes`, at most the triangle budget and at least 100,000 triangles, and is decimated to it. That is 1.0 million triangles on 2 GiB, 3.7 million on 4 GiB and 9.2 million on 8 GiB. On 4 vCPU the cap reaches the 20 million triangle budget at 16 GiB, so the default tiers keep their full budgets.
+
 ### Referenced Files
 
 Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names; an `.lcc` scene's `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin`; the chunk files of the one level of detail an `.lcc2` scene is read at). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
@@ -238,7 +244,7 @@ MaterialX materials are not read (the `usd-core` build has no MaterialX plugin);
 
 ### Compute and Limits
 
-The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
+The container sizes its work to the task it runs in, so it stays within whichever job size started it. Its memory limit is the smallest of its cgroup's limit, the task memory the state machine passes in `VAMS_TASK_MEMORY_MIB` and physical memory. On AWS Fargate the cgroup sets no limit and physical memory is the micro-VM's, larger than the task, so there the passed task memory sets the budgets. Its CPUs come from its cgroup (CPU quota and affinity). When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
 
 | Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
 | :-------- | :-------- | :---------------------------- | :-------- | :--------- |
@@ -246,7 +252,7 @@ The container sizes its work to the task it runs in, read from its cgroup (memor
 | Triangles | 5 million | 200 bytes per triangle        | 1 million | 30 million |
 | Splats    | 1 million | 200 bytes per splat           | 250,000   | 5 million  |
 
-On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first). VTK allocates the clustering grid densely, so the grid is also bounded to an eighth of the memory limit at 88 bytes per bin (at most 2^26 bins): a closed mesh far above the budget comes out with fewer triangles than the budget allows (a 20 million triangle sphere on 16 GiB becomes about 730,000). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
+On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first, and colours are kept: a face's colour stays on every triangle made from that face, whatever lines and triangle strips the mesh also holds; strips are decimated with the faces, and lines are dropped). A mesh drawn with per-face colours is held to its own cap, which is lower than the triangle budget on smaller tasks: below 4.9 GiB on 1 vCPU, 8.6 GiB on 2 vCPU, 16 GiB on 4 vCPU and 23.4 GiB on 8 vCPU, for example 3.7 million triangles against a 5 million budget on 1 vCPU and 4 GiB, and 9.2 million against 10 million on 2 vCPU and 8 GiB (see [Mesh Colours](#mesh-colours)). VTK allocates the clustering grid densely, so the grid is also bounded to an eighth of the memory limit at 88 bytes per bin (at most 2^26 bins): a closed mesh far above the budget comes out with fewer triangles than the budget allows (a 20 million triangle sphere on 16 GiB becomes about 730,000). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
 
 -   **Download**: parallel ranged GETs (64 MiB parts, four per vCPU, at most 32).
 -   **Disk**: before the download, the input's size plus 1 GiB of output headroom is checked against the work volume's free space; an input that does not fit fails at once with a message naming both. Referenced files are checked the same way as they are fetched. A streamed PTX needs no disk.

@@ -181,7 +181,9 @@ class TestListReconcileReportsAnOutOfBandTermination:
         # by the executions list releases the same rows the details view would.
         import inspect
         source = inspect.getsource(le)
-        assert "on_terminal_observed=_release_locks_for_reconciled_terminal" in source
+        assert "on_terminal_observed=_settle_reconciled_terminal" in source
+        assert "_release_locks_for_reconciled_terminal(execution_id, main_item, status)" in inspect.getsource(
+            le._settle_reconciled_terminal)
 
 
 def _read_only_enforcer():

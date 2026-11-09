@@ -15,7 +15,10 @@ import { MemoryRouter } from "react-router-dom";
 import * as APIService from "../../services/APIService";
 import SearchPage from "./SearchPage";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
-import { PERMISSIONS_LOADING_REASON } from "../../features/orchestration/permissions/routeDisabledReason";
+import {
+    PERMISSIONS_FAILED_REASON,
+    PERMISSIONS_LOADING_REASON,
+} from "../../features/orchestration/permissions/routeDisabledReason";
 import {
     ADMIN_ROUTES,
     DATABASE_READONLY_ROUTES,
@@ -63,6 +66,20 @@ describe("search page asset actions by role", () => {
             create: `Your role does not allow creating ${Synonyms.assets}.`,
             delete: `Your role does not allow archiving or deleting ${Synonyms.assets}.`,
         });
+    });
+
+    it("says the permissions check failed, not that the role is refused, when it failed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error"]);
+        render(
+            <MemoryRouter>
+                <SearchPage />
+            </MemoryRouter>
+        );
+        await waitFor(() =>
+            expect(
+                mockContainerProps[mockContainerProps.length - 1].assetActionDisabledReasons
+            ).toEqual({ create: PERMISSIONS_FAILED_REASON, delete: PERMISSIONS_FAILED_REASON })
+        );
     });
 
     it.each([

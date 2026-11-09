@@ -27,6 +27,7 @@ from common.workflows import executionOutputs as eo
 from common.workflows import executionLocks as el
 from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
+from common.workflows import executionLogCapture as elc
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -49,6 +50,8 @@ from models.common import (
     _json_default
 )
 from models.executions import (
+    ExecutionSkipDetailsModel,
+    parse_list_status_filter,
     DetailMetadataPageRequestModel,
     DetailFilesPageRequestModel,
     ExecutionResultsPageRequestModel,
@@ -61,6 +64,15 @@ from models.executions import (
 )
 
 logger = safeLogger(service="ExecutionService")
+
+# This module is deployed as two functions with different roles: the execution service, which serves
+# every route but permanent delete, and the permanent-delete function, which serves only that route and
+# is the only one granted to delete execution rows. EXECUTION_SERVICE_ROUTES names the set a function
+# serves; a route outside it answers 404 before any read. Unset serves every route (unit tests, local
+# runs); any other value serves none.
+EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES"
+ROUTE_SET_SERVICE = "service"
+ROUTE_SET_PERMANENT_DELETE = "permanentDelete"
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
@@ -397,11 +409,27 @@ SFN_SYNC_MIN_INTERVAL_SECONDS = 30
 NON_SUCCESS_TERMINAL_STATUSES = ("FAILED", "ABORTED", "TIMED_OUT")
 
 # All Step Functions / VAMS terminal statuses. A pipeline or workflow row already in one
-# of these is finished and is left untouched by an abort (only in-flight rows are aborted).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# of these is finished and is left untouched by an abort (only in-flight rows are aborted). SKIPPED is
+# a refused trigger launch's record (er.EXECUTION_STATUS_SKIPPED), terminal from its first write.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
+
+# What the logs route answers for a SKIPPED record, which never ran and so has no log.
+SKIPPED_EXECUTION_LOG_MESSAGE = (
+    "This launch was skipped by the workflow's concurrency restriction and did not run, so it has no "
+    "logs.")
+
+# What the abort route answers (400) for a SKIPPED record, which has nothing to stop.
+SKIPPED_EXECUTION_ABORT_MESSAGE = "This execution was skipped and has nothing to abort."
+
+# Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
+# sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
+# run stopped outside VAMS (_mark_pipelines_for_reconciled_terminal). An abort sweeps these rows again;
+# a row that finished on its own (SUCCEEDED, or FAILED from the end-state step or error handler, which
+# stops its sub-processes first) is left alone.
+ABORT_RESWEPT_TERMINAL_STATUSES = (ABORTED_STATUS, "TIMED_OUT")
 
 # Main-row attributes the listing's lazy reconcile can change (build_execution_items).
 LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
@@ -411,7 +439,7 @@ LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
 
 # Main-row attributes the details view's lazy reconcile can change (_reconcile_main_status).
 DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES = (
-    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate",
+    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate", "executionLog", "executionError",
 )
 
 # Main-row attributes an abort writes.
@@ -461,14 +489,22 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
 
 
-def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
-    """Best-effort fetch of recent CloudWatch log events for ONE workflow execution.
+# Bounds on the log read a listing makes for an execution it finds terminated outside VAMS: the
+# FilterLogEvents calls per execution, and the seconds ONE listing request may spend following
+# nextToken across all of them, so the read stays inside the API's synchronous timeout. The first
+# call for each execution is always made.
+RECONCILE_LOG_CAPTURE_MAX_PAGES = 5
+RECONCILE_LOG_CAPTURE_BUDGET_SECONDS = 5
 
-    Returns the full recent execution log (not just errors). All workflow state machines
-    log to a single shared group; events carry the execution name (== executionId) when
-    includeExecutionData is enabled, so the read is scoped to this execution via a
-    filterPattern. Returns the joined message text; '' on any failure or when logging is
-    not configured (logs are non-critical)."""
+
+def _fetch_execution_logs(log_group_arn, execution_id, execution_start_date="", deadline=None):
+    """Best-effort capture of ONE workflow execution's CloudWatch log for its execution record.
+
+    All workflow state machines log to one shared group, so the read is scoped to this execution by
+    its id, anchored on its start date, and follows nextToken past empty pages within
+    RECONCILE_LOG_CAPTURE_MAX_PAGES and ``deadline`` (common.workflows.executionLogCapture). The text
+    keeps the newest events within the stored bound and is redacted. Returns '' on any failure or
+    when logging is not configured (logs are non-critical)."""
     if not log_group_arn or not execution_id:
         return ""
     parts = log_group_arn.split(":log-group:")
@@ -478,20 +514,42 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
     if log_group_name.endswith(":*"):
         log_group_name = log_group_name[:-2]
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name,
-            filterPattern=f'"{execution_id}"',
-            limit=limit_events,
+        text, _stream = elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_pages=RECONCILE_LOG_CAPTURE_MAX_PAGES,
+            deadline=deadline,
         )
-        text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        # Redact any inline credentials before the log text is stored or returned.
-        text = redact_log_text(text)
-        # Keep the stored log within DynamoDB item limits.
-        text, _ = er.truncate_text(text, limit=er.MAX_LOG_FIELD_BYTES)
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return ""
+
+
+def _terminal_log_and_error(execution_id, main_item, describe_response, deadline=None):
+    """For an execution a read path just found terminal, return (error_text, log_text).
+
+    log_text is the execution's CloudWatch log scoped to it within the shared workflow log group
+    (captured for any terminal status). error_text is the Step Functions error/cause message (the
+    caller only stores it for non-success statuses). Best-effort: ('', '') on any failure, since
+    diagnostics are non-critical to the read. Both land on the same main row, so they share one byte
+    budget. Every read path that records a terminal status for a run stopped outside VAMS (the
+    listing and the details view) captures through here, so whichever is read first stores the log."""
+    error_text = ""
+    try:
+        err = describe_response.get('error', '') if describe_response else ''
+        cause = describe_response.get('cause', '') if describe_response else ''
+        error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
+    except Exception as e:
+        logger.info(f"Could not read SFN error fields (non-critical): {e}")
+    log_text = _fetch_execution_logs(
+        main_item.get('executionLogGroupArn', ''), execution_id,
+        execution_start_date=main_item.get('executionStartDate', ''),
+        deadline=deadline)
+    ((log_text, _log_truncated),
+     (error_text, _error_truncated)) = er.truncate_text_budget(
+        [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
+    return error_text, log_text
 
 
 def _decode_starting_token(starting_token):
@@ -819,11 +877,18 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'databaseId': input_item.get('databaseId', ''),
             'assetId': input_item.get('assetId', ''),
             'executionError': redact_log_text(execution_error),
-            'executionLog': redact_log_text(execution_log),
+            # A shortened tail of the stored log keeps a full page under the Lambda response limit;
+            # GET /workflows/executions/{executionId}/logs returns the whole stored log.
+            # Only the newest window of the stored log is redacted before it is shortened, so a page
+            # of 256 KB logs is not redacted whole (see elc.listed_log_text).
+            'executionLog': elc.listed_log_text(execution_log),
             # The output kinds the run produced (File/Metadata/Result subset). Threaded in via the
             # per-request config-row memo the caller built (NOT free on this path — the auth pass
             # reads the config row lazily and discards it); legacy rows have no attribute -> [].
             'outputTypes': _row_output_types((config_rows or {}).get(execution_id)),
+            # A SKIPPED record (a trigger launch a concurrency restriction refused) adds its count,
+            # lock scope and fixed reason; every other row lists exactly as before.
+            **er.skip_list_fields(main_item),
         })
     return result_items
 
@@ -931,6 +996,78 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Each direction carries its own resume point, and the input side records whether it ran to
         # exhaustion: the budget is spent across both queries, so a page that fills up on either one
         # has to say where BOTH stand or the unread direction becomes unreachable.
+        # Memoized for the whole listing, so the excludeStatus check during the walk, the authorization
+        # pass and the response builder below share one read of each execution's main row.
+        main_row_memo = {}
+
+        def _fetch_main_row(execution_id):
+            if execution_id not in main_row_memo:
+                r = main_table.query(
+                    KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
+                    ScanIndexForward=False,
+                )
+                rows = r.get('Items', [])
+                main_row_memo[execution_id] = rows[0] if rows else None
+            return main_row_memo[execution_id]
+
+        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
+        # outputTypes projection share one read per execution. Output-only executions seed it for free
+        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
+        # lazily through the config_row_loader threaded into the auth check.
+        config_row_memo = {}
+        # One enforcer for the whole listing, and one Tier-2 decision per candidate, shared by the
+        # excludeStatus check during the walk and the authorization pass after it.
+        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+        access_decisions = {}
+
+        def _authorize_candidate(candidate_id, input_item):
+            """(allowed, reason) for one candidate, by the same _execution_access_check rule the
+            details/logs paths use, memoized for the request."""
+            if candidate_id not in access_decisions:
+                if casbin_enforcer is None:
+                    access_decisions[candidate_id] = (False, "no tokens")
+                else:
+                    # The workflow ids come from the input row when it carries them — written at launch
+                    # from the same workflow as the main row — and otherwise from the main row, which
+                    # the output-direction placeholder rows need because they carry no workflow ids.
+                    authorization_item = input_item
+                    if not input_item.get('workflowId', ''):
+                        authorization_item = _fetch_main_row(candidate_id) or input_item
+
+                    def _config_row_loader(eid=candidate_id):
+                        # The one config-row read the auth pass pays for this candidate lands in the
+                        # memo, so the outputTypes projection reuses it rather than re-reading.
+                        if eid not in config_row_memo:
+                            config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
+                        return config_row_memo[eid]
+
+                    access_decisions[candidate_id] = _execution_access_check(
+                        candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
+                        config_row_loader=_config_row_loader)
+            return access_decisions[candidate_id]
+
+        # excludeStatus (validated by the route handler). It is applied only to a candidate that has
+        # passed the read check: such a candidate whose stored status it names is dropped DURING the
+        # walk, before the page is cut, so the page is filled from the rows that remain and the cursor
+        # moves past the dropped ones. A candidate the caller may not read is never dropped here — it
+        # is handled exactly as it is without the parameter (it takes its place in the walk and the
+        # authorization pass withholds it), so the page and its cursor do not depend on the status of
+        # an execution the caller cannot read. Each status check is the memoized main-row read every
+        # listed row already costs. At most MAX_EXECUTIONS_INSPECTED rows are dropped per page; a page
+        # that reaches that bound stops at the last row it decided, with a continuation and a warning.
+        # Empty: the walk is exactly as before.
+        excluded_statuses, _message = parse_list_status_filter(query_params)
+        excluded_ids = set()
+        exclusion_drops = 0
+        exclusion_budget_spent = False
+
+        def _is_excluded(execution_id, input_item):
+            allowed, _reason = _authorize_candidate(execution_id, input_item)
+            if not allowed:
+                return False
+            row = _fetch_main_row(execution_id) or {}
+            return row.get('executionStatus', '') in excluded_statuses
+
         deduped_inputs = {}
         # The caller's pageSize bounds the page, and MAX_EXECUTIONS_INSPECTED bounds the work; the
         # walk stops at whichever comes first. Capping HERE rather than slicing the finished list is
@@ -964,8 +1101,26 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         while True:
             for input_item in resp.get('Items', []):
                 execution_id = input_item.get('workflowExecutionId', '')
-                if not execution_id or execution_id in deduped_inputs:
+                if not execution_id or execution_id in deduped_inputs or execution_id in excluded_ids:
                     continue
+                if excluded_statuses:
+                    if exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
+                        # The check budget is spent, so this row cannot be decided: resume at the last
+                        # row this page decided (kept or dropped), deferring this one.
+                        bounded = True
+                        exclusion_budget_spent = True
+                        last_evaluated_key = last_input_row_key or resp.get('LastEvaluatedKey')
+                        if last_input_row_key:
+                            served_through = (last_input_row_key.get('executionStartDate', '')
+                                              or served_through)
+                            served_through_id = (last_input_row_key.get('workflowExecutionId', '')
+                                                 or served_through_id)
+                        break
+                    if _is_excluded(execution_id, input_item):
+                        exclusion_drops += 1
+                        excluded_ids.add(execution_id)
+                        last_input_row_key = _asset_list_input_row_key(input_item)
+                        continue
                 deduped_inputs[execution_id] = input_item
                 last_input_row_key = _asset_list_input_row_key(input_item)
                 if len(deduped_inputs) >= inspect_cap:
@@ -1003,12 +1158,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Queried second and merged, so an execution that is BOTH an input and the output target keeps
         # its input row (first-seen wins) and is listed once. Bounded by the same
         # MAX_EXECUTIONS_INSPECTED budget across both directions.
-        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
-        # outputTypes projection share one read per execution. Output-only executions seed it for free
-        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
-        # lazily through the config_row_loader threaded into the auth check.
-        config_row_memo = {}
-        if len(deduped_inputs) < inspect_cap:
+        # A page that spent its excludeStatus check budget on the input side stops there, with the input
+        # cursor, rather than starting the output walk.
+        if len(deduped_inputs) < inspect_cap and not exclusion_budget_spent:
             cfg_table = dynamodb.Table(workflow_execution_configuration_table)
             output_key_condition = Key('outputDatabaseId:outputAssetId').eq(
                 er.output_asset_partition_key(database_id, asset_id))
@@ -1063,10 +1215,18 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             output_last_evaluated_key = (
                                 last_output_row_key or out_resp.get('LastEvaluatedKey'))
                             break
+                        if excluded_statuses and exclusion_drops >= MAX_EXECUTIONS_INSPECTED:
+                            # Same deferral for the excludeStatus check budget.
+                            bounded = True
+                            exclusion_budget_spent = True
+                            output_last_evaluated_key = (
+                                last_output_row_key or out_resp.get('LastEvaluatedKey'))
+                            break
                         execution_id = cfg_item.get('workflowExecutionId', '')
                         last_output_row_key = (_asset_list_output_row_key(cfg_item)
                                               or last_output_row_key)
-                        if not execution_id or execution_id in deduped_inputs:
+                        if (not execution_id or execution_id in deduped_inputs
+                                or execution_id in excluded_ids):
                             continue
                         row_date = cfg_item.get('executionStartDate', '')
                         if inputs_drained and served_through:
@@ -1093,6 +1253,14 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             # executions can share a start date, so dropping the whole date would lose
                             # a sibling never returned.
                             continue
+                        if excluded_statuses:
+                            # The configuration row is this GSI item, so the read check reuses it.
+                            config_row_memo.setdefault(execution_id, cfg_item)
+                            placeholder = {'workflowExecutionId': execution_id}
+                            if _is_excluded(execution_id, placeholder):
+                                exclusion_drops += 1
+                                excluded_ids.add(execution_id)
+                                continue
                         # A placeholder input row: this execution has no input file for the asset (it
                         # only wrote here), so the per-row input fields the response builder reads are
                         # absent by design rather than missing.
@@ -1124,20 +1292,6 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 # un-migrated deployment must degrade the listing, not fail it.
                 logger.warning(f"Could not list executions by output asset (non-fatal): {e}")
 
-        # Memoized for the whole listing, so the authorization pass and the response builder below
-        # share one read of each execution's main row rather than issuing two.
-        main_row_memo = {}
-
-        def _fetch_main_row(execution_id):
-            if execution_id not in main_row_memo:
-                r = main_table.query(
-                    KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
-                    ScanIndexForward=False,
-                )
-                rows = r.get('Items', [])
-                main_row_memo[execution_id] = rows[0] if rows else None
-            return main_row_memo[execution_id]
-
         def _describe(arn):
             if not arn:
                 return None
@@ -1163,29 +1317,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 only_if_not_terminal=any(
                     attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
 
+        log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
+
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
-            """For a terminal execution, return (error_text, log_text).
-
-            log_text is the full recent CloudWatch execution log scoped to this execution
-            within the shared workflow log group (captured for any terminal status).
-            error_text is the specific Step Functions error/cause message (the caller only
-            stores it for non-success statuses). Best-effort: returns ('', '') on any
-            failure (diagnostics are non-critical to the listing).
-
-            Both land on the same main row, so they share one byte budget."""
-            error_text = ""
-            try:
-                err = describe_response.get('error', '') if describe_response else ''
-                cause = describe_response.get('cause', '') if describe_response else ''
-                error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
-            except Exception as e:
-                logger.info(f"Could not read SFN error fields (non-critical): {e}")
-            log_text = _fetch_execution_logs(
-                main_item.get('executionLogGroupArn', ''), execution_id)
-            ((log_text, _log_truncated),
-             (error_text, _error_truncated)) = er.truncate_text_budget(
-                [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
-            return error_text, log_text
+            return _terminal_log_and_error(
+                execution_id, main_item, describe_response, deadline=log_capture_deadline)
 
         # Tier-2 once per deduped execution, evaluated by the same _execution_access_check rule the
         # details/logs paths use, so a row this tab lists cannot 403 when it is opened. Enforcing GET on
@@ -1200,26 +1336,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # response builder also uses. One enforcer for the whole listing, and the configuration row is
         # read lazily per candidate, only after its workflow GET passes.
         authorized_inputs = []
-        casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
         for input_item in deduped_inputs.values():
             if casbin_enforcer is None:
                 continue
             candidate_id = input_item.get('workflowExecutionId', '')
-            authorization_item = input_item
-            if not input_item.get('workflowId', ''):
-                authorization_item = _fetch_main_row(candidate_id) or input_item
-
-            def _config_row_loader(eid=candidate_id):
-                # The one config-row read the auth pass pays for this candidate lands in the memo, so
-                # the outputTypes projection in build_execution_items reuses it rather than re-reading.
-                # An output-only execution was already seeded above, so this never runs for one.
-                if eid not in config_row_memo:
-                    config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
-                return config_row_memo[eid]
-
-            allowed, reason = _execution_access_check(
-                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
-                config_row_loader=_config_row_loader)
+            allowed, reason = _authorize_candidate(candidate_id, input_item)
             if allowed:
                 authorized_inputs.append(input_item)
             else:
@@ -1240,7 +1361,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
-            on_terminal_observed=_release_locks_for_reconciled_terminal,
+            on_terminal_observed=_settle_reconciled_terminal,
             config_rows=config_row_memo,
         )
 
@@ -1267,6 +1388,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             "groupId": (query_params.get("groupId") or "").strip(),
             "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
         }
+        # The walk excluded on the STORED status; a row this request's reconcile moved into an
+        # excluded status is dropped here too.
+        if excluded_statuses:
+            extra_filters["excludeStatus"] = excluded_statuses
         if any(extra_filters.values()):
             items = [it for it in items if _global_list_matches_filters(it, extra_filters)]
 
@@ -1333,6 +1458,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                     f"This page reached the limit of {MAX_ASSET_LIST_INPUT_ROW_PROBES} checks for "
                     f"executions an earlier page already listed, so older executions are not listed. "
                     f"Narrow the filters or {continuation}."]
+            elif exclusion_budget_spent:
+                result["warnings"] = [
+                    f"This page reached the limit of {MAX_EXECUTIONS_INSPECTED} executions checked "
+                    f"against excludeStatus, so older executions are not listed. Narrow the filters "
+                    f"or {continuation}."]
             elif inspect_cap >= MAX_EXECUTIONS_INSPECTED:
                 result["warnings"] = [
                     f"This page reached the limit of {MAX_EXECUTIONS_INSPECTED} executions inspected "
@@ -1847,7 +1977,8 @@ def abort_execution(event, execution_id):
 
     Repeating an abort is a supported operation and is the remedy for a sub-process whose
     asynchronous registration landed after the previous abort's last read: rows an earlier abort
-    stamped ABORTED are swept again, while rows that finished on their own are left alone."""
+    stamped ABORTED, and rows a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS, are
+    swept again, while rows that finished on their own are left alone."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1856,6 +1987,13 @@ def abort_execution(event, execution_id):
     if not allowed:
         logger.info(f"Abort not authorized for execution {execution_id}: {reason}")
         return authorization_error()
+
+    # A SKIPPED record never ran: there is no state machine, pipeline or lock of its own to stop, so
+    # the abort is refused (after the same authorization as any abort, so a caller who may not reach
+    # the execution still gets the refusal above) and nothing is written. Every other terminal status
+    # keeps the idempotent re-sweep below.
+    if er.is_skip_record(main_item):
+        return validation_error(body={'message': SKIPPED_EXECUTION_ABORT_MESSAGE}, event=event)
 
     now = er.iso_now()
     main_table = dynamodb.Table(workflow_execution_database_v2)
@@ -1888,6 +2026,8 @@ def abort_execution(event, execution_id):
     # other path in the product ever stops its sub-processes again — and a registration that arrived
     # after that abort's last read lands on exactly such a row. Sweeping it makes repeating the abort
     # the remedy for that orphan; the stop calls are no-ops on a resource that has already finished.
+    # The same holds for a row a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS: the
+    # read stopped none of its sub-processes (ABORT_RESWEPT_TERMINAL_STATUSES).
     pre_terminal_pipelines = set()
 
     def _stop_row_sub_processes(row):
@@ -1949,7 +2089,7 @@ def abort_execution(event, execution_id):
     pipeline_rows = get_pipeline_execution_rows(execution_id)
     for prow in pipeline_rows:
         status = prow.get('executionStatus', '')
-        if status in TERMINAL_STATUSES and status != ABORTED_STATUS:
+        if status in TERMINAL_STATUSES and status not in ABORT_RESWEPT_TERMINAL_STATUSES:
             pre_terminal_pipelines.add(prow.get('pipelineExecutionId', ''))
             continue  # finished on its own; leave as-is
 
@@ -2701,7 +2841,11 @@ def _scrub_input_metadata(row):
     independently gated by a pipeline's metadataInputs (fileMetadata vs fileAttributes). Reporting them
     apart is what makes a per-step fileAttributes gate observable through the API: a step the gate
     excluded shows an empty map while a step it allowed shows the values. A row is empty here when the
-    run captured no attributes for that file, and asset/database-scope rows always are."""
+    run captured no attributes for that file, and asset/database-scope rows always are.
+
+    'expanded' is true for a file record that metadataInputs.assetFileMetadata added by expanding a
+    whole-asset or folder selection: context the step was handed, not one of its input files. It is
+    false on every other row, including rows stored before the flag existed."""
     return {
         "databaseId": row.get('databaseId', ''),
         "assetId": row.get('assetId', ''),
@@ -2709,6 +2853,7 @@ def _scrub_input_metadata(row):
         "scope": row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET,
         "metadata": row.get('metadata', {}) or {},
         "attributes": row.get('attributes', {}) or {},
+        "expanded": row.get('expanded') is True,
     }
 
 
@@ -2736,12 +2881,27 @@ def _scrub_output_file(row):
 
 
 def _scrub_output_metadata(row):
-    """Public-facing output-metadata record (target path + key/value; source S3 omitted)."""
+    """Public-facing output-metadata record (target path + key/value + type; source S3 omitted).
+
+    metadataType tells apart the two rows a step records when it writes one key to a file as both file
+    metadata and a file attribute. A row recorded before the type was stored reads it from its source
+    file name (see er.output_metadata_type)."""
     return {
         "targetFilePath": row.get('targetFilePath', ''),
         "metadataKey": row.get('metadataKey', ''),
         "metadataValue": row.get('metadataValue', ''),
+        "metadataType": er.output_metadata_type(row),
     }
+
+
+def _existing_typed_output_metadata_twins(legacy_rows):
+    """The (pipelineExecutionId, sort-key value) pairs of the typed rows that supersede `legacy_rows`
+    and exist in the output-metadata table, read in one batch. A read that fails or does not complete
+    reports no twin, so the legacy row is shown rather than dropped."""
+    keys = [er.typed_output_metadata_row_key(row) for row in legacy_rows]
+    found = _batch_get_rows(pipeline_execution_output_metadata_table, keys)
+    return {(row.get('pipelineExecutionId', ''), row.get('targetFilePath:metadataKey', ''))
+            for row in found}
 
 
 def _scrub_output_result(row):
@@ -2933,7 +3093,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     # Track which sub-collections were capped so the response can flag partial data (no silent cap).
     truncated = set()
 
-    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0):
+    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0,
+                 rows_filter=None):
         """Append up to the per-collection cap (across all pipelines) from a pexec-keyed table,
         recording truncation. Stamps each scrubbed row with the producing pipelineId so the UI can
         attribute outputs/metadata to the pipeline that produced them. Bounds the assembled response
@@ -2943,7 +3104,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         the budget is first-come across the steps, so one row-heavy early pipeline can consume the whole
         collection and later pipelines contribute nothing — for a per-pipeline collection that reads as
         those steps having no rows. Left at 0 (the shared first-come budget) for collections whose rows
-        are attributed to a pipeline but not compared across them."""
+        are attributed to a pipeline but not compared across them.
+
+        rows_filter, when given, receives the stored rows read for this step and returns the ones to
+        report."""
         remaining = MAX_DETAIL_ROWS_PER_COLLECTION - len(target)
         if per_pipeline_cap > 0:
             remaining = min(remaining, per_pipeline_cap)
@@ -2951,6 +3115,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
             truncated.add(name)
             return
         rows, was_truncated = _query_capped(table_name, Key('pipelineExecutionId').eq(pexec), remaining)
+        if rows_filter is not None:
+            rows = rows_filter(rows)
         for r in rows:
             scrubbed = scrub(r)
             scrubbed["pipelineId"] = pipeline_id
@@ -3054,7 +3220,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         _collect(output_files, pipeline_execution_output_files_table, pexec_id,
                  _scrub_output_file, "outputs.files", _pid)
         _collect(output_metadata, pipeline_execution_output_metadata_table, pexec_id,
-                 _scrub_output_metadata, "outputs.metadata", _pid)
+                 _scrub_output_metadata, "outputs.metadata", _pid,
+                 rows_filter=er.drop_superseded_output_metadata_rows)
         _collect(output_results, pipeline_execution_output_results_table, pexec_id,
                  _scrub_output_result, "outputs.results", _pid)
 
@@ -3286,6 +3453,50 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     }
 
 
+def _caller_may_read_execution(execution_id):
+    """Whether the caller passes the details read check on another execution: True only when its main
+    row exists and the same Tier-2 rule the details route enforces allows GET. A missing row, a denial
+    and a failed read all answer False, so the answer never tells a caller that a run it cannot read
+    exists. Costs one main-row read plus that run's own access check."""
+    if not execution_id:
+        return False
+    try:
+        blocking_item = get_execution_main_row(execution_id)
+        if not blocking_item:
+            return False
+        allowed, reason = authorize_execution_access(execution_id, blocking_item, "GET")
+        if not allowed:
+            logger.info(f"Blocking execution withheld from a skip record's details: {reason}")
+        return allowed
+    except Exception as error:
+        logger.warning(f"Could not check access to blocking execution {execution_id}: {error}")
+        return False
+
+
+def skip_details_block(main_item, input_files):
+    """The details view's `skip` block for a SKIPPED record: the fixed reason, the lock scope, how many
+    launches were refused, the first and last refusal, the first MAX_SKIP_DETAIL_FILES files they named
+    (the rest page through the details files route, collection=input) and, only for a caller who may
+    read it, the run that held the lock."""
+    count = er.stored_int(main_item.get("skippedLaunchCount"))
+    files = list(input_files)[:er.MAX_SKIP_DETAIL_FILES]
+    # Files are listed for the first MAX_SKIP_RECORD_INPUT_ROWS refusals only, so a larger count means
+    # some refusals' files were never written.
+    truncated = (len(input_files) > len(files) or count > er.MAX_SKIP_RECORD_INPUT_ROWS)
+    blocking_id = main_item.get("blockingExecutionId", "") or ""
+    block = ExecutionSkipDetailsModel(
+        reason=main_item.get("skipReason", "") or "",
+        scope=main_item.get("skipScope", "") or "",
+        count=count,
+        firstSkippedDate=main_item.get("executionStartDate", "") or "",
+        lastSkippedDate=main_item.get("lastSkippedDate", "") or "",
+        files=files,
+        filesTruncated=truncated,
+        blockingExecutionId=blocking_id if _caller_may_read_execution(blocking_id) else None,
+    ).dict(exclude_none=True)
+    return block
+
+
 def get_execution_details(event, execution_id, include_sub_executions=False):
     """Return the full detail/traceability view for an execution (404 if unknown).
 
@@ -3309,6 +3520,10 @@ def get_execution_details(event, execution_id, include_sub_executions=False):
 
     details = assemble_execution_details(execution_id, main_item, config_row=config_row,
                                          include_sub_executions=include_sub_executions)
+    # A SKIPPED record (a trigger launch a concurrency restriction refused) also says why, how often and
+    # for which files; every other execution's view is unchanged.
+    if er.is_skip_record(main_item):
+        details["skip"] = skip_details_block(main_item, details.get("inputFiles") or [])
     # The assembly's budgets are per-collection estimates; this measures the payload that will actually
     # be sent and trims until it fits, so a response cannot exceed the Lambda limit (a 502 with no body,
     # and none of the truncation flags) on structure no collection was charged for.
@@ -3479,10 +3694,19 @@ def page_detail_metadata(execution_id, collection, page_size, token, pipeline_id
         # re-read on the next request rather than stepped over. It advances only on a returned row, so a
         # row skipped by the scope filter never becomes a resume point for rows that follow it.
         resume_after = last_evaluated_key
+        # A legacy output row whose typed twin exists (a step retried across the upgrade) is skipped
+        # like a row outside the scope, so each entry is listed once whichever page holds its twin.
+        superseded = set()
+        if collection == DETAIL_METADATA_COLLECTION_OUTPUT and rows:
+            kept = {id(row) for row in er.drop_superseded_output_metadata_rows(
+                rows, typed_row_exists=_existing_typed_output_metadata_twins)}
+            superseded = {id(row) for row in rows if id(row) not in kept}
 
         for row in rows:
             scanned += 1
             if scope_filter is not None and not scope_filter(row):
+                continue
+            if id(row) in superseded:
                 continue
             scrubbed = scrub(row)
             scrubbed["pipelineId"] = pipeline_id
@@ -3968,6 +4192,19 @@ def _reconcile_main_status(execution_id, main_item):
         main_item["executionStatus"] = status
         reconciled_snapshot["executionStopDate"] = stop_date
         reconciled_snapshot["executionStatus"] = status
+        if status in TERMINAL_STATUSES:
+            # A run stopped outside VAMS reaches neither the end-state lambda nor the error handler,
+            # and once this write lands no listing reconciles it again, so its log is captured here
+            # exactly as the listing's reconcile would.
+            err_text, log_text = _terminal_log_and_error(
+                execution_id, main_item, described,
+                deadline=time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS)
+            if log_text:
+                main_item["executionLog"] = log_text
+                reconciled_snapshot["executionLog"] = log_text
+            if status in NON_SUCCESS_TERMINAL_STATUSES and err_text:
+                main_item["executionError"] = err_text
+                reconciled_snapshot["executionError"] = err_text
     else:
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
@@ -3980,7 +4217,43 @@ def _reconcile_main_status(execution_id, main_item):
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
     if sfn_stop and status in TERMINAL_STATUSES:
-        _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+        _settle_reconciled_terminal(execution_id, main_item, status)
+
+
+def _settle_reconciled_terminal(execution_id, main_item, status):
+    """Record what a READ path learned about an execution that ended outside VAMS: mark its unfinished
+    pipeline rows stopped, then release its concurrency locks."""
+    _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status)
+    _release_locks_for_reconciled_terminal(execution_id, main_item, status)
+
+
+def _mark_pipelines_for_reconciled_terminal(execution_id, main_item, status):
+    """Mark the non-terminal pipeline rows of an execution stopped outside VAMS with the stop a read
+    path observed, so the run does not show a pipeline RUNNING under a stopped execution.
+
+    Status and stop date only, through the same not-terminal-conditioned write the abort route uses: a
+    pipeline that finishes on its own inside the window keeps its own end state. An outer FAILED marks
+    the rows ABORTED (the step was cut off, it did not fail itself); a SUCCEEDED run leaves them alone.
+    Display only: the sub-processes those steps registered are NOT stopped here, since a GET carries no
+    stop side effects; an abort of the execution stops them. Best-effort: a failure is logged."""
+    if status not in NON_SUCCESS_TERMINAL_STATUSES:
+        return 0
+    pipeline_status = ABORTED_STATUS if status == "FAILED" else status
+    stop_date = main_item.get("executionStopDate") or er.iso_now()
+    marked = 0
+    try:
+        for prow in get_pipeline_execution_rows(execution_id):
+            if prow.get("executionStatus", "") in TERMINAL_STATUSES:
+                continue
+            eo.set_pipeline_status(
+                dynamodb, pipeline_executions_table,
+                prow.get("pipelineExecutionId", ""), prow.get("workflowExecutionId", "") or execution_id,
+                pipeline_status, stop_date=prow.get("executionStopDate") or stop_date)
+            marked += 1
+    except Exception as e:
+        logger.info(f"Could not mark the pipeline rows of execution {execution_id} observed {status} "
+                    f"outside VAMS (non-critical): {e}")
+    return marked
 
 
 def _release_locks_for_reconciled_terminal(execution_id, main_item, status):
@@ -4919,6 +5192,25 @@ def get_execution_logs(event, execution_id, query_params):
     if (log_id or stage_name) and (mode != LOG_MODE_FULL or pipeline_row is None):
         return validation_error(body={'message': LOG_SOURCE_PARAMS_RULE}, event=event)
 
+    # A SKIPPED record never ran, so there is no log to read: the answer says so in the same response
+    # shape, without a CloudWatch search or a Step Functions history read. (A pipelineExecutionId was
+    # already answered 404 above, since the record has no pipeline rows.)
+    if er.is_skip_record(main_item):
+        if mode == LOG_MODE_TRUNCATED:
+            return success(body={'message': {
+                "mode": LOG_MODE_TRUNCATED,
+                "executionLog": SKIPPED_EXECUTION_LOG_MESSAGE,
+                "executionError": "",
+                "logsSource": "stored",
+            }})
+        return success(body={'message': {
+            "mode": LOG_MODE_FULL,
+            "pipelineExecutionId": "",
+            "events": [],
+            "nextToken": None,
+            "warnings": [SKIPPED_EXECUTION_LOG_MESSAGE],
+        }})
+
     if mode == LOG_MODE_TRUNCATED:
         if pipeline_execution_id:
             log_rows = _query_all(pipeline_execution_logs_table,
@@ -4948,27 +5240,34 @@ def get_execution_logs(event, execution_id, query_params):
                 "errorLog": redact_log_text(error_log),
                 "logsSource": logs_source,
             }})
-        # Whole-execution truncated logs. The stored executionLog is captured before CloudWatch
-        # ingestion completes and is frequently empty. Fall back first to a live execution-scoped
-        # CloudWatch search, then to the Step Functions execution history — the authoritative record
-        # of what the whole execution did, available immediately with no ingestion lag. (The Step
-        # Functions state machine's own CloudWatch logs do not reliably carry the executionId as a
-        # filterable literal, which is why the CloudWatch search is often empty for the whole run.)
+        # Whole-execution truncated logs. The stored executionLog is read as the run ends, while
+        # CloudWatch is still ingesting its events, so it can be empty or hold only part of the log;
+        # it also never holds the events logged after it was read. A live execution-scoped CloudWatch
+        # search is read too, and whichever holds more of the log's lines is served, so the stored
+        # copy is served only when the live read is empty, unavailable, or shorter (the log group's
+        # retention has dropped events, or the run's log runs past one page). With neither, the Step
+        # Functions execution history is served — the authoritative record of what the whole
+        # execution did, available immediately with no ingestion lag. (The Step Functions state
+        # machine's own CloudWatch logs do not reliably carry the executionId as a filterable
+        # literal, which is why the CloudWatch search can be empty for the whole run.)
         execution_log = main_item.get('executionLog', '')
         logs_source = "stored"
-        if not execution_log:
-            live = _full_log_search(
-                main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
-                default_start_time=_log_search_window_start(main_item))
-            if live["events"]:
-                execution_log = "\n".join(e.get('message', '') for e in live["events"])
-                logs_source = "live"
-            else:
-                history = _sfn_execution_history_events(
-                    main_item.get('workflow_execution_arn', ''), query_params)
-                if history["events"]:
-                    execution_log = "\n".join(e.get('message', '') for e in history["events"])
-                    logs_source = "sfnHistory"
+        live = _full_log_search(
+            main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
+            default_start_time=_log_search_window_start(main_item))
+        live_log = "\n".join(e.get('message', '') for e in live["events"])
+        # A stored copy marked as possibly incomplete gives way to a live read that is not shorter.
+        live_lines, stored_lines = elc.held_log_lines(live_log), elc.held_log_lines(execution_log)
+        if live["events"] and (live_lines > stored_lines or (
+                live_lines == stored_lines and elc.log_may_be_incomplete(execution_log))):
+            execution_log = live_log
+            logs_source = "live"
+        elif not execution_log:
+            history = _sfn_execution_history_events(
+                main_item.get('workflow_execution_arn', ''), query_params)
+            if history["events"]:
+                execution_log = "\n".join(e.get('message', '') for e in history["events"])
+                logs_source = "sfnHistory"
         return success(body={'message': {
             "mode": LOG_MODE_TRUNCATED,
             "executionLog": redact_log_text(execution_log),
@@ -5361,6 +5660,11 @@ def handle_get_request(event):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
+    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
+    _excluded, message = parse_list_status_filter(queryParameters)
+    if message:
+        return validation_error(body={'message': message}, event=event)
+
     # Body field validation (workflowDatabaseId) via the request model.
     request_model = parse(body, model=ListExecutionsRequestModel)
     workflow_database_id = request_model.workflowDatabaseId
@@ -5402,12 +5706,15 @@ def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None, 
 
 def _global_list_matches_filters(main_item, filters):
     """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
-    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId."""
+    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, and excludeStatus
+    (a list of statuses a row must not carry; absent or empty excludes nothing)."""
     if filters.get("workflowId") and main_item.get("workflowId", "") != filters["workflowId"]:
         return False
     if filters.get("workflowDatabaseId") and main_item.get("workflowDatabaseId", "") != filters["workflowDatabaseId"]:
         return False
     if filters.get("status") and main_item.get("executionStatus", "") != filters["status"]:
+        return False
+    if filters.get("excludeStatus") and main_item.get("executionStatus", "") in filters["excludeStatus"]:
         return False
     if filters.get("triggerType") and main_item.get("triggerType", "") != filters["triggerType"]:
         return False
@@ -5497,6 +5804,8 @@ def _global_list_row(main_item, config_row=None):
         # The output kinds the run produced (File/Metadata/Result subset). Read from the same
         # already-threaded config row, so it is zero extra reads; legacy rows have no attribute -> [].
         "outputTypes": _row_output_types(config_row),
+        # Count, lock scope and reason of a SKIPPED record; absent on every other row.
+        **er.skip_list_fields(main_item),
     }
 
 
@@ -5522,6 +5831,12 @@ def get_global_executions(event, query_params):
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }
+    # excludeStatus (validated by the route handler): rows of these statuses drop in the query's
+    # FilterExpression, before the page is cut, so a page stays full and the cursor stays exact. Only
+    # added to the filters when given, so a request without it builds the same query as before.
+    excluded_statuses, _message = parse_list_status_filter(query_params)
+    if excluded_statuses:
+        filters["excludeStatus"] = excluded_statuses
     # Recency window (default 90 days) / custom range, applied as the GSI sort-key condition.
     filter_start_date = _resolve_filter_start_date(query_params)
     filter_end_date = _resolve_date_filter(query_params, "filterEndDate") or ""
@@ -5560,6 +5875,9 @@ def get_global_executions(event, query_params):
         if filters.get(fkey) and fkey not in keyed_filters:
             cond = Attr(attr_name).eq(filters[fkey])
             filter_expr = cond if filter_expr is None else (filter_expr & cond)
+    if excluded_statuses:
+        cond = ~Attr("executionStatus").is_in(excluded_statuses)
+        filter_expr = cond if filter_expr is None else (filter_expr & cond)
     query_kwargs = {
         "IndexName": list_index["IndexName"],
         "KeyConditionExpression": key_cond,
@@ -5779,16 +6097,22 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     customTemplateOverrideUsed). The output is the V2 execute body shape (see
     models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
+    # A version the original caller named (versionPinned) is read again; a file selected without a
+    # version takes its current version. A row recorded before versionPinned existed reads as not
+    # pinned, so it re-runs on the current version as it always has.
     for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
         # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
         full_key = row.get("inputAssetFileKey", "/")
         asset_root = row.get("assetRootS3Key", "") or ""
-        input_files.append({
+        entry = {
             "databaseId": row.get("databaseId", ""),
             "assetId": row.get("assetId", ""),
             "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
-        })
+        }
+        if row.get("versionPinned") is True and row.get("versionId"):
+            entry["versionId"] = row["versionId"]
+        input_files.append(entry)
 
     pipeline_execution_parameters = {}
     for prow in get_pipeline_execution_rows(execution_id):
@@ -5827,6 +6151,16 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
                 params["customTemplateOverride"] = cfg.get("customTemplateOverride")
         if params:
             pipeline_execution_parameters[pipeline_id] = params
+
+    # A SKIPPED record never ran, so it has no pipeline rows to read the parameters from: its
+    # configuration row carries the template parameters the refused trigger launch named, and a re-run
+    # replays those rather than falling back to the workflow's defaults.
+    if er.is_skip_record(main_item) and not pipeline_execution_parameters:
+        stored = config_row.get("pipelineExecutionParameters") or {}
+        if isinstance(stored, dict):
+            pipeline_execution_parameters = {
+                str(pipeline_id): dict(params) for pipeline_id, params in stored.items()
+                if isinstance(params, dict)}
 
     # The metadata sources travel in their own fields, never as inputFiles: they are entities, not
     # files, so re-emitting them as inputFiles would fail an arity-'none' workflow's own no-input-files
@@ -6118,7 +6452,9 @@ def abort_group(event, group_id):
         if not allowed:
             skipped_inaccessible += 1
             continue
-        # Authorized: terminal members are reported (the caller can already see them via details).
+        # Authorized: terminal members are reported (the caller can already see them via details). A
+        # SKIPPED member is terminal, so it is reported as skipped-terminal and never aborted, and the
+        # group call does not fail on it.
         if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
             results.append({"executionId": execution_id, "status": "skipped-terminal"})
             continue
@@ -6173,6 +6509,10 @@ def handle_global_list_request(event):
     validate_pagination_info(query_params, 50)
     if not _enforce_api(event):
         return authorization_error()
+    # excludeStatus: known statuses only, and never the one the status filter selects (fixed 400s).
+    _excluded, message = parse_list_status_filter(query_params)
+    if message:
+        return validation_error(body={'message': message}, event=event)
     return get_global_executions(event, query_params)
 
 
@@ -6215,6 +6555,22 @@ def handle_permanent_delete_request(event):
     return permanent_delete_execution(event, execution_id)
 
 
+def _route_served_here(event):
+    """Whether this function's EXECUTION_SERVICE_ROUTES set includes the request's route."""
+    route_set = os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "")
+    if not route_set:
+        return True
+    http = (event.get("requestContext") or {}).get("http") or {}
+    is_permanent_delete = (http.get("method") == "DELETE"
+                           and API_WORKFLOW_EXECUTION_PERMANENT.matches(http.get("path", "")))
+    if route_set == ROUTE_SET_SERVICE:
+        return not is_permanent_delete
+    if route_set == ROUTE_SET_PERMANENT_DELETE:
+        return is_permanent_delete
+    logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
+    return False
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the workflow execution service API.
 
@@ -6234,6 +6590,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # queryStringParameters access (coerces null params to {} and injects the
     # v2-style http block the dispatch below reads).
     normalize_event(event)
+    if not _route_served_here(event):
+        return validation_error(status_code=404, body={"message": "Not Found"}, event=event)
     claims_and_roles = request_to_claims(event)
     # Fresh per-request asset and decision caches: a warm container reuses module globals across
     # invocations, and every authorization path reads asset attributes through the asset memo, so a

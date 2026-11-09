@@ -4,7 +4,6 @@
 """Subscription recreate path must use the shared collision-safe topic name."""
 
 import hashlib
-import importlib
 import importlib.util
 import os
 import sys
@@ -14,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Keep real common/models packages available before root conftest stubs handlers.
-from backend.backend.handlers.subscription import subscriptionService as _seed  # noqa: F401
+from backend.backend.handlers.subscription import subscriptionService as _seed
 
 PACKAGE = "backend.backend.handlers.subscription"
 HANDLER_PATH = os.path.join(
@@ -22,7 +21,7 @@ HANDLER_PATH = os.path.join(
 
 
 def _digest(asset_id: str) -> str:
-    return hashlib.sha256(asset_id.encode('utf-8')).hexdigest()[:10]
+    return hashlib.sha256(asset_id.encode('utf-8')).hexdigest()[:16]
 
 
 def _load_subscription_service():
@@ -39,22 +38,15 @@ def _load_subscription_service():
     sys.modules["handlers.authz"] = authz_stub
 
     module_name = f"{PACKAGE}._sns_topic_probe"
-    # Restore real common.* before exec so snsTopicNames resolves.
-    real_common = {
-        name: mod for name, mod in list(sys.modules.items())
-        if mod is not None and (name == "common" or name.startswith("common."))
+    env = {
+        "SUBSCRIPTIONS_STORAGE_TABLE_NAME": "test-subscription-table",
+        "ASSET_STORAGE_TABLE_NAME": "test-asset-table",
+        "USER_STORAGE_TABLE_NAME": "test-user-table",
+        "AWS_REGION": "us-east-1",
     }
-    saved_common = {name: sys.modules.get(name) for name in real_common}
-    for name, mod in real_common.items():
-        sys.modules[name] = mod
-
-    os.environ.setdefault("SUBSCRIPTIONS_STORAGE_TABLE_NAME", "test-subscription-table")
-    os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
-    os.environ.setdefault("USER_STORAGE_TABLE_NAME", "test-user-table")
-    os.environ.setdefault("AWS_REGION", "us-east-1")
 
     try:
-        with patch("boto3.client", return_value=MagicMock()), patch(
+        with patch.dict(os.environ, env), patch("boto3.client", return_value=MagicMock()), patch(
                 "boto3.resource", return_value=MagicMock()):
             spec = importlib.util.spec_from_file_location(module_name, HANDLER_PATH)
             module = importlib.util.module_from_spec(spec)
@@ -64,11 +56,6 @@ def _load_subscription_service():
     finally:
         sys.modules.pop(module_name, None)
         for name, previous in saved.items():
-            if previous is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = previous
-        for name, previous in saved_common.items():
             if previous is None:
                 sys.modules.pop(name, None)
             else:
@@ -91,7 +78,6 @@ class TestSubscriptionCreateSnsTopicUsesSharedHelper:
             Name=f"AssetTopictestdb1-x-r-1-{_digest(asset_id)}")
 
     def test_matches_create_asset_helper_for_colliding_ids(self):
-        snsTopicNames = importlib.import_module("common.snsTopicNames")
         m = _load_subscription_service()
         client = MagicMock()
         client.create_topic.return_value = {"TopicArn": "arn:sns:t"}
@@ -102,8 +88,9 @@ class TestSubscriptionCreateSnsTopicUsesSharedHelper:
 
         names = [call.kwargs["Name"] for call in client.create_topic.call_args_list]
         expected = [
-            snsTopicNames.asset_sns_topic_name("testdb1", asset_id)
-            for asset_id in ("a.b", "a-b", "a b")
+            "AssetTopictestdb1-a-b-2e7336dc8eba87ef",
+            "AssetTopictestdb1-a-b-d44362d67d921091",
+            "AssetTopictestdb1-a-b-c8687a08aa5d6ed2",
         ]
         assert names == expected
         assert len(set(names)) == 3

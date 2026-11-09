@@ -299,6 +299,34 @@ def test_trim_search_results():
     assert trimmed["results"][0] == {"id": "a1", "score": 1.5, "source": {"name": "Asset One"}}
 
 
+def test_trim_search_results_exact_total_has_no_marker():
+    raw = {"hits": {"total": {"value": 7, "relation": "eq"}, "hits": []}}
+    trimmed = VamsClient.trim_search_results(raw)
+    assert trimmed["total"] == 7
+    assert trimmed["total_is_lower_bound"] is False
+    assert trimmed["total_display"] == "7"
+
+
+def test_trim_search_results_lower_bound_total_is_marked():
+    raw = {"hits": {"total": {"value": 120, "relation": "gte"}, "hits": []}}
+    trimmed = VamsClient.trim_search_results(raw)
+    # The number stays numeric for existing consumers; the marker is carried beside it.
+    assert trimmed["total"] == 120
+    assert trimmed["total_is_lower_bound"] is True
+    assert trimmed["total_display"] == "120+"
+
+
+def test_trim_search_results_total_without_relation_is_exact():
+    # Older backends omit `relation`; a bare-number total is also accepted.
+    assert VamsClient.trim_search_results({"hits": {"total": {"value": 3}, "hits": []}})[
+        "total_display"
+    ] == "3"
+    bare = VamsClient.trim_search_results({"hits": {"total": 4, "hits": []}})
+    assert bare["total"] == 4
+    assert bare["total_is_lower_bound"] is False
+    assert bare["total_display"] == "4"
+
+
 def test_trim_search_results_max_hits():
     hits = [{"_id": str(i), "_score": 1, "_source": {}} for i in range(10)]
     raw = {"hits": {"total": {"value": 10}, "hits": hits}}
@@ -309,7 +337,13 @@ def test_trim_search_results_max_hits():
 
 def test_trim_search_results_empty():
     trimmed = VamsClient.trim_search_results({})
-    assert trimmed == {"total": None, "returned": 0, "results": []}
+    assert trimmed == {
+        "total": None,
+        "total_is_lower_bound": False,
+        "total_display": None,
+        "returned": 0,
+        "results": [],
+    }
 
 
 def test_search_enabled_follows_the_noopensearch_feature_switch():

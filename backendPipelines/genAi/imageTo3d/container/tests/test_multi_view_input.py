@@ -133,14 +133,14 @@ class TestTheContainerReadsEveryViewItIsGiven:
         invocation, must behave exactly as it did."""
         seen = []
         monkeypatch.setattr(main_module, "download_input_image",
-                            lambda entry: seen.append(entry) or f"/tmp/{entry['objectKey']}")
+                            lambda entry, **_: seen.append(entry) or f"/tmp/{entry['objectKey']}")
         paths = main_module.download_input_images(
             {"inputFile": {"bucketName": "b", "objectKey": "one.png"}})
         assert len(paths) == 1 and len(seen) == 1
 
     def test_every_entry_in_the_list_is_downloaded(self, main_module, monkeypatch):
         monkeypatch.setattr(main_module, "download_input_image",
-                            lambda entry: f"/tmp/{entry['objectKey']}")
+                            lambda entry, **_: f"/tmp/{entry['objectKey']}")
         paths = main_module.download_input_images({
             "inputFile": {"bucketName": "b", "objectKey": "cat_front.png"},
             "inputFiles": [{"bucketName": "b", "objectKey": f"cat_{n}.png"} for n in VIEW_NAMES],
@@ -151,7 +151,7 @@ class TestTheContainerReadsEveryViewItIsGiven:
         """Two manifest entries can name one file, and conditioning on the same view twice is not what
         the operator asked for."""
         monkeypatch.setattr(main_module, "download_input_image",
-                            lambda entry: f"/tmp/{entry['objectKey']}")
+                            lambda entry, **_: f"/tmp/{entry['objectKey']}")
         paths = main_module.download_input_images({
             "inputFiles": [{"bucketName": "b", "objectKey": "cat_front.png"},
                            {"bucketName": "b", "objectKey": "cat_front.png"},

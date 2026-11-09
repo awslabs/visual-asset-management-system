@@ -235,6 +235,11 @@ global, cross-asset list. A workflow id is unique across every database includin
 an additional narrowing filter rather than a disambiguator, and a value that is not
 the workflow's own database empties the result instead of erroring.
 
+Both list tools accept `exclude_status`, one status or a comma-separated list (for
+example `SKIPPED`), which the service drops before it cuts the page, so pages stay
+full. A `SKIPPED` row is not a run: it records file-upload trigger launches a
+concurrency restriction refused (`skippedLaunchCount`, `skipScope`, `skipReason`).
+
 Both accept the same equality filters (`workflow_id`, `workflow_database_id`,
 `status`, `trigger_type`, `group_id`, `triggered_by_user_id`) and the same date
 window (`filter_start_date`, `filter_end_date`, UTC `YYYY-MM-DDTHH:MM:SSZ`). Both
@@ -256,6 +261,14 @@ even when its inputs are readable.
 `list_workflows` takes `include_archived` (default off, matching `list_pipelines`
 and `list_assets`); it is how an archived workflow's id is found in order to
 restore it with `unarchive_workflow`.
+
+`get_asset`, `list_asset_files`, `get_asset_metadata`, `list_asset_versions`,
+`get_asset_version`, `get_asset_links`, `list_asset_comments` and
+`list_asset_version_comments` take `include_archived` (default off) to read an
+archived asset: `get_asset` reports its `status` as `archived`, and the others read
+its files, metadata, versions, relationships and comments. An archived asset is
+read-only; every write tool refuses it until `unarchive_asset` (destructive tier)
+restores it.
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
@@ -319,7 +332,10 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. It reads
+each input file at the version the original launch pinned (a `versionId` someone
+chose) and every other file at its current version; executions recorded before
+2.7.0 re-run every file on its current version.
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no

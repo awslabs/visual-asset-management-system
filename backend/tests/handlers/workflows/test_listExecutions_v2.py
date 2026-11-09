@@ -4,6 +4,7 @@
 import os
 import pytest
 from datetime import datetime
+from common.timestamps import utc_now
 from unittest.mock import MagicMock
 
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "t-assets")
@@ -383,13 +384,13 @@ class TestResolveFilterStartDate:
         cutoff = le._resolve_filter_start_date({})
         assert cutoff  # non-empty ISO string
         parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
-        delta_days = (datetime.utcnow() - parsed).days
+        delta_days = (utc_now() - parsed).days
         assert 89 <= delta_days <= 90  # ~90 days back (allow for second-boundary rounding)
 
     def test_none_query_params_defaults_to_90(self):
         cutoff = le._resolve_filter_start_date(None)
         parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
-        assert 89 <= (datetime.utcnow() - parsed).days <= 90
+        assert 89 <= (utc_now() - parsed).days <= 90
 
     def test_explicit_filter_start_date_is_used_verbatim(self):
         assert le._resolve_filter_start_date(
@@ -398,4 +399,4 @@ class TestResolveFilterStartDate:
     def test_blank_filter_start_date_falls_back_to_default(self):
         cutoff = le._resolve_filter_start_date({"filterStartDate": "  "})
         parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
-        assert 89 <= (datetime.utcnow() - parsed).days <= 90
+        assert 89 <= (utc_now() - parsed).days <= 90

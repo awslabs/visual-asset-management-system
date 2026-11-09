@@ -3,7 +3,7 @@
 
 import boto3
 import json
-import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
@@ -309,7 +309,7 @@ def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_rol
         {
             'userId': user_id,
             'roleName': role,
-            'createdOn': datetime.datetime.utcnow().isoformat()
+            'createdOn': utc_now().isoformat()
         }
         for role in role_names
     ]
@@ -320,7 +320,7 @@ def create_user_roles(request_model: CreateUserRolesRequestModel, claims_and_rol
             for item in items_to_insert:
                 batch.put_item(Item=item)
         
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles created successfully",
@@ -408,7 +408,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
         if role in roles_to_create_set:
             user_roles_to_create.append(dict(
                 named_user_role,
-                createdOn=datetime.datetime.utcnow().isoformat()
+                createdOn=utc_now().isoformat()
             ))
 
     # Prepare roles to delete with authorization checks
@@ -442,7 +442,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
             message=USER_ROLE_UPDATE_NO_CHANGES_MESSAGE,
             userId=user_id,
             operation="update",
-            timestamp=datetime.datetime.utcnow().isoformat()
+            timestamp=utc_now().isoformat()
         )
 
     # Perform batch operations
@@ -453,7 +453,7 @@ def update_user_roles(request_model: UpdateUserRolesRequestModel, claims_and_rol
             for keys in user_roles_to_delete:
                 batch.delete_item(Key=keys)
 
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles updated successfully",
@@ -517,7 +517,7 @@ def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_rol
             message=USER_ROLE_DELETE_NO_CHANGES_MESSAGE,
             userId=user_id,
             operation="delete",
-            timestamp=datetime.datetime.utcnow().isoformat()
+            timestamp=utc_now().isoformat()
         )
 
     # Delete all user roles
@@ -526,7 +526,7 @@ def delete_user_roles(request_model: DeleteUserRolesRequestModel, claims_and_rol
             for keys in items_to_delete:
                 batch.delete_item(Key=keys)
         
-        timestamp = datetime.datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return UserRoleOperationResponseModel(
             success=True,
             message="User roles deleted successfully",

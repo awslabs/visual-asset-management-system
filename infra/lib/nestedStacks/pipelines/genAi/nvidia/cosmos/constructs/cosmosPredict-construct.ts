@@ -39,6 +39,7 @@ import {
     generateUniqueNameHash,
     grantExternalAssetBucketKmsKeys,
     kmsKeyPolicyStatementGenerator,
+    suppressCdkNagEcrAuthTokenWildcard,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
@@ -641,6 +642,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                     streamPrefix: "batch-temp-v2",
                 }),
             });
+            suppressCdkNagEcrAuthTokenWildcard(tempTaskDefV2);
             containerImageNameV2 = containerV2.imageName;
         }
 

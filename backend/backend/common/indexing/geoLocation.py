@@ -29,7 +29,7 @@ from typing import Any, Dict, Optional, Tuple
 from customLogging.logger import safeLogger
 from models.metadata import MAX_GEOJSON_NESTING_DEPTH, _validate_geometry
 
-logger = safeLogger(service_name="GeoLocation")
+logger = safeLogger()
 
 GEO_LOCATION_FIELD = "geo_MD_location"
 

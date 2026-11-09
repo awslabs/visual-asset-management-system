@@ -3,7 +3,7 @@
 
 import boto3
 import json
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -295,7 +295,7 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
         )
         
         # Return success response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return TagTypeOperationResponseModel(
             success=True,
             message=f"Tag type '{tag_type_name}' deleted successfully",

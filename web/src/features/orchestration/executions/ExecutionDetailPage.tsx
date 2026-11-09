@@ -19,10 +19,15 @@ import ConfigEditor from "../components/ConfigEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import DataTable from "../components/DataTable";
 import InfoTooltip from "../components/InfoTooltip";
+import LoadMoreButton from "../components/LoadMoreButton";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import SubProcessesSection from "./SubProcessesSection";
+import StoppedRunSubProcessesHint, {
+    stillRunningSubProcessCount,
+} from "./StoppedRunSubProcessesHint";
 import ResultText from "./ResultText";
+import SkippedLaunchPanel from "./SkippedLaunchPanel";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -68,6 +73,33 @@ const TruncatedBadge: React.FC<{ label?: string }> = ({ label = "Partial" }) => 
         {label}
     </span>
 );
+
+const EXPANDED_RECORD_EXPLANATION =
+    "Added by expanding a whole-asset or folder selection. The step received this file's metadata as context; the file is not one of its input files.";
+
+/**
+ * Marker on an input-metadata row the server reports as `expanded`: a file record that the
+ * assetFileMetadata expansion of a whole-asset or folder selection added, as context for the step.
+ * The explanation is also a visually hidden sentence the badge is described by, so screen-reader
+ * users get what the `title` tooltip shows only on mouse hover.
+ */
+const ExpandedRecordBadge: React.FC = () => {
+    const explanationId = React.useId();
+    return (
+        <>
+            <span
+                className="orch-outline px-2 py-0.5 text-xs font-bold bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 rounded whitespace-nowrap"
+                title={EXPANDED_RECORD_EXPLANATION}
+                aria-describedby={explanationId}
+            >
+                Expanded
+            </span>
+            <span id={explanationId} className="sr-only">
+                {EXPANDED_RECORD_EXPLANATION}
+            </span>
+        </>
+    );
+};
 
 /** Tier-1 route behind the paged metadata read; the panel's contents depend on it, never the tab. */
 const DETAILS_METADATA_ROUTE = "/workflows/executions/{executionId}/details/metadata";
@@ -193,13 +225,14 @@ const MetadataSection: React.FC<MetadataSectionProps> = ({
             )}
             {escalated && paged.hasNextPage && (
                 <div className="flex items-center gap-3 mt-3 text-sm">
-                    <button
+                    <LoadMoreButton
                         onClick={() => paged.fetchNextPage()}
-                        disabled={paged.isFetchingNextPage}
+                        busy={paged.isFetchingNextPage}
+                        busyLabel="Loading…"
                         className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
-                    </button>
+                        Load more rows
+                    </LoadMoreButton>
                     <span className="text-text-secondary">
                         {rows.length} rows loaded · more available
                     </span>
@@ -296,13 +329,14 @@ const FilesSection: React.FC<{
             )}
             {escalated && paged.hasNextPage && (
                 <div className="flex items-center gap-3 mt-3 text-sm">
-                    <button
+                    <LoadMoreButton
                         onClick={() => paged.fetchNextPage()}
-                        disabled={paged.isFetchingNextPage}
+                        busy={paged.isFetchingNextPage}
+                        busyLabel="Loading…"
                         className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
-                    </button>
+                        Load more rows
+                    </LoadMoreButton>
                     <span className="text-text-secondary">
                         {rows.length} rows loaded · more available
                     </span>
@@ -387,15 +421,13 @@ const ResultsSection: React.FC<{
                     )}
                     {hasNextPage && (
                         <div className="mt-3 flex items-center gap-3 text-sm">
-                            <button
-                                type="button"
+                            <LoadMoreButton
                                 onClick={() => fetchNextPage()}
-                                disabled={isFetchingNextPage}
+                                busy={isFetchingNextPage}
+                                busyLabel="Loading…"
                                 className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
                                 data-testid="results-section-load-more"
-                            >
-                                {isFetchingNextPage ? "Loading…" : "Load more"}
-                            </button>
+                            />
                             <span className="text-text-secondary">More result text remains</span>
                         </div>
                     )}
@@ -629,7 +661,18 @@ const inputFileColumns: ColumnDef<any, any>[] = [
 // rows apart.
 const metadataColumns: ColumnDef<any, any>[] = [
     { accessorKey: "assetId", header: "Asset" },
-    { accessorKey: "filePath", header: "File" },
+    {
+        accessorKey: "filePath",
+        header: "File",
+        // A file record a whole-asset or folder expansion added (the server's `expanded` flag) was
+        // context for the step, not one of its input files, so the row says so beside its path.
+        cell: (c) => (
+            <span className="inline-flex items-center gap-2">
+                <span>{c.getValue()}</span>
+                {c.row.original.expanded && <ExpandedRecordBadge />}
+            </span>
+        ),
+    },
     { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
     // Metadata and file attributes are separate metadataInputs a pipeline can be granted
     // independently, so a row says which of the two it came from.
@@ -705,6 +748,9 @@ const outputMetadataColumns: ColumnDef<any, any>[] = [
     // Output metadata is recorded per pipeline execution, so two steps writing the same key onto the
     // same file are two rows identical but for the producing pipeline.
     { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    // One step can write the same key onto a file as both file metadata and a file attribute; the
+    // type is what tells those two rows apart.
+    { accessorKey: "metadataType", header: "Type", cell: (c) => c.getValue() || "—" },
     { accessorKey: "metadataKey", header: "Key" },
     {
         accessorKey: "metadataValue",
@@ -884,8 +930,14 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         );
     }
 
+    const stillRunningSubs = stillRunningSubProcessCount(execution);
+
+    // A SKIPPED record (file-upload trigger launches a concurrency restriction refused) never ran, so
+    // the run-only fields (duration, pipeline progress, output target) are replaced by its skip dates.
+    const isSkipped = execution.executionStatus === "SKIPPED";
+
     const duration =
-        execution.executionStartDate && execution.executionStopDate
+        !isSkipped && execution.executionStartDate && execution.executionStopDate
             ? calculateDuration(execution.executionStartDate, execution.executionStopDate)
             : null;
 
@@ -919,7 +971,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 <div className="flex items-center gap-3 mb-4 flex-wrap">
                     <h1 className="text-text-primary">Execution Detail</h1>
                     <StatusBadge status={execution.executionStatus as ExecutionStatus} />
-                    <PipelineProgress pipelines={execution.pipelines || []} />
+                    {!isSkipped && <PipelineProgress pipelines={execution.pipelines || []} />}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
                     <Field label="Execution ID" mono>
@@ -945,60 +997,87 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         {execution.triggerType || "N/A"}{" "}
                         {execution.triggeredByUserId && `by ${execution.triggeredByUserId}`}
                     </Field>
-                    <Field label="Start">
-                        {execution.executionStartDate
-                            ? formatDate(execution.executionStartDate)
-                            : "N/A"}
-                    </Field>
-                    <Field label="Stop">
-                        {execution.executionStopDate
-                            ? formatDate(execution.executionStopDate)
-                            : "N/A"}
-                    </Field>
+                    {isSkipped ? (
+                        <>
+                            <Field label="First skipped">
+                                {execution.skip?.firstSkippedDate || execution.executionStartDate
+                                    ? formatDate(
+                                          execution.skip?.firstSkippedDate ||
+                                              execution.executionStartDate ||
+                                              ""
+                                      )
+                                    : "N/A"}
+                            </Field>
+                            <Field label="Last skipped">
+                                {execution.skip?.lastSkippedDate
+                                    ? formatDate(execution.skip.lastSkippedDate)
+                                    : "N/A"}
+                            </Field>
+                        </>
+                    ) : (
+                        <>
+                            <Field label="Start">
+                                {execution.executionStartDate
+                                    ? formatDate(execution.executionStartDate)
+                                    : "N/A"}
+                            </Field>
+                            <Field label="Stop">
+                                {execution.executionStopDate
+                                    ? formatDate(execution.executionStopDate)
+                                    : "N/A"}
+                            </Field>
+                        </>
+                    )}
                     {duration && <Field label="Duration">{duration}</Field>}
                     {execution.executionGroupId && (
                         <Field label="Group ID" mono>
                             {execution.executionGroupId}
                         </Field>
                     )}
-                    {/* The output target is broken out into its three parts, matching the executions
+                    {!isSkipped && (
+                        <>
+                            {/* The output target is broken out into its three parts, matching the executions
                         list columns, so the destination is readable field-by-field rather than as one
                         composite string. */}
-                    <Field label="Output Type">
-                        {execution.outputLocationType === "none"
-                            ? "Results only (no asset output)"
-                            : execution.outputLocationType || "N/A"}
-                    </Field>
-                    <Field label="Output Database ID" mono>
-                        {execution.outputDatabaseId || "N/A"}
-                    </Field>
-                    <Field label="Output Asset ID">
-                        {execution.outputAssetId ? (
-                            execution.outputDatabaseId ? (
-                                // Link the output asset to its asset view.
-                                <a
-                                    href={buildFileManagerLink(
-                                        execution.outputDatabaseId,
-                                        execution.outputAssetId,
-                                        ""
-                                    )}
-                                    className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
-                                >
-                                    {execution.outputAssetId}
-                                </a>
-                            ) : (
-                                <span className="font-mono">{execution.outputAssetId}</span>
-                            )
-                        ) : (
-                            "N/A"
-                        )}
-                    </Field>
-                    {/* Always shown, alongside the other three output fields: "no prefix" is itself
+                            <Field label="Output Type">
+                                {execution.outputLocationType === "none"
+                                    ? "Results only (no asset output)"
+                                    : execution.outputLocationType || "N/A"}
+                            </Field>
+                            <Field label="Output Database ID" mono>
+                                {execution.outputDatabaseId || "N/A"}
+                            </Field>
+                            <Field label="Output Asset ID">
+                                {execution.outputAssetId ? (
+                                    execution.outputDatabaseId ? (
+                                        // Link the output asset to its asset view.
+                                        <a
+                                            href={buildFileManagerLink(
+                                                execution.outputDatabaseId,
+                                                execution.outputAssetId,
+                                                ""
+                                            )}
+                                            className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
+                                        >
+                                            {execution.outputAssetId}
+                                        </a>
+                                    ) : (
+                                        <span className="font-mono">{execution.outputAssetId}</span>
+                                    )
+                                ) : (
+                                    "N/A"
+                                )}
+                            </Field>
+                            {/* Always shown, alongside the other three output fields: "no prefix" is itself
                         information about where the run wrote, and hiding the row made the answer
                         indistinguishable from the field not existing. */}
-                    <Field label="Output Path Prefix" mono>
-                        {outputPathPrefixText(execution.outputFileBaseExecutionPathExtension)}
-                    </Field>
+                            <Field label="Output Path Prefix" mono>
+                                {outputPathPrefixText(
+                                    execution.outputFileBaseExecutionPathExtension
+                                )}
+                            </Field>
+                        </>
+                    )}
                 </div>
                 {execution.executionError && (
                     <div className="orch-outline mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
@@ -1011,6 +1090,16 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             {execution.executionError}
                         </pre>
                     </div>
+                )}
+                {execution.executionStatus === "SKIPPED" && execution.skip && (
+                    <SkippedLaunchPanel skip={execution.skip} />
+                )}
+                {stillRunningSubs > 0 && (
+                    <StoppedRunSubProcessesHint
+                        executionId={execution.workflowExecutionId}
+                        count={stillRunningSubs}
+                        canAbort={can("DELETE", "/workflows/executions/{executionId}")}
+                    />
                 )}
                 {execution.truncatedCollections && execution.truncatedCollections.length > 0 && (
                     <div className="orch-outline mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
@@ -1329,26 +1418,35 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         {/* The output TARGET, before the file list: where this run wrote (or that it
                             wrote no asset at all), so the destination is stated on the tab that shows
                             the files rather than only in the page header. */}
-                        <Card title="Output Target">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
-                                <Field label="Output Type">
-                                    {execution.outputLocationType === "none"
-                                        ? "Results only (no asset output)"
-                                        : execution.outputLocationType || "N/A"}
-                                </Field>
-                                <Field label="Output Database ID" mono>
-                                    {execution.outputDatabaseId || "N/A"}
-                                </Field>
-                                <Field label="Output Asset ID" mono>
-                                    {execution.outputAssetId || "N/A"}
-                                </Field>
-                                <Field label="Output Path Prefix" mono>
-                                    {outputPathPrefixText(
-                                        execution.outputFileBaseExecutionPathExtension
-                                    )}
-                                </Field>
-                            </div>
-                        </Card>
+                        {isSkipped ? (
+                            <Card title="Output Target">
+                                <p className="text-text-secondary">
+                                    These launches were skipped and did not run, so they wrote no
+                                    outputs.
+                                </p>
+                            </Card>
+                        ) : (
+                            <Card title="Output Target">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
+                                    <Field label="Output Type">
+                                        {execution.outputLocationType === "none"
+                                            ? "Results only (no asset output)"
+                                            : execution.outputLocationType || "N/A"}
+                                    </Field>
+                                    <Field label="Output Database ID" mono>
+                                        {execution.outputDatabaseId || "N/A"}
+                                    </Field>
+                                    <Field label="Output Asset ID" mono>
+                                        {execution.outputAssetId || "N/A"}
+                                    </Field>
+                                    <Field label="Output Path Prefix" mono>
+                                        {outputPathPrefixText(
+                                            execution.outputFileBaseExecutionPathExtension
+                                        )}
+                                    </Field>
+                                </div>
+                            </Card>
+                        )}
 
                         {/* Files */}
                         {(!!execution.outputs?.files?.length || isTruncated("outputs.files")) && (
@@ -1570,6 +1668,9 @@ function flattenInputMetadata(records: any[]): any[] {
                     databaseId: rec.databaseId || "",
                     assetId: rec.assetId || "",
                     filePath: rec.filePath || "",
+                    // Only an explicit true marks a row; one from a service that predates the flag
+                    // has none and reads as a selected input.
+                    expanded: rec.expanded === true,
                     source,
                     key,
                     value: map[key],

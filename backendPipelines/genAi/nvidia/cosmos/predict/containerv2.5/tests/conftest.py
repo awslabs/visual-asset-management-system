@@ -141,7 +141,7 @@ def run_container(container, monkeypatch, tmp_path):
                             lambda **kwargs: record.model_restores.append(kwargs))
         monkeypatch.setattr(container, "fetch_input_configuration", lambda *args, **kwargs: {})
 
-        def download(s3_uri, local_path):
+        def download(s3_uri, local_path, version_id=""):
             # The stub WRITES: main() reads the downloaded file's size, and a recorder alone would
             # leave the input-file assertions satisfied by nothing.
             record.downloads.append(s3_uri)

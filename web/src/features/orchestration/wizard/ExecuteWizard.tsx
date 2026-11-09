@@ -6,6 +6,8 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Dialog, { DialogFooter } from "../components/Dialog";
 import Callout from "../components/Callout";
+import { BusyButton } from "../components/BusyControls";
+import { useFocusHandOff } from "../components/useFocusHandOff";
 import { btnPrimary, btnSecondary, btnSuccess } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import WizardInputStage from "./WizardInputStage";
@@ -59,6 +61,8 @@ export interface ExecuteWizardBodyProps extends Omit<ExecuteWizardProps, "open">
     leadingSteps?: RailStep[];
     /** Receives a leading step's id when its rail row is clicked. */
     onJumpTo?: (stepId: string) => void;
+    /** Told whether the launch request is in flight, so the enclosing dialog stays open while it is. */
+    onLaunchingChange?: (launching: boolean) => void;
 }
 
 export interface PipelineStageData {
@@ -419,6 +423,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     hidden,
     leadingSteps,
     onJumpTo,
+    onLaunchingChange,
 }) => {
     const toast = useToast();
     const { data: workflowData, isLoading: workflowLoading } = useWorkflow(
@@ -455,6 +460,18 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     }, [allPipelines, pipelineIds, pipelineDbIds]);
 
     const executeWorkflow = useExecuteWorkflow();
+    const launching = executeWorkflow.isPending;
+    const onLaunchingChangeRef = useRef(onLaunchingChange);
+    onLaunchingChangeRef.current = onLaunchingChange;
+    useEffect(() => {
+        onLaunchingChangeRef.current?.(launching);
+    }, [launching]);
+    // A launch that closes the dialog unmounts the body before it can report the answer.
+    useEffect(() => () => onLaunchingChangeRef.current?.(false), []);
+    // A launch answered with warnings swaps the footer for Close; focus Launch or Back held moves there.
+    const closeRef = useRef<HTMLButtonElement>(null);
+    const launchRef = useFocusHandOff<HTMLButtonElement>(() => closeRef.current);
+    const backRef = useFocusHandOff<HTMLButtonElement>(() => closeRef.current);
 
     // Input stage data. When launched from an asset (presetAsset), seed the first input row with
     // that database+asset so the user only has to pick the file(s) — but the asset is NOT locked to
@@ -735,8 +752,10 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     };
 
     // Rail rows and Review "Edit" links jump to one of this body's steps; a leading step belongs
-    // to the enclosing dialog.
+    // to the enclosing dialog. While the launch is in flight the wizard stays on Review: the rows
+    // and links are held like Back, and a jump that still arrives is ignored.
     const jumpTo = (stepId: string) => {
+        if (launching) return;
         if (steps.some((s) => s.id === stepId)) setCurrentStageId(stepId);
         else onJumpTo?.(stepId);
     };
@@ -898,6 +917,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                     offendingPipelines={offendingPipelines}
                     workflowBlockedReason={workflowBlockedReason}
                     onEdit={jumpTo}
+                    busy={launching}
                 />
             );
         }
@@ -941,15 +961,20 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     // warnings the only remaining action is closing the dialog. Nothing renders into the footer
     // while another step of the enclosing dialog is showing.
     const footer = launched ? (
-        <button onClick={onClose} className={btnPrimary}>
+        <button ref={closeRef} onClick={onClose} className={btnPrimary}>
             Close
         </button>
     ) : (
         <>
             {currentIndex > 0 && (
-                <button onClick={handleBack} className={btnSecondary}>
+                <BusyButton
+                    ref={backRef}
+                    busy={launching}
+                    onClick={handleBack}
+                    className={btnSecondary}
+                >
                     Back
-                </button>
+                </BusyButton>
             )}
             {currentIndex < steps.length - 1 && (
                 <button onClick={handleNext} className={btnPrimary}>
@@ -957,13 +982,16 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                 </button>
             )}
             {currentIndex === steps.length - 1 && (
-                <button
+                <BusyButton
+                    ref={launchRef}
                     onClick={handleLaunch}
-                    disabled={executeWorkflow.isPending || hasValidationErrors}
+                    busy={launching}
+                    busyLabel="Launching..."
+                    disabled={hasValidationErrors}
                     className={btnSuccess}
                 >
-                    {executeWorkflow.isPending ? "Launching..." : "Launch"}
-                </button>
+                    Launch
+                </BusyButton>
             )}
         </>
     );
@@ -994,6 +1022,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                             steps={railSteps}
                             currentId={currentStageId}
                             onJumpTo={jumpTo}
+                            busy={launching}
                         />
                         <div className="min-w-0 flex-1 space-y-4">
                             {renderStage()}
@@ -1024,10 +1053,25 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
  * Executions board and the file manager compose `ExecuteWizardBody` behind a workflow picker in
  * `ExecuteWorkflowModal`.
  */
-const ExecuteWizard: React.FC<ExecuteWizardProps> = ({ open, onClose, workflow, ...rest }) => (
-    <Dialog open={open} onOpenChange={onClose} size="lg" title={`Execute ${workflow.workflowName}`}>
-        <ExecuteWizardBody onClose={onClose} workflow={workflow} hidden={false} {...rest} />
-    </Dialog>
-);
+const ExecuteWizard: React.FC<ExecuteWizardProps> = ({ open, onClose, workflow, ...rest }) => {
+    const [launching, setLaunching] = useState(false);
+    return (
+        <Dialog
+            open={open}
+            onOpenChange={onClose}
+            size="lg"
+            title={`Execute ${workflow.workflowName}`}
+            busy={launching}
+        >
+            <ExecuteWizardBody
+                onClose={onClose}
+                workflow={workflow}
+                hidden={false}
+                onLaunchingChange={setLaunching}
+                {...rest}
+            />
+        </Dialog>
+    );
+};
 
 export default ExecuteWizard;

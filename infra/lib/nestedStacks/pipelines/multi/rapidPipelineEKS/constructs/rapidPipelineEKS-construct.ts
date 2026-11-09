@@ -451,7 +451,14 @@ export class RapidPipelineEKSConstruct extends Construct {
 
             serviceAccount.role.addToPrincipalPolicy(
                 new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+                    // s3:GetObjectVersion: the job reads its input file at the S3 version the run
+                    // recorded at launch.
+                    actions: [
+                        "s3:GetObject",
+                        "s3:GetObjectVersion",
+                        "s3:PutObject",
+                        "s3:ListBucket",
+                    ],
                     resources: [
                         record.bucket.bucketArn,
                         `${record.bucket.bucketArn}/${objectPrefix}*`,
@@ -638,6 +645,10 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // subdirectory within the asset with it, so the converted file is written beside its
                 // source rather than at the asset root.
                 assetId: sfn.JsonPath.stringAt("$.assetId"),
+                // The S3 version the run reads its input at, recorded at launch ("" reads the
+                // current object). DefaultInputVersionId supplies "" when the execution input
+                // has no such field (an openPipeline from before it, during an upgrade).
+                inputVersionId: sfn.JsonPath.stringAt("$.inputVersionId"),
                 // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
                 // so a cleanup started after a stopped execution can find the job. A context-object
                 // path is always present.
@@ -1105,7 +1116,26 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Define the state machine - connect the workflow
         counterState.next(checkJobTask);
         runJobTask.next(runJobOutcomeChoice);
-        const definition = constructPipelineTask.next(constructPipelineOutcomeChoice);
+        // A payload path absent from the state input fails ConstructPipeline with States.Runtime
+        // before any Catch applies. An execution started by an openPipeline from before
+        // inputVersionId carries no such field, so the input is first merged over a "" default:
+        // States.JsonMerge keeps every field the execution input has and adds only what it lacks.
+        const stageInputVersionDefault = new sfn.Pass(this, "StageInputVersionDefault", {
+            parameters: {
+                defaults: { inputVersionId: "" },
+                "input.$": "$",
+            },
+        });
+        const defaultInputVersionId = new sfn.Pass(this, "DefaultInputVersionId", {
+            parameters: {
+                "merged.$": "States.JsonMerge($.defaults, $.input, false)",
+            },
+            outputPath: "$.merged",
+        });
+        const definition = stageInputVersionDefault
+            .next(defaultInputVersionId)
+            .next(constructPipelineTask)
+            .next(constructPipelineOutcomeChoice);
 
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {

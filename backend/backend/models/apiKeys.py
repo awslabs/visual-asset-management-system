@@ -8,7 +8,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from customLogging.logger import safeLogger
 from common.validators import validate, normalize_userid, object_name_pattern, trim_name
 
-logger = safeLogger(service_name="ApiKeyModels")
+logger = safeLogger()
 
 # Maximum lifetime of user-level (self-service) API keys, measured from key
 # creation. User-created keys must expire, and neither creation nor later
@@ -67,7 +67,7 @@ class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         logger.info("Validating API key creation parameters")
         # The key record is stored against this id and the authorizer resolves the caller by it,
@@ -108,7 +108,7 @@ class UpdateApiKeyRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_at_least_one_field(cls, values):
         if values.get('description') is None and values.get('expiresAt') is None and values.get('isActive') is None:
             raise ValueError("At least one of 'description', 'expiresAt', or 'isActive' must be provided")
@@ -151,7 +151,7 @@ class CreateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         logger.info("Validating user API key creation parameters")
         (valid, message) = validate({
@@ -188,7 +188,7 @@ class UpdateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         if values.get('description') is None and values.get('expiresAt') is None and values.get('isActive') is None:
             raise ValueError("At least one of 'description', 'expiresAt', or 'isActive' must be provided")

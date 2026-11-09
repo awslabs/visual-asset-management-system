@@ -663,6 +663,20 @@ def output_object_prefix(output_s3_asset_files_key, relative_subdir):
     return f"{prefix}{subdir}/" if subdir else prefix
 
 
+def input_fetch_command(bucket, key, local_name, version_id=""):
+    """The shell step that downloads the input file into the job's working directory.
+
+    With a version it reads that exact version (`aws s3 cp` cannot take one), writing to the name
+    `aws s3 cp <object> .` would have chosen, the key's last segment, so the rpdx step that follows
+    reads the same file either way. Without one it is the plain copy of the current object. Every
+    value is shell-quoted.
+    """
+    if version_id:
+        return (f"aws s3api get-object --bucket {shlex.quote(bucket)} --key {shlex.quote(key)} "
+                f"--version-id {shlex.quote(version_id)} {shlex.quote(local_name)} > /dev/null")
+    return f"aws s3 cp {shlex.quote(f's3://{bucket}/{key}')} ."
+
+
 def handle_construct_pipeline(event):
     """
     Handler for constructing pipeline definition
@@ -792,7 +806,11 @@ def handle_construct_pipeline(event):
         # command runs under /bin/sh (it chains steps with &&), so untrusted values must be inert
         # single-quoted literals to prevent command injection (e.g. a filename containing $(...),
         # backticks, or ';').
-        q_input_object = shlex.quote(f"s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key}")
+        # The input is read at the version the run recorded at launch; "" reads the current object.
+        fetch_input = input_fetch_command(
+            input_s3_asset_file_bucket, input_s3_asset_file_key,
+            f"{input_s3_asset_file_filename}{input_s3_asset_extension}",
+            event.get("inputVersionId") or "")
         q_input_file = shlex.quote(f"{input_s3_asset_file_filename}{input_s3_asset_extension}")
 
         # Format standard RapidPipeline command string
@@ -801,13 +819,13 @@ def handle_construct_pipeline(event):
             # the '*' left outside the quotes so it still expands as a glob.
             q_output_stem = shlex.quote(input_s3_asset_file_filename)
             q_output_prefix = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path_base}")
-            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
-            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
+            standard_command_with_config = f"{fetch_input} && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
+            standard_command_no_config = f"{fetch_input} && /rpdx/rpdx -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
         else:
             q_output_file = shlex.quote(output_s3_asset_file_filename)
             q_output_object = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path}")
-            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
-            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+            standard_command_with_config = f"{fetch_input} && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+            standard_command_no_config = f"{fetch_input} && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
 
         # Handle custom configurations using config.json file (outputType already removed above).
         processing_command = standard_command_no_config

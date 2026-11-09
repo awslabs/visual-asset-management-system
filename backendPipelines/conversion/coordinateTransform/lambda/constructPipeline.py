@@ -19,6 +19,23 @@ logger = safeLogger(service="ConstructPipeline-CoordinateTransform")
 s3 = boto3.client('s3', config=retry_config)
 sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
+# The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
+# type>: <version id>}}, never inside the definition. An image built before the field parses the
+# definition into dataclasses that reject an unknown key at every level, but reads only the first
+# argument, so a run that reaches such an image during an upgrade still starts. executeBatchJob
+# submits the whole list as the command.
+INPUT_VERSIONS_KEY = "inputVersions"
+
+
+def definition_command(definition, event) -> list:
+    """The Batch command for ``definition``: the definition, then the first stage's launch version when
+    the run has one. Without a version it is the one-element command written before the field."""
+    command = [json.dumps(definition)]
+    version_id = event.get("inputVersionId") or ""
+    if version_id:
+        command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
+    return command
+
 
 def _merge_metadata_into_params(
     input_parameters: str, input_metadata: str
@@ -275,6 +292,7 @@ def _build_execution_params(event):
         "inputFile": {
             "bucketName": input_bucket,
             "objectKey": input_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": extension,
         },
         "outputFiles": {
@@ -309,7 +327,7 @@ def _build_execution_params(event):
     return {
         "jobName": event.get("jobName"),
         "currentStageType": "COORD_TRANSFORM",
-        "definition": [json.dumps(definition)],
+        "definition": definition_command(definition, event),
         # Both of these are re-emitted because this task's outputPath is $.Payload, which REPLACES
         # the state — a value only present in the state machine's original input would be dropped
         # here. pipelineEnd reads the token to release the external workflow task, and the batch

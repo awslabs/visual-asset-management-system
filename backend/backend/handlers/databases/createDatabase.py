@@ -3,7 +3,7 @@
 
 import boto3
 import json
-import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -43,7 +43,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
     """
     try:
         table = dynamodb.Table(db_database)
-        dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+        dtNow = utc_now().strftime('%B %d %Y - %H:%M:%S')
         
         # Validate bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
         # Using query instead of get_item because the table has a sort key

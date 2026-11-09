@@ -706,10 +706,10 @@ export default function Widgets() {
 
 ```typescript
 // web/src/custom/customRoutes.tsx
-import React from "react";
 import type { RouteOption } from "../routes";
+import { lazyWithRetry } from "../utils/chunkLoadRecovery";
 
-const Widgets = React.lazy(() => import("./pages/Widgets"));
+const Widgets = lazyWithRetry(() => import("./pages/Widgets"));
 
 export const customRouteTable: RouteOption[] = [
     { path: "/custom/widgets", Page: Widgets, active: "#/custom/widgets/" },

@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient, isRequestBlocked } from "./apiClient";
+import {
+    apiClient,
+    isNetworkFailure,
+    isRequestBlocked,
+    NETWORK_FAILURE_MESSAGE,
+} from "./apiClient";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 
@@ -445,40 +450,47 @@ export const fetchAllDatabases = async () => {
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAsset = async ({ databaseId, assetId, showArchived = false }: any) => {
+    if (!databaseId || !assetId) {
+        return false;
+    }
+    const [, assetOrMessage] = await fetchAssetWithStatus({ databaseId, assetId, showArchived });
+    return assetOrMessage;
+};
+
+/**
+ * Fetches an asset and, on failure, also returns the HTTP status so a caller can tell an
+ * authorization denial (403) from a missing asset.
+ * @returns `[true, asset]` on success; `[false, message, status?]` on failure, where `status` is
+ *   the HTTP status when the request itself was rejected. A request the AWS WAF web ACL blocked
+ *   carries no status, so its message (which names the request ID) is shown. A request whose
+ *   response the browser never saw (a network failure, or a cross-origin preflight a web ACL
+ *   blocked) carries no status and a message saying the service could not be reached.
+ */
+export const fetchAssetWithStatus = async ({
+    databaseId,
+    assetId,
+    showArchived = false,
+}: any): Promise<[boolean, any, number?]> => {
     try {
-        let response;
-        if (databaseId && assetId) {
-            response = await apiClient.get(`database/${databaseId}/assets/${assetId}`, {
-                queryStringParameters: {
-                    showArchived: showArchived.toString(),
-                },
-            });
+        const response = await apiClient.get(`database/${databaseId}/assets/${assetId}`, {
+            queryStringParameters: {
+                showArchived: showArchived.toString(),
+            },
+        });
 
-            // Handle the new API response structure
-            // If response has a message field and it contains "error" or "Error", it's an error message
-            if (
-                response.message &&
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
-            ) {
-                console.log("Error fetching asset:", response.message);
-                return response.message;
-            }
-
-            // If response has a message field, return it (for backward compatibility)
-            if (response.message) {
-                return response.message;
-            }
-
-            // Otherwise, return the response directly (new API structure)
-            return response;
-        } else {
-            return false;
+        // A response with a message field is an error message (or a legacy message response)
+        if (response.message) {
+            console.log("Error fetching asset:", response.message);
+            return [false, response.message];
         }
+
+        return [true, response];
     } catch (error: any) {
         console.log(error);
-        return error?.message;
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
+        return [false, error?.message, isRequestBlocked(error) ? undefined : error?.status];
     }
 };
 /**
@@ -642,13 +654,21 @@ export const fetchTagTypesForAsset = async (params?: { databaseId?: string }) =>
     });
 };
 
-export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
+export const fetchAssetLinks = async ({
+    assetId,
+    databaseId,
+    childTreeView = false,
+    showArchived = false,
+}: any) => {
     try {
         let response;
         if (assetId) {
             const queryParams: any = {};
             if (childTreeView) {
                 queryParams.childTreeView = "true";
+            }
+            if (showArchived) {
+                queryParams.showArchived = "true";
             }
 
             console.log("Fetching asset links with params:", queryParams);
@@ -1051,12 +1071,17 @@ export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) =>
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllComments = async ({ assetId }: any) => {
+export const fetchAllComments = async ({ assetId, showArchived = false }: any) => {
     try {
-        let response = await apiClient.get(`comments/assets/${assetId}`, {});
+        // An archived asset's comments are only found when asked for
+        const archivedParams: Record<string, string> = showArchived ? { showArchived: "true" } : {};
+        let response = await apiClient.get(
+            `comments/assets/${assetId}`,
+            showArchived ? { queryStringParameters: archivedParams } : {}
+        );
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...archivedParams },
         };
         if (response.message) {
             if (response.message.Items) {
@@ -2195,6 +2220,7 @@ export const fetchAssetS3FilesPage = async ({
     pageSize = null,
     assetVersionId = null,
     prefix = null,
+    showArchived = false,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2227,6 +2253,11 @@ export const fetchAssetS3FilesPage = async ({
         // Server-side folder scope: only keys under this asset-relative prefix are listed.
         if (prefix) {
             queryParams.prefix = prefix;
+        }
+
+        // An archived asset is only found when asked for; a live asset's listing is unchanged.
+        if (showArchived) {
+            queryParams.showArchived = "true";
         }
 
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
@@ -2298,6 +2329,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic = false,
     pageSize,
     assetVersionId = null,
+    showArchived = false,
 }: {
     databaseId: string;
     assetId: string;
@@ -2305,6 +2337,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic?: boolean;
     pageSize?: any;
     assetVersionId?: string | null | undefined;
+    showArchived?: boolean;
 }) {
     let nextToken = null;
     let pageNumber = 0;
@@ -2319,6 +2352,7 @@ export async function* fetchAssetS3FilesStreaming({
             startingToken: nextToken,
             pageSize,
             assetVersionId,
+            showArchived,
         });
 
         if (!result.success) {
@@ -2354,14 +2388,21 @@ export async function* fetchAssetS3FilesStreaming({
  * @param {string} params.assetId - Asset ID
  * @param {string} params.fileKey - File key/path
  * @param {boolean} params.includeVersions - If to include file version data on the response
- * @returns {Promise<any>}
+ * @param {boolean} [params.showArchived=false] - Also find an archived asset
+ * @returns `[true, fileInfo]` on success; `[false, message, status?]` on failure, where `status` is
+ *   the HTTP status when the request itself was rejected, so a caller can tell a missing file or
+ *   asset (400 "File not found.", 404) and a permission denial (403) from a request that may
+ *   succeed when tried again. A request the AWS WAF web ACL blocked carries no status, so its
+ *   message (which names the request ID) is shown. A request whose response the browser never saw
+ *   carries no status and a message saying the service could not be reached.
  */
 export const fetchFileInfo = async ({
     databaseId,
     assetId,
     fileKey,
     includeVersions = false,
-}: any) => {
+    showArchived = false,
+}: any): Promise<[boolean, any, number?]> => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
@@ -2371,6 +2412,7 @@ export const fetchFileInfo = async ({
             queryStringParameters: {
                 filePath: fileKey,
                 includeVersions: includeVersions ? "true" : "false",
+                ...(showArchived ? { showArchived: "true" } : {}),
             },
         });
 
@@ -2392,7 +2434,14 @@ export const fetchFileInfo = async ({
         }
     } catch (error: any) {
         console.log("Error fetching file info:", error);
-        return [false, error?.message || "Failed to fetch file information"];
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
+        return [
+            false,
+            error?.message || "Failed to fetch file information",
+            isRequestBlocked(error) ? undefined : error?.status,
+        ];
     }
 };
 

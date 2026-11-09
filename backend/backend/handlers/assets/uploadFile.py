@@ -9,7 +9,8 @@ import time
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
@@ -152,7 +153,7 @@ def check_user_rate_limit(user_id: str) -> bool:
     """
     try:
         # Calculate timestamp for 1 minute ago as ISO string
-        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        one_minute_ago = utc_now() - timedelta(minutes=1)
         one_minute_ago_iso = one_minute_ago.isoformat()  # STRING format for DynamoDB
         
         logger.info(f"Checking rate limit for user {user_id} since {one_minute_ago_iso}")
@@ -300,6 +301,13 @@ def get_asset_details(databaseId, assetId):
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
+
+def upload_authorization_object(asset, databaseId, assetId):
+    """The object an upload is authorized against: the stored asset annotated with its object type,
+    or, when no asset was found, the identifiers the request supplied."""
+    if asset:
+        return {**asset, 'object__type': 'asset'}
+    return {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
 def update_asset_attributes(databaseId, assetId, updates):
     """Update the named attributes of an existing asset record in DynamoDB.
@@ -1191,7 +1199,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadId = f"y{str(uuid.uuid4())}"
     
     # Calculate expiration time (7 days from now)
-    now = datetime.utcnow()
+    now = utc_now()
     expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
     
     # Process files
@@ -2669,21 +2677,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Initialize Upload API
             request_model = parse(body, model=InitializeUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
@@ -2716,21 +2725,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Parse request model
             request_model = parse(body, model=CompleteExternalUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = complete_external_upload(uploadId, request_model, event)
@@ -2750,21 +2760,22 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Parse request model
             request_model = parse(body, model=CompleteUploadRequestModel)
             
-            # Check authorization
+            # Check authorization before existence, so a refused caller gets the same answer for a
+            # missing asset as for an existing one
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
-            if not asset:
-                return validation_error(body={'message': "Asset not found"}, event=event)
-            
-            asset["object__type"] = "asset"
-            
+
             # Fail closed: with no authenticated identity no authorization can be
             # evaluated, so deny rather than fall through to the upload.
             if len(claims_and_roles["tokens"]) == 0:
                 return authorization_error()
 
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+            authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+            if not (casbin_enforcer.enforce(authorization_object, "POST") and casbin_enforcer.enforceAPI(event)):
                 return authorization_error()
+
+            if not asset:
+                return validation_error(body={'message': "Asset not found"}, event=event)
 
             # Process request
             response = complete_upload(uploadId, request_model, event)

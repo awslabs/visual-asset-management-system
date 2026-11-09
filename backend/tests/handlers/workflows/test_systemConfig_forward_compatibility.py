@@ -35,6 +35,8 @@ from backend.backend.common.workflows.pipelineRecords import build_pipeline_syst
 from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
 
 METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+# The opt-in envelope sections: added after records existed, so an omitted key must read OFF.
+OPT_IN_METADATA_KEYS = ("assetFileMetadata", "metadataSchema")
 
 
 @pytest.mark.unit
@@ -49,8 +51,10 @@ class TestMetadataInputDefaultsAreSingleSourced:
         assert build_workflow_system_config()["metadataInputs"] == er.METADATA_INPUT_DEFAULTS
 
     def test_the_table_covers_every_key_the_validators_read(self):
-        assert set(er.METADATA_INPUT_DEFAULTS) == set(METADATA_KEYS)
-        assert set(ev._METADATA_KEYS) == set(METADATA_KEYS)
+        every_key = set(METADATA_KEYS) | set(OPT_IN_METADATA_KEYS)
+        assert set(er.METADATA_INPUT_DEFAULTS) == every_key
+        assert set(ev._METADATA_KEYS) == every_key
+        assert set(er.METADATA_INPUT_OPT_IN_KEYS) == set(OPT_IN_METADATA_KEYS)
 
     def test_a_built_map_is_not_the_shared_dict(self):
         # A builder handing back the module-level table would let one caller's edit rewrite the
@@ -67,10 +71,20 @@ class TestMetadataInputDefaultsAreSingleSourced:
         assert ev._metadata_enabled.__qualname__ == "metadata_input_enabled"
         assert ev._metadata_enabled.__module__.endswith("common.workflows.executionRecords")
 
-    def test_every_key_defaults_on(self):
-        # The permissive direction is the correct one here: a config that says nothing about a metadata
-        # type gets it, so adding a key does not retroactively strip metadata from existing runs.
-        assert all(er.METADATA_INPUT_DEFAULTS.values())
+    def test_every_metadata_type_defaults_on(self):
+        # The permissive direction is the correct one for a metadata TYPE: a config that says nothing
+        # about it gets it, so adding a key does not retroactively strip metadata from existing runs.
+        assert all(er.METADATA_INPUT_DEFAULTS[key] for key in METADATA_KEYS)
+
+    def test_every_opt_in_section_defaults_off(self):
+        # The opposite direction for a section the envelope never carried before the key existed: a
+        # record written earlier, or a client naming only some keys, must keep producing the envelope
+        # it always produced, so an omitted opt-in key reads off.
+        for key in OPT_IN_METADATA_KEYS:
+            assert er.METADATA_INPUT_DEFAULTS[key] is False, key
+            assert er.metadata_input_enabled({}, key) is False, key
+            assert er.metadata_input_enabled(None, key) is False, key
+            assert er.metadata_input_enabled({key: True}, key) is True, key
 
 
 @pytest.mark.unit

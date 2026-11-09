@@ -23,6 +23,40 @@ const mount = (onWidthChange = jest.fn()) => {
     return { ...utils, separator, leftPanel, onWidthChange };
 };
 
+describe("ResizableSplitter at phone width", () => {
+    // jsdom applies no stylesheet or media query, so the stylesheet is the contract: below 688 px the
+    // panes stack, the separator is dropped, and the left pane's inline drag width is overridden.
+    const css = require("fs").readFileSync(
+        require("path").join(__dirname, "ResizableSplitter.css"),
+        "utf-8"
+    ) as string;
+    const mediaStart = css.indexOf("@media (max-width: 687px)");
+    const phone = css.slice(mediaStart);
+
+    it("stacks the panes and hides the separator below the xs breakpoint", () => {
+        expect(mediaStart).toBeGreaterThan(-1);
+        expect(phone).toMatch(/\.resizable-splitter-container\s*{[^}]*flex-direction:\s*column/);
+        expect(phone).toMatch(/\.resizable-left-panel\s*{[^}]*width:\s*100%\s*!important/);
+        expect(phone).toMatch(/\.resizable-splitter\s*{[^}]*display:\s*none/);
+    });
+
+    it("comes after the base rules it overrides, which share its specificity", () => {
+        for (const rule of [
+            ".resizable-splitter-container {",
+            ".resizable-left-panel {",
+            ".resizable-splitter {",
+            ".resizable-right-panel {",
+        ]) {
+            expect(css.indexOf(rule)).toBeLessThan(mediaStart);
+        }
+    });
+
+    it("lets the right pane shrink below its content when side by side", () => {
+        const base = css.slice(0, mediaStart);
+        expect(base).toMatch(/\.resizable-right-panel\s*{[^}]*min-width:\s*0/);
+    });
+});
+
 describe("ResizableSplitter", () => {
     it("is a focusable vertical separator that reports its width and limits", () => {
         const { separator } = mount();

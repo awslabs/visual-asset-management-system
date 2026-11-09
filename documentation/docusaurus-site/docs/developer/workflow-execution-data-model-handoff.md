@@ -57,6 +57,13 @@ the read source for the data migration. No handler reads it.
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
     is missing a GSI partition attribute, so a write path — including a migration or backfill — that
     forgets the attribute produces an execution absent from the global list with no error at write time.
+-   **An output-metadata row's sort-key value names its type.** The attribute is still called
+    `targetFilePath:metadataKey`, but its value is `{targetFilePath}:{metadataType}:{metadataKey}` with
+    `metadataType` `metadata` or `attribute`, and the row also stores `metadataType`. A step that writes one
+    key to a file as both file metadata and a file attribute therefore records two rows. Rows from earlier
+    releases keep the `{targetFilePath}:{metadataKey}` value and have no `metadataType`; readers take the
+    type from `executionRecords.output_metadata_type`, which falls back to the source file name, and never
+    parse the sort-key value.
 
 ### Sparse indexes and empty string keys
 
@@ -90,13 +97,27 @@ a row that already reached one of those untouched.
 
 The main row captures the full CloudWatch log for the run in `executionLog` on **every** terminal
 completion, success or failure — the end-state Lambda function writes it on the normal path, and an
-`executionService` poll writes it for any terminal status it reconciles out of band. `executionError` holds
+`executionService` poll writes it for any terminal status it reconciles out of band, and the error-handler
+Lambda function writes it for a run that fails. Each reads the run's
+events from its start date onward, following the log's continuation token, and stores at most 256 KB of
+redacted text: the newest events are kept, with a first line giving the number left out and a last line
+when the read's page or time budget ended before the log did. CloudWatch Logs makes events searchable
+some seconds after they happen, and not in timestamp order, so after its status write the end-state
+and error-handler Lambda functions re-read for up to 30 seconds until two full re-reads in a row,
+after a minimum settle time, find the same number of events with the same total size, and replace the
+stored log with that read. When the reads do not agree within the 30 seconds, the largest read is
+stored with a last line saying the log may be incomplete. The execution details view and the
+executions list each capture the log when they are the first to record a run stopped outside VAMS.
+The truncated logs route also reads the live log and returns whichever copy holds more lines, and the
+live log when it holds as many lines as a stored copy marked as possibly incomplete. `executionError` holds
 only the specific failure message (the Step Functions error and cause) and is set only for a non-`SUCCEEDED`
 terminal status.
 
 `executionError` is the broadly visible message. Full log retrieval is scoped to a separate, narrower
 route (`GET /workflows/executions/{executionId}/logs`), which the shipped Database User and read-only
 permission templates deny; both fields are passed through log redaction before they leave the handler.
+The per-asset executions list returns a shortened copy of `executionLog` (the newest 16 KB,
+`LISTED_EXECUTION_LOG_MAX_BYTES`) so a 200-row page stays under the Lambda response limit.
 
 ## Which record populates when
 
@@ -114,7 +135,7 @@ permission templates deny; both fields are passed through log redaction before t
 `build_pipeline_input_file_record` exists and the data migration populates the table for migrated
 executions, but no VAMS run-time path writes it: an execution launched through `executeWorkflow` records
 its input files once, on `WorkflowExecutionInputsStorageTable`. The execution-details response reads that
-table, and `executionService` touches the per-pipeline table only to delete its rows on a permanent delete.
+table, and the per-pipeline table is touched only by the permanent-delete function, to delete its rows.
 A read path built against it returns zero rows for any execution launched by VAMS.
 :::
 

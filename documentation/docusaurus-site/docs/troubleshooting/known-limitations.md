@@ -22,6 +22,8 @@ Using the same pipeline ID in both a GLOBAL database and a non-GLOBAL database c
 
 Each metadata entity type (database, asset, asset file, asset link) supports a maximum of **500 metadata and attribute records**. Operations that would exceed this limit are rejected by the API.
 
+Pipeline write-backs are exempt from this limit and can store more than 500 records on an entity. While an entity holds more than 500 records, user and API create and `update` requests on it are refused; a `replace_all` of 500 items or fewer, or deleting records, brings it back under the limit.
+
 ### Schema Validation Enforcement
 
 Metadata schema validation is enforced only when metadata is created or updated through the VAMS API. Metadata written by pipeline outputs or direct Amazon DynamoDB manipulation is not validated against schemas. This means:
@@ -145,7 +147,11 @@ Safari does not support the cross-origin isolation requirements needed by WebAss
 -   Three.js Viewer CAD formats (.stp, .step, .iges, .brep)
 -   Cesium 3D Tileset Viewer (.json tilesets)
 
-Standard mesh formats in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl) work correctly in Safari because they do not require WASM.
+Standard mesh formats and USD in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl, .usd, .usda, .usdc, .usdz) work correctly in Safari because they do not require WASM.
+
+### Three.js Viewer USD Composition Limits
+
+The Three.js Viewer composes a USD scene from the files it loads from the asset, using the three.js USD loader. It does not compose UDIM texture sets (`<UDIM>`), a `.usdz` referenced from another layer, or references written inside a binary (`.usdc`) layer, and it does not load files outside the asset. It does not compose or download sublayers (`subLayers`); the notice lists each one as not shown by this viewer. Scenes that place their geometry in sublayers or behind variant sets or payloads may compose only in part or not at all; when nothing in a scene can be drawn, the viewer shows a message instead of an empty view. Flattening the scene into one layer (for example with `usdcat --flatten`) or opening it in a desktop USD viewer shows the full scene. A notice on the viewer lists every referenced file it did not load. See [Referenced files in the Three.js Viewer](../concepts/viewers.md#referenced-files-in-the-threejs-viewer).
 
 ### Needle USD Viewer Compressed File Limitations
 

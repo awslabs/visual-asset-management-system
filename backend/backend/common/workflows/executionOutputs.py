@@ -36,11 +36,13 @@ from customLogging.logger import safeLogger
 from common.workflows import executionRecords as er
 from common.workflows import subExecutionStages as ses
 
-logger = safeLogger(service_name="ExecutionOutputs")
+logger = safeLogger()
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
-# re-stamped by the error handler (only in-flight rows are marked terminal).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# re-stamped by the error handler (only in-flight rows are marked terminal). SKIPPED is the main row of a
+# fileUpload trigger launch a concurrency restriction refused (er.EXECUTION_STATUS_SKIPPED): terminal
+# from its first write, so no abort, reconcile or terminal writer ever overwrites it.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Sub-process resource types a registered locator can name (mirrors registerPipelineExecution).
 RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
@@ -243,9 +245,18 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
 
     resolved = []
     seen_rel = set()
+    seen_shadowed = set()
     for entry in original_inputs:
         rel = er.normalize_file_key(entry.get("relativePath", ""))
         seen_rel.add(rel)
+        # A path selected at two versions has two original entries; once an output shadows it they
+        # name the same object, so it is listed once per asset. Different assets sharing the path
+        # each keep their entry.
+        if rel in output_by_rel:
+            identity = (entry.get("databaseId", ""), entry.get("assetId", ""), rel)
+            if identity in seen_shadowed:
+                continue
+            seen_shadowed.add(identity)
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
@@ -447,6 +458,36 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
+
+
+def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
+                         workflow_id, execution_log):
+    """Replace the main row's stored executionLog with a later, fuller read of the same log.
+
+    Written only when the row still exists (a permanent delete in between must not leave a partial
+    item behind) and its stored log is shorter than this one, so two writers refreshing one run keep
+    the longer read and a refresh never shortens what is stored. Returns True when it wrote. A
+    ConditionalCheckFailed is the expected outcome when either does not hold; any other write error
+    surfaces."""
+    if not execution_log:
+        return False
+    try:
+        dynamo.Table(main_table_name).update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression="SET executionLog = :lg",
+            ConditionExpression=("attribute_exists(workflowExecutionId) AND "
+                                 "(attribute_not_exists(executionLog) OR size(executionLog) < :n)"),
+            ExpressionAttributeValues={":lg": execution_log,
+                                       ":n": len(execution_log.encode("utf-8"))},
+        )
+        return True
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Main execution row {workflow_execution_id} is gone or already stores a log at "
+                    f"least as long; the log refresh was skipped")
+        return False
 
 
 def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,

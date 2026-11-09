@@ -23,12 +23,16 @@ from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
-from ..utils.system_records import is_system_record_refusal
 from ..utils.exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError, WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     AssetNotFoundError, DatabaseNotFoundError,
 )
+
+# The API's 400 for a trigger type it does not support (backend workflowTriggerService.py) starts with
+# this text. Only that 400 gets the trigger-type hint; every other 400 is shown as the API wrote it.
+UNSUPPORTED_TRIGGER_TYPE_PREFIX = "Unsupported trigger type"
+TRIGGER_TYPE_HINT = "Only the 'fileUpload' trigger type is currently supported."
 
 
 # ---------------------------------------------------------------------------
@@ -340,8 +344,10 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     folder in that step's output path; omit it to use the pipeline id.
 
     systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
-    and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
-    captures. The workflow's gate builds the one metadata envelope every step shares.
+    and databaseMetadata, each defaulting to true, plus the opt-in assetFileMetadata and
+    metadataSchema, defaulting to false; it gates which metadata a run of this workflow captures.
+    The workflow's gate builds the one metadata envelope the steps share, and each step receives
+    only what its own pipeline or template also turns on.
 
     systemConfig.concurrencyRestriction is none, perAsset, perInputFile, or perInputFileVersion.
     The three restrictions lock the selected assets, files, or file versions for the run's duration: a
@@ -706,8 +712,8 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
         raise click.ClickException(str(e))
     except InvalidWorkflowTriggerDataError as e:
         output_error(e, json_output, error_type="Invalid Trigger Data",
-                     helpful_message=None if is_system_record_refusal(e) else
-                     "Only the 'fileUpload' trigger type is currently supported.")
+                     helpful_message=TRIGGER_TYPE_HINT
+                     if str(e).startswith(UNSUPPORTED_TRIGGER_TYPE_PREFIX) else None)
         raise click.ClickException(str(e))
 
 
@@ -931,6 +937,9 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @click.option('--filter-end-date',
               help='Only executions started on/before this UTC date-time, as '
                    'YYYY-MM-DDTHH:MM:SSZ (optional upper bound).')
+@click.option('--exclude-status',
+              help='Exclude executions of these statuses, one or comma-separated (e.g. SKIPPED); applied by '
+                   'the service before the page is cut')
 @click.option('--page-size', type=int, help='Number of items per page (max 50 due to API throttling)')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
@@ -940,9 +949,9 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflow_id: Optional[str],
                     workflow_database_id: Optional[str], filter_start_date: Optional[str],
-                    filter_end_date: Optional[str], page_size: Optional[int],
-                    max_items: Optional[int], starting_token: Optional[str], auto_paginate: bool,
-                    json_output: bool):
+                    filter_end_date: Optional[str], exclude_status: Optional[str],
+                    page_size: Optional[int], max_items: Optional[int], starting_token: Optional[str],
+                    auto_paginate: bool, json_output: bool):
     """List an asset's workflow executions (per-asset history).
 
     Only recent executions (started within the last 90 days) are listed by default; use
@@ -958,6 +967,7 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
         vamscli workflow list-executions -d my-db -a my-asset
         vamscli workflow list-executions -d my-db -a my-asset --filter-start-date 2025-01-01T00:00:00Z
         vamscli workflow list-executions -d my-db -a my-asset -w workflow-123 --auto-paginate
+        vamscli workflow list-executions -d my-db -a my-asset --exclude-status SKIPPED
     """
     api_client = _api(ctx)
     if auto_paginate and starting_token:
@@ -978,6 +988,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             params['filterStartDate'] = filter_start_date
         if filter_end_date:
             params['filterEndDate'] = filter_end_date
+        if exclude_status:
+            params['excludeStatus'] = exclude_status
         return params
 
     def _window(data: Dict[str, Any]) -> str:
@@ -1025,6 +1037,11 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('startDate', 'N/A')}")
+            # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
+            if ex.get('executionStatus') == 'SKIPPED':
+                out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
+                if ex.get('skipReason'):
+                    out.append(f"  Skip reason: {ex['skipReason']}")
             if ex.get('inputAssetFileKey'):
                 out.append(f"  Input File: {ex['inputAssetFileKey']}")
             out.append("-" * 80)

@@ -23,11 +23,13 @@ See the [Point Cloud Potree Viewer pipeline](https://awslabs.github.io/visual-as
 1. Construct Pipeline Lambda function constructs the multi-stage JSON input definitions for the jobs based on the filetypes uploaded to the S3 bucket (e57/ply = PDAL + PotreeConveter, laz/laz = PotreeConverter)
 2. AWS Batch Job executes for batch processing point cloud data
 3. AWS Fargate Task provisions Docker container compute resources and runs the specific PCP app container
-4. If the first stage/type is PDAL, the PDAL PCP container runs to translate the file to a LAZ format. The e57/ply file is retrieved form origniating S3 bucket. Outputs are to the VAMS AssetsAuxiliary S3 bucket as a temporary pipeline file.
-5. If the first or last stage/type is POTREE, the POTREE PCP container runs to translate the original LAS/LAZ or previous stage LAZ file to a octree Potree 2.0 format. The LAS/LAZ inputs file are retrieved form origniating S3 bucket (Assets or AssetsAuxiliary (temp)). The octree format outputs are written to the VAMS AssetsAuxiliary S3 bucket. Note: Temporary files from PDAL are not deleted at this time.
+4. If the first stage/type is PDAL, the PDAL PCP container runs to translate the file to a LAZ format. The e57/ply file is retrieved form origniating S3 bucket. The LAZ output is a temporary pipeline file in the VAMS AssetsAuxiliary S3 bucket, in a working folder of this run's own (`<file>/preview/PotreeViewerRuns/<jobName>/`), so two runs on one file never share it. The PDAL stage removes nothing.
+5. If the first or last stage/type is POTREE, the POTREE PCP container runs to translate the original LAS/LAZ or previous stage LAZ file to a octree Potree 2.0 format. The LAS/LAZ inputs file are retrieved form origniating S3 bucket (Assets or AssetsAuxiliary (temp)). The octree format outputs are written to the viewer folder (`<file>/preview/PotreeViewer/`) in the VAMS AssetsAuxiliary S3 bucket; the previous octree is replaced only after every new file is uploaded, so a failed run keeps the previous preview. When several runs on one file finish, the last one to finish is the preview. The POTREE stage then removes the run's working folder, whether it succeeded or failed.
 6. After the PDAL or PDAL + POTREE stages are done, the StateMachine ends in a success or fail state depending on errors. Errors in the container are written to Cloudwatch logs.
 
 Note: All container logic and AWS SDK use is controlled with Python scripts that are added to the containers at the time of build
+
+Note: Both Batch jobs are submitted by job definition name without a revision, so Batch runs the latest active revision: an E57/PLY run that spans a deploy which replaced the job definitions still submits its POTREE job.
 
 ## Docker Notes
 
@@ -48,7 +50,7 @@ PCP follows the multi-stage build strategy. First, the `build` image downloads, 
 
 Building the container image can range from a few minutes to 15 minutes depending on the machine you are building on. The PDAL container image is based on "condaforge/miniforge3" as the base docker image and POTREE is built on "python:3.11-alpine" as the base. This is based on the requirements and dependencies that each application needs.
 
-The PDAL container size is 2.22GB while the Potree Container size is 228MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
+The PDAL container (PDAL 2.10.2) size is about 2.5GB while the Potree Container size is about 600MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
 
 To build the container follow the below commands.
 

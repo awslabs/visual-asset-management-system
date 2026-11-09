@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import { DatePicker, SpaceBetween, FormField } from "@cloudscape-design/components";
+import { datePickerStrings } from "../../../common/helpers/datePickerStrings";
 
 interface DateInputProps {
     value: string;
@@ -79,6 +80,9 @@ export const DateInput: React.FC<DateInputProps> = ({
                 disabled={disabled}
                 invalid={invalid}
                 ariaLabel={ariaLabel}
+                i18nStrings={datePickerStrings(
+                    ariaLabel === "Date input" ? "date" : `date for ${ariaLabel}`
+                )}
             />
         </FormField>
     );

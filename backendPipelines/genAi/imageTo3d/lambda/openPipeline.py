@@ -8,6 +8,7 @@ import datetime
 import secrets
 from botocore.config import Config
 from customLogging.logger import safeLogger
+import inputViews
 import manifestHelper
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -171,11 +172,15 @@ def lambda_handler(event, context):
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
     external_sfn_task_token = event['sfnExternalTaskToken']
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
-    # Every view of the subject, for a model that reconstructs from several. Named here for the same
-    # reason every output path is: this lambda enumerates the payload explicitly, so a field added in
-    # vamsExecute reaches the container ONLY if it is also named at this hop. It was not, on the first
-    # attempt, and the result was a four-view run that silently reconstructed from one view and returned a
-    # result bit-identical to the single-view control.
+    # Every view of the subject with the version it is read at, for a model that reconstructs from several.
+    # Named here for the same reason every output path is: this lambda enumerates the payload explicitly,
+    # so a field added in vamsExecute reaches the container ONLY if it is also named at this hop. It was
+    # not, on the first attempt, and the result was a four-view run that silently reconstructed from one
+    # view and returned a result bit-identical to the single-view control. The path list is the one an
+    # event from a development build before inputViews carries, and the one such a build's
+    # constructPipeline reads; both are forwarded as received, and inputViews.views_from_event decides
+    # which one the run reads.
+    input_views = event.get('inputViews') or []
     input_s3_asset_file_uris = event.get('inputS3AssetFilePaths') or []
     output_s3_asset_files_uri = event.get('outputS3AssetFilesPath', '')
     output_s3_asset_preview_uri = event.get('outputS3AssetPreviewPath', '')
@@ -202,10 +207,19 @@ def lambda_handler(event, context):
             'body': {"message": f"Pipeline cannot process file type provided. Allowed: {', '.join(allowed)}"},
         }
 
+    # A view that names no S3 object fails the run here, before any compute starts, rather than being
+    # skipped or read at another version.
+    try:
+        views = inputViews.views_from_event(event)
+    except inputViews.MalformedInputView as e:
+        abort_external_workflow(f"Malformed input view: {e}", external_sfn_task_token)
+        return {'statusCode': 400, 'body': {"message": str(e)}}
+
     # EVERY view is checked, not just the primary. Checking only the first would let an unreadable file
     # through as a second view and fail inside the container, on a GPU instance, after the model loaded.
-    for view_uri in input_s3_asset_file_uris:
-        view_extension = input_file_extension(view_uri)
+    for view in views:
+        view_uri = inputViews.view_uri(view)
+        view_extension = os.path.splitext(view["key"])[1].lower()
         if not view_extension or view_extension not in allowed:
             abort_external_workflow(
                 f"Pipeline cannot process file type provided for view {view_uri}",
@@ -225,6 +239,7 @@ def lambda_handler(event, context):
         "jobName": job_name,
         "model": model,
         "inputS3AssetFilePath": input_s3_asset_file_uri,
+        "inputViews": input_views,
         "inputS3AssetFilePaths": input_s3_asset_file_uris,
         "outputS3AssetFilesPath": output_s3_asset_files_uri,
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
@@ -240,6 +255,8 @@ def lambda_handler(event, context):
         "assetId": asset_id,
         "databaseId": database_id,
         "inputBucketRegion": event.get('inputBucketRegion', ''),
+        # The S3 version of the primary input (empty reads the current object); each view carries its own.
+        "inputVersionId": event.get('inputVersionId', ''),
         "outputBucketRegion": event.get('outputBucketRegion', ''),
         "executingUserName": event.get('executingUserName', ''),
         "executingRequestContext": event.get('executingRequestContext', ''),

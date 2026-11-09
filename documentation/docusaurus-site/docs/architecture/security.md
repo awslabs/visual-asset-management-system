@@ -614,10 +614,10 @@ An override that writes role assignments determines which VAMS roles a user hold
 
 VAMS applies two AWS CDK aspects to all IAM roles in the stack:
 
-| Aspect                 | Purpose                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| **IamRoleTransform**   | Applies role name prefixes and permission boundaries from `cdk.json` settings |
-| **LogRetentionAspect** | Forces one-year retention on all Amazon CloudWatch Log Groups                 |
+| Aspect                 | Purpose                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **IamRoleTransform**   | Applies the role name prefix to core stack roles, and the permissions boundary from `cdk.json` to every IAM role in the app. See [IAM role customization](../deployment/configuration-reference.md#iam-role-customization-environmentsaws). |
+| **LogRetentionAspect** | Forces one-year retention on all Amazon CloudWatch Log Groups                                                                                                                                                                               |
 
 ## CDK Nag Enforcement
 

@@ -212,6 +212,12 @@ class TestBothIndexQueriesCarryTheRestriction:
             assert _analyzed_field_queries(query) == []
 
     def test_the_search_queries(self, search_module):
+        # Aggregations are requested only for a caller whose asset permissions translate, so give
+        # the caller an allow-all asset line; the aggregations are then scanned with the query.
+        search_module.CasbinEnforcer.return_value.effective_object_policies.return_value = [
+            {"effect": "allow", "criteriaAnd": [{"field": "databaseId", "operator": "contains", "value": ".*"}],
+             "criteriaOr": []}
+        ]
         manager = self._manager()
         builder = search_module.DualIndexQueryBuilder(manager)
         asset_query, file_query = builder.build_dual_index_queries(

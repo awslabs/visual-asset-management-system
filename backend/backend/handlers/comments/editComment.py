@@ -5,7 +5,7 @@ import copy
 import boto3
 from botocore.config import Config
 import json
-import datetime
+from common.timestamps import utc_now
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.comments.commentService import get_single_comment
@@ -49,7 +49,7 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
     logger.info(comment_database)
     table = dynamodb.Table(comment_database)
     logger.info("Setting Time Stamp")
-    dtNow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    dtNow = utc_now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     logger.info("current time in ISO8601:" + dtNow)
 
     item = get_single_comment(assetId, assetVersionIdAndCommentId)
