@@ -269,6 +269,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Text Diff version hint on its own line** — In a side's notice, "Pick another version above to compare it instead." starts on a new line instead of running on from the message. (issue #1237)
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
+-   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 
