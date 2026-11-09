@@ -162,10 +162,13 @@ def extract_geometric_metadata(model: cq.Shape) -> Dict[str, Any]:
             'depth': bbox.zmax - bbox.zmin
         }
         
-        # Calculate volume and surface area
+        # Calculate volume and surface area. The volume is that of the model's solids, because
+        # cadquery's Volume() of a shell or face (what a surface model holds) is its surface area.
+        # So a model with no solid has no volume, and surfaces beside solids add nothing to it.
         try:
-            volume = model.Volume()
-        except:
+            solids = model.Solids()
+            volume = sum(solid.Volume() for solid in solids) if solids else None
+        except Exception:
             volume = None
             
         try:
