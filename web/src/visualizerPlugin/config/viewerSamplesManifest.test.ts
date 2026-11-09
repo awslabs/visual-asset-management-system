@@ -88,6 +88,15 @@ describe("viewer sample manifest", () => {
             if (s.transform !== "zip") expect(sources).toHaveLength(1);
             if (s.transform === "splat-transform") expect(s.version).toMatch(/^\d+\.\d+\.\d+$/);
         }
+        if (s.expect?.minForegroundFraction !== undefined) {
+            // A per-sample render threshold lowers the default 1%; it never turns the check off.
+            expect(s.expect.minForegroundFraction).toBeGreaterThan(0);
+            expect(s.expect.minForegroundFraction).toBeLessThanOrEqual(1);
+        }
+        if (s.expect?.minDistinctColours !== undefined) {
+            expect(Number.isInteger(s.expect.minDistinctColours)).toBe(true);
+            expect(s.expect.minDistinctColours).toBeGreaterThanOrEqual(2);
+        }
         if ("requiresFeature" in s) {
             const required = [].concat(s.requiresFeature);
             required.forEach((f) => expect(typeof f).toBe("string"));

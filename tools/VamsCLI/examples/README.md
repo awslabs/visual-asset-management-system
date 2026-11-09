@@ -45,7 +45,7 @@ each one, refuses any that does not match, writes the generated and derived samp
 cube, a text file, a CSV with a UTF-8 byte order mark) and uploads them all to one distributable asset.
 Files the asset already holds are not uploaded again. The manifest schema (downloads, generated samples,
 `prepend-utf8-bom` / `copy` / `utf16le-bom` / `utf16be-bom` / `utf16le` / `zip` / `splat-transform`
-derivations, `requiresFeature`) is described in
+/ `ply-to-splat` / `ksplat` derivations, `requiresFeature`) is described in
 `web/e2e/CLAUDE.md`, "Viewer render proof"; the script validates it before it downloads anything.
 
 ```bash
