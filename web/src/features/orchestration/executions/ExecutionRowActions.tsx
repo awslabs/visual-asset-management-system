@@ -32,9 +32,8 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
     onPermanentDelete,
     onOpenDetails,
 }) => {
-    const isTerminal = ["SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "COMPLETE"].includes(
-        execution.executionStatus
-    );
+    // A SKIPPED record never ran, so it offers no Abort at all (the API still decides every call).
+    const isSkipped = execution.executionStatus === "SKIPPED";
     const isNonTerminal = ["NEW", "RUNNING"].includes(execution.executionStatus);
     const hasGroup = !!execution.executionGroupId;
 
@@ -47,13 +46,13 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
             label: "Abort",
             onSelect: onAbort,
             disabled: !isNonTerminal,
-            hidden: !can("DELETE", "/workflows/executions/{executionId}"),
+            hidden: isSkipped || !can("DELETE", "/workflows/executions/{executionId}"),
         },
         {
             label: "Abort group",
             onSelect: onAbortGroup || (() => {}),
             disabled: !isNonTerminal || !hasGroup,
-            hidden: !can("DELETE", "/workflows/executions/{executionId}") || !hasGroup,
+            hidden: isSkipped || !can("DELETE", "/workflows/executions/{executionId}") || !hasGroup,
         },
         {
             label: "Rerun",

@@ -12,6 +12,14 @@ from ...utils.aws import s3
 
 logger = log.get_logger()
 
+# Keep the intermediate LAZ at the LAS 1.2 / point data record format 3 shape PDAL 2.7.0 wrote by
+# default, so the PotreeConverter input does not change with the PDAL version.
+PDAL_LAS_WRITER_OPTIONS = ['--writers.las.minor_version=2', '--writers.las.dataformat_id=3']
+
+# PDAL's message is carried in the task failure `error` (256 characters, after the
+# "Pipeline Failure: " prefix) behind a ~45-character headline.
+PDAL_MESSAGE_MAX_CHARS = 160
+
 #Local Testing Commands - Powershell / unix:
 #docker build -f Dockerfile_PDAL -t pdal:v1 .
 #docker run -it -v ${PWD}/inputTest:/data/input:ro -v ${PWD}/outputTest:/data/output:rw pdal:v1 "localTest" "PDAL"
@@ -78,11 +86,10 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
         logger.info(f"Pipeline Response: {pipeline_response}")
 
         # A non-zero converter exit status means no usable output was written; report it before
-        # anything is uploaded.
+        # anything is uploaded, with PDAL's own message so the run's failure names the cause.
         if pipeline_response["returncode"] != 0:
-            return ext.error_response(stage,
-                f"PDAL translate exited with code {pipeline_response['returncode']}. Check the container logs for the converter output."
-            )
+            return ext.error_response(stage, converter_failure_message(
+                local_filename_lowered, pipeline_response["returncode"], pipeline_response["converter_output"]))
 
         # get las file for further pipeline steps
         for file in pipeline_response["output_files"]:
@@ -141,21 +148,54 @@ def allconvert_pdalconversion_pipeline(input_file_path: str, output_dir: str) ->
 
     laz_filepath = os.path.join(output_dir, filename + ext.Extensions.LAZ)
 
-    # Formulate local subprocess to run for PDAL Converter Build
+    # Formulate local subprocess to run for PDAL Converter Build. The LAS writer options keep the
+    # LAZ this stage hands to PotreeConverter at LAS 1.2 / point data record format 3 (XYZ, intensity,
+    # GPS time, RGB), the shape PDAL 2.7.0 wrote by default; PDAL 2.10 defaults to LAS 1.4 / format 7.
     PDAL_CONVERTER_CMD = ['pdal', 'translate',
                           '-i', input_file_path,
-                          '-o', laz_filepath]
+                          '-o', laz_filepath] + PDAL_LAS_WRITER_OPTIONS
 
     logger.info("Executing PDAL Conversion to Laz")
 
-    # Run PDAL local subprocess
-    returncode = subprocess.Popen(PDAL_CONVERTER_CMD).wait() # nosemgrep: dangerous-subprocess-use-audit
+    # Run PDAL local subprocess. Its output is captured so a failure can be reported with PDAL's own
+    # message, and logged so the container log still carries it.
+    process = subprocess.Popen(PDAL_CONVERTER_CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) # nosemgrep: dangerous-subprocess-use-audit
+    converter_output, _ = process.communicate()
+    returncode = process.returncode
+    converter_output = (converter_output or "").strip()
+    if converter_output:
+        logger.info(f"PDAL output: {converter_output}")
 
-    # Report the converted file only when the converter actually wrote it
-    output_files = [filename + ext.Extensions.LAZ] if os.path.isfile(laz_filepath) else []
+    # Report the converted file only when the converter exited cleanly AND wrote a non-empty file.
+    # PDAL opens the writer before it reads the input, so a failed read leaves a 0-byte .laz behind;
+    # that file is removed so nothing downstream can take it for an output.
+    wrote_output = os.path.isfile(laz_filepath) and os.path.getsize(laz_filepath) > 0
+    if returncode != 0 or not wrote_output:
+        if os.path.isfile(laz_filepath):
+            os.remove(laz_filepath)
+        output_files = []
+    else:
+        output_files = [filename + ext.Extensions.LAZ]
 
     return {
         "output_dir": output_dir,
         "output_files": output_files,
-        "returncode": returncode
+        "returncode": returncode,
+        "converter_output": converter_output,
     }
+
+
+def converter_failure_message(input_filename: str, returncode: int, converter_output: str) -> str:
+    """The stage's error message for a failed `pdal translate`.
+
+    The message is the first part of the Step Functions task failure `error`, which is capped at 256
+    characters, so the fixed headline comes first and PDAL's text follows, cut to its last line and
+    to PDAL_MESSAGE_MAX_CHARS."""
+    detail = converter_output.strip().splitlines()[-1].strip() if converter_output.strip() else ""
+    if len(detail) > PDAL_MESSAGE_MAX_CHARS:
+        detail = detail[:PDAL_MESSAGE_MAX_CHARS - 3] + "..."
+    if input_filename.lower().endswith(ext.Extensions.E57):
+        headline = "E57 file could not be read by the converter"
+    else:
+        headline = f"PDAL translate exited with code {returncode}"
+    return f"{headline}: {detail}" if detail else f"{headline}. Check the container logs for the converter output."

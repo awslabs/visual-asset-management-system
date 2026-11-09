@@ -125,7 +125,7 @@ This software includes third party software subject to the following copyrights:
 | playcanvas                 | [2.23.3](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
 | supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
-| three                      | [0.182.0](https://threejs.org/)                              | MIT                   |
+| three                      | [0.187.0, 0.182.0](https://threejs.org/)                     | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |
 | web-ifc                    | [0.0.77, 0.0.68](https://github.com/ThatOpen/engine_web-ifc) | MPL-2.0\*\*           |
 | draco3d                    | [1.5.7](https://github.com/google/draco)                     | Apache-2.0            |
@@ -216,7 +216,9 @@ This software includes third party software subject to the following copyrights:
 
 | Name            | Version                                                                                                                                                   | Related Pipeline                                                                   | License          |
 | :-------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- | :--------------- |
-| PDAL            | [master-latest](https://github.com/PDAL/PDAL)                                                                                                             | POTREE VIEWER                                                                      | BSD              |
+| PDAL            | [2.10.2](https://github.com/PDAL/PDAL/releases/tag/2.10.2)                                                                                                | POTREE VIEWER                                                                      | BSD              |
+| libE57Format    | [3.3.0](https://github.com/asmaloney/libE57Format/releases/tag/v3.3.0) (vendored in PDAL's E57 plugin)                                                    | POTREE VIEWER                                                                      | BSL-1.0          |
+| Xerces-C++      | [3.3.0](https://xerces.apache.org/xerces-c/) (PDAL E57 plugin dependency)                                                                                 | POTREE VIEWER                                                                      | Apache-2.0       |
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                                                                      | BSD-2-Clause     |
 | Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION                                                       | GNU GPLv3        |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
