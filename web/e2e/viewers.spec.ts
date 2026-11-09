@@ -4,7 +4,24 @@
  */
 
 import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
+import {
+    type AssetFileRef,
+    chooseViewer,
+    dataGrid,
+    expectCanvasRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -21,55 +38,10 @@ import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
  * a file with its extension on a distributable asset — the download API refuses non-distributable
  * assets ("Asset not distributable") — and skips with the reason when the environment has none.
  * `E2E_VIEWER_ASSET="<databaseId>/<assetId>"` confines the lookup to one asset, which is how a run
- * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda,
- * benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one distributable asset.
+ * targets a known fixture set such as BoomBox.glb, gramophone.usdz, simpleCube.usda, a .usdc
+ * and a .usd layer, benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one
+ * distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -78,9 +50,30 @@ const cases = [
     // isolation via the COI service worker); on the first headless load the SW may not be
     // active, in which case the viewer shows a graceful "WASM Support Not Available" notice
     // instead of a canvas. That is a valid, error-free outcome for this smoke test.
-    { ext: ".glb", viewer: "Three.js", select: /Three\.js/i },
-    { ext: ".usdz", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
-    { ext: ".usda", viewer: "NeedleUSD", wasm: true, requiresFeature: "ALLOWUNSAFEEVAL" },
+    // `referenceChecks: true` = the Three.js viewer loads the files a model references from the
+    // asset; the case also asserts that no request to the web app's origin failed (an unresolved
+    // texture used to be requested from the site root, which answers 403) and that no Content
+    // Security Policy violation was reported. USD opens in Three.js with or without
+    // ALLOWUNSAFEEVAL: a viewer is chosen only when Needle is listed too.
+    { ext: ".glb", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usdz", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usda", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usdc", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    { ext: ".usd", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
+    {
+        ext: ".usdz",
+        viewer: "NeedleUSD",
+        select: /Needle/i,
+        wasm: true,
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        ext: ".usda",
+        viewer: "NeedleUSD",
+        select: /Needle/i,
+        wasm: true,
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
     { ext: ".spz", viewer: "Gaussian splat" },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
@@ -99,28 +92,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -188,6 +159,48 @@ function trackSignedUrls(page: Page) {
     };
 }
 
+/**
+ * Records failed requests to the web app's origin (status >= 400 or a network failure) and the
+ * page's Content Security Policy violations while a viewer is open. Stream-route requests are
+ * excluded: a referenced file the asset does not hold is a legitimate 404 there, and the viewer
+ * lists it in its notice.
+ */
+async function trackReferenceRequests(page: Page) {
+    await page.addInitScript(() => {
+        (window as any).__cspViolations = [];
+        document.addEventListener("securitypolicyviolation", (event: any) => {
+            (window as any).__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`);
+        });
+    });
+    const failures: string[] = [];
+    const isStreamRoute = (url: string) => url.includes("/download/stream/");
+    const onResponse = (response: Response) => {
+        if (response.status() >= 400 && !isStreamRoute(response.url())) {
+            failures.push(`${response.status()} ${response.url()}`);
+        }
+    };
+    const onRequestFailed = (request: Request) => {
+        const reason = request.failure()?.errorText ?? "";
+        if (!isStreamRoute(request.url()) && !/ERR_ABORTED/i.test(reason)) {
+            failures.push(`failed ${request.url()} (${reason})`);
+        }
+    };
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+    return {
+        async summary(): Promise<{ appOriginFailures: string[]; cspViolations: string[] }> {
+            page.off("response", onResponse);
+            page.off("requestfailed", onRequestFailed);
+            const appOrigin = new URL(page.url()).origin;
+            const appOriginFailures = failures.filter((line) => line.includes(appOrigin));
+            const cspViolations = await page
+                .evaluate(() => (window as any).__cspViolations ?? [])
+                .catch(() => []);
+            return { appOriginFailures, cspViolations };
+        },
+    };
+}
+
 async function viewerSubject(page: Page, ext: string): Promise<AssetFileRef | null> {
     if (!subjects) {
         const found = await findAssetFiles(
@@ -219,9 +232,10 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
-        await openFile(page, subject!);
+        const references = c.referenceChecks ? await trackReferenceRequests(page) : null;
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -229,13 +243,29 @@ for (const c of cases) {
             timeout: 60_000,
         });
 
-        // Multi-viewer extensions require an explicit pick; single-viewer ones auto-load.
+        // A multi-viewer extension shows "No Viewer Component Selected" until a viewer is chosen; a
+        // single-viewer one loads its viewer straight away. Wait for one of the two, then choose the
+        // case's viewer with the shared keyboard helper unless the picker already shows it.
+        // chooseViewer fails when no listed viewer matches, so a required pick is never skipped.
         if (c.select) {
-            const picker = page.getByRole("button", { name: /select viewer/i });
-            if (await picker.isVisible().catch(() => false)) {
-                await picker.click();
-                // The picker is a listbox of viewer options.
-                await page.getByRole("option", { name: c.select }).first().click();
+            const surface = page.locator("canvas, iframe").first();
+            const noViewer = page.getByText(/No Viewer Component Selected/i);
+            await expect
+                .poll(
+                    async () =>
+                        (await noViewer.isVisible().catch(() => false)) ||
+                        (await surface.isVisible().catch(() => false)),
+                    { timeout: 60_000 }
+                )
+                .toBe(true);
+            const shown =
+                (await page
+                    .getByLabel(/select viewer/i)
+                    .first()
+                    .textContent()
+                    .catch(() => null)) ?? "";
+            if (!c.select.test(shown)) {
+                await chooseViewer(page, c.select);
             }
         }
 
@@ -259,6 +289,20 @@ for (const c of cases) {
         // No uncaught page errors or viewer-init console errors.
         expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
 
+        if (references) {
+            const { appOriginFailures, cspViolations } = await references.summary();
+            expect(
+                appOriginFailures,
+                `requests to the web app origin failed while ${fileName} was open:\n` +
+                    appOriginFailures.join("\n")
+            ).toEqual([]);
+            expect(
+                cspViolations,
+                `Content Security Policy violations while ${fileName} was open:\n` +
+                    cspViolations.join("\n")
+            ).toEqual([]);
+        }
+
         if (signedUrls) {
             const { partialResponses, appOriginLeaks } = await signedUrls.summary();
             expect(
@@ -272,3 +316,226 @@ for (const c of cases) {
         }
     });
 }
+
+/**
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
+ *
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
+ */
+
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    /**
+     * The viewer's `name` in the viewer config. The case asserts this viewer is the one selected
+     * (`pickViewerIfAsked`), so it must match the config exactly; for `not-offered` it is a label.
+     */
+    viewer: string;
+    kind: RenderKind;
+    /** Picker option to choose when several viewers are offered (default: `viewer` literally). */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+}
+
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset Viewer",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
+        kind: "canvas",
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
+        kind: "canvas",
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
+];
+
+const seeded = viewerSamples();
+
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
+
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
+
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
+            }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.viewer, c.select);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                // Scope to the viewer's own grid: the file page also renders the asset-versions
+                // table, whose header cells a page-wide query reads before the viewer mounts.
+                const grid = dataGrid(page);
+                const headers = grid.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await grid.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "text") {
+                await expect(
+                    page.getByText(sample.expect?.line ?? "", { exact: false })
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});

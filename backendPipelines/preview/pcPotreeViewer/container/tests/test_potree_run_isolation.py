@@ -155,6 +155,11 @@ class FakeBucketStore:
                         handle.write(converted)
                 return 0
 
+            def communicate(self, *args, **kwargs):
+                # The PDAL stage captures the converter's output to report it on a failure.
+                self.returncode = self.wait()
+                return "", None
+
         return _Popen()
 
     def run_stage(self, stage):

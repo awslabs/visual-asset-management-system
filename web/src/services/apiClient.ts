@@ -166,9 +166,11 @@ class ApiClient {
      * Single request path for all verbs. On an auth-looking failure (a 401/403, or a
      * pre-request token fetch that threw) it asks the auth layer whether a valid token
      * can still be produced: dead session -> forced logout; alive session -> a token fetch
-     * that threw is retried once, a 401 forces one refresh and one re-send, and a 403 (the
-     * authorizer's deny, a Casbin decision, or a request the AWS WAF web ACL blocked) is
-     * surfaced without a refresh. `retried` guards against loops / double-sends.
+     * that threw is retried once, a 401 (the API's authorizer did not accept the token:
+     * expired, invalid or missing) forces one refresh and one re-send, and a 403 (an
+     * authorizer deny such as an IP restriction, a Casbin decision, or a request the AWS WAF
+     * web ACL blocked) is surfaced without a refresh. `retried` guards against loops /
+     * double-sends.
      */
     private async request(
         method: HttpMethod,
@@ -211,11 +213,13 @@ class ApiClient {
                 throw await parseErrorResponse(response);
             }
             if (response.status === 401 || response.status === 403) {
-                // The REST authorizer denies a token it rejects with a 403; a 401 means the
-                // request carried no token, so force a refresh before judging the session and
-                // re-send once. A 403 (the authorizer's deny, a Casbin decision, or a request
-                // the AWS WAF web ACL blocked) is never refreshed, because only a fresh sign-in
-                // or an administrator can change it.
+                // The REST authorizer answers a token it does not accept (expired, invalid or
+                // missing) with a 401, so force a refresh before judging the session and
+                // re-send once. A 403 (an authorizer deny such as an IP restriction, a Casbin
+                // decision, or a request the AWS WAF web ACL blocked) is never refreshed: a
+                // new token does not change it. Deployments older than 2.7.0 answered a
+                // rejected token with a 403 too; ensureValidSession still logs a dead session
+                // out on either status.
                 const forceRefresh = response.status === 401 && !retried;
                 const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
