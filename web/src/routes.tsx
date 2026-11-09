@@ -12,6 +12,7 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { Navigation } from "./layout/Navigation";
+import { ActiveNavHrefProvider } from "./layout/activeNavHref";
 import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
@@ -378,6 +379,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     const [loading, setLoading] = useState(true);
     const [checkAttempt, setCheckAttempt] = useState(0);
     const [routesCheckFailed, setRoutesCheckFailed] = useState(false);
+    // A page may override its route's highlighted side-navigation href from its own resolved
+    // state (layout/activeNavHref.tsx); null keeps the route's `active` value.
+    const [activeNavOverride, setActiveNavOverride] = useState<string | null>(null);
 
     const retryRoutesCheck = () => {
         setRoutesCheckFailed(false);
@@ -491,7 +495,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                             )
                         }
                         navigation={
-                            <Navigation key={checkAttempt} activeHref={active} user={user} />
+                            <Navigation
+                                key={checkAttempt}
+                                activeHref={activeNavOverride ?? active}
+                                user={user}
+                            />
                         }
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
@@ -506,5 +514,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
 
     // Every route is mounted, so a URL the role does not allow reaches the no-access panel and an
     // unknown URL the not-found panel.
-    return <Routes>{routeTable.map(buildRoute)}</Routes>;
+    return (
+        <ActiveNavHrefProvider setActiveNavHref={setActiveNavOverride}>
+            <Routes>{routeTable.map(buildRoute)}</Routes>
+        </ActiveNavHrefProvider>
+    );
 };

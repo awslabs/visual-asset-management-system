@@ -24,6 +24,7 @@ import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 import { isApiRouteAllowed } from "../common/constants/authRoutes";
 import type { WebRouteCheck } from "../services/webRoutesCheck";
+import { API_KEYS_ADMIN_NAV_HREF, API_KEYS_USER_NAV_HREF } from "./activeNavHref";
 
 /** Where a top-level navigation entry renders. */
 export type NavPlacement = "side" | "profile";
@@ -125,7 +126,7 @@ export function coreNavEntries(): NavEntry[] {
                     // profile entry's, so the admin decision comes from the API listing.
                     type: "link",
                     text: "API Keys (all users)",
-                    href: "#/auth/api-keys/?mode=admin",
+                    href: API_KEYS_ADMIN_NAV_HREF,
                     requiresApiRoute: { method: "GET", path: "/auth/api-keys" },
                 },
             ],
@@ -138,7 +139,7 @@ export function coreNavEntries(): NavEntry[] {
                 {
                     type: "link",
                     text: "API Key Management",
-                    href: "#/auth/api-keys/?mode=user",
+                    href: API_KEYS_USER_NAV_HREF,
                 },
             ],
         },

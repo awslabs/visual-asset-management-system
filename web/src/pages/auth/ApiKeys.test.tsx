@@ -21,6 +21,7 @@ import {
 } from "../../common/constants/authRoutes";
 import { API_KEY_LISTING_PAGE_SIZE } from "../../common/constants/apiKeys";
 import ApiKeys, { apiKeyStatus, requestedApiKeyMode, resolveApiKeyMode } from "./ApiKeys";
+import { ActiveNavHrefProvider } from "../../layout/activeNavHref";
 
 const mockFetchApiKeys = jest.fn();
 const mockFetchUserApiKeys = jest.fn();
@@ -383,5 +384,85 @@ describe("ApiKeys ?mode= preference", () => {
         expect(resolveApiKeyMode("user", true, true)).toBe("user");
         expect(resolveApiKeyMode(null, true, true)).toBe("admin");
         expect(resolveApiKeyMode(null, false, true)).toBe("user");
+    });
+});
+
+/**
+ * The page is one route with two views, so it tells the side navigation which link to highlight
+ * from its resolved mode (checked against the API listing), not from the raw ?mode= value:
+ * the admin view highlights Admin - Auth > "API Keys (all users)", the user view (opened from
+ * the profile menu) highlights nothing.
+ */
+describe("ApiKeys side-navigation highlight", () => {
+    const ADMIN_HREF = "#/auth/api-keys/?mode=admin";
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        mockFetchApiKeys.mockResolvedValue({ Items: [] });
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [] });
+    });
+
+    function renderWithHighlight(entry: string) {
+        const setActiveNavHref = jest.fn();
+        const view = render(
+            <MemoryRouter initialEntries={[entry]}>
+                <ActiveNavHrefProvider setActiveNavHref={setActiveNavHref}>
+                    <ApiKeys />
+                </ActiveNavHrefProvider>
+            </MemoryRouter>
+        );
+        const last = () => setActiveNavHref.mock.calls[setActiveNavHref.mock.calls.length - 1]?.[0];
+        return { ...view, setActiveNavHref, last };
+    }
+
+    it("highlights API Keys (all users) on the admin view", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        const { last } = renderWithHighlight("/auth/api-keys/?mode=admin");
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+        await waitFor(() => expect(last()).toBe(ADMIN_HREF));
+    });
+
+    it("highlights no side link on the user view", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        const { last, setActiveNavHref } = renderWithHighlight("/auth/api-keys/?mode=user");
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(last()).toBe("");
+        expect(setActiveNavHref).not.toHaveBeenCalledWith(ADMIN_HREF);
+    });
+
+    it("does not highlight the admin link for ?mode=admin when the API allows only own keys", async () => {
+        cacheRoutes("/auth/user/api-keys");
+
+        const { last, setActiveNavHref } = renderWithHighlight("/auth/api-keys/?mode=admin");
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(last()).toBe("");
+        expect(setActiveNavHref).not.toHaveBeenCalledWith(ADMIN_HREF);
+    });
+
+    it("does not highlight the admin link while the permission check failed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error", 500]);
+
+        const { setActiveNavHref } = renderWithHighlight("/auth/api-keys/?mode=admin");
+
+        await waitFor(() =>
+            expect(screen.getByText("Could not determine your permissions")).toBeInTheDocument()
+        );
+        expect(setActiveNavHref).not.toHaveBeenCalledWith(ADMIN_HREF);
+    });
+
+    it("hands the highlight back to the route when the page closes", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        const { last, unmount } = renderWithHighlight("/auth/api-keys/?mode=admin");
+        await waitFor(() => expect(last()).toBe(ADMIN_HREF));
+
+        unmount();
+        expect(last()).toBeNull();
     });
 });

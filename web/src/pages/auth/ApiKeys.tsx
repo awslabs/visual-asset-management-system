@@ -38,6 +38,7 @@ import {
 import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -185,6 +186,12 @@ export default function ApiKeys() {
             setMode(resolveApiKeyMode(requestedMode, showAdminMode, showUserMode));
         }
     }, [requestedMode, modesResolved, showAdminMode, showUserMode]);
+
+    // Highlight Admin - Auth > "API Keys (all users)" only on the admin view, from the mode resolved
+    // against the API listing. The user view is opened from the profile menu and highlights no side
+    // link, and nothing is highlighted until the modes are known.
+    useActiveNavHref(modesResolved && mode === "admin" ? API_KEYS_ADMIN_NAV_HREF : "");
+
     const [allItems, setAllItems] = useState<any[]>([]);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
