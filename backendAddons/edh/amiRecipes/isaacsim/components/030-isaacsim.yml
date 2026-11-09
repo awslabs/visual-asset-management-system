@@ -118,8 +118,9 @@ phases:
                     - . /etc/profile.d/vams-isaacsim.sh
                     - cd /opt/isaacsim
                     - |
-                        # post_install.sh starts Kit to resolve the extension registry; a virtual display
-                        # keeps it off a build host that has no X server.
+                        # post_install.sh links the bundled examples and installs the desktop icon through
+                        # python.sh. It needs no display today; xvfb-run stays as a guard because a build
+                        # host has no X server and a later Isaac Sim release's script may want one.
                         if command -v xvfb-run > /dev/null 2>&1; then
                             xvfb-run -a ./post_install.sh
                         else
