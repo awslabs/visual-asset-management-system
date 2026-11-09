@@ -52,6 +52,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the pipeline form requiring an Event Bus ARN for the EventBridge execution type; the field is optional, as in the API, and left empty it publishes to the account's default event bus. ([#1030](https://github.com/awslabs/visual-asset-management-system/issues/1030))
 -   **Web** Fixed the pipeline edit form showing and saving Wait For Callback as Enabled for a pipeline stored without it; such a pipeline runs with the callback disabled, and the form now shows and keeps Disabled. A pipeline that an earlier save already changed to Enabled keeps Enabled; set it back to Disabled if its workflows should not wait for a callback. ([#1032](https://github.com/awslabs/visual-asset-management-system/issues/1032))
 -   **Web** Fixed `.igs` CAD files not opening in the CAD viewer; they open like `.iges` files, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. ([#1199](https://github.com/awslabs/visual-asset-management-system/issues/1199))
+-   **Backend** Fixed the Image Viewer and asset previews showing nothing for SVG files: download and stream links for a `.svg` file now return it as `image/svg+xml` with an attachment disposition, so the viewer renders it and opening the link directly downloads it. Stored files are unchanged. ([#1201](https://github.com/awslabs/visual-asset-management-system/issues/1201))
 
 ### Chores
 
