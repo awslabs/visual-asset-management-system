@@ -252,16 +252,22 @@ export function buildAssetIndexingFunction(
  *
  * The deleted-events handler makes no S3 write that re-enters its own queue, so it keeps the default.
  *
- * Commercial partition only. Lambda documents recursive-loop detection for the commercial Regions, and
- * the AWS GovCloud (US) user guide lists it as not available there; nothing documents it for the AWS
- * European Sovereign Cloud. Where the detection does not exist there is nothing to opt out of, and
- * omitting the property keeps the function template unchanged in those partitions.
+ * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the
+ * AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not available,
+ * so `aws-us-gov` and any other partition omit the property: there is nothing to opt out of, and the
+ * function template stays unchanged there.
+ *
+ * shortcut: this is a stopgap. Core upload and indexing must not depend on a partition-specific Lambda
+ * setting, and a partition that gains the detection later drops records again until it is added here.
+ * Remove this setting once the created-events path stops writing back to its own bucket
+ * (https://github.com/awslabs/visual-asset-management-system/issues/1207).
  */
 function bucketSyncRecursiveLoop(
     handlerType: "created" | "deleted",
     config: Config.Config
 ): lambda.RecursiveLoop | undefined {
-    if (handlerType !== "created" || config.env.partition !== "aws") {
+    const partition = config.env.partition;
+    if (handlerType !== "created" || (partition !== "aws" && partition !== "aws-eusc")) {
         return undefined;
     }
     return lambda.RecursiveLoop.ALLOW;

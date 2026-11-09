@@ -126,6 +126,43 @@ describe("apiClient backstop", () => {
         expect(mockLogout).not.toHaveBeenCalled();
     });
 
+    it("on 401 for a POST: re-sends the same body once after the refresh (#1212)", async () => {
+        // The authorizer answers an expired token with 401 before the handler runs, so a
+        // write is safe to re-send exactly once with its original body.
+        mockHeader.mockReset();
+        mockHeader.mockResolvedValueOnce("Bearer stale").mockResolvedValue("Bearer fresh");
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(401, { message: "Unauthorized" }))
+            .mockResolvedValueOnce(jsonResponse(200, { created: true }));
+        (global.fetch as any) = fetchMock;
+        mockEnsure.mockResolvedValue(true);
+
+        await expect(apiClient.post("thing", { body: { name: "n1" } })).resolves.toEqual({
+            created: true,
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+        expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify({ name: "n1" }));
+        expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh");
+    });
+
+    it("on the authorizer's 403 deny (e.g. an IP restriction): no refresh, no re-send (#1212)", async () => {
+        // From 2.7.0 the authorizer's Deny means the credential was accepted and refused
+        // (IP not allowed, no roles); a new token cannot change it.
+        const fetchMock = jest.fn().mockResolvedValue(
+            jsonResponse(403, {
+                message: "User is not authorized to access this resource with an explicit deny",
+            })
+        );
+        (global.fetch as any) = fetchMock;
+        mockEnsure.mockResolvedValue(true);
+        await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 403 });
+        expect(mockEnsure).toHaveBeenCalledWith(false);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
     it("on a repeated 401 with an ALIVE session: surfaces after exactly one retry", async () => {
         const fetchMock = jest.fn().mockResolvedValue(jsonResponse(401, { message: "Expired" }));
         (global.fetch as any) = fetchMock;
