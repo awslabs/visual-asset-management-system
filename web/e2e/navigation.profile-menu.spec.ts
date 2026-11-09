@@ -88,7 +88,9 @@ test.describe("Profile menu", () => {
 test.describe("Profile menu at the phone width", () => {
     test.use({ viewport: VIEWPORTS.phone });
 
-    test("is reachable through the More menu", async ({ page }) => {
+    test("is reachable from the top bar (user icon, or More on the narrowest screens)", async ({
+        page,
+    }) => {
         await gotoHome(page);
 
         const reachedBy = await openProfileMenu(page);

@@ -1320,8 +1320,9 @@ export async function profileMenuName(page: Page): Promise<string | null> {
 
 /**
  * The profile menu's trigger in the top bar: the button named with the user's name, or "Profile
- * menu" when the top bar has no name to show. Settings never collapses; at narrow widths the
- * profile menu moves into the "More" overflow menu, so use `openProfileMenu` to reach it.
+ * menu" when the top bar has no name to show. Settings never collapses. At phone widths (320-390
+ * px) the trigger stays in the top bar as the user icon; only at about 280 px does TopNavigation
+ * move it into the "More" overflow menu, so use `openProfileMenu` to reach it at any width.
  */
 export async function profileMenuTrigger(page: Page): Promise<Locator> {
     const name = await profileMenuName(page);
@@ -1332,8 +1333,9 @@ export async function profileMenuTrigger(page: Page): Promise<Locator> {
 
 /**
  * Open the profile menu by keyboard (focus, then Enter) and return how it was reached: `menu` when
- * the trigger is in the top bar, `overflow` when TopNavigation collapsed it into "More" (phone
- * widths), where the user's entry opens a submenu view. Page links are `a[href="#/..."]` in both.
+ * the trigger is in the top bar (including the user icon at phone widths), `overflow` when
+ * TopNavigation collapsed it into "More" (about 280 px and below), where the user's entry opens a
+ * submenu view. Page links are `a[href="#/..."]` in both.
  */
 export async function openProfileMenu(page: Page): Promise<"menu" | "overflow"> {
     const header = page.locator("#headerWrapper");

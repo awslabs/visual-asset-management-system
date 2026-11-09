@@ -154,6 +154,36 @@ describe("placement", () => {
     });
 });
 
+describe("User Management and the authentication mode", () => {
+    const userManagementHref = "#/auth/cognitousers/";
+    const originalDisableCognito = window.DISABLE_COGNITO;
+
+    afterEach(() => {
+        window.DISABLE_COGNITO = originalDisableCognito;
+    });
+
+    function adminAuthHrefs(): string[] {
+        const adminAuth = entriesFor("side").find((entry) => entry.text === "Admin - Auth");
+        expect(adminAuth).toBeDefined();
+        return hrefsIn([adminAuth]);
+    }
+
+    it("shows User Management under Admin - Auth in Cognito mode", () => {
+        window.DISABLE_COGNITO = false;
+        expect(adminAuthHrefs()).toContain(userManagementHref);
+    });
+
+    it("hides User Management in external OAuth mode (window.DISABLE_COGNITO)", () => {
+        window.DISABLE_COGNITO = true;
+        const hrefs = adminAuthHrefs();
+        expect(hrefs).not.toContain(userManagementHref);
+        // Positive control: the rest of Admin - Auth is still listed.
+        expect(hrefs).toContain("#/auth/roles/");
+        // And it does not reappear in the profile menu.
+        expect(hrefsIn(entriesFor("profile"))).not.toContain(userManagementHref);
+    });
+});
+
 describe("requiresApiRoute", () => {
     const adminHref = "#/auth/api-keys/?mode=admin";
 

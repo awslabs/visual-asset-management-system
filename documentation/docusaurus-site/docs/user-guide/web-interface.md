@@ -27,7 +27,7 @@ The menu with your user name in the top bar lists the pages that belong to you, 
 | **API Key Management** | Opens your own API keys (**My Keys**). See [API keys](api-keys.md).                              |
 | **Sign out**           | Ends your session. It is always the last item and is available even when your pages cannot load. |
 
-The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On narrow screens it is inside the **More** menu.
+The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On phone-width screens the menu is the user icon in the top bar; only on the narrowest screens (about 280 px) does it move into the **More** menu.
 
 The **Settings** menu next to it holds the theme choice, which is stored in your browser. See [Setting your theme preference](getting-started.mdx#setting-your-theme-preference).
 
@@ -240,6 +240,10 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 | Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
+| Your API keys         | `https://<VAMS_WEBSITE>/#/auth/api-keys/?mode=user`                                                                     |
+| All users' API keys   | `https://<VAMS_WEBSITE>/#/auth/api-keys/?mode=admin`                                                                    |
+
+The `?mode=` value on the API keys page is a preference. The page opens the requested mode only if the API allows it for your role; otherwise it opens the mode your role does have (all users' keys for an administrator, your own keys for everyone else). The API still checks every call.
 
 ### File Path Encoding
 
