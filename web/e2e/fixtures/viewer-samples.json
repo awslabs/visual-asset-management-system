@@ -50,7 +50,10 @@
             "size": 12302827,
             "sha256": "230f2c01196ab620a4e9ed26ba537e66df02ead47fdecb4ebb4faa68bd7c4348",
             "licence": "CC-BY-4.0",
-            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)"
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)",
+            "expect": {
+                "minForegroundFraction": 0.003
+            }
         },
         {
             "id": "splat-sog",
@@ -60,7 +63,69 @@
             "size": 2065634,
             "sha256": "c78a66448959dbc46e3601629f7bc78ad4ca02f863a09041150d431d5d7c8573",
             "licence": "CC-BY-4.0",
-            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)"
+            "source": "https://github.com/BabylonJS/Assets (README: Creative Commons Attribution 4.0 unless specified otherwise in the asset folder; splats/ specifies nothing else)",
+            "expect": {
+                "minForegroundFraction": 0.003
+            }
+        },
+        {
+            "id": "splat-spz-v3",
+            "viewer": "gaussian-splat-viewer-babylonjs",
+            "path": "/Unicorn_Stuffy-v3.spz",
+            "derivedFrom": "splat-ply",
+            "transform": "splat-transform",
+            "version": "3.10.3",
+            "args": [
+                "--spz-version",
+                "3"
+            ],
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as SPZ format version 3 (gzip) by @playcanvas/splat-transform",
+            "expect": {
+                "minForegroundFraction": 0.003
+            }
+        },
+        {
+            "id": "splat-spz-v4",
+            "viewer": "gaussian-splat-viewer-babylonjs",
+            "path": "/Unicorn_Stuffy-v4.spz",
+            "derivedFrom": "splat-ply",
+            "transform": "splat-transform",
+            "version": "3.10.3",
+            "args": [
+                "--spz-version",
+                "4"
+            ],
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as SPZ format version 4 (NGSP) by @playcanvas/splat-transform",
+            "expect": {
+                "spzVersion": 4
+            }
+        },
+        {
+            "id": "splat-splat",
+            "viewer": "gaussian-splat-viewer-babylonjs",
+            "path": "/Unicorn_Stuffy.splat",
+            "derivedFrom": "splat-ply",
+            "transform": "ply-to-splat",
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as raw 32-byte .splat rows by the seeder",
+            "expect": {
+                "minForegroundFraction": 0.003
+            }
+        },
+        {
+            "id": "splat-ksplat",
+            "viewer": "supersplat-viewer",
+            "path": "/Unicorn_Stuffy.ksplat",
+            "derivedFrom": "splat-ply",
+            "transform": "ksplat",
+            "version": "0.4.7",
+            "threeVersion": "0.170.0",
+            "level": 1,
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as .ksplat (compression level 1) by @mkkellogg/gaussian-splats-3d (MIT)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
         },
         {
             "id": "online3d-3dm",
