@@ -764,59 +764,122 @@ class TestTheRunLimit:
 
 
 @pytest.mark.unit
-class TestTheEvaluationsGiveWayToABusyTriggerQueue:
+class TestTheEvaluationsKeepWithinTheirShareOfTheTriggerQueue:
+    """The evaluations phase never has more than EVALUATION_OUTSTANDING_LIMIT of its own
+    evaluations sent and not taken by the trigger (D164), whatever the queue's approximate message
+    count reads; it waits for as long as the trigger takes and never queues a share anyway."""
 
-    def _backlog(self, world, depths):
-        values = iter(depths)
-        world.sqs.get_queue_attributes.side_effect = lambda **kwargs: {
-            "Attributes": {"ApproximateNumberOfMessages": str(next(values, 0))}}
+    LIMIT = 3
 
-    def test_a_busy_queue_delays_the_next_share_and_a_quiet_one_takes_it(self):
-        with World(auto_eval=True) as world:
+    @pytest.fixture
+    def evaluating(self):
+        with World(auto_eval=True) as world, \
+                patch.object(binding_apply, "EVALUATION_OUTSTANDING_LIMIT", self.LIMIT, create=True):
+            # The queue's approximate count reads 0, as SQS's did right after the job's sends.
+            world.sqs.get_queue_attributes.return_value = {
+                "Attributes": {"ApproximateNumberOfMessages": "0"}}
             world.bind(NEW)
             while world.apply_record()["applyStatus"] == "applying":
                 world.run_once(page_size=3)
-            self._backlog(world, [binding_apply.EVALUATION_BACKLOG_LIMIT])
-            assert world.run_once(page_size=3) is False
-            record = world.apply_record()
-            assert (record["evaluationWaits"], record["nextMessageDelay"]) == (
-                1, binding_apply.EVALUATION_FIRST_WAIT_SECONDS)
-            assert world.queued() == []
-            # The continuation is delayed, and a delayed message is waiting, not stopped.
-            assert binding_apply.send_message(world.sqs, JOB_QUEUE, record)
-            assert world.sqs.send_message.call_args.kwargs["DelaySeconds"] == \
-                binding_apply.EVALUATION_FIRST_WAIT_SECONDS
-            assert binding_apply.evaluation_status(record) == "queueing"
-            # A quiet queue takes the next share; the waits start again.
-            self._backlog(world, [0])
-            world.run_once(page_size=3)
-            record = world.apply_record()
-            assert record["evaluationWaits"] == 0 and "nextMessageDelay" not in record
-            assert len(world.queued()) == 3
+            yield world
 
-    def test_a_share_that_waited_its_most_is_queued_anyway(self):
-        with World(auto_eval=True) as world:
-            world.bind(NEW)
-            while world.apply_record()["applyStatus"] == "applying":
-                world.run_once(page_size=3)
-            world.sqs.get_queue_attributes.side_effect = lambda **kwargs: {
-                "Attributes": {"ApproximateNumberOfMessages": "100000"}}
-            delays = []
-            for _ in range(binding_apply.EVALUATION_WAITS_PER_SHARE):
-                world.run_once(page_size=3)
-                delays.append(world.apply_record()["nextMessageDelay"])
-            assert world.queued() == []
-            assert delays == [binding_apply.wait_delay(n)
-                              for n in range(binding_apply.EVALUATION_WAITS_PER_SHARE)]
-            assert max(delays) <= 900
-            world.run_once(page_size=3)
-            assert len(world.queued()) == 3
+    def _take(self, world, count):
+        record = world.apply_record()
+        assert binding_apply.count_taken(DB, record["applyId"], count)
 
-    def test_an_unreadable_backlog_does_not_hold_the_phase(self):
-        with World(auto_eval=True) as world:
-            world.bind(NEW)
-            world.sqs.get_queue_attributes.side_effect = RuntimeError("denied")
-            world.drain(page_size=3)
-            record = world.apply_record()
-            assert record["evaluationStatus"] == "queued"
-            assert world.queued() == sorted(asset for asset in ASSETS if asset != OVERRIDE)
+    def test_a_full_share_delays_the_next_one_and_taken_evaluations_free_it(self, evaluating):
+        world = evaluating
+        # Six records to evaluate (all but the override); room for three.
+        assert world.apply_record()["evaluationsToQueue"] == len(ASSETS) - 1
+        world.run_once(page_size=3)
+        assert len(world.queued()) == 3
+        assert world.run_once(page_size=3) is False
+        record = world.apply_record()
+        assert binding_apply.outstanding_evaluations(record) == 3
+        assert (record["evaluationWaits"], record["nextMessageDelay"]) == (
+            1, binding_apply.EVALUATION_FIRST_WAIT_SECONDS)
+        assert len(world.queued()) == 3
+        # The continuation is delayed, and a delayed message is waiting, not stopped.
+        assert binding_apply.send_message(world.sqs, JOB_QUEUE, record)
+        assert world.sqs.send_message.call_args.kwargs["DelaySeconds"] == \
+            binding_apply.EVALUATION_FIRST_WAIT_SECONDS
+        assert binding_apply.evaluation_status(record) == "queueing"
+        # Two taken: the last three still do not fit.
+        self._take(world, 2)
+        world.run_once(page_size=3)
+        assert len(world.queued()) == 3
+        assert world.apply_record()["evaluationWaits"] == 2
+        # All three taken: the last share goes, the waits start again, and the phase ends.
+        self._take(world, 1)
+        world.drain(page_size=3)
+        record = world.apply_record()
+        assert world.queued() == sorted(asset for asset in ASSETS if asset != OVERRIDE)
+        assert record["evaluationWaits"] == 0 and "nextMessageDelay" not in record
+        assert (record["evaluationStatus"], record["evaluationsSent"]) == ("queued", 6)
+
+    def test_a_share_waits_for_as_long_as_the_trigger_takes_and_is_never_queued_anyway(
+            self, evaluating):
+        world = evaluating
+        world.run_once(page_size=3)
+        runs_before = world.apply_record()["runs"]
+        delays = []
+        for _ in range(binding_apply.EVALUATION_WAITS_PER_SHARE + 6):
+            world.run_once(page_size=3)
+            delays.append(world.apply_record()["nextMessageDelay"])
+        # Waiting, never queued anyway (the earlier rule queued it after eight waits).
+        assert len(world.queued()) == 3
+        assert delays == [binding_apply.wait_delay(n) for n in range(len(delays))]
+        assert delays[-6:] == [binding_apply.EVALUATION_MAX_WAIT_SECONDS] * 6 == [900] * 6
+        # Only the waits below the largest delay counted against the run limit.
+        assert world.apply_record()["runs"] - runs_before == \
+            binding_apply.EVALUATION_WAITS_PER_SHARE + 1
+        assert binding_apply.evaluation_status(world.apply_record()) == "queueing"
+        self._take(world, 3)
+        world.drain(page_size=3)
+        assert world.apply_record()["evaluationStatus"] == "queued"
+        assert len(world.queued()) == len(ASSETS) - 1
+
+    def test_evaluations_left_uncounted_hold_it_only_until_the_queue_retention_passed(
+            self, evaluating):
+        world = evaluating
+        world.run_once(page_size=3)
+        world.run_once(page_size=3)
+        assert len(world.queued()) == 3
+        # The trigger never counted them (their last delivery's batch failed as a whole): once
+        # the trigger queue's retention period has passed since that share, none can remain.
+        sent_at = datetime.now(timezone.utc) - timedelta(
+            seconds=binding_apply.TRIGGER_QUEUE_RETENTION_SECONDS + 120)
+        world.t["complianceEvaluationStorage"].update_item(
+            Key=binding_apply.record_key(DB), UpdateExpression="SET evaluationsSentAt = :at",
+            ExpressionAttributeValues={":at": sent_at.isoformat()})
+        assert binding_apply.outstanding_evaluations(world.apply_record()) == 0
+        world.drain(page_size=3)
+        record = world.apply_record()
+        assert len(world.queued()) == 6 and record["evaluationStatus"] == "queued"
+        # The earlier ones are counted taken; the new share is outstanding.
+        assert (record["evaluationsSent"], record["evaluationsTaken"]) == (6, 3)
+        assert binding_apply.outstanding_evaluations(record) == 3
+
+    def test_evaluations_are_counted_before_they_are_sent_and_unqueued_ones_taken_back(
+            self, evaluating):
+        world = evaluating
+        seen = []
+
+        def batch(**kwargs):
+            seen.append(int(world.apply_record().get("evaluationsSent", 0)))
+            return {"Failed": [{"Id": kwargs["Entries"][0]["Id"]}]}
+        world.sqs.send_message_batch.side_effect = batch
+        world.run_once(page_size=3)
+        # Counted (three) before the batch was sent; the one not queued was taken back.
+        assert seen == [3]
+        record = world.apply_record()
+        assert (record["evaluationsSent"], binding_apply.counts_of(record)["evaluationsQueued"]) == (
+            2, 2)
+
+    def test_a_run_that_lost_the_count_to_another_run_stops_there(self, evaluating):
+        world = evaluating
+        record = world.apply_record()
+        # Another delivery of the same run counted a share after this run read the record.
+        assert binding_apply.reserve_evaluations(record, record, 1)
+        assert not binding_apply.reserve_evaluations(record, record, 1)
+        assert world.apply_record()["evaluationsSent"] == 1

@@ -8,10 +8,16 @@ the compliance trigger's queue, which every database's automatic evaluations sha
 
 - no step of the apply ever waits behind an evaluation: its continuations are on the job queue,
   which carries no evaluation;
-- the evaluations phase queues a share only while fewer than EVALUATION_BACKLOG_LIMIT messages wait
-  on the trigger's queue, so the trigger's queue never holds more than about that many plus one
-  share, and another database's change never waits behind more, whatever the apply's size; while
-  the queue is busy the phase hands over to a delayed continuation and never reads stopped;
+- the evaluations phase never has more than EVALUATION_OUTSTANDING_LIMIT of its own evaluations on
+  the trigger's queue (D164): the job counts what it sends, the trigger counts what it took, and a
+  share goes only when it fits; the queue's approximate message count (here read as 0, or lagging
+  the sends, as SQS's did in round 29) plays no part. Another database's change never waits behind
+  more, whatever the apply's size; while no share fits the phase hands over to a delayed
+  continuation, for as long as the trigger takes (a held trigger included), and never reads
+  stopped;
+- the trigger counts an apply's evaluations once per batch, not a record it reports failed (until
+  its last delivery), not one of a replaced apply, and fails the records whose count it could not
+  write;
 - `stalled` is derived from the apply's own messages (a message queued, a run in flight, a
   redelivery coming), never from how long ago it made progress, so an apply whose next message
   waits never reads `stalled`, and one that really stopped still does and resumes;
@@ -55,10 +61,9 @@ QUEUE = "https://sqs.example/compliance-trigger"
 JOB_QUEUE = "https://sqs.example/compliance-jobs"
 PAGE = 3
 PER_SHARE = 4
-BACKLOG_LIMIT = 5
-# The most messages the trigger's queue may hold, whatever the apply's size: a share is queued only
-# below the limit, and a share is at most PER_SHARE + PAGE - 1 evaluations.
-BOUND = BACKLOG_LIMIT - 1 + PER_SHARE + PAGE - 1
+# The most of the apply's evaluations sent and not yet taken by the trigger, whatever its size
+# (only the apply's evaluations are on the trigger's queue here, so it is the queue's depth too).
+BOUND = 6
 EVALUATION_SECONDS = 60
 # Spelled out, so this file runs (and fails on its assertions) against code without them; one case
 # ties them to the module's.
@@ -75,15 +80,20 @@ class FifoQueues:
     """The job queue and the trigger's queue, each delivering in arrival order. A job message may
     carry a delay (seconds of simulated time). For every apply message it records the evaluations
     on its own queue ahead of it, and for every evaluation queued the trigger queue's depth after
-    it."""
+    it. Its approximate message count reads 0 (`reading` "zero") or the depth as it was
+    `LAG_SENDS` sends ago (`reading` "lagging"), never the depth now."""
 
-    def __init__(self, world):
+    LAG_SENDS = 50
+
+    def __init__(self, world, reading="zero"):
         self.world = world
+        self.reading = reading
         self.jobs = []
         self.evaluations = []
         self.lost = []
         self.job_ahead = []
         self.depths = []
+        self.delays = []
 
     @staticmethod
     def _is_evaluation(body):
@@ -95,6 +105,7 @@ class FifoQueues:
         if QueueUrl == JOB_QUEUE:
             if json.loads(MessageBody).get("vamsInternalAction") == binding_apply.APPLY_ACTION:
                 self.job_ahead.append(sum(1 for m in self.jobs if self._is_evaluation(m["body"])))
+                self.delays.append(int(DelaySeconds or 0))
             self.jobs.append(message)
         else:
             assert QueueUrl == QUEUE, QueueUrl
@@ -110,7 +121,10 @@ class FifoQueues:
 
     def get_queue_attributes(self, QueueUrl, AttributeNames):
         assert QueueUrl == QUEUE, QueueUrl
-        return {"Attributes": {"ApproximateNumberOfMessages": str(len(self.evaluations))}}
+        depth = 0
+        if self.reading == "lagging" and len(self.depths) > self.LAG_SENDS:
+            depth = self.depths[-1 - self.LAG_SENDS]
+        return {"Attributes": {"ApproximateNumberOfMessages": str(depth)}}
 
     def change_message_visibility(self, **kwargs):
         return {}
@@ -122,12 +136,15 @@ class FifoQueues:
 
 class World:
 
-    def __init__(self, assets=30, auto_eval=True):
+    def __init__(self, assets=30, auto_eval=True, reading="zero"):
         self.asset_ids = [f"a{index:03d}" for index in range(assets)]
         self.override = self.asset_ids[5]
         self.quarantined = self.asset_ids[3]
         self.auto_eval = auto_eval
+        self.reading = reading
         self.elapsed = 0
+        # A held trigger (reserved concurrency 0) takes nothing from its queue.
+        self.trigger_held = False
 
     def __enter__(self):
         self._mock = mock_aws()
@@ -135,7 +152,7 @@ class World:
         resource = boto3.resource("dynamodb", region_name="us-east-1")
         self.patches, self.t = _cdkTables.table_doubles(resource,
                                                         (store, binding_svc, trigger, jobs))
-        self.queue = FifoQueues(self)
+        self.queue = FifoQueues(self, self.reading)
         self.evaluated = []
         self.patches += [
             patch.object(binding_svc, "CasbinEnforcer", return_value=_stand_in({"*"})),
@@ -152,7 +169,7 @@ class World:
             patch.object(store, "to_update_expr", REAL_TO_UPDATE_EXPR),
             patch.object(binding_apply, "PAGE_SIZE", PAGE),
             patch.object(binding_apply, "EVALUATIONS_PER_SHARE", PER_SHARE, create=True),
-            patch.object(binding_apply, "EVALUATION_BACKLOG_LIMIT", BACKLOG_LIMIT, create=True),
+            patch.object(binding_apply, "EVALUATION_OUTSTANDING_LIMIT", BOUND, create=True),
         ]
         real_run = binding_apply.run
 
@@ -219,7 +236,7 @@ class World:
         ready = [m for m in self.queue.jobs if m["readyAt"] <= self.elapsed]
         if ready:
             return self.queue.jobs, ready[0]
-        if self.queue.evaluations:
+        if self.queue.evaluations and not self.trigger_held:
             return self.queue.evaluations, self.queue.evaluations[0]
         if self.queue.jobs:
             message = min(self.queue.jobs, key=lambda m: m["readyAt"])
@@ -258,6 +275,10 @@ class World:
                 check()
         raise AssertionError("the queues did not drain")
 
+    def outstanding(self):
+        """The apply's evaluations sent and not yet taken, as its record counts them."""
+        return binding_apply.outstanding_evaluations(self.apply_record())
+
 
 def _bound_assets(world):
     return sorted(asset_id for asset_id in world.asset_ids if asset_id != world.override)
@@ -266,18 +287,68 @@ def _bound_assets(world):
 @pytest.mark.unit
 class TestAnApplyOfAnySizeWithAutomaticEvaluation:
 
-    @pytest.mark.parametrize("assets", [30, 60], ids=["30 assets", "60 assets"])
-    def test_no_step_waits_behind_an_evaluation_and_the_trigger_queue_stays_bounded(self, assets):
-        with World(assets) as world:
+    @pytest.mark.parametrize("assets, reading", [(30, "zero"), (60, "zero"), (60, "lagging")],
+                             ids=["30 assets, reads 0", "60 assets, reads 0",
+                                  "60 assets, lagging reading"])
+    def test_no_step_waits_behind_an_evaluation_and_the_trigger_queue_stays_bounded(
+            self, assets, reading):
+        with World(assets, reading=reading) as world:
             assert world.bind(NEW)[0] == 202
-            world.drain()
+
+            def counted_as_queued():
+                # The record's count of outstanding evaluations is never below what the queue
+                # holds (here the same), and never above the bound.
+                assert world.outstanding() >= len(world.queue.evaluations)
+                assert world.outstanding() <= BOUND
+            world.drain(check=counted_as_queued)
             # Every continuation went to the job queue, which never held an evaluation.
             assert len(world.queue.job_ahead) >= assets // PAGE
             assert max(world.queue.job_ahead) == 0
-            # The trigger's queue never held more than the limit and one share, whatever the
-            # size, so another database's change never waited behind more.
+            # The trigger's queue never held more than the bound of the apply's evaluations,
+            # whatever the size or the queue's approximate count, so another database's change
+            # never waited behind more.
             assert world.queue.depths and max(world.queue.depths) <= BOUND
             assert len(world.queue.depths) == len(_bound_assets(world))
+            # The phase ended; every asset evaluated once; the counts agree.
+            record = world.apply_record()
+            assert (record["evaluationStatus"], record.get("phase")) == ("queued", None)
+            assert sorted(asset_id for asset_id, _, _ in world.evaluated) == _bound_assets(world)
+            assert (record["evaluationsSent"], record["evaluationsTaken"]) == (
+                len(_bound_assets(world)), len(_bound_assets(world)))
+            assert world.outstanding() == 0
+
+    def test_a_held_trigger_keeps_the_phase_waiting_within_its_bound_and_never_stopped(self):
+        with World(30) as world:
+            world.bind(NEW)
+            while world.apply_record()["applyStatus"] == "applying":
+                world.deliver()
+            world.trigger_held = True
+            limit = world.apply_record()["runLimit"]
+            # Three hours of simulated time with the trigger taking nothing.
+            queued_at_half_an_hour = None
+            while world.elapsed < 3 * 3600:
+                world.deliver()
+                read = binding_apply.answer(world.apply_record(), now=world.now())
+                assert read["evaluationStatus"] == "queueing", world.elapsed
+                assert len(world.queue.evaluations) <= BOUND
+                if queued_at_half_an_hour is None and world.elapsed >= 1800:
+                    queued_at_half_an_hour = read["evaluationsQueued"]
+            # Nothing more was queued after the first shares filled its room: no share is queued
+            # anyway after a time, the trigger's queue keeps at most the bound of them.
+            assert 0 < queued_at_half_an_hour == world.apply_record()["counts"]["evaluationsQueued"]
+            assert queued_at_half_an_hour == len(world.queue.evaluations) <= BOUND
+            # It waited with the delay doubling up to the largest, and the waits at the largest
+            # delay did not count against its run limit.
+            longest = binding_apply.EVALUATION_MAX_WAIT_SECONDS
+            assert world.queue.delays[-1] == longest
+            assert world.queue.delays.count(longest) >= 8
+            record = world.apply_record()
+            assert record["runs"] < limit and "stopReason" not in record
+            world.trigger_held = False
+            world.drain(check=lambda: world.outstanding() <= BOUND)
+            record = world.apply_record()
+            assert (record["evaluationStatus"], record.get("resumes", 0)) == ("queued", 0)
+            assert sorted(asset_id for asset_id, _, _ in world.evaluated) == _bound_assets(world)
 
     def test_it_never_reads_stalled_while_its_message_waits_and_finishes_without_a_resume(self):
         with World(60) as world:
@@ -537,3 +608,99 @@ def test_the_reasons_are_the_module_s():
     assert (binding_apply.STALLED_FAILED, binding_apply.STALLED_NOT_QUEUED,
             binding_apply.STALLED_NOT_DELIVERED, binding_apply.CANCELLED_AUTO_EVAL_OFF) == (
         STALLED_FAILED, STALLED_NOT_QUEUED, STALLED_NOT_DELIVERED, CANCELLED_AUTO_EVAL_OFF)
+
+
+def _evaluation_event(apply_id, asset_ids, receives=1):
+    return {"Records": [
+        {"messageId": f"m-{asset_id}", "body": json.dumps(
+            {"databaseId": DB, "assetId": asset_id, "bindingApplyId": apply_id}),
+         "attributes": {"ApproximateReceiveCount": str(receives)}}
+        for asset_id in asset_ids]}
+
+
+@pytest.mark.unit
+class TestTheTriggerCountsTheEvaluationsItTook:
+    """The trigger counts a binding change's evaluations on its apply record once per batch
+    (D164): the job's bound rests on that count."""
+
+    def _in_evaluations_phase(self, world):
+        world.bind(NEW)
+        while world.apply_record()["applyStatus"] == "applying":
+            world.deliver()
+        world.queue.evaluations.clear()
+        return world.apply_record()["applyId"]
+
+    def _taken(self, world):
+        return int(world.apply_record().get("evaluationsTaken", 0))
+
+    def test_one_write_per_batch_counts_each_record_it_is_done_with(self):
+        with World(9) as world:
+            apply_id = self._in_evaluations_phase(world)
+            writes = []
+            real = binding_apply.count_taken
+
+            def counted(*args):
+                writes.append(args)
+                return real(*args)
+            with patch.object(binding_apply, "count_taken", side_effect=counted):
+                result = trigger.lambda_handler(_evaluation_event(apply_id, ["a000", "a001",
+                                                                             "a002"]), MagicMock())
+            assert result == {"batchItemFailures": []}
+            assert writes == [(DB, apply_id, 3)]
+            assert self._taken(world) == 3
+            # A record delivered twice (SQS delivers at least once) is skipped as evaluated, and
+            # counted again: each delivery the trigger is done with counts.
+            trigger.lambda_handler(_evaluation_event(apply_id, ["a000"]), MagicMock())
+            assert self._taken(world) == 4
+
+    def test_a_record_it_reports_failed_is_counted_only_on_its_last_delivery(self):
+        with World(9) as world:
+            apply_id = self._in_evaluations_phase(world)
+            throttled = ClientError({"Error": {"Code": "ThrottlingException"}}, "GetItem")
+            with patch.object(trigger, "_process_binding_evaluation", side_effect=throttled):
+                result = trigger.lambda_handler(_evaluation_event(apply_id, ["a000"]), MagicMock())
+                assert result == {"batchItemFailures": [{"itemIdentifier": "m-a000"}]}
+                assert self._taken(world) == 0
+                last = binding_apply.TRIGGER_QUEUE_MAX_RECEIVE_COUNT
+                result = trigger.lambda_handler(
+                    _evaluation_event(apply_id, ["a000"], receives=last), MagicMock())
+                assert result == {"batchItemFailures": [{"itemIdentifier": "m-a000"}]}
+            # SQS moves it to the dead-letter queue now, so it no longer waits on the queue.
+            assert self._taken(world) == 1
+
+    def test_an_evaluation_of_a_replaced_change_is_not_counted(self):
+        with World(9) as world:
+            old_apply = self._in_evaluations_phase(world)
+            assert world.bind(OLD)[0] == 202
+            assert trigger.lambda_handler(_evaluation_event(old_apply, ["a000"]), MagicMock()) == {
+                "batchItemFailures": []}
+            record = world.apply_record()
+            assert record["applyId"] != old_apply and "evaluationsTaken" not in record
+
+    def test_a_count_it_could_not_write_fails_the_records_so_they_are_counted_later(self):
+        with World(9) as world:
+            apply_id = self._in_evaluations_phase(world)
+            with patch.object(binding_apply, "count_taken", side_effect=ClientError(
+                    {"Error": {"Code": "ProvisionedThroughputExceededException"}}, "UpdateItem")):
+                result = trigger.lambda_handler(_evaluation_event(apply_id, ["a000", "a001"]),
+                                                MagicMock())
+            assert sorted(item["itemIdentifier"] for item in result["batchItemFailures"]) == [
+                "m-a000", "m-a001"]
+            # Delivered again: skipped as already evaluated, and counted.
+            before = len(world.evaluated)
+            assert trigger.lambda_handler(_evaluation_event(apply_id, ["a000", "a001"], receives=2),
+                                          MagicMock()) == {"batchItemFailures": []}
+            assert len(world.evaluated) == before
+            assert self._taken(world) == 2
+
+
+def test_the_trigger_queue_settings_are_complianceFunctions_ts():
+    source = COMPLIANCE_FUNCTIONS.read_text(encoding="utf-8")
+    assert re.search(r"export const COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT = ([^;]+);",
+                     source).group(1).strip() == "3"
+    assert binding_apply.TRIGGER_QUEUE_MAX_RECEIVE_COUNT == 3
+    # The trigger's queue sets no retention period: SQS keeps a message 4 days.
+    queue = source[source.index('new sqs.Queue(scope, "ComplianceTriggerQueue"'):]
+    queue = queue[:queue.index("});")]
+    assert "retentionPeriod" not in queue
+    assert binding_apply.TRIGGER_QUEUE_RETENTION_SECONDS == 4 * 24 * 3600

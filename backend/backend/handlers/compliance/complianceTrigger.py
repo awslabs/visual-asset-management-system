@@ -298,6 +298,9 @@ class TriggerBatch:
         self._link_endpoints = {}
         # Per queue record: (receipt handle, ApproximateReceiveCount), for `defer`.
         self._receipts = {}
+        # Per queue record carrying a binding change's evaluation: (databaseId, applyId), for
+        # `count_binding_evaluations`.
+        self._binding_evaluations = {}
 
     def run(self, record_id, step, *args, **kwargs):
         """Run `step` for the queue record `record_id`; an exception is logged, and an
@@ -344,6 +347,42 @@ class TriggerBatch:
             return False
         self.fail(message_id)
         return True
+
+    def note_binding_evaluation(self, message_id, database_id, apply_id):
+        """Remember that the queue record `message_id` carries an evaluation the binding change
+        `apply_id` queued (`count_binding_evaluations`)."""
+        if message_id and database_id and apply_id:
+            self._binding_evaluations[message_id] = (database_id, apply_id)
+
+    def _last_delivery(self, message_id):
+        receives = self._receipts.get(message_id, ("", 1))[1]
+        return receives >= binding_apply.TRIGGER_QUEUE_MAX_RECEIVE_COUNT
+
+    def count_binding_evaluations(self):
+        """Count, on each binding change's apply record, the change's evaluations this batch is
+        done with (`complianceBindingApply.count_taken`, one write per change), so the change's
+        evaluations phase keeps no more than its bound of them on this queue (D164). A record
+        reported failed is counted when it is delivered again, unless this was its last delivery:
+        SQS then moves it to the dead-letter queue. When the count cannot be written, the change's
+        records are reported failed (unless on their last delivery), so they are delivered again,
+        skipped as already evaluated, and counted then."""
+        failed = set(self._failed)
+        groups = {}
+        for message_id, key in self._binding_evaluations.items():
+            if message_id in failed and not self._last_delivery(message_id):
+                continue
+            groups.setdefault(key, []).append(message_id)
+        for (database_id, apply_id), message_ids in groups.items():
+            try:
+                binding_apply.count_taken(database_id, apply_id, len(message_ids))
+            except Exception as e:
+                logger.exception(f"Could not count {len(message_ids)} evaluations of binding "
+                                 f"change {apply_id} of {database_id} as taken: {e}")
+                if not is_infrastructure_error(e):
+                    continue
+                for message_id in message_ids:
+                    if not self._last_delivery(message_id):
+                        self.fail(message_id)
 
     def failures(self):
         """The `batchItemFailures` an SQS event source with `ReportBatchItemFailures` reads."""
@@ -432,7 +471,8 @@ class TriggerBatch:
 def lambda_handler(event, context):
     """Process one SQS batch of indexer-topic messages and report the records an infrastructure
     error failed (`batchItemFailures`), so only those are redelivered. A compliance job's message
-    on this queue is logged and dropped (`drop_job_message`)."""
+    on this queue is logged and dropped (`drop_job_message`). The binding changes' evaluations the
+    batch is done with are counted on their apply records (`count_binding_evaluations`, D164)."""
     batch = TriggerBatch()
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
@@ -446,6 +486,7 @@ def lambda_handler(event, context):
         batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
     batch.write_stamps()
     batch.evaluate_all()
+    batch.count_binding_evaluations()
     return {"batchItemFailures": batch.failures()}
 
 
@@ -481,6 +522,8 @@ def _dispatch_event(message, batch=None, message_id=""):
         _process_file_event(message, batch, message_id)
     elif message.get("databaseId") and message.get("assetId") and \
             message.get(binding_apply.APPLY_STAMP_FIELD):
+        batch.note_binding_evaluation(message_id, message.get("databaseId"),
+                                      message.get(binding_apply.APPLY_STAMP_FIELD))
         batch.add_candidate(message_id, _process_binding_evaluation, message.get("databaseId"),
                             message.get("assetId"), message.get(binding_apply.APPLY_STAMP_FIELD))
     elif message.get("databaseId") and message.get("assetId"):
