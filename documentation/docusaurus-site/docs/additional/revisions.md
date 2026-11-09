@@ -262,6 +262,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Viewer permission message** — When the API refuses a file's download with 403, the core viewers and the Text Diff Viewer say "You do not have permission to view or download this file." instead of a generic download error; a 401 asks the user to sign in again. (issue #1211)
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
+-   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 
 **Other changes:**
 
