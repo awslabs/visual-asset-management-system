@@ -75,6 +75,9 @@ export class ApiBuilderNestedStack extends NestedStack {
     // The API key service. Add-on Lambdas that mint a per-session key for a user invoke it with a
     // lambdaCrossCall event rather than writing the key table themselves.
     public apiKeyServiceFunction!: lambda.Function;
+    // The Lambdas here that list API routes for the constraint editor and the allowed-route check;
+    // the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
 
     constructor(
         parent: Construct,
@@ -922,6 +925,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
         this.apiKeyServiceFunction = authFunctions.apiKeyService;
+        this.addonFeatureListingFunctions.push(authFunctions.routes);
 
         // NOTE: the auth constraints service and its routes (/auth/constraints,
         // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and

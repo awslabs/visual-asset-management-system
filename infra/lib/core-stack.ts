@@ -23,6 +23,7 @@ import { SearchBuilderNestedStack } from "./nestedStacks/searchAndIndexing/searc
 import { StaticWebBuilderNestedStack } from "./nestedStacks/staticWebApp/staticWebBuilder-nestedStack";
 import * as Config from "../config/config";
 import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
+import { ADDON_FEATURES_ENABLED_ENV } from "../common/addonAppFeatures";
 import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
@@ -323,6 +324,17 @@ export class CoreVAMSStack extends cdk.Stack {
             addonBuilderNestedStack.addStackDependency(apiBuilderNestedStack);
 
             this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
+
+            // The Lambdas that list API routes and permission object types (the constraint editor's
+            // lists and the allowed-route checks) leave out the entries of an add-on this deployment
+            // does not build. The value is a plain string, so it adds no cross-stack reference.
+            const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
+            for (const listingFunction of [
+                ...apiBuilderNestedStack.addonFeatureListingFunctions,
+                ...apiBuilder2NestedStack.addonFeatureListingFunctions,
+            ]) {
+                listingFunction.addEnvironment(ADDON_FEATURES_ENABLED_ENV, addonFeaturesEnabled);
+            }
 
             ///Fork extension point (Nested Stack; resources defined in custom/customResources.ts)
             const customBuilderNestedStack = new CustomBuilderNestedStack(this, "CustomBuilder", {

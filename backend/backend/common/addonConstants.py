@@ -19,6 +19,10 @@ list no add-on extends stays empty.
   pattern and is not a core or custom type in any letter case; each field it lists is a core field
   (for example ``databaseId``) or one declared above. A new type grants nothing until a constraint
   allows it, the seeded admin role included.
+* ``ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES`` -- the add-on feature switch (``common/addonFeatures.py``)
+  each type above is offered under, one entry per type. On a deployment without that switch the
+  type is left out of ``GET /auth/constraints/permissionObjects`` and a new constraint of the type
+  is refused; a stored one still reads, lists and deletes (``tests/common/test_addon_features.py``).
 * ``ADDON_UNALLOWED_FILE_EXTENSIONS`` / ``ADDON_UNALLOWED_MIME_TYPES`` -- entries added to the upload
   deny lists, append-only: a lower-case extension with its leading dot (``".xyz"``), a lower-case
   MIME type (``"application/x-example"``). A core entry cannot be removed or repeated.
@@ -55,6 +59,14 @@ ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS: Dict[str, dict] = {
         {"label": "EDH Capacity Reservation ID", "value": "edhCapacityReservationId"}]},
     "edhContainer": {"label": "EDH Container Job", "fields": [
         {"label": "EDH Job Definition", "value": "edhJobDefinition"}]},
+}
+
+ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES: Dict[str, str] = {
+    # EDH Workstations (handlers/addon/edh/); container jobs are an optional feature of the add-on.
+    "edhWorkstation": "EDH_WORKSTATIONS",
+    "edhImage": "EDH_WORKSTATIONS",
+    "edhCapacityReservation": "EDH_WORKSTATIONS",
+    "edhContainer": "EDH_CONTAINERS",
 }
 
 ADDON_UNALLOWED_FILE_EXTENSIONS: List[str] = []

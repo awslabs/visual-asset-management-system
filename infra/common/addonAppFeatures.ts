@@ -17,3 +17,11 @@ export enum ADDON_APP_FEATURES {
     EDH_CONTAINERS = "EDH_CONTAINERS",
     EDH_AMI_RECIPES = "EDH_AMI_RECIPES",
 }
+
+/**
+ * The environment variable the core stack sets on the Lambdas that list API routes and permission
+ * object types (the constraint editor's lists and the allowed-route checks): the enabled add-on
+ * switches, comma-separated, empty when no add-on is deployed. Those listings leave out the entries of
+ * an add-on that is not deployed (backend common/addonFeatures.py reads it).
+ */
+export const ADDON_FEATURES_ENABLED_ENV = "ADDON_FEATURES_ENABLED";

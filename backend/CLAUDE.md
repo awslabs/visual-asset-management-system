@@ -40,6 +40,7 @@ backend/
 │   │   ├── apiRouteTypes.py                        # ApiRoute + GET/POST/... (re-exported by apiRoutes.py)
 │   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer, EDH Workstations) → ADDON_ROUTES
 │   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries, log keys
+│   │   ├── addonFeatures.py                        # Add-on feature switches; which ones the deployment enabled
 │   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
 │   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
@@ -1054,6 +1055,20 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
 `common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
 and `models/addon/` (the Physna viewer and EDH models). Every list merges in the order core, add-on, custom.
+
+**A disabled add-on is not listed.** Each add-on route names its feature switch in
+`ApiRoute.addon_feature` (the add-on's, or that of the optional feature that registers it), and each add-on
+object type has one in `ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES` (`common/addonConstants.py`). The switch names
+are in `common/addonFeatures.py`, mirroring `infra/common/addonAppFeatures.ts`. The core stack passes the
+enabled add-on switches, comma-separated, in `ADDON_FEATURES_ENABLED` to the routes, constraints and
+constraint-template Lambdas only. With a switch absent, `get_public_api_routes()` leaves its routes out
+(`GET /auth/routes/api` lists none, `GET /auth/routes/api/allowed` evaluates and audits none),
+`permissionObjects` leaves its object types out, and `deployed_object_type_error()` (`models/roleConstraints.py`)
+refuses a new constraint or permission template naming one ("belongs to an add-on that is not enabled on this
+deployment"). A constraint already stored with such a type still reads, lists and deletes, and Casbin still
+loads it. Without the variable (local dev server, a test that does not set it) everything is listed. A new
+add-on route or object type gets its tag (`tests/common/test_addon_features.py`;
+`tests/handlers/auth/test_addon_listings_follow_deployment.py` holds the behaviour).
 
 -   Fork handlers follow every rule above, including both Casbin tiers with the fail-closed
     pre-set flag (Rule 4) and dispatch on the `ApiRoute` constants from `custom/customApiRoutes.py`

@@ -90,6 +90,28 @@ def _reject_regex_operator_on_list_field(field, operator):
             f"compare. Use 'is_one_of' or 'is_not_one_of' instead.")
 
 
+def deployed_object_type_error(object_type):
+    """The message refusing a constraint ``objectType`` this deployment does not offer, or None.
+
+    The allowed values named are the ones ``GET /auth/constraints/permissionObjects`` lists: an add-on
+    type only when the deployment enabled its add-on (``common/addonFeatures.py``). A type of an add-on
+    the deployment did not enable is refused with a sentence saying so; its name is echoed only after it
+    matched a declared add-on type, so the message carries no caller text. Constraints already stored
+    with such a type are not touched: they still read, list and delete, and take effect again once the
+    add-on is enabled.
+    """
+    from common.addonFeatures import constraint_object_type_addon_feature, constraint_object_type_deployed
+    from common.constants import ALLOWED_CONSTRAINT_OBJECT_TYPES
+
+    if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_deployed(object_type):
+        return None
+    if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_addon_feature(object_type):
+        return (f"Invalid objectType. '{object_type}' belongs to an add-on that is not enabled on this "
+                "deployment.")
+    offered = [name for name in ALLOWED_CONSTRAINT_OBJECT_TYPES if constraint_object_type_deployed(name)]
+    return f"Invalid objectType. Allowed values: {', '.join(offered)}"
+
+
 ######################## Constraint API Models ##########################
 
 class ConstraintCriteriaModel(BaseModel, extra='ignore'):
@@ -241,7 +263,6 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
         from common.constants import (
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
-            ALLOWED_CONSTRAINT_OBJECT_TYPES,
             ALLOWED_CONSTRAINT_OPERATORS,
             get_constraint_fields_for_object_type
         )
@@ -279,10 +300,10 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
         
-        # Validate objectType
+        # Validate objectType: a type this deployment offers (an add-on type only with its add-on)
         object_type = values.get('objectType')
-        if object_type not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
-            message = f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
+        message = deployed_object_type_error(object_type)
+        if message:
             logger.error(message)
             raise ValueError(message)
 
@@ -525,7 +546,6 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
         from common.constants import (
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
-            ALLOWED_CONSTRAINT_OBJECT_TYPES,
             ALLOWED_CONSTRAINT_OPERATORS,
             get_constraint_fields_for_object_type
         )
@@ -588,11 +608,10 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             raise ValueError("At least one constraint is required")
 
         for constraint in constraints:
-            # Validate objectType
-            if constraint.objectType not in ALLOWED_CONSTRAINT_OBJECT_TYPES:
-                raise ValueError(
-                    f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
-                )
+            # Validate objectType: a type this deployment offers (an add-on type only with its add-on)
+            message = deployed_object_type_error(constraint.objectType)
+            if message:
+                raise ValueError(message)
 
             # Validate each criterion's field is valid for the constraint's objectType
             valid_fields = get_constraint_fields_for_object_type(constraint.objectType)

@@ -268,9 +268,10 @@ sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.ass
 sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
     _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
-# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module and
-# the add-on route list it imports are loaded first, for the same reason.
-for _apir_dep in ('apiRouteTypes', 'addonApiRoutes'):
+# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module, the add-on
+# feature switches (common/addonFeatures.py, which the add-on route list and apiRoutes import; it reads
+# its environment variable on each call) and the add-on route list are loaded first, for the same reason.
+for _apir_dep in ('apiRouteTypes', 'addonFeatures', 'addonApiRoutes'):
     _apir_dep_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_apir_dep}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_apir_dep}.py')

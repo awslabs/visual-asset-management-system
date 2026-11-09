@@ -32,6 +32,12 @@ const SIMULATIONS_HREF = "#/edh/workstations/simulations/";
 const ADMIN_HREF = "#/edh/admin/";
 const EDH_ROUTE_PATHS = ["/edh/workstations", "/edh/workstations/simulations", "/edh/admin"];
 const REACT_LAZY = Symbol.for("react.lazy");
+// The switches a deployment with the add-on and its container jobs publishes: the Simulations route
+// exists only with both (routes.tsx routeTableFor; addonFeatureRoutes.test.tsx covers the switches).
+const SIMULATIONS_SWITCHES = [
+    addonFeaturesEnabled.EDH_WORKSTATIONS,
+    addonFeaturesEnabled.EDH_CONTAINERS,
+];
 
 jest.mock("../../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
 
@@ -133,9 +139,15 @@ describe("EDH routes", () => {
         allowRoutes("/edh/workstations/simulations");
 
         render(
-            <MemoryRouter initialEntries={["/edh/workstations/simulations/"]}>
-                <AppRoutes navigationOpen={true} setNavigationOpen={jest.fn()} user={undefined} />
-            </MemoryRouter>
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: SIMULATIONS_SWITCHES }}>
+                <MemoryRouter initialEntries={["/edh/workstations/simulations/"]}>
+                    <AppRoutes
+                        navigationOpen={true}
+                        setNavigationOpen={jest.fn()}
+                        user={undefined}
+                    />
+                </MemoryRouter>
+            </RuntimeConfigContext.Provider>
         );
 
         await waitFor(() =>
@@ -147,9 +159,15 @@ describe("EDH routes", () => {
         allowRoutes("/edh/admin");
 
         render(
-            <MemoryRouter initialEntries={["/edh/workstations/simulations/"]}>
-                <AppRoutes navigationOpen={true} setNavigationOpen={jest.fn()} user={undefined} />
-            </MemoryRouter>
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: SIMULATIONS_SWITCHES }}>
+                <MemoryRouter initialEntries={["/edh/workstations/simulations/"]}>
+                    <AppRoutes
+                        navigationOpen={true}
+                        setNavigationOpen={jest.fn()}
+                        user={undefined}
+                    />
+                </MemoryRouter>
+            </RuntimeConfigContext.Provider>
         );
 
         // A route the role does not allow shows the no-access panel, like any core page.
