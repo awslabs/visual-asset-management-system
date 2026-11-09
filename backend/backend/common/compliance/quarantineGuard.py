@@ -28,6 +28,24 @@ logger = safeLogger()
 # The one client-facing message every guarded handler returns (Rule 11: no asset identifiers).
 QUARANTINE_BLOCK_MESSAGE = "Asset is quarantined and cannot be downloaded"
 
+
+class QuarantineBlockedResponse(VAMSGeneralErrorResponse):
+    """The quarantine block's refusal: status 400, text exactly ``QUARANTINE_BLOCK_MESSAGE``.
+
+    Every guarded handler answers a ``VAMSGeneralErrorResponse`` with ``{'message': str(error)}``.
+    The base class prefixes its text with "VAMS General Error: ", so the refusal reached the web,
+    the CLI and the MCP tools as "VAMS General Error: Asset is quarantined and cannot be
+    downloaded" rather than the sentence the documentation quotes (D169). This subclass's text is
+    the sentence alone, on every route the guard covers; every other ``VAMSGeneralErrorResponse``
+    keeps its own text.
+    """
+
+    def __init__(self):
+        super().__init__(QUARANTINE_BLOCK_MESSAGE, status_code=400)
+
+    def __str__(self):
+        return QUARANTINE_BLOCK_MESSAGE
+
 try:
     quarantine_blocks_download = os.environ.get(
         "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", "false"
@@ -47,7 +65,7 @@ compliance_asset_state_table = (
 
 
 def check_quarantine_block(database_id, asset_id):
-    """Raise ``VAMSGeneralErrorResponse`` when the asset is quarantined without a granted exception.
+    """Raise ``QuarantineBlockedResponse`` when the asset is quarantined without a granted exception.
 
     A no-op when the quarantine block is off. Otherwise reads the asset's compliance state row:
     a ``complianceState`` of ``quarantined`` with no ``exceptionGranted`` raises; a missing row,
@@ -61,4 +79,4 @@ def check_quarantine_block(database_id, asset_id):
     item = response.get("Item")
     if item and item.get("complianceState") == "quarantined" and not item.get("exceptionGranted"):
         logger.info(f"Quarantine block applied to asset {asset_id} in database {database_id}")
-        raise VAMSGeneralErrorResponse(QUARANTINE_BLOCK_MESSAGE)
+        raise QuarantineBlockedResponse()

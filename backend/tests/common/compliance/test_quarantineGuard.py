@@ -6,7 +6,8 @@ download handlers share.
 
 Two halves. The call-time contract of ``check_quarantine_block`` -- a no-op when the block is off,
 a pass for a missing row, any non-quarantined state or a granted exception, and a
-``VAMSGeneralErrorResponse`` carrying the fixed message for a quarantined row with no exception.
+``VAMSGeneralErrorResponse`` whose text is exactly the fixed message for a quarantined row with no
+exception.
 And the import-time contract: the compliance asset-state table is resolved only when
 ``COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`` is ``true`` (through ``get_table_name``, so the
 ``COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME`` override wins over SSM), and a name that cannot be
@@ -23,6 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.compliance.quarantineGuard as guard
+from backend.tests.quarantineRefusalBody import quarantine_refusal
 from models.common import VAMSGeneralErrorResponse
 
 _GUARD_PATH = os.path.join(
@@ -82,8 +84,20 @@ class TestCheckQuarantineBlock:
         with _enabled(_state_table(_row())):
             with pytest.raises(VAMSGeneralErrorResponse) as raised:
                 guard.check_quarantine_block(_DB, _ASSET)
-        assert str(raised.value).endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        # D169: the text the handlers answer with is the sentence alone, as the docs quote it.
+        assert str(raised.value) == guard.QUARANTINE_BLOCK_MESSAGE
+        assert f"{raised.value}" == guard.QUARANTINE_BLOCK_MESSAGE
         assert raised.value.status_code == 400
+
+    def test_the_message_is_the_one_the_web_tests_render(self):
+        """The web viewers' tests render the body in the shared test data; it is this message."""
+        assert quarantine_refusal() == {
+            "statusCode": 400, "body": {"message": guard.QUARANTINE_BLOCK_MESSAGE}}
+
+    def test_other_general_errors_keep_their_prefix(self):
+        """[control] Only the quarantine refusal drops the prefix; shipped errors keep their text."""
+        assert str(VAMSGeneralErrorResponse("File not found in S3")) == (
+            "VAMS General Error: File not found in S3")
 
     def test_quarantined_with_exception_explicitly_false_raises(self):
         with _enabled(_state_table(_row(exceptionGranted=False))):

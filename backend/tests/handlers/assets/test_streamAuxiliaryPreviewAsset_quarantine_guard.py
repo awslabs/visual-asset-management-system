@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.compliance.quarantineGuard as guard
+from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
 
 os.environ.setdefault("S3_ASSET_AUXILIARY_BUCKET", "test-asset-auxiliary-bucket")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -224,8 +225,8 @@ class TestPreviewStreamingIsQuarantineGuardedAfterAuthorization:
         with _guard_enabled(table):
             response = m.lambda_handler(_rest_event(method), MagicMock())
 
-        assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        # D169: the whole body is the documented sentence, with no "VAMS General Error: " prefix.
+        assert_is_the_quarantine_refusal(response)
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
         enforcer.return_value.enforceAPI.assert_called_once()
         enforcer.return_value.enforce.assert_called_once()

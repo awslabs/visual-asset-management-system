@@ -26,6 +26,12 @@ import ImageViewerComponent from "../viewers/ImageViewerPlugin/ImageViewerCompon
 import AssetPreviewThumbnail from "../../components/filemanager/components/AssetPreviewThumbnail";
 import FilePreviewThumbnail from "../../components/filemanager/components/FilePreviewThumbnail";
 import { PreviewThumbnailCell } from "../../components/search/SearchPreviewThumbnail/PreviewThumbnailCell";
+import {
+    QUARANTINE_REFUSAL_BODY,
+    QUARANTINE_REFUSAL_MESSAGE,
+    QUARANTINE_REFUSED_DOWNLOAD,
+    quarantineRefusalResponse,
+} from "./quarantineRefusal.testdata";
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../services/APIService", () => ({
@@ -34,9 +40,10 @@ jest.mock("../../services/APIService", () => ({
     fetchFileInfo: jest.fn(),
 }));
 
-const QUARANTINED = "Asset is quarantined and cannot be downloaded";
-/** The tuple `downloadAsset` returns for the API's refusal of a quarantined asset. */
-const REFUSED = [false, QUARANTINED, 400, QUARANTINED];
+/** The API's real refusal of a quarantined asset (D169: the backend tests pin this body). */
+const QUARANTINED = QUARANTINE_REFUSAL_MESSAGE;
+/** The tuple `downloadAsset` returns for it (APIService.quarantineRefusal.test.ts). */
+const REFUSED = QUARANTINE_REFUSED_DOWNLOAD;
 
 describe("the API's refusal reason", () => {
     it("is the API's message of a 4xx refusal the viewers do not word themselves", () => {
@@ -82,10 +89,12 @@ describe("the API's refusal reason", () => {
         // jsdom has no fetch Response; a stand-in with what the helper reads.
         const response = (status: number, json: () => Promise<any>) =>
             ({ status, clone: () => ({ json }) } as unknown as Response);
-        const refused = response(400, async () => ({ message: QUARANTINED }));
-        expect(await streamResponseFailureMessage(refused, "Failed to load: a.glb (400)")).toBe(
-            QUARANTINED
-        );
+        expect(
+            await streamResponseFailureMessage(
+                quarantineRefusalResponse(),
+                "Failed to load: a.glb (400)"
+            )
+        ).toBe(QUARANTINED);
         const failed = response(502, async () => {
             throw new SyntaxError("Unexpected token");
         });
@@ -98,7 +107,7 @@ describe("the API's refusal reason", () => {
         expect(
             describeStreamFailure("the point cloud preview", {
                 status: 400,
-                body: { message: QUARANTINED },
+                body: QUARANTINE_REFUSAL_BODY,
             })
         ).toBe(`Unable to load the point cloud preview: ${QUARANTINED}.`);
         expect(describeStreamFailure("the point cloud preview", { status: 400 })).toBe(

@@ -159,7 +159,10 @@ backend/
 │   │   │                                           #   last_deleted_at(): the id's last delete, D136)
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
-│   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
+│   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true;
+│   │   │                                           #   refuses with QuarantineBlockedResponse (400, body
+│   │   │                                           #   exactly QUARANTINE_BLOCK_MESSAGE, no "VAMS General
+│   │   │                                           #   Error: " prefix, D169)
 │   │   ├── workflows/executionAccess.py            # THE execution read rule (workflow GET, captured
 │   │   │                                           #   metadata-source databases, every asset read and
 │   │   │                                           #   the output asset, deleted asset → its database)

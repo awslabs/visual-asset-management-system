@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.compliance.quarantineGuard as guard
+from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
 
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("ASSET_VERSIONS_STORAGE_TABLE_NAME", "test-asset-versions-table")
@@ -222,7 +223,7 @@ class TestProcessAssetBatchQuarantineChokePoint:
         with pytest.raises(m.VAMSGeneralErrorResponse) as raised:
             _run_batch(_root(), {"tokens": ["alice"]}, enforcer, request, table)
 
-        assert str(raised.value).endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        assert str(raised.value) == guard.QUARANTINE_BLOCK_MESSAGE
         # Tier 2 ran first; the state read is keyed on the asset it authorized.
         enforcer.return_value.enforce.assert_called_once()
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
@@ -395,8 +396,8 @@ class TestExportRouteQuarantineBlock:
 
         response, spies = _invoke_export(_SINGLE_ASSET_PRESIGNED, table)
 
-        assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        # D169: the whole body is the documented sentence, with no "VAMS General Error: " prefix.
+        assert_is_the_quarantine_refusal(response)
         assert _SIGNED_URL not in response["body"]
         spies["sign"].assert_not_called()
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})

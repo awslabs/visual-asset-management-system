@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.compliance.quarantineGuard as guard
+from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
 
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-buckets-table")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -75,9 +76,11 @@ def _load():
     return module
 
 
-def _event(download_type="assetFile"):
+def _event(download_type="assetFile", keys=None):
     body = {"downloadType": download_type}
-    if download_type == "assetFile":
+    if keys is not None:
+        body["keys"] = keys
+    elif download_type == "assetFile":
         body["key"] = "/model.glb"
     return {
         "path": f"/database/{_DB}/assets/{_ASSET}/download",
@@ -189,13 +192,42 @@ class TestDownloadQuarantineBlockAfterAuthorization:
         with _guard_enabled(table):
             response = m.lambda_handler(_event(), MagicMock())
 
-        assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        # D169: the whole body is the documented sentence, with no "VAMS General Error: " prefix.
+        assert_is_the_quarantine_refusal(response)
         assert _SIGNED_URL not in response["body"]
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
         enforcer.return_value.enforce.assert_called_once()
         s3.generate_presigned_url.assert_not_called()
         m.log_file_download.assert_not_called()
+
+    def test_a_bulk_download_of_a_quarantined_asset_is_the_same_refusal(self):
+        """`keys` signs several files after one asset-level check: the guard refuses the whole
+        request with the same body, not a per-file error."""
+        m = _load()
+        s3, _enforcer = _wire(m)
+        table = _state_table(_quarantined())
+
+        with _guard_enabled(table):
+            response = m.lambda_handler(
+                _event(keys=["/model.glb", "/texture.png"]), MagicMock())
+
+        assert_is_the_quarantine_refusal(response)
+        table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
+        s3.generate_presigned_url.assert_not_called()
+        m.log_file_download_bulk.assert_not_called()
+
+    def test_other_refusals_keep_their_text(self):
+        """[control] Only the quarantine refusal changed: another refusal of the same route keeps
+        the text it had."""
+        m = _load()
+        _wire(m, distributable=False)
+
+        with _guard_enabled(_state_table(_quarantined())):
+            response = m.lambda_handler(_event(), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"]) == {
+            "message": "VAMS General Error: Asset not distributable"}
 
     def test_granted_exception_returns_a_presigned_url(self):
         m = _load()
@@ -236,8 +268,7 @@ class TestPreviewDownloadQuarantineBlock:
         with _guard_enabled(table):
             response = m.lambda_handler(_event("assetPreview"), MagicMock())
 
-        assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        assert_is_the_quarantine_refusal(response)
         assert _SIGNED_URL not in response["body"]
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
         enforcer.return_value.enforce.assert_called_once()

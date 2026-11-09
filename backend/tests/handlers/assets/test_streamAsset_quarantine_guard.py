@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import common.compliance.quarantineGuard as guard
+from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
 
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-buckets-table")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -248,9 +249,9 @@ class TestQuarantineGuardRunsAfterAuthorization:
         with _guard_enabled(table):
             response = m.lambda_handler(_rest_event(method), MagicMock())
 
-        assert response["statusCode"] == 400
-        # general_error renders str(VAMSGeneralErrorResponse), which prefixes the message.
-        assert json.loads(response["body"])["message"].endswith(guard.QUARANTINE_BLOCK_MESSAGE)
+        # D169: the whole body is the documented sentence, with no "VAMS General Error: " prefix
+        # (API Gateway drops a HEAD answer's body; the Lambda's is checked for both methods).
+        assert_is_the_quarantine_refusal(response)
         # The read happened, and only after both authorization tiers passed.
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
         enforcer.return_value.enforceAPI.assert_called_once()
