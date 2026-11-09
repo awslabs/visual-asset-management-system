@@ -89,8 +89,9 @@ class TestEveryApiKeyIsAnApiKeyCaller:
         assert claims["apiKeyId"] is None
         assert claims["tokens"] == ["alice"]
 
-    def test_a_disabled_ordinary_key_is_denied_before_any_handler(self):
+    def test_a_disabled_ordinary_key_is_refused_before_any_handler(self):
+        # A disabled key does not authenticate: the authorizer raises exactly "Unauthorized" (API
+        # Gateway's 401) and returns no policy, so no context reaches a handler.
         record = dict(_record(ORDINARY_KEY_ID, "ci-deploy"), isActive="false")
-        policy = _authorize("vams_ordinary", record=record)
-        assert policy["policyDocument"]["Statement"][0]["Effect"] == "Deny"
-        assert "context" not in policy
+        with pytest.raises(Exception, match="^Unauthorized$"):
+            _authorize("vams_ordinary", record=record)
