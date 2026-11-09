@@ -60,7 +60,7 @@ The mode a link asks for is a preference: the page opens it only when your roles
 4. Choose **Create API Key**.
 5. **Copy the generated key immediately.** The key value is displayed only once in the confirmation dialog.
 
-![API Key Management page showing key listing and management options](/img/API_key_managment_page_20260323_v2.5.png)
+![API Key Management page in the All Keys (Admin) view, with API Keys (all users) highlighted under Admin - Auth in the side navigation](/img/API_key_managment_page_20261109_v2.7.png)
 
 :::warning[Save the key now]
 The API key value is shown only once after creation. If you close the dialog without copying the key, you must delete the API key and create a new one. There is no way to retrieve the key value after creation.
