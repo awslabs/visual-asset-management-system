@@ -161,6 +161,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
 | `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
 | `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
+| `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's           |
+| `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                       |
 
 **Selector facts worth not rediscovering:**
 
@@ -234,15 +236,17 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                                                                                                                                           |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                        |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                        |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), or `las-to-ply` (an uncompressed `.las` with colour written as binary PLY vertices; stdlib only, LAZ refused) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), `ply-to-splat` (a float 3DGS `.ply` as raw `.splat` rows, which splat-transform cannot write), `ksplat` (`.ply` to `.ksplat` with `@mkkellogg/gaussian-splats-3d`: `version` and `threeVersion` pinned, optional `level`), or `las-to-ply` (an uncompressed `.las` with colour written as binary PLY vertices; stdlib only, LAZ refused) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
-case reads). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
+thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
+0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 
@@ -253,12 +257,13 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
-(`watchRequestHosts`). Run the spec on the development build first and record the pixel stats it logs;
+(`watchRequestHosts`). The `supersplat` kind checks inside the editor's iframe with
+`expectSuperSplatRendered` and passes `SUPERSPLAT_CSP_ALLOWED` as `cspAllowed`. Run the spec on the development build first and record the pixel stats it logs;
 a case that passes there and fails on a change is a regression.
 
 A `potree` case reads the octree the Point Cloud Potree Viewer pipeline (`app.pipelines.usePreviewPcPotreeViewer`)
@@ -280,7 +285,14 @@ npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
 E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
 E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
+
+The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
+the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out
+of the `chromium` project, so every other case still runs in a browser without WebGPU. Without an
+adapter the SuperSplat cases skip with the reason; `E2E_REQUIRE_WEBGPU=1` makes that a failure. On a machine with no GPU, Chromium's software adapter loses the device while the editor
+loads a file (v3.1.1 and v3.7.0 alike), so run the render checks where a GPU is available.
 
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
 and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:
