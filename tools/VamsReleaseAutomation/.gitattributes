@@ -1,0 +1,5 @@
+# Core patches (ledger-template/core-patches/*.patch) are applied with `git apply` to sources that
+# have LF line endings. The repository root's `*.patch text eol=crlf` would check them out with CRLF
+# endings, and a CRLF patch no longer applies to an LF file, so every build that lists one would stop
+# with exit 20. Keep them LF on every platform.
+*.patch text eol=lf
