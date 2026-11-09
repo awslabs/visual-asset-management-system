@@ -17,6 +17,7 @@ start rather than as an unguarded download.
 
 import importlib.util
 import itertools
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -129,6 +130,36 @@ class TestCheckQuarantineBlock:
         table.get_item.assert_called_once_with(Key={"databaseId": _DB, "assetId": _ASSET})
         table.query.assert_not_called()
         table.scan.assert_not_called()
+
+
+@pytest.mark.unit
+class TestTheRefusalAnswer:
+    """D174: the guard writes no line of its own; the handler answers the refusal with
+    ``quarantine_refusal``, one INFO line naming the database, the asset and the route."""
+
+    def test_the_check_itself_logs_nothing_and_the_refusal_names_what_it_refused(self):
+        logger = MagicMock(name="guard.logger")
+        with _enabled(_state_table(_row())), patch.object(guard, "logger", logger):
+            with pytest.raises(guard.QuarantineBlockedResponse) as raised:
+                guard.check_quarantine_block(_DB, _ASSET)
+        assert logger.method_calls == []
+        assert (raised.value.database_id, raised.value.asset_id) == (_DB, _ASSET)
+
+    @pytest.mark.parametrize("event", [
+        {"requestContext": {"http": {"method": "GET", "path": "/database/db1/assets/asset1/x"}}},
+        {"httpMethod": "GET", "path": "/database/db1/assets/asset1/x", "requestContext": {}},
+    ], ids=["http-api", "rest"])
+    def test_one_info_line_without_a_traceback_and_the_documented_body(self, event):
+        logger = MagicMock(name="guard.logger")
+        with patch.object(guard, "logger", logger):
+            response = guard.quarantine_refusal(guard.QuarantineBlockedResponse(_DB, _ASSET), event)
+        assert response["statusCode"] == 400
+        assert {"statusCode": 400, "body": json.loads(response["body"])} == (
+            quarantine_refusal())
+        assert [call[0] for call in logger.method_calls] == ["info"]
+        message = logger.info.call_args.args[0]
+        assert f"asset {_ASSET} in database {_DB} on GET /database/db1/assets/asset1/x" in message
+        assert "exc_info" not in logger.info.call_args.kwargs
 
 
 def _load_fresh(env, get_table_name=None):

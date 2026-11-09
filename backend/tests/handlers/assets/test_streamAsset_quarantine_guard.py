@@ -26,6 +26,9 @@ import pytest
 
 import common.compliance.quarantineGuard as guard
 from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
+from backend.tests.quarantineRefusalLog import (
+    assert_error_logged_with_traceback, assert_refusal_logged_once, captured_logs,
+)
 
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-buckets-table")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -305,3 +308,34 @@ class TestQuarantineGuardRunsAfterAuthorization:
 
         assert response["statusCode"] == _SUCCESS[method]
         table.get_item.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("method", ["HEAD", "GET"])
+class TestTheRefusalIsLoggedOnceWithoutATraceback:
+    """D174: a quarantine refusal is an expected 400, logged once at INFO with the database, the
+    asset and the route, and never as an ERROR with a traceback."""
+
+    def test_the_refusal_is_one_info_line_naming_database_asset_and_route(self, method):
+        m = _load()
+        _wire(m)
+        event = _rest_event(method)
+
+        with _guard_enabled(_state_table(_quarantined())), captured_logs(m) as logs:
+            response = m.lambda_handler(event, MagicMock())
+
+        assert_is_the_quarantine_refusal(response)
+        assert_refusal_logged_once(logs, _DB, _ASSET, method, event["path"])
+
+    def test_another_general_error_keeps_its_traceback(self, method):
+        """[control] Only the quarantine refusal changed level."""
+        from models.common import VAMSGeneralErrorResponse
+        m = _load()
+        _wire(m)
+        m.get_asset_details = MagicMock(side_effect=VAMSGeneralErrorResponse("Lookup failed"))
+
+        with _guard_enabled(_state_table(_quarantined())), captured_logs(m) as logs:
+            response = m.lambda_handler(_rest_event(method), MagicMock())
+
+        assert response["statusCode"] == 400
+        assert_error_logged_with_traceback(logs)

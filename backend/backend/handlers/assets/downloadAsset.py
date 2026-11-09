@@ -29,7 +29,9 @@ from common.s3 import (
     list_all_objects,
     presigned_get_object_params,
 )
-from common.compliance.quarantineGuard import check_quarantine_block
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel, DownloadAssetFileUrlModel
@@ -675,6 +677,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 )
 
             return success(body=response.dict())
+        except QuarantineBlockedResponse as refusal:
+            # An expected refusal: one INFO line, no traceback (D174).
+            return quarantine_refusal(refusal, event)
         except VAMSGeneralErrorResponse as e:
             # Extract status code if provided
             status_code = getattr(e, 'status_code', 400)
@@ -686,6 +691,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         # Extract status code if provided

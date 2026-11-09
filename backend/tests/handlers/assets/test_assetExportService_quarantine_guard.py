@@ -26,6 +26,9 @@ import pytest
 
 import common.compliance.quarantineGuard as guard
 from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
+from backend.tests.quarantineRefusalLog import (
+    assert_error_logged_with_traceback, assert_refusal_logged_once, captured_logs,
+)
 
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("ASSET_VERSIONS_STORAGE_TABLE_NAME", "test-asset-versions-table")
@@ -433,3 +436,30 @@ class TestExportRouteQuarantineBlock:
         assert response["statusCode"] == 200
         assert _SIGNED_URL in response["body"]
         table.get_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestTheRefusalIsLoggedOnceWithoutATraceback:
+    """D174: a quarantine refusal is an expected 400, logged once at INFO with the database, the
+    asset and the route, and never as an ERROR with a traceback."""
+
+    def test_the_refusal_is_one_info_line_naming_database_asset_and_route(self):
+        m = _load()
+        with captured_logs(m) as logs:
+            response, _spies = _invoke_export(_SINGLE_ASSET_PRESIGNED,
+                                              _state_table(_quarantined()))
+
+        assert_is_the_quarantine_refusal(response)
+        assert_refusal_logged_once(logs, _DB, _ASSET, "POST", _EXPORT_PATH)
+
+    def test_another_general_error_keeps_its_traceback(self):
+        """[control] Only the quarantine refusal changed level."""
+        from models.common import VAMSGeneralErrorResponse
+        m = _load()
+        lookup = MagicMock(side_effect=VAMSGeneralErrorResponse("Lookup failed"))
+        with captured_logs(m) as logs, patch.object(m, "get_asset_with_permissions", lookup):
+            response, _spies = _invoke_export(_SINGLE_ASSET_PRESIGNED,
+                                              _state_table(_quarantined()))
+
+        assert response["statusCode"] == 400
+        assert_error_logged_with_traceback(logs)

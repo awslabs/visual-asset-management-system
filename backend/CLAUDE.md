@@ -162,7 +162,10 @@ backend/
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true;
 │   │   │                                           #   refuses with QuarantineBlockedResponse (400, body
 │   │   │                                           #   exactly QUARANTINE_BLOCK_MESSAGE, no "VAMS General
-│   │   │                                           #   Error: " prefix, D169)
+│   │   │                                           #   Error: " prefix, D169); each handler catches it
+│   │   │                                           #   ahead of VAMSGeneralErrorResponse and answers with
+│   │   │                                           #   quarantine_refusal(): one INFO line (database,
+│   │   │                                           #   asset, route), no traceback (D174)
 │   │   ├── workflows/executionAccess.py            # THE execution read rule (workflow GET, captured
 │   │   │                                           #   metadata-source databases, every asset read and
 │   │   │                                           #   the output asset, deleted asset → its database)

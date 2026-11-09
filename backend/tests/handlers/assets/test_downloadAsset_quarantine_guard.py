@@ -21,6 +21,9 @@ import pytest
 
 import common.compliance.quarantineGuard as guard
 from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
+from backend.tests.quarantineRefusalLog import (
+    assert_error_logged_with_traceback, assert_refusal_logged_once, captured_logs,
+)
 
 os.environ.setdefault("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", "test-buckets-table")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -316,3 +319,38 @@ class TestPreviewDownloadQuarantineBlock:
         assert "not distributable" in json.loads(response["body"])["message"]
         table.get_item.assert_not_called()
         s3.generate_presigned_url.assert_not_called()
+
+
+@pytest.mark.unit
+class TestTheRefusalIsLoggedOnceWithoutATraceback:
+    """D174: a quarantine refusal is an expected 400, logged once at INFO with the database, the
+    asset and the route (single file, several files, preview), without a traceback."""
+
+    @pytest.mark.parametrize("download_type,keys", [
+        ("assetFile", None), ("assetFile", ["/model.glb", "/texture.png"]), ("assetPreview", None),
+    ], ids=["single", "bulk", "preview"])
+    def test_the_refusal_is_one_info_line_naming_database_asset_and_route(self, download_type,
+                                                                          keys):
+        m = _load()
+        _wire(m)
+        event = _event(download_type, keys=keys)
+
+        with _guard_enabled(_state_table(_quarantined())), captured_logs(m) as logs:
+            response = m.lambda_handler(event, MagicMock())
+
+        assert_is_the_quarantine_refusal(response)
+        assert_refusal_logged_once(logs, _DB, _ASSET, "POST", event["path"])
+
+    def test_another_general_error_is_logged_as_before(self):
+        """[control] "Asset not distributable" keeps the route's handling: its answer and
+        `general_error`'s line, and no quarantine line."""
+        m = _load()
+        _wire(m, distributable=False)
+
+        with _guard_enabled(_state_table(_quarantined())), captured_logs(m) as logs:
+            response = m.lambda_handler(_event(), MagicMock())
+
+        assert json.loads(response["body"]) == {
+            "message": "VAMS General Error: Asset not distributable"}
+        assert not any("quarantin" in str(c) for c in logs["guard"].method_calls)
+        assert [c[0] for c in logs["general_error"].method_calls] == ["warning"]
