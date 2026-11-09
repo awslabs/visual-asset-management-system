@@ -124,7 +124,7 @@ This software includes third party software subject to the following copyrights:
 | online-3d-viewer           | [0.18.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
 | playcanvas                 | [2.23.3](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
-| supersplat                 | [v3.1.1](https://github.com/playcanvas/supersplat)           | MIT                   |
+| supersplat                 | [v3.7.0](https://github.com/playcanvas/supersplat)           | MIT                   |
 | three                      | [0.187.0, 0.182.0](https://threejs.org/)                     | MIT                   |
 | occt-import-js             | [0.0.22](https://github.com/kovacsv/occt-import-js)          | LGPL-2.1\*            |
 | web-ifc                    | [0.0.77, 0.0.68](https://github.com/ThatOpen/engine_web-ifc) | MPL-2.0\*\*           |

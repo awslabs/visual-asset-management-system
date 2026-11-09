@@ -144,6 +144,60 @@ def splat_transform(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], 
         return out.read_bytes()
 
 
+# The steps of util/create-ksplat.js in mkkellogg/GaussianSplats3D (MIT), against the npm build:
+# argv = source .ply, output .ksplat, compression level.
+KSPLAT_SCRIPT = """\
+import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
+import * as fs from "fs";
+const [input, output, level] = process.argv.slice(2);
+const data = fs.readFileSync(input);
+const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+const splats = GaussianSplats3D.PlyParser.parseToUncompressedSplatArray(buffer, 0);
+const generator = GaussianSplats3D.SplatBufferGenerator.getStandardGenerator(1, Number(level), 0);
+const result = generator.generateFromUncompressedSplatArray(splats);
+fs.writeFileSync(output, Buffer.from(result.bufferData));
+"""
+
+
+def ksplat(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], bytes]]) -> bytes:
+    """The source .ply converted to .ksplat by @mkkellogg/gaussian-splats-3d at the pinned
+    `version` (with `three` at `threeVersion`, its peer), compression level `level` (default 1).
+    splat-transform reads .ksplat but cannot write it. Installed under the 7-day release-age floor."""
+    ((source, data),) = sources
+    with tempfile.TemporaryDirectory(prefix="vams-ksplat-") as tmp:
+        work = Path(tmp)
+        src = work / source["path"].rsplit("/", 1)[-1]
+        out = work / "out.ksplat"
+        script = work / "create-ksplat.mjs"
+        src.write_bytes(data)
+        script.write_text(KSPLAT_SCRIPT, encoding="utf-8")
+        (work / "package.json").write_text('{"private": true}\n', encoding="utf-8")
+        steps = [
+            [
+                "npm",
+                "install",
+                "--no-save",
+                "--no-audit",
+                "--no-fund",
+                "--min-release-age=7",
+                f"@mkkellogg/gaussian-splats-3d@{sample['version']}",
+                f"three@{sample['threeVersion']}",
+            ],
+            ["node", str(script), str(src), str(out), str(sample.get("level", 1))],
+        ]
+        for argv in steps:
+            print(f"  $ {' '.join(argv)}")
+            proc = subprocess.run(argv, cwd=work, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise SeedError(
+                    f"{sample['id']}: {argv[0]} failed ({proc.returncode})\n"
+                    f"stdout: {proc.stdout.strip()}\nstderr: {proc.stderr.strip()}"
+                )
+        if not out.exists():
+            raise SeedError(f"{sample['id']}: create-ksplat wrote no output")
+        return out.read_bytes()
+
+
 SH_C0 = 0.28209479177387814
 
 
@@ -209,8 +263,9 @@ TRANSFORMS: Dict[str, Callable[[Dict[str, Any], List[Tuple[Dict[str, Any], bytes
     "zip": zip_sources,
     "splat-transform": splat_transform,
     "ply-to-splat": ply_to_splat,
+    "ksplat": ksplat,
 }
-SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform", "ply-to-splat"}
+SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform", "ply-to-splat", "ksplat"}
 REQUIRED_KEYS = {"id", "viewer", "path", "licence", "source"}
 
 
@@ -256,6 +311,8 @@ def validate_manifest(samples: List[Dict[str, Any]]) -> None:
                 problems.append(f"{sid}: {transform} takes exactly one source")
             if transform == "splat-transform" and not sample.get("version"):
                 problems.append(f"{sid}: splat-transform needs a pinned version")
+            if transform == "ksplat" and not (sample.get("version") and sample.get("threeVersion")):
+                problems.append(f"{sid}: ksplat needs a pinned version and threeVersion")
         required = sample.get("requiresFeature", [])
         if not isinstance(required, (str, list)):
             problems.append(f"{sid}: requiresFeature must be a string or a list")

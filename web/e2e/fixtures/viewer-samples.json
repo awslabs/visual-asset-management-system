@@ -115,6 +115,19 @@
             }
         },
         {
+            "id": "splat-ksplat",
+            "viewer": "supersplat-viewer",
+            "path": "/Unicorn_Stuffy.ksplat",
+            "derivedFrom": "splat-ply",
+            "transform": "ksplat",
+            "version": "0.4.7",
+            "threeVersion": "0.170.0",
+            "level": 1,
+            "licence": "inherits splat-ply (CC-BY-4.0)",
+            "source": "the splat-ply sample written as .ksplat (compression level 1) by @mkkellogg/gaussian-splats-3d (MIT)",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
             "id": "online3d-3dm",
             "viewer": "online3d-viewer-rhino",
             "path": "/RhinoLogo.3dm",
