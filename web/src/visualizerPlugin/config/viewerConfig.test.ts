@@ -16,7 +16,11 @@ import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
 import addonViewerConfig from "./addonViewerConfig.json";
-import { OCCT_FORMATS } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
+import {
+    OCCT_FORMATS,
+    THREE_MESH_FORMATS,
+    USD_FORMATS,
+} from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
 import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
 import { VIEWER_COMPONENTS } from "../viewers/manifest";
 import { ADDON_DEPENDENCY_MANAGERS, ADDON_VIEWER_COMPONENTS } from "../viewers/addonManifest";
@@ -42,6 +46,19 @@ const missingFrom = (declared: string[], formats: string[]): string[] =>
 describe("viewerConfig vs the loaders", () => {
     it("offers the Three.js viewer for every CAD format its loader routes to OCCT", () => {
         expect(missingFrom(byId("threejs-viewer").supportedExtensions, OCCT_FORMATS)).toEqual([]);
+    });
+
+    it("offers the Three.js viewer for every USD format its loader routes to USDLoader", () => {
+        expect(missingFrom(byId("threejs-viewer").supportedExtensions, USD_FORMATS)).toEqual([]);
+    });
+
+    it("declares only formats a Three.js loader parses", () => {
+        // Every declared extension must reach a loader, or the viewer never finishes loading.
+        const parsed = [...THREE_MESH_FORMATS, ...USD_FORMATS, ...OCCT_FORMATS];
+        const declared = byId("threejs-viewer").supportedExtensions.map((ext: string) =>
+            ext.replace(/^\./, "")
+        );
+        expect(declared.filter((ext: string) => !parsed.includes(ext))).toEqual([]);
     });
 
     it("missingFrom reports a gap when one exists", () => {

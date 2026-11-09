@@ -345,7 +345,7 @@ class TestVamsExecute:
         _mod, resp, payload = self._run(manifest=self._chained_manifest(), config={"MODEL": "blenderagent"})
         assert resp["statusCode"] == 200
         assert payload is not None
-        assert any(k.endswith("user_supplied.glb") for k in payload["inputS3AssetFilePaths"])
+        assert any(view["key"].endswith("user_supplied.glb") for view in payload["inputViews"])
 
     def test_two_distinct_meshes_are_still_refused(self):
         """Narrowing collapses formats of one model, not genuinely different models: two stems still
@@ -713,21 +713,27 @@ class TestOpenPipeline:
         class of test exists for; only a deliberate control run distinguished it from success.
         """
         event = self._event()
-        views = [f"s3://in-bucket/asset/cat_{name}.png"
+        views = [{"bucket": "in-bucket", "key": f"asset/cat_{name}.png", "versionId": f"v-{name}"}
                  for name in ("front", "left", "back", "right")]
-        event["inputS3AssetFilePaths"] = views
+        event["inputViews"] = views
         _mod, resp, start, _fail = self._run(event)
         assert resp["statusCode"] == 200
         payload = json.loads(start.call_args.kwargs["input"])
-        assert payload.get("inputS3AssetFilePaths") == views, (
+        assert payload.get("inputViews") == views, (
             "the view list was dropped at this hop, which reconstructs from one view and looks successful")
 
-    def test_a_view_of_an_unsupported_type_is_refused_here(self):
+    @pytest.mark.parametrize("shape", ["inputViews", "inputS3AssetFilePaths"])
+    def test_a_view_of_an_unsupported_type_is_refused_here(self, shape):
         """Every view is gated, not just the primary: an unreadable second view would otherwise fail
-        inside the container, on a GPU instance, after the model had loaded."""
+        inside the container, on a GPU instance, after the model had loaded. A development build's
+        vamsExecute sends the path list, so that shape is gated too."""
         event = self._event()
-        event["inputS3AssetFilePaths"] = ["s3://in-bucket/asset/cat_front.png",
-                                          "s3://in-bucket/asset/cat_left.txt"]
+        keys = ("asset/cat_front.png", "asset/cat_left.txt")
+        event.pop("inputViews", None)
+        if shape == "inputViews":
+            event["inputViews"] = [{"bucket": "in-bucket", "key": key, "versionId": ""} for key in keys]
+        else:
+            event["inputS3AssetFilePaths"] = [f"s3://in-bucket/{key}" for key in keys]
         _mod, resp, start, send_failure = self._run(event)
         assert resp["statusCode"] == 400
         assert not start.called, "no state machine may start with an unusable view"
@@ -815,7 +821,8 @@ class TestConstructPipeline:
     def test_definition_maps_each_asset_bucket_outside_the_deployment_region(self):
         mod = self._load()
         out = mod.lambda_handler(self._event(
-            inputS3AssetFilePaths=["s3://abkt/xidM/photos/mug.png", "s3://abkt/xidM/photos/mug_back.png"],
+            inputViews=[{"bucket": "abkt", "key": "xidM/photos/mug.png", "versionId": ""},
+                        {"bucket": "abkt", "key": "xidM/photos/mug_back.png", "versionId": ""}],
             outputS3AssetFilesPath="s3://runbkt/pipelines/imageTo3d/JOB/output/E1/files/",
             outputS3AssetMetadataPath="s3://runbkt/pipelines/imageTo3d/JOB/output/E1/metadata/",
             outputS3AssetResultsPath="s3://runbkt/pipelines/imageTo3d/JOB/output/E1/results/",
