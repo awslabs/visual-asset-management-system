@@ -54,7 +54,7 @@ If it fails, report the error output focusing on:
 
 #### 3. Lint Check
 
-Always run lint from the **repo root** (the root `package.json` scripts target `web/src`, `infra/lib`, `infra/bin`, and `infra/test`):
+Always run lint from the **repo root** (the root `package.json` scripts target `web/src`, `infra/lib`, `infra/bin`, `infra/test`, and the release automation CDK app's `lib`, `bin` and `test` under `tools/VamsReleaseAutomation/cicd/pipeline/`):
 
 ```bash
 npm run lint 2>&1
@@ -127,6 +127,17 @@ Perform these static checks without running commands:
 **Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
 
 **Config template consistency**: Verify any config fields present in the configuration file from check 1 also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
+
+#### 9. Release Automation Checks
+
+Run these when the change touches `tools/VamsReleaseAutomation/`, its documentation pages under `documentation/docusaurus-site/docs/deployment/release-automation/` and `productionizing/`, `.kiro/steering/RELEASE_AUTOMATION_WORKFLOW.md` or `.claude/commands/release-automation.md`. Both run offline, with no AWS calls.
+
+```bash
+cd tools/VamsReleaseAutomation && pip install -e '.[dev]' && make check 2>&1
+cd tools/VamsReleaseAutomation/cicd/pipeline && npm ci --ignore-scripts && npm run typecheck && npm test 2>&1
+```
+
+`make check` runs the engine, guard, script, IAM and CI tests, then the parse, ledger-template, identical-copy, doc-command, agent-policy, FILES.md, link and neutrality checks; report each step that prints `FAILED`. The pipeline `npm test` includes the cdk-nag "no unsuppressed finding" test.
 
 ### Report Format
 

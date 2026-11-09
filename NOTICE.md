@@ -683,3 +683,97 @@ This software includes third party software subject to the following copyrights:
 | rich       | >=14.2.0   | MIT          |
 | tqdm       | >=4.67.1   | MPL-2.0/MIT  |
 | defusedxml | >=0.7.1    | Python-2.0   |
+
+---
+
+## THIRD PARTY COMPONENTS - TOOLS (VAMS RELEASE AUTOMATION)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**Release Automation Python Dependencies (runtime, with their dependencies)**
+
+| Name                      | Version     | License                 |
+| :------------------------ | :---------- | :---------------------- |
+| boto3                     | 1.43.123    | Apache-2.0              |
+| botocore                  | 1.43.123    | Apache-2.0              |
+| PyYAML                    | 6.0.3       | MIT                     |
+| jsonschema                | 4.26.0      | MIT                     |
+| attrs                     | 26.1.0      | MIT                     |
+| jmespath                  | 1.1.0       | MIT                     |
+| jsonschema-specifications | 2025.9.1    | MIT                     |
+| python-dateutil           | 2.9.0.post0 | Apache-2.0/BSD-3-Clause |
+| referencing               | 0.37.0      | MIT                     |
+| rpds-py                   | 2026.9.1    | MIT                     |
+| s3transfer                | 0.19.3      | Apache-2.0              |
+| six                       | 1.17.0      | MIT                     |
+| urllib3                   | 2.8.0       | MIT                     |
+
+**Release Automation MCP Server (`[mcp]` extra, with its dependencies)**
+
+| Name              | Version | License      |
+| :---------------- | :------ | :----------- |
+| mcp               | 2.3.0   | MIT          |
+| mcp-types         | 2.3.0   | MIT          |
+| annotated-types   | 0.8.0   | MIT          |
+| anyio             | 4.15.1  | MIT          |
+| click             | 8.5.0   | BSD-3-Clause |
+| h11               | 0.16.0  | MIT          |
+| httpcore2         | 2.16.0  | BSD-3-Clause |
+| httpx2            | 2.16.0  | BSD-3-Clause |
+| idna              | 3.20    | BSD-3-Clause |
+| opentelemetry-api | 1.45.1  | Apache-2.0   |
+| pydantic          | 2.14.1  | MIT          |
+| pydantic_core     | 2.50.1  | MIT          |
+| PyJWT             | 2.15.1  | MIT          |
+| python-multipart  | 0.0.32  | Apache-2.0   |
+| sse-starlette     | 3.6.0   | BSD-3-Clause |
+| starlette         | 1.10.0  | BSD-3-Clause |
+| truststore        | 0.10.5  | MIT          |
+| typing-inspection | 0.4.4   | MIT          |
+| uvicorn           | 0.54.0  | BSD-3-Clause |
+
+**Release Automation Python Development Dependencies (with their dependencies)**
+
+| Name               | Version    | License                    |
+| :----------------- | :--------- | :------------------------- |
+| pytest             | 9.2.0      | MIT                        |
+| moto               | 5.2.5      | Apache-2.0                 |
+| certifi            | 2026.10.23 | MPL-2.0                    |
+| cffi               | 2.1.1      | MIT-0                      |
+| charset-normalizer | 3.5.2      | MIT                        |
+| cryptography       | 50.0.2     | Apache-2.0 OR BSD-3-Clause |
+| docker             | 7.2.0      | Apache-2.0                 |
+| idna               | 3.20       | BSD-3-Clause               |
+| iniconfig          | 2.3.1      | MIT                        |
+| MarkupSafe         | 3.0.4      | BSD-3-Clause               |
+| packaging          | 26.3       | Apache-2.0 OR BSD-2-Clause |
+| pluggy             | 1.7.0      | MIT                        |
+| py-partiql-parser  | 0.6.3      | MIT                        |
+| pycparser          | 3.12       | BSD-3-Clause               |
+| Pygments           | 2.21.0     | BSD-2-Clause               |
+| requests           | 2.34.2     | Apache-2.0                 |
+| responses          | 0.26.3     | Apache-2.0                 |
+| Werkzeug           | 3.1.9      | BSD-3-Clause               |
+| xmltodict          | 1.0.4      | MIT                        |
+
+**Release Automation CDK Pipeline (NPM, `tools/VamsReleaseAutomation/cicd/pipeline`)**
+
+| Package     | Version  | License    |
+| :---------- | :------- | :--------- |
+| aws-cdk-lib | 2.275.0  | Apache-2.0 |
+| cdk-nag     | 2.38.2   | Apache-2.0 |
+| constructs  | 10.8.1   | Apache-2.0 |
+| yaml        | 2.9.1    | ISC        |
+| @types/jest | 30.0.0   | MIT        |
+| @types/node | 22.20.5  | MIT        |
+| aws-cdk     | 2.1146.1 | Apache-2.0 |
+| jest        | 30.5.2   | MIT        |
+| ts-jest     | 29.4.15  | MIT        |
+| ts-node     | 10.9.2   | MIT        |
+| typescript  | 5.9.3    | Apache-2.0 |
+
+The CDK pipeline lockfile resolves 352 packages. Their declared licences are MIT (284), ISC (32),
+Apache-2.0 (11), BSD-3-Clause (11), BlueOak-1.0.0 (8), BSD-2-Clause (2), (MIT OR CC0-1.0) (2),
+CC-BY-4.0 (1) and 0BSD (1).

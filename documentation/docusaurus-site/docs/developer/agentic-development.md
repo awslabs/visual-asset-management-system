@@ -60,6 +60,7 @@ The `.kiro/steering/` directory contains detailed development workflow guides. T
 | `infra/lib/nestedStacks/pipelines/CLAUDE.md` | Pipeline nested stacks      | Pipeline nested stack pattern, Lambda package layout, VPC builder wiring, sub-process and log registration wiring, S3 output paths       |
 | `tools/VamsCLI/CLAUDE.md`                    | Python CLI tool             | Click framework, profile management, command groups, constants pattern, JSON output mode                                                 |
 | `tools/VamsMCP/CLAUDE.md`                    | MCP server                  | Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules                                    |
+| `tools/VamsReleaseAutomation/CLAUDE.md`      | Release automation          | `vra` engine and MCP server, human-only actions, shared home, ledger core patches, CDK pipeline app, IAM manifests, offline `make check` |
 | `documentation/CLAUDE.md`                    | Documentation site          | Docusaurus conventions, writing style, sidebar configuration, cross-reference sources                                                    |
 
 ### Workflow Documents
@@ -74,6 +75,7 @@ The following workflow documents live in `.kiro/steering/`.
 | `WEB_DEVELOPMENT_WORKFLOW.md`         | React frontend     | Service-layer pattern, Cloudscape imports, HashRouter, Synonyms, lazy loading, Context + useReducer, theme system, viewer plugins      |
 | `WEB_FRONTEND.md`                     | React frontend     | Front-end steering mirroring `web/CLAUDE.md`: directory structure, mandatory rules, viewer plugin system, testing (Jest), conventions  |
 | `DOCUMENTATION_WORKFLOW.md`           | Documentation site | Docusaurus conventions, admonition syntax, sidebar updates, writing style, cross-references, build commands                            |
+| `RELEASE_AUTOMATION_WORKFLOW.md`      | Release automation | Mirror of `tools/VamsReleaseAutomation/CLAUDE.md`: engine, MCP server, shared home, skill, adapters, CI/CD lanes, IAM manifests        |
 
 ## How Steering Documents Guide Development
 
@@ -151,17 +153,18 @@ These patterns are documented with complete code templates in both `CDK_DEVELOPM
 
 In addition to steering documents, Claude Code supports **slash commands** — reusable skill prompts stored in `.claude/commands/`. These commands automate common multi-step development tasks and can be invoked from the Claude Code CLI with `/<command-name>`.
 
-| Command                  | File                                        | Description                                                                                                                                  |
-| :----------------------- | :------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/add-api-endpoint`      | `.claude/commands/add-api-endpoint.md`      | Scaffold a new backend API endpoint across all required files (handler, model, Lambda builder, API route, frontend service)                  |
-| `/add-pipeline`          | `.claude/commands/add-pipeline.md`          | Scaffold a new processing pipeline with container, Lambda, CDK stack, and configuration                                                      |
-| `/deploy-check`          | `.claude/commands/deploy-check.md`          | Run pre-deployment validation checklist (config, CDK synth, lint, security)                                                                  |
-| `/generate-permissions`  | `.claude/commands/generate-permissions.md`  | Generate VAMS permission constraint JSON templates                                                                                           |
-| `/refresh-steering-docs` | `.claude/commands/refresh-steering-docs.md` | Update CLAUDE.md directory structures and key file references                                                                                |
-| `/update-changelog`      | `.claude/commands/update-changelog.md`      | Generate changelog entries from git commits                                                                                                  |
-| `/update-docs`           | `.claude/commands/update-docs.md`           | Update Docusaurus documentation pages based on recent code changes                                                                           |
-| `/verify-docs`           | `.claude/commands/verify-docs.md`           | Cross-check documentation accuracy against source code                                                                                       |
-| `/vams-agent`            | `.claude/commands/vams-agent.md`            | Operate a VAMS deployment at runtime via `vamscli` (search, inspect, bulk-update, cross-link); self-discovers commands, read-only by default |
+| Command                  | File                                        | Description                                                                                                                                                       |
+| :----------------------- | :------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/add-api-endpoint`      | `.claude/commands/add-api-endpoint.md`      | Scaffold a new backend API endpoint across all required files (handler, model, Lambda builder, API route, frontend service)                                       |
+| `/add-pipeline`          | `.claude/commands/add-pipeline.md`          | Scaffold a new processing pipeline with container, Lambda, CDK stack, and configuration                                                                           |
+| `/deploy-check`          | `.claude/commands/deploy-check.md`          | Run pre-deployment validation checklist (config, CDK synth, lint, security)                                                                                       |
+| `/generate-permissions`  | `.claude/commands/generate-permissions.md`  | Generate VAMS permission constraint JSON templates                                                                                                                |
+| `/refresh-steering-docs` | `.claude/commands/refresh-steering-docs.md` | Update CLAUDE.md directory structures and key file references                                                                                                     |
+| `/release-automation`    | `.claude/commands/release-automation.md`    | Operate the release lifecycle of a customer fork through the `vra` engine (sync, merge, build, deploy, test, promote, roll back, data copy); read-only by default |
+| `/update-changelog`      | `.claude/commands/update-changelog.md`      | Generate changelog entries from git commits                                                                                                                       |
+| `/update-docs`           | `.claude/commands/update-docs.md`           | Update Docusaurus documentation pages based on recent code changes                                                                                                |
+| `/verify-docs`           | `.claude/commands/verify-docs.md`           | Cross-check documentation accuracy against source code                                                                                                            |
+| `/vams-agent`            | `.claude/commands/vams-agent.md`            | Operate a VAMS deployment at runtime via `vamscli` (search, inspect, bulk-update, cross-link); self-discovers commands, read-only by default                      |
 
 These commands encode the cross-component patterns from the steering documents into executable workflows. For example, `/add-api-endpoint` automates the six-file change pattern described in Example 1 above.
 
@@ -230,6 +233,10 @@ The skill is host-agnostic. Claude Code invokes it as the `/vams-agent` slash co
 Granting an agent write or destructive access lets it modify or delete VAMS data under your identity. Start read-only, enable mutations only for the specific task at hand, and review what an agent proposes before authorizing bulk or destructive operations. Workflow execution in particular runs real AWS compute and can incur significant cost on GenAI and 3D processing pipelines.
 :::
 
+### Release Automation MCP Server
+
+A third component operates the **release lifecycle** of a customer fork rather than the data in a deployment. [Release Automation](../deployment/release-automation/index.md) (`tools/VamsReleaseAutomation/`) ships the `vra` engine with a stdio MCP server, `vra mcp`, and one agent-portable skill with adapters for Codex, Claude Code (`/release-automation`), Kiro and Cursor. Agents sync and merge upstream releases, build, deploy, test and promote through it; it uses the AWS credentials of the machine or pipeline it runs on, not a VAMS user's sign-in. Its MCP tools come in read, write and gated tiers, deploys to gated environments need approval records, and the actions reserved for a person (confirming manual work, releasing or taking over another run's lock, waiving the build scanners, wiring IT's IAM role answer into the configuration) are refused for agents in the engine itself. See [Agent systems](../deployment/release-automation/agent-systems.md).
+
 ### Keeping the CLI, MCP Server, and Skill Aligned
 
 The MCP server sits downstream of the CLI: it imports the VamsCLI `APIClient` and `ProfileManager` directly rather than calling the REST API itself. Changes therefore propagate in one direction, and each hop must be updated together:
@@ -276,11 +283,14 @@ VAMS maintains two parallel families of steering documents — `CLAUDE.md` files
 | `infra/lib/nestedStacks/pipelines/CLAUDE.md` | `CDK_DEVELOPMENT_WORKFLOW.md` (pipeline development section)                                    |
 | `tools/VamsCLI/CLAUDE.md`                    | `CLI_DEVELOPMENT_WORKFLOW.md`                                                                   |
 | `tools/VamsMCP/CLAUDE.md`                    | `CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                                         |
+| `tools/VamsReleaseAutomation/CLAUDE.md`      | `RELEASE_AUTOMATION_WORKFLOW.md`                                                                |
 | `documentation/CLAUDE.md`                    | `DOCUMENTATION_WORKFLOW.md`                                                                     |
 
 Because the MCP server is downstream of the CLI, the CLI and MCP steering documents share a single Kiro workflow document rather than each having their own. A change to the CLI-to-MCP propagation rules therefore has four destinations, listed in [Keeping the CLI, MCP Server, and Skill Aligned](#keeping-the-cli-mcp-server-and-skill-aligned).
 
 The agent skill (`tools/VamsAgentSkill/SKILL.md`) sits outside both families. It is a runtime operating instruction rather than a development steering document, and it is agent-agnostic — the Claude Code `/vams-agent` command is a thin entry point that loads the same file. Update the skill directly; there is no Kiro mirror to keep in sync.
+
+The release automation skill (`tools/VamsReleaseAutomation/skill/SKILL.md`) is the same kind of agent-portable runtime instruction, loaded by the Claude Code `/release-automation` command and the Kiro, Codex and Cursor adapters; it has no Kiro mirror either.
 
 ## Adding New Steering Documents
 
