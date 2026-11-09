@@ -357,6 +357,14 @@ ships an add-on with tools; a fork does not.
     level after the destructive block and before `register_custom_tools(...)`. The MCP SDK keeps
     the first registration of a name, so a core tool wins over an add-on tool and an add-on tool
     over a custom one.
+-   **An add-on's tools exist only on a deployment with the add-on.** Each module declares its
+    add-on's switch in `FEATURE` (a `FEATURE_*` of `vamscli.addon_constants`), and
+    `register_addon_tools` registers the module only when `addon_deployed(client, module)`: the
+    profile's feature-switch snapshot, read at server start, carries it (no client registers
+    nothing). Enabling the add-on later takes `vamscli auth login` and a server restart; the README
+    says so. Tests that look at a server's add-on tools reload it through the `server_with_switches`
+    fixture (`tests/conftest.py`), never over the developer's own profile
+    (`tests/test_addon_tool_registration.py`).
 -   **A feature-gated add-on tool opens with a pre-flight.** Its first statement is
     `client.require_feature(<FEATURE_*>, <*_DISABLED_MESSAGE>)`, both names from
     `vamscli.addon_constants`: the MCP counterpart of the CLI's `@requires_feature`. It reads the

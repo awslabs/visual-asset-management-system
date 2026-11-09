@@ -491,13 +491,16 @@ and is the better first move.
 
 ## Add-on tools
 
-The optional add-ons' tools are part of this server, in `vams_mcp/addon_tools/`. They are
-registered whether or not the deployment enables the add-on, under the same `VAMS_ENABLE_WRITES`
-and `VAMS_ENABLE_DESTRUCTIVE` gates as the tools above. Each one first checks the feature switches
-the vamscli profile recorded at its last `vamscli auth login`, and on a deployment that has not
-enabled the add-on answers the sentence the CLI prints, with `error_type` `FeatureDisabledError`,
-without making a request; log in again if the add-on was enabled since. The `autoApprove` sample
-above names no add-on tool: each add-on below lists the reads that are safe to add to it.
+The optional add-ons' tools are part of this server, in `vams_mcp/addon_tools/`, under the same
+`VAMS_ENABLE_WRITES` and `VAMS_ENABLE_DESTRUCTIVE` gates as the tools above. An add-on's tools are
+registered only when the feature switches the vamscli profile recorded at its last
+`vamscli auth login` include the add-on's switch, read once when the server starts: on a deployment
+that has not enabled the add-on, the server lists none of its tools. After an administrator enables
+the add-on, run `vamscli auth login` again and restart the MCP server (reload or restart its entry in
+the client) to see them. A registered add-on tool still checks the switches before any request, and
+answers the sentence the CLI prints, with `error_type` `FeatureDisabledError`, without making a
+request when the deployment lacks the switch it needs. The `autoApprove` sample above names no
+add-on tool: each add-on below lists the reads that are safe to add to it.
 
 ### EDH Workstations
 
@@ -513,8 +516,9 @@ that build them and its container jobs. The add-on's guide is in
 `get_edh_health`, `get_edh_admin_settings`, `list_edh_container_catalog`, `list_edh_container_jobs`,
 `list_edh_ami_recipes`, `get_edh_ami_recipe`, `list_edh_ami_recipe_builds`,
 `list_edh_catalog_capacity_reservations`, `list_edh_admin_capacity_reservations`. On a
-deployment that has not enabled the add-on, every EDH tool answers
-`The EDH Workstations add-on is not enabled for this deployment ...`. The
+deployment that has not enabled the add-on the server lists no EDH tool; should the profile sign in
+to such a deployment while the server runs, every EDH tool answers
+`The EDH Workstations add-on is not enabled for this deployment ...` until the server restarts. The
 two container reads answer only when the deployment also enables the add-on's
 container jobs, and otherwise answer `EDH container jobs are not enabled for
 this deployment ...` the same way. The three AMI recipe reads answer only when

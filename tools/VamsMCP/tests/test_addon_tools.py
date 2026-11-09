@@ -8,7 +8,8 @@ pre-flight, that its read section calls nothing that mutates, that every client 
 exists on vamscli's `APIClient`, and that no tool name is taken twice. Each check is a function over a
 parsed module, run on the shipped modules and on a synthetic module that breaks it, so a check that
 stopped firing fails here too. The hook itself (what it hands each module, and that it runs before
-the custom-tools hook) is exercised with probe modules and a server reload.
+the custom-tools hook) is exercised with probe modules and a server reload; which add-ons' tools a
+server registers, from the profile's feature switches, is in `test_addon_tool_registration.py`.
 """
 
 import ast
@@ -376,9 +377,10 @@ class _Records(logging.Handler):
 
 
 @pytest.fixture
-def probed_server(monkeypatch):
-    """Reload the server with one probe add-on module in place of the shipped ones, and a custom hook
-    that registers a tool under the probe's name; restore both afterwards."""
+def probed_server(monkeypatch, server_with_switches):
+    """Reload the server with one probe add-on module in place of the shipped ones, over a profile
+    whose switches hold the probe's, and a custom hook that registers a tool under the probe's name;
+    restore both afterwards."""
     seen = {}
     records = _Records()
     mcp_logger = logging.getLogger("mcp")
@@ -410,11 +412,12 @@ def probed_server(monkeypatch):
 
     probe = types.ModuleType("vams_mcp.addon_tools.probe")
     probe.register = register
+    probe.FEATURE = "ADDON_PROBE_FEATURE"
     monkeypatch.setattr(addon_tools, "ADDON_TOOL_MODULES", (probe,))
     monkeypatch.setattr(custom_tools, "register_custom_tools", custom)
-    importlib.reload(server_module)
     try:
-        yield server_module, seen, records
+        with server_with_switches([probe.FEATURE]) as server:
+            yield server, seen, records
     finally:
         mcp_logger.removeHandler(records)
         monkeypatch.undo()
@@ -451,14 +454,16 @@ async def test_the_add_on_hook_runs_before_the_custom_hook(probed_server):
 
 
 @pytest.mark.asyncio
-async def test_the_reload_restores_the_shipped_add_on_modules():
-    # Control for the fixture's teardown: the default server carries no probe tool, and the shipped
-    # add-on tools are registered again.
+async def test_the_reload_restores_the_shipped_add_on_modules(server_with_switches):
+    # Control for the fixture's teardown: the default server carries no probe tool, and over a profile
+    # with every shipped add-on's switch the shipped add-on tools are registered again.
     names = {tool.name for tool in await server_module.mcp.list_tools()}
     assert "addon_probe_shared" not in names
+    assert server_module.register_addon_tools is addon_tools.register_addon_tools
     shipped = {
         node.name for tree in _addon_module_trees().values()
         for tier, node in _placed_tools(_register_def(tree)) if tier == "read"
     }
+    with server_with_switches([module.FEATURE for module in addon_tools.ADDON_TOOL_MODULES]) as server:
+        names = {tool.name for tool in await server.mcp.list_tools()}
     assert shipped and shipped <= names
-    assert server_module.register_addon_tools is addon_tools.register_addon_tools

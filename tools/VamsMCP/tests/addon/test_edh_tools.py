@@ -13,10 +13,8 @@ desktop credential. The layout every add-on module shares is held by `tests/test
 """
 
 import ast
-import importlib
 import inspect
 import json
-import os
 import re
 import types
 import uuid
@@ -46,8 +44,6 @@ SOURCE_TEXT = SOURCE_PATH.read_text(encoding="utf-8")
 _TREE = ast.parse(SOURCE_TEXT)
 SERVER_TEXT = Path(server.__file__).read_text(encoding="utf-8")
 README_TEXT = (Path(server.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
-
-GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")
 
 # The contract, stated here rather than derived from the source: a test that reads the module it is
 # checking cannot notice a tool that moved between the two gate blocks.
@@ -210,22 +206,6 @@ def gated(client):
     return _register(client, enable_writes=True, enable_destructive=True)
 
 
-@pytest.fixture
-def enabled_server():
-    """Reimport `vams_mcp.server` with both gates on, then restore the default-gate module."""
-    for name in GATE_VARS:
-        os.environ[name] = "true"
-    importlib.reload(server)
-    try:
-        assert server.CONFIG.enable_writes is True
-        assert server.CONFIG.enable_destructive is True
-        yield server
-    finally:
-        for name in GATE_VARS:
-            os.environ.pop(name, None)
-        importlib.reload(server)
-
-
 class _EmptyAnswer:
     """The response a recorded verb returns: an empty JSON body."""
 
@@ -357,8 +337,11 @@ def test_the_duplicate_tool_is_a_write_not_a_destructive_tool(client):
 
 
 @pytest.mark.asyncio
-async def test_the_server_registers_the_reads_and_withholds_the_gated_tools_by_default():
-    names = {tool.name for tool in await server.mcp.list_tools()}
+async def test_the_server_registers_the_reads_and_withholds_the_gated_tools_by_default(server_with_switches):
+    """Over a profile whose switches hold the add-on's (`tests/test_addon_tool_registration.py` covers
+    the profile without it)."""
+    with server_with_switches([FEATURE_EDH_WORKSTATIONS]) as edh_server:
+        names = {tool.name for tool in await edh_server.mcp.list_tools()}
     missing = sorted(set(EDH_READ_TOOLS) - names)
     assert not missing, f"EDH read tools not registered: {missing}"
     leaked = sorted(set(EDH_GATED_TOOLS) & names)
@@ -366,9 +349,11 @@ async def test_the_server_registers_the_reads_and_withholds_the_gated_tools_by_d
 
 
 @pytest.mark.asyncio
-async def test_the_server_registers_every_edh_tool_with_both_gates_on(enabled_server):
+async def test_the_server_registers_every_edh_tool_with_both_gates_on(server_with_switches):
     """The server passes its own CONFIG to the add-on lane, so its gates govern these tools too."""
-    names = {tool.name for tool in await enabled_server.mcp.list_tools()}
+    with server_with_switches([FEATURE_EDH_WORKSTATIONS], enable_writes=True, enable_destructive=True) as on:
+        assert on.CONFIG.enable_writes is True and on.CONFIG.enable_destructive is True
+        names = {tool.name for tool in await on.mcp.list_tools()}
     missing = sorted(set(EDH_TOOLS) - names)
     assert not missing, f"EDH tools not registered with both gates on: {missing}"
 

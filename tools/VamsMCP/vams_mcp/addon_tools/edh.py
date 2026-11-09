@@ -3,12 +3,14 @@
 ``register`` is one of the modules ``addon_tools.register_addon_tools`` calls, so ``server.py``
 registers these tools after its own and before a fork's. The add-on's handlers return no ``message``
 envelope, and its list routes return every row in one ``{"Items": [...]}`` page (EDH itself does not
-paginate), so these tools hand the body back directly rather than through ``paginate()``. Every EDH
-tool is registered whether or not the deployment enabled the add-on, and opens with
-``client.require_feature``: on a deployment without the add-on the tool answers the CLI's "not
-enabled" message before any request is made. ``get_edh_workstation_connect`` sits with the writes: it
-changes nothing, but it issues a desktop credential. No tool reaches the desktop sign-in of a
-workstation.
+paginate), so these tools hand the body back directly rather than through ``paginate()``. The tools
+are registered only when the profile's feature-switch snapshot carries ``FEATURE``
+(``addon_tools.register_addon_tools``), so a deployment without the add-on lists none of them. Each
+tool still opens with ``client.require_feature``: a container-job or AMI recipe tool on a deployment
+without that optional feature answers the CLI's "not enabled" message before any request is made, as
+does any tool after the profile signs in to a deployment without the add-on while the server runs.
+``get_edh_workstation_connect`` sits with the writes: it changes nothing, but it issues a desktop
+credential. No tool reaches the desktop sign-in of a workstation.
 """
 
 import uuid
@@ -22,6 +24,9 @@ from vamscli.addon_constants import (
     FEATURE_EDH_CONTAINERS,
     FEATURE_EDH_WORKSTATIONS,
 )
+
+# The switch whose presence in the profile's snapshot registers these tools.
+FEATURE = FEATURE_EDH_WORKSTATIONS
 
 
 def register(
