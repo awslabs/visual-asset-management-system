@@ -382,6 +382,8 @@ export function compareSeed(): CompareSeed | null {
 export interface ViewerSamples {
     databaseId: string;
     assetId: string;
+    /** True when the seed ran with `--asset-version` (one snapshot, then a second README version). */
+    assetVersion?: boolean;
     samples: Record<
         string,
         {

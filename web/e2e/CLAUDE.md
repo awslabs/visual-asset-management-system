@@ -231,14 +231,14 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 
 **Samples.** Every subject is an entry of `e2e/fixtures/viewer-samples.json` (tracked; schema checked by
 `web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`). An entry has `id`, `viewer` (a viewer id
-from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
+from the viewer configs, or `none` for the subject of a `not-offered` case that no viewer may open), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                               |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                            |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                            |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                  |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                  |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `copy`, `utf16le-bom` / `utf16be-bom` / `utf16le` (the source's UTF-8 re-encoded, with or without a byte order mark), `zip` (optional `zipEntries` names), or `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
@@ -253,9 +253,14 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
-must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
+must succeed for), `thresholds`, `cspAllowed`, `consoleAllowed` (console lines that case alone may log,
+such as Chromium's own `416` line for an empty file; never widen `CONSOLE_ERROR_IGNORE` for one case)
+and `reads` (the statuses, in order, of the presigned GETs of the sample's file: `[206]`, `[206, 200]`
+or `[416]`, how the bounded text loader read it). A text sample's `viewer` must list the sample's
+`extensionToken` (so `.gitignore` is `(none)`, `.env.example` is `.example`); the manifest jest test
+checks it. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
 (`watchRequestHosts`). Run the spec on the development build first and record the pixel stats it logs;

@@ -359,6 +359,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the VEERUM directory has no `.npmrc`; its package comes from the vendor's private registry. ([#334](https://github.com/awslabs/visual-asset-management-system/issues/334))
 -   **Web** The Needle USD viewer stays at commit `aab170a`: later upstream commits relicense it under the PolyForm Noncommercial License 1.0.0, and `NOTICE.md` records why. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 -   **Web** The Playwright viewer spec proves that the Cesium, PlayCanvas, Online 3D, PDF, Columnar and Text viewers draw public sample files, which `tools/VamsCLI/examples/seed_viewer_samples.py` uploads from the manifest `web/e2e/fixtures/viewer-samples.json`, and fails on a new Content Security Policy violation or a request outside the deployment. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
+-   **Web** The Playwright viewer and compare specs also cover files with no extension, dotfiles, binary content and UTF-16 text in the Text and Text Diff viewers, from public samples the seed script uploads; its `--asset-version` option adds the version row the compare case needs. ([#1198](https://github.com/awslabs/visual-asset-management-system/issues/1198))
 
 ### Known Outstanding Issues
 

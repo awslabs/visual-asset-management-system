@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
 import addonViewerConfig from "./addonViewerConfig.json";
+import { extensionToken, WILDCARD_EXTENSION } from "../core/extensionMatching";
 
 const WEB_ROOT = path.resolve(__dirname, "..", "..", "..");
 const manifest = JSON.parse(
@@ -26,9 +27,12 @@ const seeder = fs.readFileSync(
     "utf8"
 );
 const samples: any[] = manifest.samples;
-const viewerIds = new Set(
-    [...(viewerConfig as any).viewers, ...(addonViewerConfig as any).viewers].map((v: any) => v.id)
-);
+const allViewers: any[] = [...(viewerConfig as any).viewers, ...(addonViewerConfig as any).viewers];
+const viewerIds = new Set(allViewers.map((v: any) => v.id));
+/** `viewer` of a sample no viewer may open: the subject of a `not-offered` case. */
+const NO_VIEWER = "none";
+/** The text viewers, whose samples are matched by file name alone (extensionless files, #1198). */
+const TEXT_VIEWERS = new Set(["text-viewer", "text-diff-viewer"]);
 
 /** The keys of a `NAME = {` / `NAME: ... = {` dict literal in the seeder. */
 function seederKeys(name: string): string[] {
@@ -67,7 +71,7 @@ describe("viewer sample manifest", () => {
             expect(s[key]).toBeTruthy();
         }
         expect(s.path.startsWith("/")).toBe(true);
-        expect(viewerIds.has(s.viewer)).toBe(true);
+        expect(s.viewer === NO_VIEWER || viewerIds.has(s.viewer)).toBe(true);
         const kinds = ["url", "generated", "derivedFrom"].filter((k) => k in s);
         expect(kinds).toHaveLength(1);
         if (s.url) {
@@ -89,6 +93,38 @@ describe("viewer sample manifest", () => {
             required.forEach((f) => expect(typeof f).toBe("string"));
         }
     });
+});
+
+describe("viewer sample file names (#1198)", () => {
+    // A text sample is matched by its name through the one filename rule (`extensionToken`), not
+    // `path.extname`: `.gitignore` has no extension (token "(none)"), `.env.example` has ".example".
+    const tokenOf = (s: any): string => extensionToken(s.path) as string;
+
+    it("[control] reads dotfiles and extensionless names as the web app does", () => {
+        expect(tokenOf({ path: "/noext/.gitignore" })).toBe("(none)");
+        expect(tokenOf({ path: "/noext/README" })).toBe("(none)");
+        expect(tokenOf({ path: "/noext/.prettierrc.json" })).toBe(".json");
+        expect(tokenOf({ path: "/noext/.env.example" })).toBe(".example");
+    });
+
+    it.each(samples.filter((s) => TEXT_VIEWERS.has(s.viewer)).map((s) => [s.id, s]))(
+        "%s is offered by the text viewer it names",
+        (_id, s) => {
+            const viewer = allViewers.find((v) => v.id === s.viewer);
+            expect(viewer.supportedExtensions).toContain(tokenOf(s));
+        }
+    );
+
+    it.each(samples.filter((s) => s.viewer === NO_VIEWER).map((s) => [s.id, s]))(
+        "%s is offered by no viewer except the wildcard preview",
+        (_id, s) => {
+            const offering = allViewers
+                .filter((v) => !v.supportedExtensions.includes(WILDCARD_EXTENSION))
+                .filter((v) => v.supportedExtensions.includes(tokenOf(s)))
+                .map((v) => v.id);
+            expect(offering).toEqual([]);
+        }
+    );
 });
 
 describe("viewer render cases (web/e2e/viewers.spec.ts)", () => {
