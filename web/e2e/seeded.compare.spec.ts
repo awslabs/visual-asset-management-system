@@ -415,13 +415,16 @@ test.describe("compare mode: files without an extension (seeded viewer samples)"
 
         await page.getByRole("button", { name: "Compare Selected Files" }).click();
         const modal = dialog(page);
-        await expectDifferRendered(modal);
+        // A notice on one side replaces the diff table with two per-side panes, so there is no
+        // `diff-container` to wait for: assert each pane on its own instead.
+        await expect(modal.getByTestId("text-diff-viewer")).toBeVisible({ timeout: 60_000 });
         await expect(modal.getByTestId("text-diff-side-binary")).toBeVisible({ timeout: 60_000 });
         await expect(modal.getByText("Binary file")).toBeVisible();
         // The readable side renders on its own pane.
         await expect(modal.getByText("Apache License", { exact: false }).first()).toBeVisible({
             timeout: 60_000,
         });
+        await expect(modal.locator('[class*="diff-container"]')).toHaveCount(0);
         expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
         await page.keyboard.press("Escape");
     });
