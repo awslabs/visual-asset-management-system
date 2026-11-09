@@ -86,6 +86,11 @@ export default function AssetUploadWorkflow({
         setUploadError(error);
     };
 
+    // Name the asset the way the rest of the app does. The upload response carries only the
+    // internal assetId; both upload pages resolve a display name before this step runs, and
+    // fall back to the id themselves when the asset's name is not known.
+    const assetLabel = assetDetail.assetName || uploadResponse?.assetId;
+
     // Handle view asset button click
     const handleViewAsset = () => {
         if (uploadResponse) {
@@ -126,50 +131,50 @@ export default function AssetUploadWorkflow({
                                 // Message for existing assets
                                 uploadResponse?.message?.includes("Preview file upload failed") ? (
                                     <Alert type="warning" header="Upload Completed with Warnings">
-                                        Files have been added to asset {uploadResponse?.assetId},
-                                        but there were issues with the preview file upload.
+                                        Files have been added to {Synonyms.asset} {assetLabel}, but
+                                        there were issues with the preview file upload.
                                     </Alert>
                                 ) : uploadResponse?.noFilesStored ? (
                                     <Alert type="error" header="Upload failed">
-                                        No files were added to {Synonyms.asset}{" "}
-                                        {uploadResponse?.assetId}. See the error details below.
+                                        No files were added to {Synonyms.asset} {assetLabel}. See
+                                        the error details below.
                                     </Alert>
                                 ) : uploadResponse?.overallSuccess === false ? (
                                     <Alert
                                         type="warning"
                                         header="Upload Completed with Some Failures"
                                     >
-                                        Some files have been added to asset{" "}
-                                        {uploadResponse?.assetId}, but there were issues with some
-                                        file uploads. See the error details below.
+                                        Some files have been added to {Synonyms.asset} {assetLabel},
+                                        but there were issues with some file uploads. See the error
+                                        details below.
                                     </Alert>
                                 ) : (
                                     <Alert type="success" header="Upload Complete">
-                                        Files have been successfully added to asset{" "}
-                                        {uploadResponse?.assetId}.
+                                        Files have been successfully added to {Synonyms.asset}{" "}
+                                        {assetLabel}.
                                     </Alert>
                                 )
                             ) : // Message for new assets
                             uploadResponse?.message?.includes("Preview file upload failed") ? (
                                 <Alert type="warning" header="Upload Completed with Warnings">
-                                    Asset {uploadResponse?.assetId} has been created and asset files
+                                    {Synonyms.Asset} {assetLabel} has been created and its files
                                     have been uploaded, but there were issues with the preview file
                                     upload.
                                 </Alert>
                             ) : uploadResponse?.noFilesStored ? (
                                 <Alert type="error" header="Upload failed">
-                                    {Synonyms.Asset} {uploadResponse?.assetId} was created, but none
-                                    of its files were stored. See the error details below.
+                                    {Synonyms.Asset} {assetLabel} was created, but none of its files
+                                    were stored. See the error details below.
                                 </Alert>
                             ) : uploadResponse?.overallSuccess === false ? (
                                 <Alert type="warning" header="Upload Completed with Some Failures">
-                                    Asset {uploadResponse?.assetId} has been created, but there were
+                                    {Synonyms.Asset} {assetLabel} has been created, but there were
                                     issues with some file uploads. See the error details below.
                                 </Alert>
                             ) : (
                                 <Alert type="success" header="Upload Complete">
-                                    Asset {uploadResponse?.assetId} has been successfully created
-                                    and all files have been uploaded.
+                                    {Synonyms.Asset} {assetLabel} has been successfully created and
+                                    all its files have been uploaded.
                                 </Alert>
                             )}
 
