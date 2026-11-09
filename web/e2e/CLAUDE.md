@@ -259,7 +259,8 @@ through `npm exec --min-release-age=7` at the pinned version.
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
 opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
-must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
+must succeed for), `thresholds`, `cspAllowed` and `servedBundle` (a web path a disabled-by-default add-on
+serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do). Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
 (`watchRequestHosts`). The `supersplat` kind checks inside the editor's iframe with

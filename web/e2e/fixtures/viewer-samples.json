@@ -298,6 +298,58 @@
             "expect": {
                 "pipeline": "usePreviewPcPotreeViewer"
             }
+        },
+        {
+            "id": "vntana-glb-box",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/BoxTextured.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/BoxTextured/glTF-Binary/BoxTextured.glb",
+            "size": 5956,
+            "sha256": "b510eca2e2ef33f62f9ed57d6e7ce2d10ebb2bdebc4a8e59d347719ba81abdf4",
+            "licence": "CC-BY-4.0 (Cesium, 2017); the texture is the Cesium logo, a trademark",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxTextured"
+        },
+        {
+            "id": "vntana-glb-avocado",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/Avocado.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Avocado/glTF-Binary/Avocado.glb",
+            "size": 8110040,
+            "sha256": "ccc9c3ce56423720b09399c2351537207cd5a65f859f9e6e2f30922762f3abd4",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado"
+        },
+        {
+            "id": "ifc-haus",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/haus.ifc",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/haus.ifc",
+            "size": 2526544,
+            "sha256": "ea6f04eaf92fac4d7ad0038bc3d2dfea4c094dd3f516ecc33c50bf1835ca108d",
+            "licence": "MIT",
+            "source": "IFC4 house model, MIT License, Copyright (c) 2021 Antonio Gonzalez Viegas (https://github.com/IFCjs/test-ifc-files), as listed in https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "ifc-haus-zip",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/haus.ifczip",
+            "derivedFrom": "ifc-haus",
+            "transform": "zip",
+            "licence": "inherits ifc-haus",
+            "source": "the ifc-haus sample stored as the only entry of a ZIP archive",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "ifc-school-structural",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/school_str.ifc",
+            "url": "https://raw.githubusercontent.com/ThatOpen/engine_components/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc/school_str.ifc",
+            "size": 8593426,
+            "sha256": "82c3406c11cdf83a7ad00e2155bdcfdef50877e491e780623824161d8955b340",
+            "licence": "MIT",
+            "source": "IFC4 structural model from the That Open engine_components repository (MIT licence; no separate licence for resources/ifc), https://github.com/ThatOpen/engine_components/tree/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
         }
     ]
 }
