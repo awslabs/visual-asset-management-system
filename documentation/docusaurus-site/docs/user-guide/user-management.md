@@ -35,7 +35,7 @@ Creating a user in Amazon Cognito establishes authentication credentials only. T
 1. In the left sidebar, expand the **Admin - Auth** section.
 2. Choose **User Management**.
 
-![Cognito User Management page showing user listing](/img/cognito_user_management_20260323_v2.5.png)
+![Cognito User Management page showing user listing](/img/cognito_user_management_20261109_v2.7.png)
 
 :::note[Navigation visibility]
 The **User Management** link appears only when Amazon Cognito is the configured authentication provider. If you do not see this link, your deployment likely uses an external identity provider.

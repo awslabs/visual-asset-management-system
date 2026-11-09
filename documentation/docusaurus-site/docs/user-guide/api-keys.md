@@ -37,6 +37,8 @@ You reach the page from two places:
 -   **API Key Management** in the profile menu (the menu with your user name in the top bar) opens **My Keys**, your own keys.
 -   **API Keys (all users)** under **Admin - Auth** in the left sidebar opens **All Keys (Admin)**. It appears only when your roles allow the administrative `GET /auth/api-keys` route.
 
+![The profile menu open in the top bar, listing API Key Management under Your pages above Sign out](/img/API_key_managment_page_profile_menu_20261109_v2.7.png)
+
 The mode a link asks for is a preference: the page opens it only when your roles allow it, and otherwise opens the mode they do allow. The API checks every request either way.
 
 ---
