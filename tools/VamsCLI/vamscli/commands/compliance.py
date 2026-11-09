@@ -327,7 +327,10 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
                            json_output: bool, success_message: str) -> Dict[str, Any]:
     """Print a database bind or unbind answer. A change applied in the background prints its
     apply; with `wait`, the command follows it to its end and exits non-zero unless it was applied
-    (failed, stalled, or still applying when the wait timed out)."""
+    (failed, stalled, or still applying when the wait timed out). It exits with `sys.exit`, as the
+    other commands do: `main()` runs the CLI with `standalone_mode=False`, under which Click turns
+    `ctx.exit(1)` into a return value that the entry point drops, so the installed CLI exited 0
+    (D167)."""
     apply = result.get('apply') if isinstance(result, dict) else None
     if not apply:
         output_result(result, json_output, success_message=success_message)
@@ -356,7 +359,7 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
                    "applied.")
     output_result(result, json_output, success_message=message, cli_formatter=format_binding_change)
     if wait and status != COMPLIANCE_BINDING_APPLY_APPLIED:
-        ctx.exit(1)
+        sys.exit(1)
     return result
 
 

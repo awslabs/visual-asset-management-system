@@ -163,6 +163,12 @@ Industry has nested sub-command groups:
         `~/.aws` (botocore then raises `ProfileNotFound` for the shell's `AWS_PROFILE`) and, on
         Windows, leaves the temp `APPDATA` without `vamscli/logs` (the rotating file handler raises
         `FileNotFoundError`). Both are artifacts of the simulation, not defects.
+-   [ ] **Exit Non-Zero With `sys.exit`**: A command that ends non-zero without raising calls
+        `sys.exit(n)`, never `ctx.exit(n)`. `main()` runs the CLI with `standalone_mode=False`, under
+        which Click turns `ctx.exit(n)` into a return value that the entry point drops, so the
+        installed CLI exits 0 while `CliRunner` sees `n` (D167, #335). Test such an exit through
+        `main()` (`TestTheWaitsExitStatusThroughTheEntryPoint` in `tests/test_compliance_commands.py`).
+        Claude Code counterpart: `tools/VamsCLI/CLAUDE.md` "JSON Output Contract" rule 6.
 -   [ ] **Run All Tests**: Ensure `pytest` passes
 
 #### **Step 7: Documentation**

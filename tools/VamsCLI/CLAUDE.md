@@ -292,6 +292,7 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 3. Status/warning/info messages are suppressed when `json_output=True`
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
 5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance; `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
+6. **A command that ends non-zero without raising exits with `sys.exit(n)`, never `ctx.exit(n)`.** `main()` runs the CLI with `standalone_mode=False`, under which Click turns `ctx.exit(n)` into a return value that the entry point drops, so the installed CLI exits 0 while `CliRunner` (standalone) sees `n`. `compliance bind|unbind --wait` exited 0 on a timeout, failure or stop this way (D167, #335). Test such an exit through `main()`, as `TestTheWaitsExitStatusThroughTheEntryPoint` in `tests/test_compliance_commands.py` does.
 
 ### 5. Decorator Usage
 

@@ -3004,6 +3004,87 @@ class TestABindingChangeAppliedInTheBackground:
             'applying', 'applied', 'stalled', 'failed')
 
 
+class TestTheWaitsExitStatusThroughTheEntryPoint:
+    """D167: the installed `vamscli` runs `main()`, which runs the CLI with
+    `standalone_mode=False`; under it Click turns `ctx.exit(1)` into a return value that `main()`
+    dropped, so `bind|unbind --wait` exited 0 on a timeout, a failure or a stop while `CliRunner`
+    (standalone) saw 1. These cases go through `main()` as the console script does."""
+
+    @staticmethod
+    def _exit_code(monkeypatch, argv):
+        import sys as system
+
+        import vamscli.main as main_module
+        monkeypatch.setattr(system, 'argv', ['vamscli', *argv])
+        try:
+            main_module.main()
+        except SystemExit as exited:
+            return exited.code if isinstance(exited.code, int) else (0 if exited.code is None else 1)
+        return 0
+
+    @pytest.fixture
+    def no_sleep(self, monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+
+    BIND = ['compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database']
+
+    def test_accepted_without_wait_exits_0(self, monkeypatch, generic_command_mocks, capsys):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            assert self._exit_code(monkeypatch, self.BIND) == 0
+        assert 'The binding change was accepted and is being applied' in capsys.readouterr().out
+
+    def test_applied_exits_0(self, monkeypatch, generic_command_mocks, no_sleep, capsys):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(APPLIED)
+            assert self._exit_code(monkeypatch, [*self.BIND, '--wait']) == 0
+        assert 'The binding change was applied' in capsys.readouterr().out
+
+    @pytest.mark.parametrize('json_output', [False, True], ids=['text', 'json'])
+    def test_a_wait_that_timed_out_exits_1(self, monkeypatch, generic_command_mocks, no_sleep,
+                                          capsys, json_output):
+        clock = iter(range(0, 1000, 5))
+        monkeypatch.setattr('vamscli.commands.compliance.time.monotonic', lambda: next(clock))
+        argv = [*self.BIND, '--wait', '--wait-timeout', '5'] + (
+            ['--json-output'] if json_output else [])
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(
+                _apply(assetsProcessed=10))
+            assert self._exit_code(monkeypatch, argv) == 1
+        out = capsys.readouterr().out
+        if json_output:
+            assert json.loads(out)['waitTimedOut'] is True
+        else:
+            assert 'Stopped waiting after 5 s; the binding change is still being applied' in out
+
+    @pytest.mark.parametrize('status, text', [
+        ('failed', 'The binding change failed'),
+        ('stalled', 'run the same command again to resume it'),
+    ], ids=['failed', 'stopped'])
+    def test_a_change_that_failed_or_stopped_exits_1(self, monkeypatch, generic_command_mocks,
+                                                     no_sleep, capsys, status, text):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = _read(
+                _apply(status=status, reason='Its last step failed on every delivery; repeat the '
+                                             'same change to resume it'))
+            assert self._exit_code(monkeypatch, [*self.BIND, '--wait']) == 1
+        assert text in capsys.readouterr().out
+
+    def test_an_unbind_that_failed_exits_1(self, monkeypatch, generic_command_mocks, no_sleep):
+        with generic_command_mocks('compliance') as mocks:
+            removal = _apply(operation='unbind', schemaName=None, assetCount=4)
+            mocks['api_client'].unbind_compliance_schema.return_value = _accepted(
+                removal, previousSchema='cad-quality')
+            mocks['api_client'].get_compliance_bindings.return_value = _read(dict(
+                removal, status='failed',
+                reason='The database was deleted while the binding was being applied'))
+            assert self._exit_code(monkeypatch, [
+                'compliance', 'unbind', '-d', 'my-database', '--wait']) == 1
+
+
 class TestTheEvaluationsABindingChangeQueues:
     """D161 follow-up: once every record carries the binding the change is applied, and its
     evaluations are queued afterwards; --wait waits for the binding, and the output says where the
