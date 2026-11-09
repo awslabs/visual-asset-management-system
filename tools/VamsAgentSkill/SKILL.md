@@ -183,6 +183,12 @@ or re-encode the request to get past the rule. Report the `requestId` to the
 administrator, who finds the matching rule in the web ACL's sampled requests or WAF
 log group. The tier rules below apply to every other `403`.
 
+**A `401` is not a refusal.** From v2.7.0 the API answers `401` when it does not
+accept the credential at all (an expired or invalid token, an unknown, disabled or
+expired API key); the CLI refreshes and resends, and one that persists is an
+`AuthenticationError`. Ask the user to sign in again (`vamscli auth login`) and
+report it as a sign-in problem, never as a missing permission.
+
 **Why this matters to you:** the allowed-routes listing from Step 1b is Tier 1
 **only**. A route appearing there means the user may call it — not that they may
 touch every database, asset, pipeline, or workflow behind it. So:

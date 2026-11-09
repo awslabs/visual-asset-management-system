@@ -466,6 +466,15 @@ manifest inputFiles[].versionId
     a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
     on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
     paths by index, since one launch may select the same file at two versions.
+-   **Several inputs travel as one list of objects**, each `{bucket, key, versionId}` built from one
+    manifest entry, never as a path list beside a parallel version list: two lists fall out of step without
+    an error, and a short version list reads the remaining inputs at the current object. Image to 3D sends
+    `inputViews` (`genAi/imageTo3d/lambda/inputViews.py`), reads it as the only list when present, and fails
+    the run on an entry without a bucket, a key or a `versionId` string. It still sends
+    `inputS3AssetFilePaths`, derived from the views, for a development build before `inputViews`. While the
+    three functions run different builds (a stack update or a rollback), views are read at the current
+    object, and a file selected at two versions is read once; where the `constructPipeline` that runs reads
+    `inputViews`, the primary input keeps its version.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
 `openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
@@ -1262,6 +1271,13 @@ or a `suite-settings.json` entry names no test directory or gives no reason, a C
 in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a suite
 whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
 drifts from the thumbnail Dockerfile.
+
+**Container-level smoke scripts live in `ci/smoke/`, not in the pipeline folder.** They need Docker and
+built images, so CI does not run them; they are run by hand when a converter or its base image changes.
+`ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
+them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
+row per file (exit codes, LAS format, point count, colour and intensity ranges, octree points); run it on
+the old and new PDAL image and diff the two (#1203).
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls
