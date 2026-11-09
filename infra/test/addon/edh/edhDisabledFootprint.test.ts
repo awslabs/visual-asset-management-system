@@ -74,10 +74,11 @@ function traces(s: SynthResult): Record<string, number> {
 
 /** Output names of every template that mention the add-on. */
 const edhOutputs = (s: SynthResult): string[] =>
-    Object.entries<any>(s.templates).flatMap(([stack, tpl]) =>
-        Object.keys(tpl.Outputs ?? {})
-            .filter((name) => /edh/i.test(name))
-            .map((name) => `${stack}/${name}`)
+    Object.entries(s.templates as Record<string, { Outputs?: Record<string, unknown> }>).flatMap(
+        ([stack, tpl]) =>
+            Object.keys(tpl.Outputs ?? {})
+                .filter((name) => /edh/i.test(name))
+                .map((name) => `${stack}/${name}`)
     );
 
 /** A nested-stack logical id without its 8-hex-digit hash, which follows the construct path. */
@@ -88,10 +89,10 @@ function rootGraph(s: SynthResult): Record<string, string[]> {
     const addon = s
         .ofType("AWS::CloudFormation::Stack")
         .find((r) => r.logicalId.startsWith("AddonBuilder"));
-    expect(addon).toBeDefined();
+    if (!addon) throw new Error(`${s.name}: no AddonBuilder nested stack was synthesized`);
     const graph: Record<string, string[]> = {};
     for (const r of s.ofType("AWS::CloudFormation::Stack")) {
-        if (r.stack !== addon!.stack) continue;
+        if (r.stack !== addon.stack) continue;
         const dependsOn = ([] as string[]).concat(r.raw.DependsOn ?? []);
         graph[unhashed(r.logicalId)] = dependsOn.map(unhashed).sort();
     }
@@ -100,8 +101,8 @@ function rootGraph(s: SynthResult): Record<string, string[]> {
 
 const addonDependencies = (graph: Record<string, string[]>): string[] => {
     const key = Object.keys(graph).find((k) => k.startsWith("AddonBuilder"));
-    expect(key).toBeDefined();
-    return graph[key!];
+    if (!key) throw new Error("the root graph holds no AddonBuilder nested stack");
+    return graph[key];
 };
 const isApiBuilder = (dependency: string) => /^ApiBuilder(?!2)/.test(dependency);
 const isCoreBuilderOfEveryStack = (dependency: string) =>

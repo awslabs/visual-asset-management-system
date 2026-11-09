@@ -759,11 +759,11 @@ export default function CreateConstraint({
                             statusIconAriaLabel="Info"
                             header="This object type is not offered on this deployment"
                         >
-                            This constraint's object type, {formState.objectType}, is not offered on
-                            this deployment, usually because the add-on that declares it is not
-                            enabled. The constraint is kept as stored and takes effect again once
-                            that add-on is enabled. You can delete it from the list; saving changes
-                            to it is refused.
+                            The object type of this constraint, {formState.objectType}, is not
+                            offered on this deployment, usually because the add-on that declares it
+                            is not enabled. The constraint is kept as stored and takes effect again
+                            once that add-on is enabled. You can delete it from the list; saving
+                            changes to it is refused.
                         </Alert>
                     )}
 

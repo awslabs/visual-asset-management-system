@@ -21,6 +21,7 @@ import { AppRoutes, routeTableFor } from "../routes";
 import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 import CreateConstraint, { webRouteOptionsFor } from "../pages/auth/CreateConstraint";
+import { fetchConstraintPermissionObjects } from "../services/APIService";
 import { addonFeaturesEnabled } from "./addonFeatures";
 
 jest.mock("../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
@@ -160,8 +161,9 @@ describe("Create Constraint", () => {
     });
 
     it("opens a stored constraint of a type the API no longer offers with its name and a notice", async () => {
-        const { fetchConstraintPermissionObjects } = require("../services/APIService");
-        fetchConstraintPermissionObjects.mockResolvedValue(permissionObjects([ASSET]));
+        (fetchConstraintPermissionObjects as jest.Mock).mockResolvedValue(
+            permissionObjects([ASSET])
+        );
         render(
             <RuntimeConfigContext.Provider value={{ featuresEnabled: [] }}>
                 <MemoryRouter>
@@ -208,8 +210,9 @@ describe("Create Constraint", () => {
     });
 
     it("shows no notice for a constraint whose type the API offers (control)", async () => {
-        const { fetchConstraintPermissionObjects } = require("../services/APIService");
-        fetchConstraintPermissionObjects.mockResolvedValue(permissionObjects([ASSET]));
+        (fetchConstraintPermissionObjects as jest.Mock).mockResolvedValue(
+            permissionObjects([ASSET])
+        );
         render(
             <MemoryRouter>
                 <CreateConstraint
