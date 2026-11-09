@@ -44,6 +44,11 @@ export class AddonBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionNames: string[] = [];
     /** Feature switches for the enabled add-ons, pushed by the core stack. */
     public readonly enabledFeatures: string[] = [];
+    /**
+     * True when an enabled add-on invokes `apiKeyServiceFunction`, so the core stack deploys this
+     * stack after ApiBuilder. With no such add-on the stack keeps the dependencies it has without one.
+     */
+    public readonly usesApiKeyService: boolean = false;
 
     constructor(parent: Construct, name: string, props: AddonBuilderNestedStackProps) {
         super(parent, name);
@@ -105,6 +110,9 @@ export class AddonBuilderNestedStack extends NestedStack {
                     apiKeyServiceFunction: props.apiKeyServiceFunction,
                 }
             );
+
+            // The add-on mints the desktop session keys through the API key service.
+            this.usesApiKeyService = true;
 
             // The EDH Workstations add-on gates its web pages, CLI group and MCP tools on one flag,
             // with a further flag for each of the optional container-job and AMI recipe surfaces.

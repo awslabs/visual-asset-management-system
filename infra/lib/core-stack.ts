@@ -319,9 +319,12 @@ export class CoreVAMSStack extends cdk.Stack {
             });
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
-            // Add-on stacks invoke the API key service Lambda built in ApiBuilder. RestApi already
-            // depends on both, so the order stays ApiBuilder -> AddonBuilder -> RestApi.
-            addonBuilderNestedStack.addStackDependency(apiBuilderNestedStack);
+            // An add-on stack that invokes the API key service Lambda built in ApiBuilder deploys after
+            // it. RestApi already depends on both, so the order stays ApiBuilder -> AddonBuilder ->
+            // RestApi. With no such add-on enabled, AddonBuilder keeps its two dependencies above.
+            if (addonBuilderNestedStack.usesApiKeyService) {
+                addonBuilderNestedStack.addStackDependency(apiBuilderNestedStack);
+            }
 
             this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
 

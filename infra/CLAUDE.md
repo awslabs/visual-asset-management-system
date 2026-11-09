@@ -192,8 +192,9 @@ CoreVAMSStack (root)
   |     |                                                           (its vamsSchema registration custom
   |     |                                                            resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (one nested stack per enabled add-on)   -> storage, resourceNames, ApiBuilder
-  |     |                                                           (apiKeyServiceFunction, for an add-on that
-  |     |                                                            mints temporary session keys)
+  |     |                                                           (ApiBuilder only while an add-on that mints
+  |     |                                                            temporary session keys through
+  |     |                                                            apiKeyServiceFunction is on: usesApiKeyService)
   |     +-- CustomBuilder (fork extension point)                 -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)   -> storage, AuthBuilder, ApiBuilder,
   |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder,
