@@ -794,4 +794,3 @@ class UserRoleDeletionError(UserRoleError):
 class InvalidUserRoleDataError(UserRoleError):
     """Raised when user role data is invalid."""
     pass
-

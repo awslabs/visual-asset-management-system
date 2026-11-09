@@ -444,7 +444,6 @@ export function edhVpcRequiringFeatures(config: Config): string[] {
     return config.app.addons.useEdhWorkstations.enabled ? ["addons.useEdhWorkstations"] : [];
 }
 
-/** Validates the add-on block. Normalizes `containers.enabled` to false while the add-on is off. */
 /** The secret name an AWS Secrets Manager secret ARN carries (with its random suffix), or undefined. */
 function secretNameOfArn(arn: unknown): string | undefined {
     if (typeof arn !== "string") return undefined;
@@ -453,6 +452,7 @@ function secretNameOfArn(arn: unknown): string | undefined {
     return at < 0 ? undefined : arn.slice(at + marker.length);
 }
 
+/** Validates the add-on block. Normalizes `containers.enabled` to false while the add-on is off. */
 export function validateEdhWorkstationsConfig(config: Config): void {
     // EDH Workstations Configuration Validation
     const edh = config.app.addons.useEdhWorkstations;
