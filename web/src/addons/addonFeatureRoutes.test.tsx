@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { AppRoutes, routeTableFor } from "../routes";
 import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
@@ -129,6 +129,88 @@ describe("the web-route check and the mounted pages", () => {
             "/edh/workstations",
             "/edh/admin",
         ]);
+    });
+});
+
+describe("answers to the web-route check that arrive out of order", () => {
+    // The check sent before the switches arrived can answer after the check sent with them (a cold
+    // Lambda, a slow network). Only the latest check's answer may decide what the page shows.
+    const view = (features: string[]) => (
+        <RuntimeConfigContext.Provider value={{ featuresEnabled: features }}>
+            <MemoryRouter initialEntries={["/edh/workstations/"]}>
+                <AppRoutes navigationOpen={true} setNavigationOpen={jest.fn()} user={undefined} />
+            </MemoryRouter>
+        </RuntimeConfigContext.Provider>
+    );
+    const FAILED = "Page access could not be checked";
+    let answers: Array<{ allow: () => void; fail: () => void }>;
+    let consoleError: jest.SpyInstance;
+
+    beforeEach(() => {
+        answers = [];
+        consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+        mockCheck.mockImplementation(
+            (routes: WebRouteCheck[]) =>
+                new Promise((resolve, reject) =>
+                    answers.push({
+                        allow: () => resolve(routes),
+                        fail: () => reject(new Error("routes check unavailable")),
+                    })
+                )
+        );
+    });
+
+    afterEach(() => consoleError.mockRestore());
+
+    // Renders with no switches, then with the add-on's: two checks, both still unanswered.
+    const twoChecksInFlight = () => {
+        const { rerender } = render(view([]));
+        rerender(view(EDH));
+        expect(mockCheck).toHaveBeenCalledTimes(2);
+        expect(answers).toHaveLength(2);
+    };
+
+    it("keeps the add-on's page when the earlier check succeeds after the later one", async () => {
+        twoChecksInFlight();
+        await act(async () => answers[1].allow());
+        expect(await screen.findByTestId("edh-workstations-page")).toBeInTheDocument();
+        await act(async () => answers[0].allow());
+        expect(screen.getByTestId("edh-workstations-page")).toBeInTheDocument();
+    });
+
+    it("keeps the add-on's page when the earlier check fails after the later one succeeded", async () => {
+        twoChecksInFlight();
+        await act(async () => answers[1].allow());
+        expect(await screen.findByTestId("edh-workstations-page")).toBeInTheDocument();
+        await act(async () => answers[0].fail());
+        expect(screen.getByTestId("edh-workstations-page")).toBeInTheDocument();
+        expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+    });
+
+    it("opens the page when a later check succeeds after the earlier one failed", async () => {
+        const { rerender } = render(view([]));
+        await act(async () => answers[0].fail());
+        expect(await screen.findByText(FAILED)).toBeInTheDocument();
+        rerender(view(EDH));
+        expect(answers).toHaveLength(2);
+        await act(async () => answers[1].allow());
+        expect(await screen.findByTestId("edh-workstations-page")).toBeInTheDocument();
+        expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+    });
+
+    it("control: shows the page when the answers arrive in order", async () => {
+        twoChecksInFlight();
+        await act(async () => answers[0].allow());
+        await act(async () => answers[1].allow());
+        expect(await screen.findByTestId("edh-workstations-page")).toBeInTheDocument();
+    });
+
+    it("control: still shows the could-not-check panel when the latest check fails", async () => {
+        twoChecksInFlight();
+        await act(async () => answers[0].allow());
+        await act(async () => answers[1].fail());
+        expect(await screen.findByText(FAILED)).toBeInTheDocument();
+        expect(screen.queryByTestId("edh-workstations-page")).not.toBeInTheDocument();
     });
 });
 

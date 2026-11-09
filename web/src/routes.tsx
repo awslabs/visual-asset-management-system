@@ -434,7 +434,6 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
     }, [location, navigate]);
 
-    const allAllowedRoutes: string[] = [];
     const [allowedRoutes, setAllowedRoutes] = useState<string[]>(
         routeTable.map((route) => {
             return route.path;
@@ -445,6 +444,10 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     const [checkedPaths, setCheckedPaths] = useState<string[] | null>(null);
 
     useEffect(() => {
+        // Only the answer to the latest check is used. The check runs again when the switches
+        // change or on Retry, and an earlier check can answer after a later one: its route set is
+        // out of date, so its success or failure is dropped.
+        let superseded = false;
         const allRoutes: WebRouteCheck[] = [];
         for (const route of activeRouteTable) {
             if (route.path) {
@@ -458,9 +461,10 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
-                    for (const allowedRoute of allowed) {
-                        allAllowedRoutes.push(allowedRoute.route__path);
-                    }
+                    if (superseded) return;
+                    const allAllowedRoutes = allowed.map(
+                        (allowedRoute) => allowedRoute.route__path
+                    );
 
                     //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
                     if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
@@ -468,9 +472,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
 
                     setAllowedRoutes(allAllowedRoutes);
                     setCheckedPaths(allRoutes.map((route) => route.route__path));
+                    setRoutesCheckFailed(false);
                     setLoading(false);
                 })
                 .catch((error) => {
+                    if (superseded) return;
                     console.error(error);
                     // Access is unknown: "/" renders, and every other route shows the
                     // could-not-check panel with Retry.
@@ -478,6 +484,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                     setLoading(false);
                 });
         } catch (e) {}
+        return () => {
+            superseded = true;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [checkAttempt, featuresKey]);
 
