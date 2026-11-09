@@ -336,7 +336,7 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
-type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered";
+type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -356,6 +356,22 @@ interface RenderCase {
     fetches?: string;
     thresholds?: RenderThresholds;
     cspAllowed?: RegExp[];
+}
+
+/**
+ * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
+ * `expect.minDistinctColours` for a model that fills little of the canvas, and every other sample
+ * keeps the defaults of `expectCanvasRendered`.
+ */
+function caseThresholds(c: RenderCase, sample: { expect?: Record<string, any> }): RenderThresholds {
+    const fromSample: RenderThresholds = {};
+    if (typeof sample.expect?.minForegroundFraction === "number") {
+        fromSample.minForegroundFraction = sample.expect.minForegroundFraction;
+    }
+    if (typeof sample.expect?.minDistinctColours === "number") {
+        fromSample.minDistinctColours = sample.expect.minDistinctColours;
+    }
+    return { ...fromSample, ...c.thresholds };
 }
 
 const renderCases: RenderCase[] = [
@@ -381,6 +397,38 @@ const renderCases: RenderCase[] = [
         // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
         // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
         select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
+    },
+    // BabylonJS 9 with no CDN fetch (#1174): every listed format draws; SPZ version 4 is refused
+    // with a message (Babylon reads it only through @adobe/spz, which the CSP blocks).
+    {
+        sample: "splat-ply",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-spz-v3",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-spz-v4",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "refused",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
     },
     { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
     { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
@@ -418,7 +466,9 @@ const seeded = viewerSamples();
 test.describe("viewer render proof (seeded samples)", () => {
     for (const c of renderCases) {
         const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
-        test(`${c.viewer} renders ${label}`, async ({ page }) => {
+        test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
+            page,
+        }) => {
             test.skip(
                 !seeded,
                 "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
@@ -489,7 +539,7 @@ test.describe("viewer render proof (seeded samples)", () => {
                     page,
                     await largestCanvas(page),
                     `${c.viewer} (${fileName})`,
-                    c.thresholds
+                    caseThresholds(c, sample)
                 );
                 console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
             } else if (c.kind === "pdf") {
@@ -520,6 +570,20 @@ test.describe("viewer render proof (seeded samples)", () => {
                 ).toEqual([]);
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "refused") {
+                // The SuperSplat Editor reads SPZ version 4 and is offered only with
+                // ALLOWUNSAFEEVAL, so the message names it there and nowhere else.
+                const alert = page.getByRole("alert");
+                await expect(alert).toContainText(
+                    `${fileName} uses SPZ format version ${sample.expect?.spzVersion ?? 4}`,
+                    { timeout: 60_000 }
+                );
+                if (features.includes("ALLOWUNSAFEEVAL")) {
+                    await expect(alert).toContainText("Open it in the SuperSplat Editor instead");
+                } else {
+                    await expect(alert).toContainText("does not support");
+                    await expect(alert).not.toContainText("SuperSplat");
+                }
             } else if (c.kind === "text") {
                 await expect(
                     page.getByText(sample.expect?.line ?? "", { exact: false })

@@ -31,6 +31,8 @@ import datetime as _dt
 import hashlib
 import io
 import json
+import math
+import struct
 import subprocess
 import sys
 import tempfile
@@ -142,13 +144,73 @@ def splat_transform(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], 
         return out.read_bytes()
 
 
+SH_C0 = 0.28209479177387814
+
+
+def ply_to_splat(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], bytes]]) -> bytes:
+    """A binary little-endian 3D Gaussian splat .ply (float properties only) written as raw .splat
+    rows, the headerless 32-byte layout antimatter15/splat introduced: position (3 float32), scale
+    (3 float32, exp of the log scale), RGBA (4 uint8, base colour from f_dc_*, alpha the sigmoid of
+    opacity) and the normalized rotation quaternion (4 uint8, q * 128 + 128). @playcanvas/
+    splat-transform reads .splat but does not write it, hence this transform."""
+    ((source, data),) = sources
+    marker = b"end_header\n"
+    end = data.find(marker)
+    if not data.startswith(b"ply\n") or end < 0:
+        raise SeedError(f"{sample['id']}: {source['id']} is not a PLY file")
+    header = data[: end + len(marker)].decode("latin-1")
+    if "format binary_little_endian" not in header:
+        raise SeedError(f"{sample['id']}: {source['id']} is not a binary little-endian PLY")
+    count = int(header.split("element vertex ", 1)[1].split("\n", 1)[0])
+    props = [line.split() for line in header.splitlines() if line.startswith("property ")]
+    if any(p[1] != "float" for p in props):
+        raise SeedError(f"{sample['id']}: {source['id']} has non-float properties")
+    names = [p[2] for p in props]
+    needed = ["x", "y", "z", "scale_0", "scale_1", "scale_2", "f_dc_0", "f_dc_1", "f_dc_2"]
+    needed += ["opacity", "rot_0", "rot_1", "rot_2", "rot_3"]
+    if any(n not in names for n in needed):
+        raise SeedError(f"{sample['id']}: {source['id']} lacks 3D Gaussian splat properties")
+    index = {n: names.index(n) for n in needed}
+    stride = len(names)
+    body = data[end + len(marker) :]
+    if len(body) < count * stride * 4:
+        raise SeedError(f"{sample['id']}: {source['id']} is shorter than its header says")
+    values = struct.unpack_from(f"<{count * stride}f", body)
+
+    def byte(value: float) -> int:
+        return max(0, min(255, round(value)))
+
+    rows = bytearray()
+    for i in range(count):
+        row = values[i * stride : (i + 1) * stride]
+        f = lambda name: row[index[name]]  # noqa: E731
+        q = [f("rot_0"), f("rot_1"), f("rot_2"), f("rot_3")]
+        norm = math.sqrt(sum(v * v for v in q)) or 1.0
+        rows += struct.pack(
+            "<6f8B",
+            f("x"),
+            f("y"),
+            f("z"),
+            math.exp(f("scale_0")),
+            math.exp(f("scale_1")),
+            math.exp(f("scale_2")),
+            byte((0.5 + SH_C0 * f("f_dc_0")) * 255),
+            byte((0.5 + SH_C0 * f("f_dc_1")) * 255),
+            byte((0.5 + SH_C0 * f("f_dc_2")) * 255),
+            byte(255 / (1 + math.exp(-f("opacity")))),
+            *[byte(v / norm * 128 + 128) for v in q],
+        )
+    return bytes(rows)
+
+
 # Each transform takes the derived sample's manifest entry and its sources' (entry, bytes) pairs.
 TRANSFORMS: Dict[str, Callable[[Dict[str, Any], List[Tuple[Dict[str, Any], bytes]]], bytes]] = {
     "prepend-utf8-bom": lambda sample, sources: UTF8_BOM + sources[0][1],
     "zip": zip_sources,
     "splat-transform": splat_transform,
+    "ply-to-splat": ply_to_splat,
 }
-SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform"}
+SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform", "ply-to-splat"}
 REQUIRED_KEYS = {"id", "viewer", "path", "licence", "source"}
 
 
