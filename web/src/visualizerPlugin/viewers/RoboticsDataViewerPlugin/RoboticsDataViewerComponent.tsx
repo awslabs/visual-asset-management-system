@@ -18,6 +18,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Spinner from "@cloudscape-design/components/spinner";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadStatusMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 import {
     buildDeepLink,
@@ -49,16 +50,16 @@ type PreparedFile = { name: string; url: string } | { name: string; error: strin
 
 type Phase = "preparing" | "loading" | "ready" | "failed";
 
-/** What the user is told when a file's download URL could not be prepared. Generic on purpose:
- *  the backend's denial reason is not echoed. */
-const describeFailure = (status: unknown, message: unknown): string => {
-    if (status === 401 || status === 403) return "You are not authorized to view this file.";
-    if (status === 410) return "This file version has been archived and is not available.";
-    if (status === 404) return "This file or version could not be found.";
-    return typeof message === "string" && message.length > 0
-        ? message
-        : "The file could not be prepared for viewing.";
-};
+/** What the user is told when a file's download URL could not be prepared: the shared wording for
+ *  a refused download (#1211), decided only by the API's status, or the API's message otherwise.
+ *  The backend's denial reason is not echoed. */
+const describeFailure = (status: unknown, message: unknown): string =>
+    downloadStatusMessage(
+        typeof status === "number" ? status : undefined,
+        typeof message === "string" && message.length > 0
+            ? message
+            : "The file could not be prepared for viewing."
+    );
 
 const RoboticsDataViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
