@@ -52,6 +52,10 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the pipeline form requiring an Event Bus ARN for the EventBridge execution type; the field is optional, as in the API, and left empty it publishes to the account's default event bus. ([#1030](https://github.com/awslabs/visual-asset-management-system/issues/1030))
 -   **Web** Fixed the pipeline edit form showing and saving Wait For Callback as Enabled for a pipeline stored without it; such a pipeline runs with the callback disabled, and the form now shows and keeps Disabled. A pipeline that an earlier save already changed to Enabled keeps Enabled; set it back to Disabled if its workflows should not wait for a callback. ([#1032](https://github.com/awslabs/visual-asset-management-system/issues/1032))
 -   **Web** Fixed `.igs` CAD files not opening in the CAD viewer; they open like `.iges` files, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. ([#1199](https://github.com/awslabs/visual-asset-management-system/issues/1199))
+-   **Web** Fixed the Columnar Data Viewer keying a CSV's first column with its UTF-8 byte order mark. ([#1182](https://github.com/awslabs/visual-asset-management-system/issues/1182))
+-   **Web** Fixed the Columnar Data Viewer staying on its loading spinner for a CSV whose rows have more cells than the header; the extra cells get generated column names. ([#1183](https://github.com/awslabs/visual-asset-management-system/issues/1183))
+-   **Web** Fixed the Columnar Data Viewer showing an empty last row for a CSV that ends with a newline. ([#1184](https://github.com/awslabs/visual-asset-management-system/issues/1184))
+-   **Web** Fixed the Columnar Data Viewer showing only one of the columns that share a CSV header name; each is shown, labelled `value`, `value (2)` and so on. ([#1185](https://github.com/awslabs/visual-asset-management-system/issues/1185))
 
 ### Chores
 
