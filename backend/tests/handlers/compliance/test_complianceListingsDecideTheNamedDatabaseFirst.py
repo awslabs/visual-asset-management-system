@@ -44,6 +44,9 @@ from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance import complianceQuarantineService as quarantine_svc
 
 SERVICES = (store, quarantine_svc, audit_svc)
+# The retirement records are read from the moto tables (the deleted database's history has one), so
+# every read of them is a request the recorder below sees.
+USES_RETIREMENT_RECORD = True
 USER_ID = "named-database-user"
 BASE_TIME = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
