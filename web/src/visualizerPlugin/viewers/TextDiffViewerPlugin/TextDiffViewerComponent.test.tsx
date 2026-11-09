@@ -349,6 +349,69 @@ describe("TextDiffViewerComponent", () => {
         expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
     });
 
+    describe("the 'pick another version' hint starts on its own line (#1237)", () => {
+        const HINT = "Pick another version above to compare it instead.";
+        const utf16NoBom = () => {
+            const text = '{"a": 2}';
+            const bytes = new Uint8Array(text.length * 2);
+            for (let i = 0; i < text.length; i++) bytes[i * 2] = text.charCodeAt(i);
+            return bytes;
+        };
+
+        it.each([
+            [
+                "binary",
+                () => {
+                    bodies[urlFor("asset-B")] = PNG_BYTES;
+                },
+            ],
+            [
+                "encoding",
+                () => {
+                    bodies[urlFor("asset-B")] = utf16NoBom();
+                },
+            ],
+            [
+                "failed",
+                () => {
+                    mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+                        assetId === "asset-B"
+                            ? [false, "Server error", 500]
+                            : [true, urlFor(assetId, versionId)]
+                    );
+                },
+            ],
+        ])("renders the hint as a separate block after a %s notice", async (kind, arrange) => {
+            arrange();
+
+            renderDiff();
+
+            const pane = await screen.findByTestId(`text-diff-side-${kind}`);
+            const hint = await screen.findByTestId("text-diff-side-version-hint");
+            expect(pane).toContainElement(hint);
+            expect(hint).toHaveTextContent(HINT);
+            // A block element, not an inline <small>/<span> that runs on with the message text.
+            expect(hint.tagName).toBe("P");
+            expect(window.getComputedStyle(hint).display).toBe("block");
+            // The message is its own node beside the hint, never inside the same element.
+            expect(hint.parentElement?.textContent).not.toBe(hint.textContent);
+            expect(hint.textContent).toBe(HINT);
+        });
+
+        it("[control] shows no hint on a signed-out side (sign in again, not another version)", async () => {
+            mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+                assetId === "asset-B"
+                    ? [false, "Unauthorized", 401]
+                    : [true, urlFor(assetId, versionId)]
+            );
+
+            renderDiff();
+
+            await screen.findByTestId("text-diff-side-unauthenticated");
+            expect(screen.queryByTestId("text-diff-side-version-hint")).toBeNull();
+        });
+    });
+
     it("re-fetches only the side whose version was changed", async () => {
         const { container } = renderDiff();
         await waitFor(() => expect(screen.getByTestId("diff")).toBeInTheDocument());

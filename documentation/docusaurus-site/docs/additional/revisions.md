@@ -261,6 +261,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Columnar Data Viewer CSV files** — A CSV saved with a UTF-8 byte order mark no longer keys its first column with the mark (issue #1182); a CSV whose rows have more cells than the header opens with generated names for the extra columns instead of loading forever (issue #1183); a trailing newline no longer adds an empty last row (issue #1184); and columns that share a header name are all shown, labelled `value`, `value (2)` and so on (issue #1185).
 -   **Text Diff latest label** — Opening Compare for one file from the file viewer labels the side pinned to the file's current version `(latest)` instead of only its version id. (issue #1202)
 -   **Viewer permission message** — When the API refuses a file's download with 403, the core viewers and the Text Diff Viewer say "You do not have permission to view or download this file." instead of a generic download error; a 401 asks the user to sign in again. (issue #1211)
+-   **Text Diff version hint on its own line** — In a side's notice, "Pick another version above to compare it instead." starts on a new line instead of running on from the message. (issue #1237)
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 
 **Other changes:**

@@ -649,7 +649,15 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                         {state.error.kind !== "forbidden" &&
                             state.error.kind !== "unauthenticated" &&
                             state.versions.length > 0 && (
-                                <Box variant="small" padding={{ top: "xs" }}>
+                                // A block element (<p>), not variant="small" (an inline <small>),
+                                // so the hint starts on its own line after the message (#1237).
+                                <Box
+                                    variant="p"
+                                    fontSize="body-s"
+                                    color="text-body-secondary"
+                                    padding={{ top: "xs" }}
+                                    data-testid="text-diff-side-version-hint"
+                                >
                                     Pick another version above to compare it instead.
                                 </Box>
                             )}
