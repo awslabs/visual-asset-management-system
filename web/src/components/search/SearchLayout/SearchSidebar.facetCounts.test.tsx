@@ -130,7 +130,22 @@ describe("SearchSidebar facet counts", () => {
         expect(labels(container, "File Type")).toEqual(["glb (132+)"]);
     });
 
-    it("keeps the counts exact when the answer returned every match it counted", async () => {
+    it("shows the facet counts as minimums when no window filled, as the route reports the total (D75)", async () => {
+        // Returned every match it counted and truncated is false, yet the matching is approximate,
+        // so the route says gte and the facets carry "+" for the same reason.
+        const answer = { ...restrictedAnswer("gte", 66, 66) };
+        answer.nlp = { ...answer.nlp, truncated: false };
+        const { container } = renderSidebar(answer, "nlp");
+        await waitFor(() => expect(labels(container, "Database")).toHaveLength(2));
+        expect(labels(container, "Database")).toEqual([
+            "uat-open (50+ results)",
+            "uat-schema (16+ results)",
+        ]);
+        expect(labels(container, "File Type")).toEqual(["glb (66+)"]);
+    });
+
+    it("keeps the counts as they are when the route reports its total as exact", async () => {
+        // The relation is the route's decision; an exact answer (as the route sends for zero) has no "+".
         const { container } = renderSidebar(restrictedAnswer("eq", 66, 66), "nlp");
         await waitFor(() => expect(labels(container, "Database")).toHaveLength(2));
         expect(labels(container, "Database")).toEqual([

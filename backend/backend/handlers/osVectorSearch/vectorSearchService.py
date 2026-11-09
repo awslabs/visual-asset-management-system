@@ -8,7 +8,9 @@ non-archived items of every database the caller may read: one unpartitioned call
 every live database and named none, otherwise one call per target (at most MAX_TARGETS, on
 SEARCH_WORKERS threads). Each target gets a *breadth* call over whole-file items and, with
 ``includeSegments``, a *depth* call over every item; only a full breadth window marks the answer
-truncated because breadth windows hold one item per file. Candidates are merged by distance, collapsed
+truncated because breadth windows hold one item per file. The vector index answers ``SearchVectors``
+with approximate nearest-neighbour (ANN) search, so every total that is not zero is reported as a
+minimum (``gte``), truncated or not (see _total_relation). Candidates are merged by distance, collapsed
 to one hit per (database, asset, path, version) with the file's matching segments counted and the best
 one named, ranked by similarity plus a fixed bonus for the file types the query mentions, joined to
 their asset rows and authorized per hit through Casbin. When an OpenSearch mode is enabled the
@@ -385,15 +387,30 @@ def _aggregations(hits: List[Dict[str, Any]], fields: Tuple[str, ...]) -> Dict[s
     return aggregations
 
 
+def _total_relation(total: int, truncated: bool) -> str:
+    """``hits.total.relation`` of an answer that searched: ``gte`` (a minimum) or ``eq`` (exact).
+
+    A truncated answer is a minimum: a breadth window filled, or not every database was searched. Every
+    other answer that found a readable hit is a minimum too, because the vector index answers
+    ``SearchVectors`` with approximate nearest-neighbour (ANN) search
+    (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html): a weak match
+    can be left out of an answer whose windows did not fill, so identical searches can differ in their
+    weakest matches. A total of zero from an answer that is not truncated stays exact: ANN returns the
+    nearest items whenever any item passes the filters, so an empty answer means nothing matched.
+    ``nlp.truncated`` keeps its own meaning (a window filled or a database was not searched); this
+    relation does not feed it."""
+    return "gte" if truncated or total > 0 else "eq"
+
+
 def _envelope(hits, total, request, databases_searched, candidates, collapsed, class_intent, truncated, warnings,
-              started, aggregations=None) -> Dict[str, Any]:
+              started, *, total_relation: str, aggregations=None) -> Dict[str, Any]:
     hits = _strip(hits)
     return {
         "took": int((time.monotonic() - started) * 1000),
         "timed_out": False,
         "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
         "hits": {
-            "total": {"value": total, "relation": "gte" if truncated else "eq"},
+            "total": {"value": total, "relation": total_relation},
             "max_score": max(hit["_score"] for hit in hits) if hits else None,
             "hits": hits,
         },
@@ -507,8 +524,10 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
     plan = _plan(request, accessible, live_count)
     class_intent = fileClassIntent.detect(request.query) if not request.fileClasses else []
     if not plan.targets:
+        # Nothing was searched, so there is nothing approximate to count: the empty answer is exact.
         warnings.append(_warning("databases:none_accessible", "No searchable database is accessible to the caller"))
-        return success(body=_envelope([], 0, request, 0, 0, 0, class_intent, False, warnings, started))
+        return success(body=_envelope([], 0, request, 0, 0, 0, class_intent, False, warnings, started,
+                                      total_relation="eq"))
     vector = embed_text(request.query, model_id=embedding_model_id, dimensions=embedding_dimensions, purpose="query")
     raw, breadth_full, depth_full = _run_searches(_store(), vector, request, plan)
     merged = _post_filter(_merge(raw), request)
@@ -529,6 +548,7 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         body=_envelope(
             result[: request.size], len(result), request, plan.databases_searched, len(merged),
             len(merged) - len(collapsed), class_intent, truncated, warnings, started,
+            total_relation=_total_relation(len(result), truncated),
             aggregations=_aggregations(result, AGGREGATION_FIELDS[request.entityTypes[0]]),
         )
     )

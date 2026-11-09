@@ -263,6 +263,8 @@ interface CardViewProps {
     onCreateAsset?: () => void;
     onDeleteSelected?: () => void;
     totalItems?: number;
+    /** The total is a minimum (hits.total.relation "gte"): the counter shows it with "+". */
+    totalItemsIsLowerBound?: boolean;
 }
 
 const CardView: React.FC<CardViewProps> = ({
@@ -282,6 +284,7 @@ const CardView: React.FC<CardViewProps> = ({
     onCreateAsset,
     onDeleteSelected,
     totalItems,
+    totalItemsIsLowerBound = false,
 }) => {
     const formatFieldValue = (key: string, value: any) => {
         if (!value) return "-";
@@ -554,7 +557,9 @@ const CardView: React.FC<CardViewProps> = ({
             }
             header={
                 <Header
-                    counter={totalItems ? `(${totalItems})` : ""}
+                    counter={
+                        totalItems ? `(${totalItems}${totalItemsIsLowerBound ? "+" : ""})` : ""
+                    }
                     actions={
                         <SpaceBetween direction="horizontal" size="xs">
                             {recordType === "asset" && (

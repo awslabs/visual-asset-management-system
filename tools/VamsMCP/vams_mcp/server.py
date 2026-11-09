@@ -779,9 +779,12 @@ def search_nlp(
       segmentEndMs}, or null when the whole-file vector won). False sends `includeSegments: false`
       and matches whole-file vectors only — use it when chunked documents crowd out other kinds.
 
-    Returns {total, relation, returned, results, nlp, warnings}. `relation` is "gte" and
-    `nlp.truncated` is true when `total` is a LOWER BOUND: the vector index answers fixed windows
-    and one filled, so more files may match than were ranked — do not report the count as exact.
+    Returns {total, relation, returned, results, nlp, warnings}. Every `total` that is not zero is a
+    LOWER BOUND (`relation` "gte", `total_is_lower_bound` true, `total_display` "N+"): the vector
+    index uses approximate nearest-neighbour search, so a weak match can be missed and identical
+    calls can differ in their weakest matches — report the count as "N+", never as exact. Zero is
+    exact (`relation` "eq"). `nlp.truncated` is true when, in addition, a result window filled or
+    not every database was searched, so more files may match than were ranked.
     `warnings[]` is the closed set truncated:window, truncated:targets, databases:none_accessible,
     opensearch:fields_ignored, opensearch:enrichment_failed, segments:window_full; an empty result
     with databases:none_accessible means the caller can access no database, not that nothing

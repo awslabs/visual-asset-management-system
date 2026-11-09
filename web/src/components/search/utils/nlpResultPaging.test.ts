@@ -5,6 +5,8 @@
 
 import {
     EMPTY_NLP_RESPONSE,
+    nlpCountExplanation,
+    nlpCountsAreMinimums,
     nlpResultTotal,
     pageNlpResult,
     sortNlpHits,
@@ -24,8 +26,12 @@ const hit = (id: string, score: number, key: string, size?: number): SearchResul
     _source: { str_key: key, num_filesize: size },
 });
 
+// The route's relation (D75): every total that is not zero is a minimum, a truncated one included.
 const response = (hits: SearchResult[], truncated = false): NlpSearchResponse => ({
-    hits: { total: { value: hits.length, relation: truncated ? "gte" : "eq" }, hits },
+    hits: {
+        total: { value: hits.length, relation: truncated || hits.length > 0 ? "gte" : "eq" },
+        hits,
+    },
     nlp: {
         query: "q",
         embeddingModelId: "m",
@@ -83,7 +89,7 @@ describe("pageNlpResult", () => {
     it("slices the requested page and reports the full count as the total", () => {
         const page = pageNlpResult(response(hits), { from: 2, size: 2 }, []);
         expect(page.hits.hits.map((h) => h._id)).toEqual(["c"]);
-        expect(page.hits.total).toEqual({ value: 3, relation: "eq" });
+        expect(page.hits.total).toEqual({ value: 3, relation: "gte" });
         expect(page.aggregationTotal).toBe(3);
         expect(page.nlp.truncated).toBe(false);
     });
@@ -94,22 +100,44 @@ describe("pageNlpResult", () => {
         expect(page.nlp.truncated).toBe(true);
     });
 
-    it("shows the route's exact total when the API found more readable hits than it returned", () => {
+    it("shows a non-window answer as a minimum because the route reports it as one (D75)", () => {
+        // No window filled (truncated false), yet the matching is approximate, so the route says gte
+        // and every place shows "3+"; the "top N" line still keys on truncated alone.
+        const page = pageNlpResult(response(hits), { from: 0, size: 50 }, []);
+        expect(page.nlp.truncated).toBe(false);
+        expect(isTotalLowerBound(page)).toBe(true);
+        expect(formatTotalResultCount(page)).toBe("3+");
+        expect(formatTotalResultCount(withNlpResultTotal(response(hits)))).toBe("3+");
+        expect(nlpCountsAreMinimums(response(hits))).toBe(true);
+    });
+
+    it("keeps zero exact: an empty answer shows 0, never 0+", () => {
+        const empty = response([]);
+        expect(empty.hits.total).toEqual({ value: 0, relation: "eq" });
+        expect(formatTotalResultCount(pageNlpResult(empty, { from: 0, size: 50 }, []))).toBe("0");
+        expect(nlpCountsAreMinimums(empty)).toBe(false);
+    });
+
+    it("passes the route's relation through as it came, eq included", () => {
+        // The relation is the route's decision; the page never derives one of its own.
+        const exact = response(hits);
+        exact.hits.total = { value: 3, relation: "eq" };
+        expect(nlpResultTotal(exact)).toEqual({ value: 3, relation: "eq" });
+        expect(nlpCountsAreMinimums(exact)).toBe(false);
+    });
+
+    it("shows the route's total when the API found more readable hits than it returned", () => {
         // D53/D61: the route counts every readable hit (its total and facets) but returns at most `size`.
-        // The count is the route's total, the one the notification and `vamscli search nlp` show too; it
-        // is exact because the route says so, and the pages cover the returned hits only.
+        // The count is the route's total, the one the announcement and `vamscli search nlp` show too,
+        // a minimum as the route says (D75), and the pages cover the returned hits only.
         const more = response(hits);
-        more.hits.total = { value: 150, relation: "eq" };
+        more.hits.total = { value: 150, relation: "gte" };
         const page = pageNlpResult(more, { from: 0, size: 50 }, []);
-        expect(page.hits.total).toEqual({ value: 150, relation: "eq" });
+        expect(page.hits.total).toEqual({ value: 150, relation: "gte" });
         expect(page.aggregationTotal).toBe(150);
         expect(page.pagedTotal).toBe(3);
-        expect(formatTotalResultCount(page)).toBe("150");
+        expect(formatTotalResultCount(page)).toBe("150+");
         expect(getPagedResultCount(page)).toBe(3);
-        // Control: a response whose total is its returned hits stays exact.
-        const exact = pageNlpResult(response(hits), { from: 0, size: 50 }, []);
-        expect(exact.hits.total).toEqual({ value: 3, relation: "eq" });
-        expect(formatTotalResultCount(exact)).toBe("3");
     });
 
     it("gives the notification, the badge and the table header one count (UAT D61)", () => {
@@ -172,5 +200,45 @@ describe("pageNlpResult", () => {
         expect(EMPTY_NLP_RESPONSE.hits.total).toEqual({ value: 0, relation: "eq" });
         expect(EMPTY_NLP_RESPONSE.nlp.truncated).toBe(false);
         expect(EMPTY_NLP_RESPONSE.warnings).toEqual([]);
+    });
+});
+
+describe("nlpCountExplanation (D75: why a natural-language count is a minimum)", () => {
+    const approximate =
+        "The + means there may be more: natural-language search finds the closest matches approximately, so it can miss a weak match.";
+
+    it("names approximate matching for an answer whose windows did not fill", () => {
+        const text = nlpCountExplanation(response(hits));
+        expect(text).toBe(`This count includes only records you can open. ${approximate}`);
+        expect(text).not.toMatch(/permission rules/);
+        expect(text).not.toMatch(/result limit/);
+    });
+
+    it("adds the filled window or the unsearched databases when the answer reports them", () => {
+        const withWarnings = (codes: string[]) => ({
+            ...response(hits, true),
+            warnings: codes.map((code) => ({ code, message: "api text" })),
+        });
+        expect(nlpCountExplanation(withWarnings(["truncated:window"]))).toBe(
+            `This count includes only records you can open. ${approximate} This search also reached its result limit.`
+        );
+        expect(nlpCountExplanation(withWarnings(["truncated:targets"]))).toBe(
+            `This count includes only records you can open. ${approximate} This search also did not search every database.`
+        );
+        expect(nlpCountExplanation(withWarnings(["truncated:window", "truncated:targets"]))).toBe(
+            `This count includes only records you can open. ${approximate} This search also reached its result limit and did not search every database.`
+        );
+        // Truncated with no cause named: both are possible.
+        expect(nlpCountExplanation(withWarnings([]))).toMatch(
+            /reached its result limit or did not search every database\.$/
+        );
+    });
+
+    it("never repeats an API message", () => {
+        const text = nlpCountExplanation({
+            ...response(hits, true),
+            warnings: [{ code: "truncated:window", message: "A result window of 100 filled" }],
+        });
+        expect(text).not.toContain("A result window of 100 filled");
     });
 });

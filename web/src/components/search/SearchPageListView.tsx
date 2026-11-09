@@ -56,6 +56,7 @@ import {
     areFilesComparableTogether,
 } from "../../visualizerPlugin/core/viewableExtensions";
 import { describeSegmentMatch, formatRelevancePercent } from "./utils/relevance";
+import { nlpCountExplanation } from "./utils/nlpResultPaging";
 
 let tagTypes: any;
 
@@ -1292,7 +1293,7 @@ function SearchPageListView({
                                         header="About this count"
                                         content={
                                             state?.result?.nlp
-                                                ? "This count includes only records you can open. The + means there may be more: a natural-language search stops after a fixed number of candidates, or did not search every database, so the count is a minimum."
+                                                ? nlpCountExplanation(state.result)
                                                 : "This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
                                         }
                                         triggerType="custom"

@@ -318,7 +318,9 @@ without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). It take
 (validated against the indexed class ids, which the docstring lists),
 `file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
 and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
-means the total is a lower bound. `metadata_query`, `geo_search` and `tags` are
+means the total is a lower bound, and every total that is not zero is one,
+because the vector index uses approximate nearest-neighbour search.
+`metadata_query`, `geo_search` and `tags` are
 OpenSearch-only constraints: without OpenSearch they are ignored and reported as
 the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a
 Bedrock embedding, so it is deliberately left out of the `autoApprove` sample

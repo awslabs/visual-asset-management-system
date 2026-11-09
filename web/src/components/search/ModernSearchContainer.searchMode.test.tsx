@@ -95,12 +95,14 @@ const keywordRows = {
     aggregationTotal: 2,
 };
 
+// The route's answer: its total is a minimum whether or not a window filled (D75, approximate
+// matching); `truncated` alone says a window filled.
 const nlpEnvelope = (truncated: boolean) => ({
     took: 5,
     timed_out: false,
     _shards: { total: 1, successful: 1, skipped: 0, failed: 0 },
     hits: {
-        total: { value: 2, relation: truncated ? "gte" : "eq" },
+        total: { value: 2, relation: "gte" },
         hits: [
             {
                 _id: "db1#a1#/x.glb#v1",
@@ -287,8 +289,8 @@ describe("ModernSearchContainer search modes", () => {
 
     it("shows one count for a natural-language search: the route's total, in the announcement, the badge and the table header", async () => {
         // UAT D61: the notification said "Found 101+ results" (the route's total) while the badge and
-        // the table header said "100+" (the returned hits). The route counted exactly 150 readable matches
-        // and returned 2, so every place shows 150, exact as the route says (as `vamscli search nlp` does);
+        // the table header said "100+" (the returned hits). The route counted 150 readable matches,
+        // a minimum (D75), and returned 2, so every place shows 150+ (as `vamscli search nlp` does);
         // the table still pages the 2 returned hits.
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const envelope = nlpEnvelope(false);
@@ -296,7 +298,7 @@ describe("ModernSearchContainer search modes", () => {
             true,
             {
                 ...envelope,
-                hits: { ...envelope.hits, total: { value: 150, relation: "eq" } },
+                hits: { ...envelope.hits, total: { value: 150, relation: "gte" } },
                 aggregationTotal: 150,
             },
         ]);
@@ -305,29 +307,53 @@ describe("ModernSearchContainer search modes", () => {
         await userEvent.type(input, "red truck");
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 150 results"));
-        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150 results");
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 150+ results"));
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("150+ results");
         const table = createWrapper(container).findTable();
-        expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150");
-        expect(table?.findHeaderSlot()?.getElement().textContent).not.toContain("150+");
+        expect(table?.findHeaderSlot()?.getElement().textContent).toContain("150+");
         expect(screen.queryByText(/\b2\+/)).toBeNull();
         expect(createWrapper(container).findPagination()?.findPageNumbers()).toHaveLength(1);
         expect(screen.getByText("Truck")).toBeInTheDocument();
         expect(screen.getByText("Lorry")).toBeInTheDocument();
     });
 
-    it("keeps an exact natural-language count exact when the route returned every match it counted", async () => {
+    it("shows a natural-language count whose windows did not fill as a minimum, with the approximate-matching reason (D75)", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const { container } = renderContainer();
         const input = await screen.findByPlaceholderText("Describe what you are looking for...");
         await userEvent.type(input, "red truck");
         await userEvent.click(screen.getByRole("button", { name: "Search" }));
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2 results"));
-        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("2 results");
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 2+ results"));
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("2+ results");
         const header = createWrapper(container).findTable()?.findHeaderSlot()?.getElement();
-        expect(header?.textContent).toContain("2");
-        expect(header?.textContent).not.toContain("+");
+        expect(header?.textContent).toContain("2+");
+        // No window filled, so no "top N" line; the popover names approximate matching.
+        expect(screen.queryByText(/semantic matches; more may exist/)).toBeNull();
+        fireEvent.click(screen.getByText("\u24D8"));
+        expect(
+            screen.getByText(/finds the closest matches approximately, so it can miss a weak match/)
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/result limit/)).toBeNull();
+    });
+
+    it("announces a single natural-language hit as a minimum: Found 1+ results (D75)", async () => {
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const envelope = nlpEnvelope(false);
+        (searchNlp as jest.Mock).mockResolvedValue([
+            true,
+            {
+                ...envelope,
+                hits: { total: { value: 1, relation: "gte" }, hits: [envelope.hits.hits[0]] },
+                aggregationTotal: 1,
+            },
+        ]);
+        const { container } = renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(countAnnouncement().textContent).toBe("Found 1+ results"));
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("1+ results");
     });
 
     it("with only OpenSearch on: no mode control and the keyword search runs on mount", async () => {
@@ -446,6 +472,11 @@ describe("ModernSearchContainer search modes", () => {
         const segmentMessage = "A segment window of 100 filled; more segments may match";
         const ignoredMessage = "OpenSearch is not enabled; ignored: filters, tags";
         const noneAccessibleMessage = "No searchable database is accessible to the caller";
+        // D76: what the page shows for those two codes instead of the API's message.
+        const ignoredText =
+            "Some filters aren't available for natural-language search in this deployment and weren't applied.";
+        const noneAccessibleText =
+            "You don't have access to any database this search covers. Ask your administrator for access.";
         const truncatedLine = "Showing the top 2 semantic matches; more may exist.";
         const segmentLine =
             "Some files have more matching scenes or passages than were checked; more may exist.";
@@ -469,20 +500,26 @@ describe("ModernSearchContainer search modes", () => {
             await screen.findByText("Truck");
         };
 
-        it("toasts the rare warnings' messages in one notice, never the object or a window-full message", async () => {
+        it("toasts the rare warnings in one notice, in the page's own words, never the API's message, the object or a window-full message (D76)", async () => {
             await searchWith(true, [
                 { code: "truncated:window", message: truncatedMessage },
                 { code: "opensearch:fields_ignored", message: ignoredMessage },
                 { code: "databases:none_accessible", message: noneAccessibleMessage },
             ]);
             await screen.findByText("Search notice");
-            expect(
-                screen.getByText(`${ignoredMessage} ${noneAccessibleMessage}`)
-            ).toBeInTheDocument();
+            expect(screen.getByText(`${ignoredText} ${noneAccessibleText}`)).toBeInTheDocument();
+            expect(screen.queryByText(new RegExp(ignoredMessage))).toBeNull();
+            expect(screen.queryByText(/caller/)).toBeNull();
             expect(screen.queryByText(new RegExp(truncatedMessage))).toBeNull();
             expect(screen.queryByText(/\[object Object\]/)).toBeNull();
             // The filled window is stated on the page instead.
             expect(screen.getByText(truncatedLine)).toBeInTheDocument();
+        });
+
+        it("toasts the API's message for a code the page does not know", async () => {
+            await searchWith(false, [{ code: "future:code", message: "A new kind of notice" }]);
+            await screen.findByText("Search notice");
+            expect(screen.getByText("A new kind of notice")).toBeInTheDocument();
         });
 
         it("raises no toast for a truncated:window warning alone; the page states it", async () => {
@@ -496,20 +533,23 @@ describe("ModernSearchContainer search modes", () => {
         it("raises no toast for a segments:window_full warning alone and states it on the page", async () => {
             await searchWith(false, [{ code: "segments:window_full", message: segmentMessage }]);
             expect(screen.getByText(segmentLine)).toBeInTheDocument();
-            // A segment window is not a truncated answer: no whole-file line, and the count is exact.
+            // A segment window is not a truncated answer: no whole-file line. The count is the route's
+            // minimum (D75, approximate matching).
             expect(screen.queryByText(truncatedLine)).toBeNull();
-            expect(countAnnouncement().textContent).toBe("Found 2 results");
+            expect(countAnnouncement().textContent).toBe("Found 2+ results");
             await new Promise((resolve) => setTimeout(resolve, 300));
             expect(screen.queryByText("Search notice")).toBeNull();
             expect(screen.queryByText(segmentMessage)).toBeNull();
         });
 
-        it("still toasts a databases:none_accessible warning", async () => {
+        it("still toasts a databases:none_accessible warning, in words that name no database and never 'caller' (D76)", async () => {
             await searchWith(false, [
                 { code: "databases:none_accessible", message: noneAccessibleMessage },
             ]);
             await screen.findByText("Search notice");
-            expect(screen.getByText(noneAccessibleMessage)).toBeInTheDocument();
+            expect(screen.getByText(noneAccessibleText)).toBeInTheDocument();
+            expect(screen.queryByText(noneAccessibleMessage)).toBeNull();
+            expect(screen.queryByText(/caller/)).toBeNull();
             expect(screen.queryByText(segmentLine)).toBeNull();
         });
     });
@@ -640,13 +680,14 @@ describe("ModernSearchContainer natural-language File Type filter", () => {
         },
     });
 
-    // The natural-language envelope with the terms buckets the keyword route also returns.
+    // The natural-language envelope with the terms buckets the keyword route also returns; its
+    // total is a minimum, as the route reports every total that is not zero (D75).
     const nlpFiles = (
         hits: ReturnType<typeof fileHit>[],
         fileTypes: Array<{ key: string; doc_count: number }>
     ) => ({
         ...nlpEnvelope(false),
-        hits: { total: { value: hits.length, relation: "eq" }, hits },
+        hits: { total: { value: hits.length, relation: "gte" }, hits },
         aggregations: {
             str_fileext: { buckets: fileTypes },
             str_databaseid: { buckets: [{ key: "db1", doc_count: hits.length }] },
@@ -725,7 +766,7 @@ describe("ModernSearchContainer natural-language File Type filter", () => {
                 .findDropdown()
                 .findOptions()
                 .map((option) => option.findLabel().getElement().textContent)
-        ).toEqual(["glb (1)", "txt (2)"]);
+        ).toEqual(["glb (1+)", "txt (2+)"]);
         await act(async () => {
             fileTypes.selectOptionByValue("txt");
         });

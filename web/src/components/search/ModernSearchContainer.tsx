@@ -42,6 +42,7 @@ import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
+import { rareNlpWarningText } from "./utils/nlpWarnings";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
@@ -67,18 +68,15 @@ export const REDUCED_ASSET_COLUMNS = [
     "bool_archived",
 ];
 
-/** "Found 1 result" / "Found N results", with "+" when N is a minimum ("Found 1,200+ results"). */
+/**
+ * "Found 1 result" / "Found N results", with "+" when N is a minimum ("Found 1,200+ results"). A
+ * minimum of one reads "Found 1+ results", as a natural-language answer with one hit does: the API
+ * reports every natural-language total that is not zero as a minimum.
+ */
 const resultCountMessage = (result: SearchResponse) => {
     const exactOne = getTotalResultCount(result) === 1 && !isTotalLowerBound(result);
     return `Found ${formatTotalResultCount(result)} ${exactOne ? "result" : "results"}`;
 };
-
-/**
- * Natural-language warnings that only say a search window filled. The page states them itself (the
- * count's "+" and the line under the results), so they raise no toast; every other code is rare and
- * is toasted.
- */
-const NLP_WINDOW_WARNING_CODES = new Set(["truncated:window", "segments:window_full"]);
 
 const ModernSearchContainer: React.FC<
     SearchContainerProps & {
@@ -236,13 +234,11 @@ const ModernSearchContainer: React.FC<
             setNlpResult(result);
             setAnsweredMode("nlp");
             searchState.setResult(result);
-            // Each entry is `{ code, message }`; the user reads the messages. A filled window is
-            // stated on the page instead (see NLP_WINDOW_WARNING_CODES).
-            const rareWarnings = (result.warnings ?? []).filter(
-                (w) => !NLP_WINDOW_WARNING_CODES.has(w.code)
-            );
-            if (rareWarnings.length > 0) {
-                showWarning("Search notice", rareWarnings.map((w) => w.message).join(" "));
+            // Each entry is `{ code, message }`; the user reads the page's own text for each rare
+            // code (rareNlpWarningText). A filled window is stated on the page instead.
+            const notice = rareNlpWarningText(result.warnings);
+            if (notice) {
+                showWarning("Search notice", notice);
             }
             // The announcement reads the count the badge and the table header show.
             return withNlpResultTotal(result);
@@ -711,6 +707,7 @@ const ModernSearchContainer: React.FC<
                         onCreateAsset={showBulkActions ? handleCreateAsset : undefined}
                         onDeleteSelected={showBulkActions ? () => {} : undefined}
                         totalItems={totalResults}
+                        totalItemsIsLowerBound={isTotalLowerBound(displayedResult)}
                     />
                 );
 
@@ -916,8 +913,8 @@ const ModernSearchContainer: React.FC<
                                 may exist.
                             </Box>
                         )}
-                        {/* Only a segment window filled: the files are all counted, but some may
-                            match in more scenes or passages than were checked. */}
+                        {/* Only a segment window filled: no whole-file window did, but some files
+                            may match in more scenes or passages than were checked. */}
                         {searchMode === "nlp" &&
                             nlpResult &&
                             !nlpResult.nlp?.truncated &&

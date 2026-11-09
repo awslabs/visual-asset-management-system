@@ -303,7 +303,7 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
     "timed_out": false,
     "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
     "hits": {
-        "total": { "value": 3, "relation": "eq" },
+        "total": { "value": 3, "relation": "gte" },
         "max_score": 0.81,
         "hits": [
             {
@@ -383,20 +383,20 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 
 -   `_id` is `databaseId#assetId#filePath#versionId` for a file hit and `databaseId#assetId` for an asset hit. `_score` is `1 - distance`, clipped to `[0, 1]`.
 -   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
--   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` when a result window filled or the accessible database list was cut (`nlp.truncated` is `true`), else `eq`.
+-   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search ([Using vector indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html)), so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of `0` is `eq`, unless `nlp.truncated` is `true`. `nlp.truncated` is `true` only when a result window filled or the accessible database list was cut.
 -   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
 -   `nlp.candidatesEvaluated` is the number of distinct vector items after the per-database results were merged; `nlp.itemsCollapsed` is how many of them folded into another hit of the same file.
 
 **Warnings:**
 
-| Code                           | Meaning                                                                                                              |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `truncated:window`             | A whole-file result window filled; more files may match than were evaluated. `relation` is `gte`.                    |
-| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `relation` is `gte`.               |
-| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty and the query was not embedded.              |
-| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                 |
-| `opensearch:enrichment_failed` | The OpenSearch constrain/enrich step failed; the hits are returned without it.                                       |
-| `segments:window_full`         | A segment result window filled while the whole-file windows did not; more segments may match. `relation` stays `eq`. |
+| Code                           | Meaning                                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `truncated:window`             | A whole-file result window filled; more files may match than were evaluated. `nlp.truncated` is `true`.                           |
+| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `nlp.truncated` is `true`.                      |
+| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty, its total is `0` (`eq`), and the query was not embedded. |
+| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                              |
+| `opensearch:enrichment_failed` | The OpenSearch constrain/enrich step failed; the hits are returned without it.                                                    |
+| `segments:window_full`         | A segment result window filled while the whole-file windows did not; more segments may match. `nlp.truncated` stays `false`.      |
 
 **Error Responses:**
 

@@ -1459,6 +1459,36 @@ class TestSearchNlpCommand:
             assert ('Warning: truncated:window: The vector index window filled; the total is a lower '
                     'bound.') in result.output
 
+    def test_a_non_window_answer_is_shown_as_a_lower_bound(self, cli_runner, search_command_mocks):
+        """D75: the route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
+        whether or not a window filled, so the CLI shows `N+` without any truncated warning."""
+        with search_command_mocks as mocks:
+            approximate = json.loads(json.dumps(_NLP_RESULT))
+            approximate["nlp"]["truncated"] = False
+            approximate["warnings"] = []
+            mocks['api_client'].search_nlp.return_value = approximate
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'pump manual'])
+            assert result.exit_code == 0, result.output
+            assert 'Found 2+ files' in result.output
+            assert 'Search completed. Found 2+ files.' in result.output
+            assert 'Warning:' not in result.output
+
+    def test_a_zero_answer_is_exact(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            mocks['api_client'].search_nlp.return_value = {
+                "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+                "nlp": {"truncated": False}, "warnings": []}
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'purple submarine'])
+            assert result.exit_code == 0, result.output
+            assert 'Found 0 files' in result.output and '0+' not in result.output
+
+    def test_help_says_every_non_zero_total_is_a_lower_bound(self, cli_runner):
+        result = cli_runner.invoke(cli, ['search', 'nlp', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert 'Every reported total that is not zero is a lower bound' in text
+        assert 'approximate nearest-neighbour search' in text
+
     def test_a_warning_without_a_message_still_shows_its_code(self, cli_runner, search_command_mocks):
         with search_command_mocks as mocks:
             code_only = json.loads(json.dumps(_NLP_RESULT))

@@ -154,6 +154,21 @@ def test_search_nlp_forwards_every_parameter_and_reattaches_the_bounds(mock_clie
     mock_client.api.search_query.assert_not_called()
 
 
+def test_search_nlp_reports_a_non_window_answer_as_a_lower_bound(mock_client):
+    """D75: the route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
+    whether or not a window filled; the tool hands the agent the lower bound in all three fields."""
+    raw = {"hits": {"total": {"value": 2, "relation": "gte"},
+                    "hits": [{"_id": "db1#a1#/x.glb#v1", "_score": 0.9, "_source": {"str_key": "/x.glb"}},
+                             {"_id": "db1#a2#/y.glb#v1", "_score": 0.8, "_source": {"str_key": "/y.glb"}}]},
+           "nlp": {"truncated": False}, "warnings": []}
+    mock_client.api.search_nlp.return_value = raw
+    mock_client.trim_search_results = server.VamsClient.trim_search_results
+    out = server.search_nlp(query="valve")
+    assert out["relation"] == "gte"
+    assert out["total"] == 2 and out["total_is_lower_bound"] is True and out["total_display"] == "2+"
+    assert out["nlp"] == {"truncated": False} and out["warnings"] == []
+
+
 def test_search_nlp_defaults_omit_the_optional_keys(mock_client):
     mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}

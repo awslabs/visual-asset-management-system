@@ -275,7 +275,9 @@ class TestPlanning:
         assert store.calls[0] == BREADTH_DB1
         assert list(store.calls[0]) == ["databaseId", "isLatest", "isArchived", "embeddingModelId", "segmentKind"]
         assert body["nlp"]["databasesSearched"] == 1
-        assert body["hits"]["total"]["relation"] == "eq"
+        # One readable hit and no window filled: still a minimum, because the index matches approximately.
+        assert body["hits"]["total"] == {"value": 1, "relation": "gte"}
+        assert body["nlp"]["truncated"] is False
 
     def test_all_access_caller_gets_one_unpartitioned_pair(self, svc):
         svc.access.get_accessible_databases_with_count.return_value = (["db1", "db2"], 2)
@@ -451,7 +453,8 @@ class TestTruncation:
         rows(svc, ("db1", "a1"))
         store = FakeStore([item(distance=0.3), chunk("c000001", 0.1), chunk("c000002", 0.2)])
         _, body = call(svc, store, {"query": "tractor", "size": 1})
-        assert body["nlp"]["truncated"] is False and body["hits"]["total"]["relation"] == "eq"
+        # A segment window does not truncate the answer; the total is a minimum for the approximate match.
+        assert body["nlp"]["truncated"] is False and body["hits"]["total"]["relation"] == "gte"
         assert {w["code"] for w in body["warnings"]} == {"segments:window_full"}
 
     def test_target_list_is_cut_at_max_targets(self, svc):
@@ -463,6 +466,50 @@ class TestTruncation:
         assert len(store.calls) == svc.MAX_TARGETS == 200
         assert body["nlp"]["databasesSearched"] == 200 and body["nlp"]["truncated"] is True
         assert {w["code"] for w in body["warnings"]} == {"truncated:targets"}
+
+
+class TestApproximateTotals:
+    """D75: the vector index matches by approximate nearest-neighbour search, so a weak match can drop
+    out of an answer whose windows did not fill. Every total that is not zero is a minimum (``gte``);
+    zero stays exact, and ``nlp.truncated`` still means only a filled window or an unsearched database."""
+
+    @pytest.mark.parametrize("entity_type", ["file", "asset"])
+    def test_a_non_empty_answer_whose_windows_did_not_fill_is_a_minimum(self, svc, entity_type):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        store = FakeStore([item(asset="a1", path="a.glb", distance=0.1), item(asset="a2", path="b.glb", distance=0.4)])
+        status, body = call(svc, store, {"query": "tractor", "entityTypes": [entity_type]})
+        assert status == 200
+        assert body["hits"]["total"] == {"value": 2, "relation": "gte"}
+        assert body["aggregationTotal"] == 2
+        # Approximate matching is not a filled window: no truncated flag and no warning for it.
+        assert body["nlp"]["truncated"] is False
+        assert body["warnings"] == []
+
+    def test_a_search_that_found_nothing_is_exactly_zero(self, svc):
+        rows(svc, ("db1", "a1"))
+        status, body = call(svc, FakeStore([]), {"query": "purple submarine"})
+        assert status == 200
+        assert body["hits"]["total"] == {"value": 0, "relation": "eq"}
+        assert body["nlp"]["truncated"] is False
+
+    def test_a_search_whose_matches_are_all_unreadable_is_exactly_zero(self, svc):
+        rows(svc, ("db1", "a1"))
+        svc.enforcer.enforce.return_value = False
+        status, body = call(svc, FakeStore([item()]), {"query": "tractor"})
+        assert status == 200 and body["hits"]["hits"] == []
+        assert body["hits"]["total"] == {"value": 0, "relation": "eq"}
+
+    def test_a_truncated_answer_stays_a_minimum(self, svc):
+        rows(svc, ("db1", "a1"))
+        store = FakeStore([item(path="a.glb", distance=0.1), item(path="b.glb", distance=0.2)])
+        _, body = call(svc, store, {"query": "tractor", "size": 1, "includeSegments": False})
+        assert body["nlp"]["truncated"] is True and body["hits"]["total"]["relation"] == "gte"
+
+    def test_the_relation_helper_states_each_case(self, svc):
+        assert svc._total_relation(3, False) == "gte"
+        assert svc._total_relation(0, False) == "eq"
+        assert svc._total_relation(0, True) == "gte"
+        assert "approximate nearest-neighbour" in svc._total_relation.__doc__
 
 
 class TestErrorsAndEnvelope:
@@ -546,7 +593,10 @@ class TestErrorsAndEnvelope:
         svc.access.get_accessible_databases_with_count.return_value = ([], 2)
         store = FakeStore([item()])
         status, body = call(svc, store, {"query": "tractor"})
-        assert status == 200 and body["hits"]["hits"] == [] and body["hits"]["total"]["value"] == 0
+        assert status == 200 and body["hits"]["hits"] == []
+        # Nothing was searched, so the empty answer is exact (D75): no consumer shows "0+".
+        assert body["hits"]["total"] == {"value": 0, "relation": "eq"}
+        assert body["nlp"]["truncated"] is False
         assert {w["code"] for w in body["warnings"]} == {"databases:none_accessible"}
         assert not svc.embed_text.called and store.calls == []
 

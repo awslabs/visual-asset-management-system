@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { NlpSearchResponse, SearchResult } from "../types";
+import Synonyms from "../../../synonyms";
+import type { NlpSearchResponse, NlpSearchWarning, SearchResult } from "../types";
 
 /**
  * Paging and sorting over a natural-language result set. `POST /search/nlp` returns at most 100
@@ -57,11 +58,13 @@ export function sortNlpHits(hits: SearchResult[], sort: HitSort[]): SearchResult
 }
 
 /**
- * The one count a natural-language search shows, in its notification, the heading badge and the table
+ * The one count a natural-language search shows, in its announcement, the heading badge and the table
  * header: the route's total (every readable hit it found, which its facets count too), shown as a minimum
- * (`gte`, "101+") only when the route reports its total as one (a search window filled, or not every
- * database was searched). An exact total stays exact when the route returned fewer hits than it counted
- * (it returns at most the requested size); the table pages over the returned hits.
+ * (`gte`, "101+") whenever the route reports it as one. The route does so for every total that is not
+ * zero: the vector index finds the closest matches by approximate nearest-neighbour search, so a weak
+ * match can be missed even when no window filled, and a filled window or an unsearched database are
+ * further reasons. The relation is the route's decision and is passed through as it came; the table
+ * pages over the returned hits (at most the requested size).
  */
 export function nlpResultTotal(result: NlpSearchResponse): {
     value: number;
@@ -73,12 +76,50 @@ export function nlpResultTotal(result: NlpSearchResponse): {
 }
 
 /**
- * Whether the counts of a natural-language answer are minimums: its count is (nlpResultTotal), so
- * each facet count beside it is shown with "+" too. False for anything that is not an answer.
+ * Whether the counts of a natural-language answer are minimums: its count is (nlpResultTotal), which
+ * holds for every answer that found something, so each facet count beside it is shown with "+" too. The
+ * facets are minimums for the same reason as the total: they count the same approximate matches. False
+ * for an exact answer (zero) and for anything that is not an answer.
  */
 export function nlpCountsAreMinimums(result: NlpSearchResponse | null | undefined): boolean {
     if (!result?.nlp || !Array.isArray(result.hits?.hits) || !result.hits.total) return false;
     return nlpResultTotal(result).relation === "gte";
+}
+
+/**
+ * The "About this count" text for a natural-language count shown as a minimum. Matching is approximate,
+ * so that is the reason every such count gives; a filled window or an unsearched database is named too
+ * when the answer reports one (`nlp.truncated`, with the `truncated:*` warning saying which).
+ */
+export function nlpCountExplanation(
+    result:
+        | { nlp?: { truncated?: boolean } | null; warnings?: NlpSearchWarning[] | null }
+        | null
+        | undefined
+): string {
+    const sentences = [
+        "This count includes only records you can open.",
+        "The + means there may be more: natural-language search finds the closest matches approximately, so it can miss a weak match.",
+    ];
+    if (result?.nlp?.truncated) {
+        const codes = new Set((result.warnings ?? []).map((w) => w.code));
+        const window = codes.has("truncated:window");
+        const targets = codes.has("truncated:targets");
+        if (window && targets) {
+            sentences.push(
+                `This search also reached its result limit and did not search every ${Synonyms.database}.`
+            );
+        } else if (targets) {
+            sentences.push(`This search also did not search every ${Synonyms.database}.`);
+        } else if (window) {
+            sentences.push("This search also reached its result limit.");
+        } else {
+            sentences.push(
+                `This search also reached its result limit or did not search every ${Synonyms.database}.`
+            );
+        }
+    }
+    return sentences.join(" ");
 }
 
 /** `result` with its total replaced by nlpResultTotal, for the completion notification. */

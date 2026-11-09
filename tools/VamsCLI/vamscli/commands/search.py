@@ -1150,8 +1150,11 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
     requires the VECTORSEARCH feature. --filters and --metadata-query are OpenSearch-only
     constraints and are ignored, with a warning in the response, when OpenSearch is disabled.
 
-    The reported total is a lower bound (shown as "N+") when the index window filled; narrow the
-    search with -d, --file-class or --file-ext rather than raising --size (100 is the ceiling).
+    Every reported total that is not zero is a lower bound (shown as "N+"): the vector index uses
+    approximate nearest-neighbour search, so a weak match can be missed even when no window
+    filled. A truncated:window or truncated:targets warning means more files may match than
+    were ranked; narrow the search with -d, --file-class or --file-ext rather than raising
+    --size (100 is the ceiling).
 
     Examples:
         vamscli search nlp -q "rusty pipe near the north tank"

@@ -106,6 +106,10 @@ def test_search_nlp_docstring_states_the_bounds_and_the_closed_warning_set():
     doc = _docstring_of("search_nlp")
     assert "1..100" in doc and "1..1000" in doc and "100 ids" in doc
     assert "gte" in doc and "lower bound" in doc.lower()
+    # D75: the docstring says why every non-zero total is a minimum, not only when a window fills.
+    flat = " ".join(doc.split())
+    assert "Every `total` that is not zero is a LOWER BOUND" in flat
+    assert "approximate nearest-neighbour search" in flat
     for code in WARNING_CODES:
         assert code in doc, code
     assert "no offset paging" in doc.lower() or "no from_offset" in doc.lower()

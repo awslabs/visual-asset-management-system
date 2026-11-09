@@ -218,8 +218,9 @@ export interface NlpSearchSummary {
  * One advisory attached to an otherwise successful natural-language response. `code` is one of a
  * fixed set (`truncated:window`, `truncated:targets`, `databases:none_accessible`,
  * `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full` — a segment
- * search window filled while the answer is not already truncated); `message` is the text shown
- * to the user.
+ * search window filled while the answer is not already truncated); `message` is written for API and
+ * CLI callers. The search page shows its own text for each code (utils/nlpWarnings.ts), and the
+ * API's `message` only for a code it does not know.
  */
 export interface NlpSearchWarning {
     code: string;
@@ -512,9 +513,10 @@ export function getTotalResultCount(result: SearchResponse | null | undefined): 
 }
 
 /**
- * Whether the total is a minimum rather than an exact count. The backend reports a lower bound
- * (hits.total.relation "gte") when some of the caller's permission rules cannot be counted ahead of
- * the per-record check.
+ * Whether the total is a minimum rather than an exact count, as the backend reports it
+ * (hits.total.relation "gte"). Keyword search reports one when some of the caller's permission rules
+ * cannot be counted ahead of the per-record check; natural-language search reports every total that is
+ * not zero as one, because its matching is approximate.
  */
 export function isTotalLowerBound(result: SearchResponse | null | undefined): boolean {
     return result?.hits?.total?.relation === "gte";

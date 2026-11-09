@@ -973,6 +973,61 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
         expect(s).toContain("windows or chunks");
         expect(s).toContain("retrieval-augmented generation");
     });
+
+    test("every page that states the natural-language total's relation names approximate matching and keeps zero exact (D75)", () => {
+        // The handler reports every non-zero total as gte because SearchVectors is approximate.
+        const handler = readRepo(
+            path.join("backend", "backend", "handlers", "osVectorSearch", "vectorSearchService.py")
+        );
+        expect(handler).toMatch(/return "gte" if truncated or total > 0 else "eq"/); // control
+        const ann =
+            "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html";
+        const limits = section(readDoc("concepts/vector-search.md"), "## Limits");
+        expect(limits).toContain("approximate nearest-neighbour (ANN) search");
+        expect(limits).toContain(ann);
+        expect(limits).toContain("identical searches can differ in their weakest matches");
+        expect(limits).toContain(
+            "Every natural-language total is therefore reported as a minimum (`hits.total.relation` `gte`) except zero"
+        );
+        const searching = section(readDoc("concepts/vector-search.md"), "## Searching");
+        expect(searching).toContain(
+            "`hits.total.relation` is `gte` for every answer that found a match"
+        );
+        expect(searching).not.toContain("`hits.total.relation` is then `gte`");
+        const api = readDoc("api/search.md");
+        expect(api).toContain(
+            "`hits.total.relation` is `gte` for every answer with at least one hit"
+        );
+        expect(api).toContain(ann);
+        expect(api).not.toContain("`relation` stays `eq`");
+        const spec = readRepo(path.join("documentation", "VAMS_API.yaml"));
+        expect(spec).toContain("hits.total.relation is gte for every answer with at least one hit");
+        expect(spec).not.toContain("(nlp.truncated is true), else eq");
+        const guide = readDoc("user-guide/search-and-discovery.md");
+        expect(guide).toContain("every count except zero carries a `+`");
+        expect(guide).not.toContain(
+            "There a `+` means the search stopped before it counted every match"
+        );
+    });
+
+    test("the user guide lists the Search notice texts the web shows for the rare warnings (D76)", () => {
+        const warnings = readRepo(
+            path.join("web", "src", "components", "search", "utils", "nlpWarnings.ts")
+        );
+        const guide = section(
+            readDoc("user-guide/search-and-discovery.md"),
+            "## Natural language search"
+        );
+        for (const text of [
+            "You don't have access to any ${Synonyms.database} this search covers. Ask your administrator for access.",
+            "Not every ${Synonyms.database} you can access was searched. Choose a ${Synonyms.database} in the filters to search it fully.",
+            "Some filters aren't available for natural-language search in this deployment and weren't applied.",
+            "Some result details, such as dates and metadata, couldn't be loaded, and metadata, tag and location filters weren't applied. The matches are still shown.",
+        ]) {
+            expect(warnings).toContain(text); // control: the web shows this text
+            expect(guide).toContain(`"${text.replace(/\$\{Synonyms\.database\}/g, "database")}"`);
+        }
+    });
 });
 
 describe("sidebar and page set", () => {

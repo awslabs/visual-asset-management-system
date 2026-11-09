@@ -88,16 +88,42 @@ describe("Search list view count", () => {
         expect(screen.getByText(/there may be more/)).toBeInTheDocument();
     });
 
-    it("explains a natural-language minimum by the search window, not by permission rules", () => {
+    it("explains a natural-language minimum by approximate matching, not by permission rules (D75)", () => {
         const nlpState = {
             ...lowerBoundState,
-            result: { ...lowerBoundState.result, nlp: { query: "gearbox", truncated: true } },
+            result: {
+                ...lowerBoundState.result,
+                nlp: { query: "gearbox", truncated: false },
+                warnings: [],
+            },
         };
         renderView(nlpState);
 
         fireEvent.click(screen.getByText("\u24D8"));
-        expect(screen.getByText(/stops after a fixed number of candidates/)).toBeInTheDocument();
+        expect(screen.getByText(/includes only records you can open/)).toBeInTheDocument();
+        expect(
+            screen.getByText(/finds the closest matches approximately, so it can miss a weak match/)
+        ).toBeInTheDocument();
+        // No window filled and every database was searched: neither is named.
+        expect(screen.queryByText(/result limit/)).not.toBeInTheDocument();
         expect(screen.queryByText(/permission rules/)).not.toBeInTheDocument();
+    });
+
+    it("also names the filled window when the natural-language answer reports one", () => {
+        const nlpState = {
+            ...lowerBoundState,
+            result: {
+                ...lowerBoundState.result,
+                nlp: { query: "gearbox", truncated: true },
+                warnings: [{ code: "truncated:window", message: "A result window of 100 filled" }],
+            },
+        };
+        renderView(nlpState);
+
+        fireEvent.click(screen.getByText("\u24D8"));
+        expect(screen.getByText(/approximately/)).toBeInTheDocument();
+        expect(screen.getByText(/This search also reached its result limit\./)).toBeInTheDocument();
+        expect(screen.queryByText(/A result window of 100 filled/)).not.toBeInTheDocument();
     });
 
     it("shows an exact count without + or a popover", () => {

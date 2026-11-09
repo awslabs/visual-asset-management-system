@@ -225,6 +225,8 @@ class VamsClient:
         ``total`` stays the numeric ``hits.total.value``. ``total_is_lower_bound`` is True when the
         API reports ``hits.total.relation == "gte"`` (the true total is at least ``total``), and
         ``total_display`` is the total as text with a trailing '+' in that case (e.g. "120+").
+        ``POST /search/nlp`` reports every total that is not zero that way (approximate matching);
+        keyword search does when some permission rules can only be counted as a minimum.
         """
         hits_container = raw.get("hits", {}) if isinstance(raw, dict) else {}
         total = hits_container.get("total", {})
