@@ -6,10 +6,11 @@
 Audit row (COMPLIANCE_AUDIT_STORAGE_TABLE, PK `entryId`):
     entryId, databaseId:assetId (AssetIndex PK), timestamp (the sort key of every index),
     eventType (EventTypeIndex PK), allListPartition (AuditByDateGSI PK — the constant
-    `AUDIT_LIST_PARTITION`), databaseId, assetId, actor, details (JSON), searchText (what the
-    listing's `text` filter matches: lowercased asset name, asset id and actor), and the optional
-    assetName (the asset's name when the event was recorded), previousState, newState, schemaName,
-    evaluationId, cascadeId.
+    `AUDIT_LIST_PARTITION`), databaseId (DatabaseIndex PK; `<databaseId>#deleted` once a deleted
+    database's history moved, `*` on schema-level entries), assetId, actor, details (JSON),
+    searchText (what the listing's `text` filter matches: lowercased asset name, asset id and
+    actor), and the optional assetName (the asset's name when the event was recorded),
+    previousState, newState, schemaName, evaluationId, cascadeId.
 
 `AuditByDateGSI` is what makes the unfiltered audit listing one newest-first query, and a row the
 index can see is one that carries the constant. Every writer therefore puts an item this module
@@ -51,20 +52,24 @@ def build_audit_item(
     timestamp: Optional[str] = None,
     asset_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """One audit row, keyed for all three indexes; `timestamp` defaults to now (UTC, ISO-8601).
-    Optional fields left None are absent from the row rather than written as null."""
+    """One audit row, keyed for all four indexes; `timestamp` defaults to now (UTC, ISO-8601).
+    Optional fields left None are absent from the row rather than written as null. A row without a
+    database id (none or empty) carries no `databaseId`: DynamoDB refuses an empty string or a null
+    as the key of an index (`DatabaseIndex`), so the row stays out of that index alone and the
+    write succeeds."""
     item = {
         "entryId": str(uuid.uuid4()),
         "databaseId:assetId": f"{database_id}:{asset_id}",
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "eventType": event_type,
         "allListPartition": AUDIT_LIST_PARTITION,
-        "databaseId": database_id,
         "assetId": asset_id,
         "actor": actor,
         "details": json.dumps(details or {}),
         "searchText": audit_search_text(asset_name, asset_id, actor),
     }
+    if isinstance(database_id, str) and database_id:
+        item["databaseId"] = database_id
     if asset_name:
         item["assetName"] = asset_name
     if previous_state is not None:

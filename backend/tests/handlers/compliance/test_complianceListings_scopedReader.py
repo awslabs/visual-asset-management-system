@@ -31,8 +31,8 @@ import pytest
 
 import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.compliance._harness import (
-    USER, body_of, claims_for, enforcer, live_only_asset_table, mirror_engine, real_constants,
-    rest_event,
+    USER, body_of, claims_for, database_table_with, enforcer, live_only_asset_table, mirror_engine,
+    real_constants, rest_event,
 )
 from backend.tests.handlers.auth.test_permission_templates_compliance_binding import (  # noqa: F401
     roles_enforcer,
@@ -92,11 +92,17 @@ def _decision_cost(step):
     `_DecisionClock` charging `step` seconds a decision, instead of the host's clock."""
     clock = _DecisionClock(step)
     real = listing.query_page
+    real_merge = listing.merge_query_page
 
     def query_page(*args, accept=None, **kwargs):
         return real(*args, accept=clock.counted(accept) if accept else None, clock=clock,
                     **kwargs)
-    with patch.object(listing, "query_page", query_page):
+
+    def merge_query_page(*args, accept=None, **kwargs):
+        return real_merge(*args, accept=clock.counted(accept) if accept else None, clock=clock,
+                          **kwargs)
+    with patch.object(listing, "query_page", query_page), \
+            patch.object(listing, "merge_query_page", merge_query_page):
         yield clock
 
 
@@ -138,29 +144,42 @@ def audit_entries():
 
 
 class _OrderedIndex:
-    """The audit trail's AuditByDateGSI, newest first, keyed by its three key attributes."""
+    """The audit trail's AuditByDateGSI and DatabaseIndex (one database's entries, D173), newest
+    first, each keyed by its three key attributes. Counts the reads of each index."""
 
     def __init__(self, entries):
         self._newest_first = sorted(entries, key=lambda e: (e["timestamp"], e["entryId"]),
                                     reverse=True)
-        self._position = {entry["entryId"]: index for index, entry in enumerate(self._newest_first)}
+        self._by_database = {}
+        for entry in self._newest_first:
+            self._by_database.setdefault(entry["databaseId"], []).append(entry)
         self.reads = 0
+        self.reads_by_index = {"AuditByDateGSI": 0, "DatabaseIndex": 0}
+        self.partitions_read = []
 
     def query(self, **kwargs):
-        assert kwargs["IndexName"] == "AuditByDateGSI"
+        index = kwargs["IndexName"]
+        assert index in self.reads_by_index, index
         assert kwargs["ScanIndexForward"] is False
         assert "FilterExpression" not in kwargs, "the unfiltered listing sends no filter"
         self.reads += 1
+        self.reads_by_index[index] += 1
+        if index == "DatabaseIndex":
+            partition = kwargs["KeyConditionExpression"]._values[1]
+            self.partitions_read.append(partition)
+            rows = self._by_database.get(partition, [])
+            keys = ("entryId", "databaseId", "timestamp")
+        else:
+            rows = self._newest_first
+            keys = ("entryId", "allListPartition", "timestamp")
         start = 0
         if kwargs.get("ExclusiveStartKey"):
-            start = self._position[kwargs["ExclusiveStartKey"]["entryId"]] + 1
-        page = self._newest_first[start:start + kwargs["Limit"]]
+            ids = [entry["entryId"] for entry in rows]
+            start = ids.index(kwargs["ExclusiveStartKey"]["entryId"]) + 1
+        page = rows[start:start + kwargs["Limit"]]
         response = {"Items": [dict(entry) for entry in page]}
-        if start + kwargs["Limit"] < len(self._newest_first):
-            last = page[-1]
-            response["LastEvaluatedKey"] = {"entryId": last["entryId"],
-                                            "allListPartition": last["allListPartition"],
-                                            "timestamp": last["timestamp"]}
+        if start + kwargs["Limit"] < len(rows):
+            response["LastEvaluatedKey"] = {name: page[-1][name] for name in keys}
         return response
 
 
@@ -204,6 +223,7 @@ def _walk_audit(table, stand_in, count, max_items, step=CHEAP_DECISION_SECONDS):
                 patch.object(audit_svc, "CasbinEnforcer", return_value=stand_in), \
                 patch.object(audit_svc, "audit_table", table), \
                 patch.object(audit_svc, "asset_table", live_only_asset_table()), \
+                patch.object(audit_svc, "database_table", database_table_with(*DATABASES)), \
                 _decision_cost(step) as clock:
             started = time.perf_counter()
             response = audit_svc.lambda_handler(
@@ -261,14 +281,22 @@ class TestTheAuditTrailForAReaderOfOneDatabase:
             if entry["databaseId"] == READER_DB]
         assert [entry["entryId"] for entry in entries] == expected
         assert {entry["databaseId"] for entry in entries} == {READER_DB}
-        # The walk took several bounded requests (one in fifty entries is the reader's).
-        assert len(requests) > 1
+        # D173: only the reader's database is read (its DatabaseIndex partition), so every page but
+        # the last is full: other databases' entries never take a page's place.
+        assert table.reads_by_index["AuditByDateGSI"] == 0
+        assert set(table.partitions_read) == {READER_DB}
+        assert len(requests) == math.ceil(len(expected) / max_items)
         for position, request in enumerate(requests):
-            assert request["reads"] <= listing.DEFAULT_READ_BUDGET
+            assert request["reads"] == 1, request
             assert request["engine"] <= ENGINE_CALLS_BOUND, request
-            # One refusal per database the reader may not read, not one per entry.
-            assert request["refusals"] <= len(DATABASES), request
-            _decision_bounds(request, step, last=position == len(requests) - 1)
+            # The listing decides each database once: a refusal for each of the 49 the reader
+            # may not read, `*` and the empty-database object, plus the reader's own archive id
+            # the rows' decision asks (as before); not one per entry.
+            assert request["refusals"] <= len(DATABASES) + 2, request
+            # Every row read and decided is the reader's.
+            assert request["decisions"] == request["entries"], request
+            if position < len(requests) - 1:
+                assert request["entries"] == max_items, request
         _summary(f"audit maxItems={max_items} step={step} (400 of 20,000 entries readable)",
                  requests)
 
@@ -281,8 +309,11 @@ class TestTheAuditTrailForAReaderOfOneDatabase:
         assert [e["entryId"] for e in body["entries"]] == [e["entryId"] for e in newest]
         assert requests["entries"] == 100 and requests["reads"] == 1
         # Two decisions per database id on the page (the live id, and its archive's stored id
-        # once, which this caller is allowed: no archive is read), not one per entry.
-        assert admin.enforce.call_count <= 2 * len(DATABASES)
+        # once, which this caller is allowed: no archive is read), and `*` (the schema-level
+        # entries' id) once, as the listing decides whether the caller may read every database
+        # (D173); not one per entry.
+        assert admin.enforce.call_count <= 2 * len(DATABASES) + 1
+        assert table.reads_by_index == {"AuditByDateGSI": 1, "DatabaseIndex": 0}
         print(f"SCOPED audit admin first page: {requests['reads']} read, "
               f"{admin.enforce.call_count} engine calls, {requests['seconds'] * 1000:.0f} ms")
 
@@ -291,7 +322,8 @@ def _walk_audit_first(table, stand_in):
     with patch.object(audit_svc, "request_to_claims", claims_for(USER)), \
             patch.object(audit_svc, "CasbinEnforcer", return_value=stand_in), \
             patch.object(audit_svc, "audit_table", table), \
-            patch.object(audit_svc, "asset_table", live_only_asset_table()):
+            patch.object(audit_svc, "asset_table", live_only_asset_table()), \
+            patch.object(audit_svc, "database_table", database_table_with(*DATABASES)):
         reads = table.reads
         started = time.perf_counter()
         response = audit_svc.lambda_handler(rest_event("GET", "/compliance/audit"), MagicMock())

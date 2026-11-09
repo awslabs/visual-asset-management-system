@@ -7,8 +7,10 @@
 - GET /compliance/audit                          — audit entries across assets, optionally by event type
 
 Audit table (PK entryId; GSI AssetIndex on databaseId:assetId/timestamp; GSI EventTypeIndex on
-eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp). Every listing
-is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
+eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp; GSI
+DatabaseIndex on databaseId/timestamp). Every listing is one newest-first query on the index that
+serves it, or for a caller who may read only some databases one DatabaseIndex query per database
+merged newest first (`query_audit`), and pages externally with a Base64 NextToken.
 An entry that names an asset is the caller's as the asset's compliance data is (`AssetAccess`): the
 evaluation GET on its database, and, for a caller whose policy has asset rules, the asset GET on
 the asset's row as stored; the entries of an archived asset are also decided with its stored
@@ -42,6 +44,7 @@ from common.compliance.cascadeAuditSummary import (
 )
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from customLogging.auditLogging import deferred_authorization_audit
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -73,6 +76,25 @@ INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 ASSET_INDEX_KEY_ATTRIBUTES = ("entryId", "databaseId:assetId", "timestamp")
 EVENT_TYPE_INDEX_KEY_ATTRIBUTES = ("entryId", "eventType", "timestamp")
 DATE_INDEX_KEY_ATTRIBUTES = ("entryId", "allListPartition", "timestamp")
+# One database's entries, newest first (`databaseId`, `timestamp`; D173).
+DATABASE_INDEX = "DatabaseIndex"
+DATABASE_INDEX_KEY_ATTRIBUTES = ("entryId", "databaseId", "timestamp")
+# The most databases a page across databases is merged from, one DatabaseIndex query each (a
+# caller who may read more, but not every database, reads the global listing); also the most a
+# merged page's token may name, which keeps the token a few kilobytes.
+MAX_MERGED_DATABASES = 25
+# The pages of database ids a page across databases lists before it treats them as too many to
+# merge (each page is 1 MB of database rows).
+MAX_DATABASE_SCAN_PAGES = 10
+# The database id of the schema-level entries (`schema_deleted`).
+SCHEMA_LEVEL_DATABASE_ID = "*"
+# The field a merged page's token keeps each database's resume point under.
+MERGE_TOKEN_FIELD = "databases"
+# Which listing issued a token (`_token_kind`).
+TOKEN_EVENT_TYPE = "event"
+TOKEN_MERGE = "merge"
+TOKEN_DATE = "date"
+TOKEN_DATABASE = "database"
 # The cache key of the evaluation GET on a database's stored id `<databaseId>#deleted`: the row
 # decision of a listing and the archived counts of a finished cascade's entry ask it once per
 # database of a request.
@@ -148,7 +170,10 @@ def handle_get_request(event):
         return get_asset_audit(event, knownDatabase.decoded_scope(path_params.get("databaseId")),
                                path_params.get("assetId"), query_params)
     if API_COMPLIANCE_AUDIT.matches(path):
-        return query_audit(event, query_params)
+        # The listing decides every database it may list once (D173): their refusals are written
+        # together at the end of the request, not one CloudWatch call each.
+        with deferred_authorization_audit():
+            return query_audit(event, query_params)
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -375,21 +400,134 @@ def get_asset_audit(event, database_id, asset_id, params):
     return success(body=result)
 
 
-def _audit_filter(database_id, text):
-    """The FilterExpression of the listing's `databaseId` and `text` filters, or None. An entry
-    written before `searchText` existed is matched on its asset id and actor."""
+def _audit_filter(database_id=None, text=None, event_type=None):
+    """The FilterExpression of the listing's `databaseId`, `text` and `eventType` filters, or None.
+    An entry written before `searchText` existed is matched on its asset id and actor. A filter never
+    names a key of the index it is sent with: `databaseId` only on an index not keyed on it, and
+    `eventType` only off EventTypeIndex."""
     conditions = []
     if database_id:
         conditions.append(Attr("databaseId").eq(database_id))
     if text:
         conditions.append(Attr("searchText").contains(text) | Attr("assetId").contains(text)
                           | Attr("actor").contains(text))
+    if event_type:
+        conditions.append(Attr("eventType").eq(event_type))
     if not conditions:
         return None
     expression = conditions[0]
     for condition in conditions[1:]:
         expression = expression & condition
     return expression
+
+
+def _token_value(starting_token):
+    """The JSON object a token decodes to, or None when it is not Base64 JSON of a non-empty object."""
+    try:
+        decoded = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    return decoded if isinstance(decoded, dict) and decoded else None
+
+
+def _token_kind(token):
+    """Which listing issued a decoded token: `event` (EventTypeIndex, `{"partition", "key"}`), `merge`
+    (the databases a reader may read, `{"databases": ...}`), `date` (an AuditByDateGSI key) or
+    `database` (a DatabaseIndex key). A token always continues on the index that issued it, so a
+    token issued before an upgrade, or while DatabaseIndex was being built, stays valid."""
+    if "partition" in token:
+        return TOKEN_EVENT_TYPE
+    if MERGE_TOKEN_FIELD in token:
+        return TOKEN_MERGE
+    if "allListPartition" in token:
+        return TOKEN_DATE
+    return TOKEN_DATABASE
+
+
+def _merge_token(positions):
+    """The token of a merged page: each database's resume point as `[timestamp, entryId]`, or null
+    for a database none of whose entries were taken yet."""
+    return _encode_token({MERGE_TOKEN_FIELD: {
+        partition: None if key is None else [key["timestamp"], key["entryId"]]
+        for partition, key in positions.items()}})
+
+
+def _merge_positions(token):
+    """`[(databaseId, start key | None)]` of a merged page's token, in database id order, or None
+    when it is malformed or names more than MAX_MERGED_DATABASES databases."""
+    named = token.get(MERGE_TOKEN_FIELD)
+    if not isinstance(named, dict) or not named or len(named) > MAX_MERGED_DATABASES:
+        return None
+    positions = []
+    for partition in sorted(named):
+        value = named[partition]
+        if partition != SCHEMA_LEVEL_DATABASE_ID and not knownDatabase.validate_scope(partition)[0]:
+            return None
+        if value is None:
+            positions.append((partition, None))
+            continue
+        if (not isinstance(value, list) or len(value) != 2
+                or not all(isinstance(part, str) and part for part in value)):
+            return None
+        positions.append((partition, {"entryId": value[1], "databaseId": partition,
+                                      "timestamp": value[0]}))
+    return positions
+
+
+def _database_ids():
+    """Every database row's id (live, and a deleted database's `<databaseId>#deleted`), or None when
+    there are more than MAX_DATABASE_SCAN_PAGES pages of them. The database table is small and is
+    scanned for its key alone, paged."""
+    database_ids = []
+    scan_kwargs = {"ProjectionExpression": "databaseId"}
+    for _page in range(MAX_DATABASE_SCAN_PAGES):
+        response = database_table.scan(**scan_kwargs)
+        database_ids.extend(item["databaseId"] for item in response.get("Items", [])
+                            if isinstance(item.get("databaseId"), str) and item["databaseId"])
+        if "LastEvaluatedKey" not in response:
+            return database_ids
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    return None
+
+
+def _audit_partitions(presenter):
+    """Every `databaseId` an audit entry of a database can be stored under, as DatabaseIndex
+    partitions, in id order: each database row's id (a live database, and a deleted one's history
+    `<databaseId>#deleted`), the history of a database re-created since it was deleted (its
+    retirement record's `deletedAt`), a live id whose deleted generation is still moving (its rows
+    still carry the live id), and `*`, the schema-level entries. None when the databases are too many
+    to list (`_database_ids`). Reads: the database table's keys and the retirement records of the
+    database ids (`Presenter.prime`, one BatchGetItem per 100 ids)."""
+    database_ids = _database_ids()
+    if database_ids is None:
+        return None
+    base_ids = sorted({databaseRetirement.base_id(database_id) for database_id in database_ids})
+    presenter.prime(base_ids)
+    partitions = set(database_ids) | {SCHEMA_LEVEL_DATABASE_ID}
+    for base in base_ids:
+        if presenter.moving(base):
+            partitions.add(base)
+        if presenter.deleted_at(base):
+            partitions.add(databaseRetirement.deleted_id(base))
+    return sorted(partitions)
+
+
+def _presented_id(presenter, partition):
+    """The database id a partition's entries are decided on: `<databaseId>#deleted` for a live id
+    whose deleted generation is still moving (`databaseRetirement.Presenter`), else the id itself."""
+    return databaseRetirement.deleted_id(partition) if presenter.moving(partition) else partition
+
+
+def _readable_partitions(presenter, readable):
+    """`(partitions, every)`: the DatabaseIndex partitions the caller may read (the evaluation GET on
+    each one's id, `readable`, asked once per id and shared with the rows' own decision), and whether
+    that is every partition. `(None, True)` when the partitions are too many to list."""
+    partitions = _audit_partitions(presenter)
+    if partitions is None:
+        return None, True
+    allowed = [partition for partition in partitions
+               if readable(_presented_id(presenter, partition))]
+    return allowed, len(allowed) == len(partitions)
 
 
 def query_audit(event, params):
@@ -401,13 +539,29 @@ def query_audit(event, params):
 
     Access path — a key condition on one index, the other filters a FilterExpression:
     - `databaseId` + `assetId`: the asset's AssetIndex partition;
-    - `eventType`: that EventTypeIndex partition; the token names it and carries its key;
-    - otherwise AuditByDateGSI, whose partition is the constant every audit row carries.
-    The time window narrows each index's `timestamp` sort key. The page is filled across at most
-    `listing.DEFAULT_READ_BUDGET` reads with the entries the caller may GET by databaseId
+    - `databaseId`: that database's DatabaseIndex partition (`<databaseId>#deleted` for a deleted
+      database's history), so other databases' entries are never read;
+    - neither, for a caller allowed on every database: `eventType`'s EventTypeIndex partition (the
+      token names it and carries its key), otherwise AuditByDateGSI, whose partition is the
+      constant every audit row carries;
+    - neither, for a caller who may read only some databases (at most MAX_MERGED_DATABASES): the
+      DatabaseIndex partition of each of them, merged newest first (`listing.merge_query_page`; the
+      token holds each database's resume point), so the databases it may not read take no place on
+      a page. A caller who may read none gets an empty page without a token, and reads nothing;
+      one who may read more than MAX_MERGED_DATABASES but not every database, or who is allowed on
+      the empty-database object (an entry that names no database is in no DatabaseIndex
+      partition), reads the global path.
+    The partitions are each database row's id, the history of a re-created database and `*`
+    (`_audit_partitions`). A token continues on the index that issued it. While DynamoDB still builds
+    DatabaseIndex after an update, a first page reads the global path instead.
+    The time window narrows each index's `timestamp` sort key. Each page is filled across at most
+    `listing.DEFAULT_READ_BUDGET` reads (a merged page: one per database, then
+    `DEFAULT_READ_BUDGET - 1` more) with the entries the caller may GET by databaseId
     (`listing.query_page`), the engine asked once per database id of the request; `NextToken`
     resumes after the last entry returned, or after the last entry read when the budget ended the
-    page first, so a reader who may read few databases can get a short or empty page with a token.
+    page first. So a page is short or empty while `NextToken` is present only when the `text` or
+    `eventType` filter, or the caller's asset rules, refuse most of the entries read, or on the
+    global path for a reader who may not read some databases.
     A `databaseId` that
     names no database, live or deleted, answers `400` "Database not found" to a caller the rows'
     check allows on that id (`knownDatabase.database_known`).
@@ -437,63 +591,10 @@ def query_audit(event, params):
                                      DEFAULT_AUDIT_PAGE_SIZE)
     if page_size is None:
         return validation_error(body={"message": "limit must be an integer"}, event=event)
-
-    filter_database = database_id
-    if asset_id:
-        index_name, keys = "AssetIndex", ASSET_INDEX_KEY_ATTRIBUTES
-        key_condition = Key("databaseId:assetId").eq(f"{database_id}:{asset_id}")
-        filter_database = None
-        if event_type:
-            extra = Attr("eventType").eq(event_type)
-        else:
-            extra = None
-    elif event_type:
-        index_name, keys = "EventTypeIndex", EVENT_TYPE_INDEX_KEY_ATTRIBUTES
-        key_condition = Key("eventType").eq(event_type)
-        extra = None
-    else:
-        index_name, keys = "AuditByDateGSI", DATE_INDEX_KEY_ATTRIBUTES
-        key_condition = Key("allListPartition").eq(AUDIT_LIST_PARTITION)
-        extra = None
-
-    start_key = None
-    starting_token = params.get("startingToken")
-    if starting_token:
-        if event_type and not asset_id:
-            # A token for the event-type listing is {"partition": <eventType>, "key": <key> | null}.
-            # One naming another partition, or carrying a key that is not this index's, never
-            # reaches DynamoDB.
-            raw = None
-            try:
-                raw = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
-            except (ValueError, TypeError):
-                raw = None
-            if not isinstance(raw, dict) or raw.get("partition") != event_type:
-                logger.info("Audit pagination token rejected: unknown partition")
-                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
-                                        event=event)
-            if raw.get("key") is not None:
-                start_key = _index_key(raw.get("key"), keys)
-                if start_key is None:
-                    logger.info("Audit pagination token rejected: malformed key")
-                    return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
-                                            event=event)
-        else:
-            start_key = listing.decode_token(starting_token, keys)
-            if start_key is None:
-                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
-                                        event=event)
-
-    query_kwargs = {
-        "IndexName": index_name,
-        "KeyConditionExpression": _timestamp_condition(key_condition, start_date, end_date),
-        "ScanIndexForward": False,
-    }
-    expression = _audit_filter(filter_database, text)
-    if extra is not None:
-        expression = extra if expression is None else expression & extra
-    if expression is not None:
-        query_kwargs["FilterExpression"] = expression
+    starting_token = params.get("startingToken") or None
+    token = _token_value(starting_token) if starting_token else None
+    if starting_token and token is None:
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
     # A database filter naming no database is not an empty page (`knownDatabase`). Checked only for
@@ -528,11 +629,15 @@ def query_audit(event, params):
             item.get("databaseId") or "", item.get("assetId"), readable,
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
 
-    # Each read's retirement records are read together, before any entry is presented (D133).
-    entries, next_key, _ = listing.query_page(
-        audit_table, query_kwargs, page_size, keys, start_key=start_key,
-        filtered=expression is not None, accept=may_get,
-        prepare=presenter.prepare(then=archived.expect_items()))
+    page = _AuditPage(page_size, start_date, end_date, text, event_type, accept=may_get,
+                      # Each read's retirement records are read together, before any entry is
+                      # presented (D133).
+                      prepare=presenter.prepare(then=archived.expect_items()))
+    answer = _route_page(page, token, starting_token, database_id, asset_id, event_type,
+                         presenter, readable if casbin_enforcer else None)
+    if answer is None:
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    entries, next_token = answer
     visible = _archive_visibility(casbin_enforcer, archived, readable)
     descendants = _descendant_readability(readable, archived)
     _expect_descendants(archived, entries)
@@ -540,7 +645,165 @@ def query_audit(event, params):
     entries = [entry_answer(details_for_reader(entry, visible, descendants, live))
                for entry in entries]
     result = {"entries": entries}
-    if next_key:
-        result["NextToken"] = _encode_token(
-            {"partition": event_type, "key": next_key} if event_type and not asset_id else next_key)
+    if next_token:
+        result["NextToken"] = next_token
     return success(body=result)
+
+
+class _AuditPage:
+    """One audit listing request's page: its size, filters and row decision, read on one index
+    (`single`) or merged from several databases' DatabaseIndex partitions (`merged`)."""
+
+    def __init__(self, page_size, start_date, end_date, text, event_type, accept, prepare):
+        self.page_size = page_size
+        self.start_date, self.end_date = start_date, end_date
+        self.text, self.event_type = text, event_type
+        self.accept, self.prepare = accept, prepare
+
+    def single(self, index_name, keys, key_condition, expression, start_key):
+        """`(entries, next_key)` of one newest-first query on `index_name` (`listing.query_page`)."""
+        query_kwargs = {
+            "IndexName": index_name,
+            "KeyConditionExpression": _timestamp_condition(key_condition, self.start_date,
+                                                           self.end_date),
+            "ScanIndexForward": False,
+        }
+        if expression is not None:
+            query_kwargs["FilterExpression"] = expression
+        entries, next_key, _ = listing.query_page(
+            audit_table, query_kwargs, self.page_size, keys, start_key=start_key,
+            filtered=expression is not None, accept=self.accept, prepare=self.prepare)
+        return entries, next_key
+
+    def merged(self, partitions):
+        """`(entries, positions)` of the DatabaseIndex partitions `[(databaseId, start key | None)]`,
+        merged newest first (`listing.merge_query_page`)."""
+        expression = _audit_filter(text=self.text, event_type=self.event_type)
+
+        def query_kwargs_for(partition):
+            query_kwargs = {
+                "IndexName": DATABASE_INDEX,
+                "KeyConditionExpression": _timestamp_condition(
+                    Key("databaseId").eq(partition), self.start_date, self.end_date),
+                "ScanIndexForward": False,
+            }
+            if expression is not None:
+                query_kwargs["FilterExpression"] = expression
+            return query_kwargs
+
+        entries, positions, _ = listing.merge_query_page(
+            audit_table, partitions, query_kwargs_for, self.page_size,
+            DATABASE_INDEX_KEY_ATTRIBUTES, "timestamp", filtered=expression is not None,
+            accept=self.accept, prepare=self.prepare)
+        return entries, positions
+
+
+def _route_page(page, token, starting_token, database_id, asset_id, event_type, presenter,
+                readable):
+    """`(entries, NextToken | None)` of the request on the index that serves it (`query_audit`), or
+    None when `startingToken` is not a token of that listing (a token naming another partition or
+    another index's key never reaches DynamoDB)."""
+    kind = _token_kind(token) if token else None
+    if asset_id:
+        start_key = None
+        if starting_token:
+            start_key = listing.decode_token(starting_token, ASSET_INDEX_KEY_ATTRIBUTES)
+            if start_key is None:
+                return None
+        entries, next_key = page.single(
+            "AssetIndex", ASSET_INDEX_KEY_ATTRIBUTES,
+            Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+            _audit_filter(text=page.text, event_type=event_type), start_key)
+        return entries, _encode_token(next_key) if next_key else None
+
+    if kind in (TOKEN_EVENT_TYPE, TOKEN_DATE):
+        return _global_page(page, token, kind, database_id, event_type)
+    if database_id:
+        if kind == TOKEN_MERGE:
+            return None
+        start_key = None
+        if kind == TOKEN_DATABASE:
+            start_key = _index_key(token, DATABASE_INDEX_KEY_ATTRIBUTES)
+            if start_key is None or start_key["databaseId"] != database_id:
+                logger.info("Audit pagination token rejected: another database's key")
+                return None
+        try:
+            entries, next_key = page.single(
+                DATABASE_INDEX, DATABASE_INDEX_KEY_ATTRIBUTES, Key("databaseId").eq(database_id),
+                _audit_filter(text=page.text, event_type=event_type), start_key)
+        except Exception as error:
+            if start_key is not None or not databaseRetirement.wait_index_not_ready(error):
+                raise
+            logger.info("DatabaseIndex is not readable yet; the database's entries are read from "
+                        "the date-ordered trail")
+            return _global_page(page, None, None, database_id, event_type)
+        return entries, _encode_token(next_key) if next_key else None
+
+    if kind == TOKEN_DATABASE:
+        return None
+    if kind == TOKEN_MERGE:
+        positions = _merge_positions(token)
+        if positions is None:
+            return None
+        # Every database the token names is decided again: one the caller may no longer read is
+        # left out.
+        positions = [(partition, start) for partition, start in positions
+                     if readable is not None and readable(_presented_id(presenter, partition))]
+        if not positions:
+            return [], None
+        entries, left = page.merged(positions)
+        return entries, _merge_token(left) if left else None
+
+    if readable is None:
+        return [], None
+    partitions, every = _readable_partitions(presenter, readable)
+    # An entry that names no database is in no DatabaseIndex partition: a caller allowed on the
+    # empty-database object reads the global listing, where it is listed for it.
+    if every or len(partitions) > MAX_MERGED_DATABASES or readable(""):
+        return _global_page(page, None, None, None, event_type)
+    if not partitions:
+        return [], None
+    try:
+        entries, left = page.merged([(partition, None) for partition in partitions])
+    except Exception as error:
+        if not databaseRetirement.wait_index_not_ready(error):
+            raise
+        logger.info("DatabaseIndex is not readable yet; the audit trail is read date-ordered")
+        return _global_page(page, None, None, None, event_type)
+    return entries, _merge_token(left) if left else None
+
+
+def _global_page(page, token, kind, database_id, event_type):
+    """`(entries, NextToken | None)` on EventTypeIndex (with `eventType`) or AuditByDateGSI, with
+    `databaseId` as a filter when given (a token issued on these indexes, or a first page while
+    DatabaseIndex is still being built), or None for a token of another listing."""
+    if event_type:
+        start_key = None
+        if token is not None:
+            # A token for the event-type listing is {"partition": <eventType>, "key": <key> | null}.
+            # One naming another partition, or carrying a key that is not this index's, never
+            # reaches DynamoDB.
+            if kind != TOKEN_EVENT_TYPE or token.get("partition") != event_type:
+                logger.info("Audit pagination token rejected: unknown partition")
+                return None
+            if token.get("key") is not None:
+                start_key = _index_key(token.get("key"), EVENT_TYPE_INDEX_KEY_ATTRIBUTES)
+                if start_key is None:
+                    logger.info("Audit pagination token rejected: malformed key")
+                    return None
+        entries, next_key = page.single(
+            "EventTypeIndex", EVENT_TYPE_INDEX_KEY_ATTRIBUTES, Key("eventType").eq(event_type),
+            _audit_filter(database_id=database_id, text=page.text), start_key)
+        if not next_key:
+            return entries, None
+        return entries, _encode_token({"partition": event_type, "key": next_key})
+    start_key = None
+    if token is not None:
+        start_key = _index_key(token, DATE_INDEX_KEY_ATTRIBUTES) if kind == TOKEN_DATE else None
+        if start_key is None:
+            return None
+    entries, next_key = page.single(
+        "AuditByDateGSI", DATE_INDEX_KEY_ATTRIBUTES,
+        Key("allListPartition").eq(AUDIT_LIST_PARTITION),
+        _audit_filter(database_id=database_id, text=page.text), start_key)
+    return entries, _encode_token(next_key) if next_key else None

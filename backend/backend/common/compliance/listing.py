@@ -21,6 +21,11 @@ that resumes after the last row decided. So a reader who may read few databases 
 empty, page with a token in bounded time, however large the table, and a client keeps paging while
 a token is returned.
 
+A listing that a reader may see only part of reads only that part where an index allows it:
+`merge_query_page` merges one newest-first query per partition (the audit trail of each database a
+reader may read, D173) into one page in the same order, with the same read and decision budgets, so
+the other partitions' rows never take a page's place.
+
 Text filters match `assetSearchText` (state rows) or `searchText` (audit entries), a lowercased
 copy of the fields a person searches by, written with the row (`asset_name_attributes`,
 `audit_search_text`). The `assetNameSort` attribute is the key of the asset-state table's
@@ -32,6 +37,7 @@ builds them with `state_record_answer`, which leaves them out (PRIVATE_STATE_ATT
 import base64
 import json
 import time
+from collections import deque
 from typing import Any, Callable, Dict, Hashable, Iterable, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Attr
@@ -43,6 +49,8 @@ DEFAULT_READ_BUDGET = 5
 # Items a filtered query evaluates per read (DynamoDB also stops at 1 MB): enough that a selective
 # filter fills a page in a few reads, few enough that one read stays small.
 FILTERED_READ_LIMIT = 500
+# The fewest items `merge_query_page` reads from one partition at a time.
+MERGE_MIN_READ = 10
 # Seconds one listing request may spend in `accept` deciding rows. A decision asked once per
 # database id costs microseconds a row, so this binds only a decision made per row on the engine,
 # where each refusal also writes an authorization audit record (about 9 ms a row when deployed).
@@ -231,6 +239,92 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
         last_key = evaluated_key
         if reads >= read_budget:
             return items, last_key, reads
+
+
+def merge_query_page(table, partitions: List[Tuple[str, Optional[Dict[str, Any]]]],
+                     query_kwargs_for: Callable[[str], Dict[str, Any]], max_items: int,
+                     key_attributes: Iterable[str], sort_attribute: str, filtered: bool = False,
+                     accept: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                     read_budget: int = DEFAULT_READ_BUDGET,
+                     decision_budget: Optional[float] = None,
+                     clock: Optional[Callable[[], float]] = None,
+                     prepare: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+                     ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Optional[Dict[str, Any]]]],
+                                int]:
+    """`(items, positions, reads)`: up to `max_items` items, newest first by `sort_attribute`,
+    merged from one newest-first query per partition, as `query_page` pages one query.
+
+    `partitions` lists `(partition, start_key)` in a fixed order (ties on `sort_attribute` go to the
+    earlier partition): `start_key` is where the partition resumes, None for its newest item.
+    `query_kwargs_for(partition)` gives that partition's query. The answer's `positions` maps every
+    partition with items left to the key of the last item taken from it (its `key_attributes`), or
+    to its `start_key` when none was; None when every partition is exhausted.
+
+    Each partition is read once (`max(MERGE_MIN_READ, per read / partitions)` items, the per-read
+    count of `query_page`), then again only when the merge needs its next item: at most
+    `len(partitions) + read_budget - 1` reads, and about `read_budget` reads' worth of items. A page
+    the budget ends early still returns `positions`. `accept`, `decision_budget`, `clock` and
+    `prepare` are as in `query_page`."""
+    key_attributes = tuple(key_attributes)
+    narrowing = filtered or accept is not None
+    per_read = max(max_items, FILTERED_READ_LIMIT) if narrowing else max_items
+    first_read = per_read if len(partitions) <= 1 else max(
+        MERGE_MIN_READ, -(-per_read // len(partitions)))
+    reads_allowed = len(partitions) + max(read_budget, 1) - 1
+    budget = DEFAULT_DECISION_BUDGET_SECONDS if decision_budget is None else decision_budget
+    clock = clock or time.monotonic
+    streams = [{"partition": partition, "buffer": deque(), "cursor": start, "more": True,
+                "resume": start} for partition, start in partitions]
+    items: List[Dict[str, Any]] = []
+    reads = 0
+    deciding = 0.0
+
+    def read(stream, limit):
+        nonlocal reads
+        kwargs = dict(query_kwargs_for(stream["partition"]), Limit=limit)
+        if stream["cursor"]:
+            kwargs["ExclusiveStartKey"] = stream["cursor"]
+        response = table.query(**kwargs)
+        reads += 1
+        page = response.get("Items", [])
+        if prepare is not None and page:
+            prepare(page)
+        stream["buffer"].extend(page)
+        # Continue on the key's presence, as `query_page` does.
+        if "LastEvaluatedKey" in response:
+            stream["cursor"] = response["LastEvaluatedKey"]
+        else:
+            stream["more"] = False
+
+    def positions():
+        left = {stream["partition"]: stream["resume"] for stream in streams
+                if stream["buffer"] or stream["more"]}
+        return left or None
+
+    for stream in streams:
+        read(stream, first_read)
+    while True:
+        # The newest item can be chosen only once every partition with items left has one at hand.
+        for stream in streams:
+            while not stream["buffer"] and stream["more"]:
+                if reads >= reads_allowed:
+                    return items, positions(), reads
+                read(stream, per_read)
+        ready = [stream for stream in streams if stream["buffer"]]
+        if not ready:
+            return items, None, reads
+        newest = max(ready, key=lambda stream: str(stream["buffer"][0].get(sort_attribute, "")))
+        item = newest["buffer"].popleft()
+        newest["resume"] = _item_key(item, key_attributes)
+        accepted = True
+        if accept is not None:
+            started = clock()
+            accepted = accept(item)
+            deciding += clock() - started
+        if accepted:
+            items.append(item)
+        if len(items) == max_items or (accept is not None and deciding >= budget):
+            return items, positions(), reads
 
 
 def _item_key(item: Dict[str, Any], key_attributes: Tuple[str, ...]) -> Dict[str, Any]:

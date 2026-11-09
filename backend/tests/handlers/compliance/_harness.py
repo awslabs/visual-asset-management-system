@@ -277,10 +277,14 @@ def database_table_with(*database_ids):
     """A database-table stand-in for the existence check of the database-level compliance reads
     (`common.compliance.knownDatabase`): a `get_item` answers a row for each id in `database_ids`
     (a deleted database's row id `<databaseId>#deleted` included when listed so) and none for any
-    other id."""
+    other id; a `scan` answers every listed id."""
     table = MagicMock(name="database_table")
     table.get_item.side_effect = lambda Key, **_kwargs: (
         {"Item": {"databaseId": Key["databaseId"]}} if Key["databaseId"] in database_ids else {})
+    # The audit listing across databases lists the database ids (`complianceAuditService.
+    # _database_ids`, D173): one page holding every listed id.
+    table.scan.side_effect = lambda **_kwargs: {
+        "Items": [{"databaseId": database_id} for database_id in database_ids]}
     return table
 
 

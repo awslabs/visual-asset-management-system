@@ -2581,6 +2581,24 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // One database's audit entries, newest first: the listing filtered by `databaseId`, and the
+    // listing of a caller who may read only some databases (one query per database, merged by
+    // time), so other databases' entries never take a page's place. Every audit row carries its
+    // `databaseId` (a deleted database's history `<databaseId>#deleted`, `*` on schema-level
+    // entries), so on an existing table DynamoDB backfills it in place; a row with none is left out.
+    complianceAuditStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "timestamp",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     ///DEPRECATED TABLES
 
     //Build storage resources object

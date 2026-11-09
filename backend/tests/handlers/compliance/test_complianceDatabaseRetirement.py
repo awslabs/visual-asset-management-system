@@ -1043,10 +1043,15 @@ class TestTheRetirementRecordsOfAPageAreReadTogether:
                 status, body = world.get(service, path)
             assert status == 200
             assert counting.record_gets == []
-            assert len(counting.batches) == 1
-            (request,) = counting.batches[0]["RequestItems"].values()
-            assert request["ConsistentRead"] is True
-            keys = {key["evaluationId"] for key in request["Keys"]}
+            # The audit listing across databases reads the records of every database it lists in
+            # one batch (D173), then those of the page's other ids (here `other-db`, which has
+            # audit entries and no database row) in one more.
+            assert len(counting.batches) == (2 if service is audit_svc else 1)
+            keys = set()
+            for batch in counting.batches:
+                (request,) = batch["RequestItems"].values()
+                assert request["ConsistentRead"] is True
+                keys |= {key["evaluationId"] for key in request["Keys"]}
             assert all(key.startswith(retirement.RECORD_PREFIX) for key in keys)
             assert {f"{retirement.RECORD_PREFIX}{database_id}" for database_id in SPREAD} <= keys
             listed = {row["databaseId"] for row in body[rows_key]}

@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, DB, USER, body_of, claims_for, enforcer, live_only_asset_table, rest_event,
+    ASSET, DB, USER, body_of, claims_for, database_table_with, enforcer, live_only_asset_table,
+    rest_event,
 )
 from backend.tests.pagingStub import Pager
 from common.compliance import listing
@@ -25,6 +26,14 @@ def _no_archived_assets():
     """No asset of these tests is archived: the archived-asset reads find none (the archived case
     is `test_complianceArchivedAssetAccess.py`)."""
     with patch.object(svc, "asset_table", live_only_asset_table()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _two_databases():
+    """The deployment's databases, `DB` and `other`: the listing across databases lists them to
+    tell whether the caller may read every one (D173). A test that needs others patches its own."""
+    with patch.object(svc, "database_table", database_table_with(DB, "other")):
         yield
 
 MOD = "handlers.compliance.complianceAuditService"
@@ -182,15 +191,15 @@ class TestAuthorization:
         rows = [_entry(database_id=DB), _entry(database_id="other")]
         response, table = self._list_with(enforcer(obj=False), rows, query={})
         assert response["statusCode"] == 200
-        assert body_of(response)["entries"] == []
-        # The page was read and every row was refused: nothing leaks and nothing is skipped.
-        assert table.query.call_count <= 1
-        assert table.query.call_args.kwargs["IndexName"] == "AuditByDateGSI"
+        assert body_of(response) == {"entries": []}
+        # D173: a caller who may read no database is answered without reading the trail, and gets
+        # no token: nothing leaks, and no page of other databases' entries is handed out.
+        table.query.assert_not_called()
 
-    def test_an_empty_token_list_yields_an_empty_page_but_keeps_the_token(self):
+    def test_an_empty_token_list_yields_an_empty_page_and_reads_nothing(self):
         """The handler never reaches the listing with no tokens (Tier 1 denies), but the listing's
-        own contract holds regardless: with no enforcer nothing is appended, while the page's
-        continuation is still handed out."""
+        own contract holds regardless: with no enforcer nothing is read or appended, and no token
+        is handed out (D173: a caller who may read no database reads nothing)."""
         table = MagicMock()
         table.query.return_value = {"Items": [_entry()], "LastEvaluatedKey": _date_key("e", "t")}
         event = rest_event("GET", LIST_PATH)
@@ -198,8 +207,8 @@ class TestAuthorization:
                 patch(f"{MOD}.audit_table", table):
             response = svc.query_audit(event, {})
         assert response["statusCode"] == 200
-        assert body_of(response)["entries"] == []
-        assert _decode(body_of(response)["NextToken"]) == _date_key("e", "t")
+        assert body_of(response) == {"entries": []}
+        table.query.assert_not_called()
 
     def test_an_entry_without_a_database_is_listed_only_for_the_empty_database_object(self):
         orphan = {k: v for k, v in _entry().items() if k != "databaseId"}
@@ -477,3 +486,81 @@ class TestCrossAssetListing:
             pages=[{"Items": []}])
         assert response["statusCode"] == 200
         assert "ExclusiveStartKey" not in table.query.call_args.kwargs
+
+
+def _names_in(expression):
+    """The attribute names a boto3 condition reads."""
+    from boto3.dynamodb.conditions import ConditionExpressionBuilder
+    built = ConditionExpressionBuilder().build_expression(expression)
+    return set(built.attribute_name_placeholders.values())
+
+
+@pytest.mark.unit
+class TestTheListingReadsOnlyWhatThePageCanShow:
+    """D173: which index each listing reads, and its bound."""
+
+    MANY = [f"db-{n:02d}" for n in range(30)]
+
+    def _list(self, query, allowed, databases=None, pages=None):
+        instance = enforcer()
+        instance.enforce.side_effect = lambda obj, act: obj["databaseId"] in allowed
+        table = MagicMock(name="audit_table")
+        table.query.side_effect = pages or (lambda **kw: {"Items": []})
+        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.audit_table", table), \
+                patch(f"{MOD}.database_table", database_table_with(*(databases or self.MANY))):
+            response = svc.lambda_handler(rest_event("GET", LIST_PATH, query_params=query),
+                                          MagicMock())
+        return response, [call.kwargs for call in table.query.call_args_list]
+
+    def test_a_database_filter_reads_its_partition_and_never_filters_on_the_index_key(self):
+        response, calls = self._list({"databaseId": DB, "eventType": "exception_granted",
+                                      "text": "pump"}, allowed={DB}, databases=[DB])
+        assert response["statusCode"] == 200
+        (call,) = calls
+        assert call["IndexName"] == svc.DATABASE_INDEX and _partition_of(call) == DB
+        assert _names_in(call["FilterExpression"]) == {"eventType", "searchText", "assetId",
+                                                        "actor"}
+
+    def test_a_caller_who_may_read_two_databases_reads_their_two_partitions(self):
+        response, calls = self._list({}, allowed={"db-03", "db-17"})
+        assert response["statusCode"] == 200
+        assert [c["IndexName"] for c in calls] == [svc.DATABASE_INDEX] * 2
+        assert sorted(_partition_of(c) for c in calls) == ["db-03", "db-17"]
+        assert all("FilterExpression" not in c for c in calls)
+
+    def test_a_caller_who_may_read_more_than_the_merge_bound_reads_the_global_listing(self):
+        allowed = set(self.MANY[:svc.MAX_MERGED_DATABASES + 1])
+        _response, calls = self._list({}, allowed=allowed)
+        assert [c["IndexName"] for c in calls] == ["AuditByDateGSI"]
+
+    def test_a_caller_allowed_on_every_database_reads_the_global_listing(self):
+        _response, calls = self._list({"eventType": "compliance_check"},
+                                      allowed=set(self.MANY) | {"*"})
+        assert [c["IndexName"] for c in calls] == ["EventTypeIndex"]
+
+    def test_a_merged_page_is_bounded_by_its_databases_and_the_read_budget(self):
+        """A filter that matches nothing read: one read per database, then the read budget's
+        refills; the page ends empty with every database's resume point."""
+        allowed = {"db-01", "db-02", "db-03"}
+
+        def nothing_matches(**kwargs):
+            return {"Items": [], "LastEvaluatedKey": {"entryId": "e", "timestamp": "t",
+                                                      "databaseId": _partition_of(kwargs)}}
+        response, calls = self._list({"text": "nothing"}, allowed=allowed, pages=nothing_matches)
+        body = body_of(response)
+        assert body["entries"] == []
+        assert len(calls) == len(allowed) + listing.DEFAULT_READ_BUDGET - 1
+        assert set(_decode(body["NextToken"])["databases"]) == allowed
+
+    def test_an_error_other_than_a_building_index_is_not_hidden(self):
+        from botocore.exceptions import ClientError
+
+        def throttled(**_kwargs):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException",
+                                         "Message": "slow down"}}, "Query")
+        response, calls = self._list({"databaseId": DB}, allowed={DB}, databases=[DB],
+                                     pages=throttled)
+        assert response["statusCode"] == 500
+        assert [c["IndexName"] for c in calls] == [svc.DATABASE_INDEX]

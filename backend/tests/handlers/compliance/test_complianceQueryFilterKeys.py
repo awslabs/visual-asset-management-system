@@ -257,6 +257,8 @@ class TestNoFilterOnAKeyAttribute:
                 ("ComplianceAuditStorageTable", "AuditByDateGSI"),
                 ("ComplianceAuditStorageTable", "EventTypeIndex"),
                 ("ComplianceAuditStorageTable", "AssetIndex"),
+                # A database filter with `text` or `eventType` (D173): neither names the index key.
+                ("ComplianceAuditStorageTable", "DatabaseIndex"),
                 ("MetadataSchemaStorageTableV2", "DatabaseIdMetadataEntityTypeIndex"),
                 ("MetadataSchemaStorageTableV2", "DatabaseIdIndex"),
         ):

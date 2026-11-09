@@ -1403,7 +1403,13 @@ POST /compliance/cascades/{cascadeId}/reject
 
 ## Query the compliance audit trail
 
-Retrieves audit entries across assets, newest first, one page per call. With `eventType` a single event type is read; without it the whole trail is read in timestamp order, so entries of different event types interleave by time. The continuation token is opaque: pass it back as `startingToken` with the same filters it was issued for. Entries are filtered to those whose database the caller may read — an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId` — so a page can be empty while `NextToken` is present. Each request reads a bounded part of the trail and answers within it, so a caller who may read few of the databases in the trail gets short or empty pages more often: keep following `NextToken` until none is returned.
+Retrieves audit entries across assets, newest first, one page per call; entries of different event types interleave by time. The continuation token is opaque: pass it back as `startingToken` with the same filters it was issued for. Entries are filtered to those whose database the caller may read; an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`.
+
+Only the entries a page can show are read. With `databaseId`, the listing reads that database's entries alone. Without it, a caller who may read only some databases (at most 25) reads each of them, merged by time, and a caller who may read none gets an empty page without `NextToken`. Any other caller reads the whole trail, by event type when `eventType` is given. So entries of databases the caller does not see never take a page's place.
+
+Each request reads a bounded part of what it reads and answers within it, so a page can still hold fewer entries than `maxItems`, even none, while `NextToken` is present. This happens when the `text` or `eventType` filter, or the caller's asset permissions, leave out most of the entries read, or when a caller who may read more than 25 databases, but not every one, reads the whole trail. Keep following `NextToken` until none is returned.
+
+Right after an update that adds the database index to an existing audit table, Amazon DynamoDB builds it in the background. Until it is active, a first page reads the whole trail as before, and its `NextToken` continues there.
 
 ```
 GET /compliance/audit
@@ -1414,7 +1420,7 @@ GET /compliance/audit
 | Parameter       | Type   | Required | Default | Description                                                                                                           |
 | --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                |
-| `databaseId`    | string | No       | `null`  | Only entries of this database.                                                                                        |
+| `databaseId`    | string | No       | `null`  | Only entries of this database (a deleted database's history: `<databaseId>%23deleted`); only they are read.           |
 | `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                     |
 | `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                       |
 | `startDate`     | string | No       | `null`  | ISO-8601 timestamp; only entries at or after it are returned.                                                         |
@@ -1448,7 +1454,7 @@ GET /compliance/audit
 }
 ```
 
-`details` is a JSON-encoded object whose keys depend on the event type. `previousState` and `newState` are present on entries that changed an asset's compliance state; `schemaName`, `evaluationId` and `cascadeId` are present when the event concerns one. Entries about a schema rather than an asset (`schema_deleted`) carry `*` as `databaseId` and `assetId`. `assetName` is the asset's name when the entry was written; entries written before names were recorded have none. The `databaseId` and `text` filters are applied to the entries read, a bounded amount per page, so a page can hold fewer entries than `maxItems` while `NextToken` is present. `NextToken` is absent on the last page.
+`details` is a JSON-encoded object whose keys depend on the event type. `previousState` and `newState` are present on entries that changed an asset's compliance state; `schemaName`, `evaluationId` and `cascadeId` are present when the event concerns one. Entries about a schema rather than an asset (`schema_deleted`) carry `*` as `databaseId` and `assetId`. `assetName` is the asset's name when the entry was written; entries written before names were recorded have none. The `text` filter, and `eventType` together with `databaseId` or for a caller who may read only some databases, are applied to the entries read, a bounded amount per page, so such a page can hold fewer entries than `maxItems` while `NextToken` is present. `NextToken` is absent on the last page.
 
 ### Event types
 

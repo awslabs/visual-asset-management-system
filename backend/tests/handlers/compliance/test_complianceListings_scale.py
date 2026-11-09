@@ -21,7 +21,9 @@ from backend.tests.handlers.compliance._harness import (
     COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, USER, body_of, claims_for, database_table_with,
     enforcer, rest_event,
 )
+from backend.tests.handlers.compliance import _cdkTables
 from common.compliance import listing
+from common.resourceNames import ResourceKeys
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceQuarantineService as quarantine_svc
@@ -37,25 +39,9 @@ EVENT_TYPES = ["compliance_check", "compliance_check", "compliance_check", "exce
                "quarantine_released", "schema_bound_to_database", "cascade_triggered",
                "evaluation_error"]
 
-AUDIT_TABLE_DEFINITION = {
-    "TableName": "t-compliance-audit",
-    "KeySchema": [{"AttributeName": "entryId", "KeyType": "HASH"}],
-    "AttributeDefinitions": [
-        {"AttributeName": "entryId", "AttributeType": "S"},
-        {"AttributeName": "databaseId:assetId", "AttributeType": "S"},
-        {"AttributeName": "timestamp", "AttributeType": "S"},
-        {"AttributeName": "eventType", "AttributeType": "S"},
-        {"AttributeName": "allListPartition", "AttributeType": "S"},
-    ],
-    "GlobalSecondaryIndexes": [
-        {"IndexName": name, "KeySchema": [{"AttributeName": pk, "KeyType": "HASH"},
-                                          {"AttributeName": "timestamp", "KeyType": "RANGE"}],
-         "Projection": {"ProjectionType": "ALL"}}
-        for name, pk in (("AssetIndex", "databaseId:assetId"), ("EventTypeIndex", "eventType"),
-                         ("AuditByDateGSI", "allListPartition"))
-    ],
-    "BillingMode": "PAY_PER_REQUEST",
-}
+# The audit table as the CDK storage stack defines it (every index the service queries).
+AUDIT_TABLE_DEFINITION = _cdkTables.table_for_resource_key(
+    ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE).create_table_kwargs("t-compliance-audit")
 
 
 @pytest.fixture(autouse=True)
@@ -254,11 +240,15 @@ class TestTheAuditTrailAt20000Entries:
         assert reads == 1
         print(f"READS audit eventType: {reads} queries")
 
-    def test_a_database_filter_fills_the_page_within_the_budget(self, tables):
+    def test_a_database_filter_reads_that_databases_partition(self, tables):
         body, reads = _audit(tables, databaseId=OTHER_DB, maxItems="100")
         assert len(body["entries"]) == 100
         assert {e["databaseId"] for e in body["entries"]} == {OTHER_DB}
-        assert reads <= listing.DEFAULT_READ_BUDGET
+        stamps = [e["timestamp"] for e in body["entries"]]
+        assert stamps == sorted(stamps, reverse=True)
+        # D173: one read of the database's DatabaseIndex partition, whatever the other databases
+        # hold.
+        assert reads == 1
         print(f"READS audit databaseId (a quarter of the trail): {reads} queries")
 
     def test_a_selective_text_filter_stays_within_the_budget(self, tables):
@@ -366,3 +356,59 @@ class TestTheStateRowNameIsKeptCurrent:
             # An asset without a compliance record gets none.
             assert store.refresh_asset_state_name("db", "untracked", "X", table=table) is False
             assert "Item" not in table.get_item(Key={"databaseId": "db", "assetId": "untracked"})
+
+
+class _Partitions:
+    """Newest-first partitions `{name: [(ts, id), ...]}` answering `query` by partition."""
+
+    def __init__(self, rows):
+        self.rows = {name: sorted(items, reverse=True) for name, items in rows.items()}
+        self.calls = []
+
+    def query(self, **kwargs):
+        name = kwargs["partition"]
+        self.calls.append((name, kwargs["Limit"]))
+        rows = [{"p": name, "ts": ts, "id": i} for ts, i in self.rows[name]]
+        start = 0
+        if kwargs.get("ExclusiveStartKey"):
+            start = [r["id"] for r in rows].index(kwargs["ExclusiveStartKey"]["id"]) + 1
+        page = rows[start:start + kwargs["Limit"]]
+        response = {"Items": page}
+        if start + kwargs["Limit"] < len(rows):
+            response["LastEvaluatedKey"] = {"p": name, "id": page[-1]["id"], "ts": page[-1]["ts"]}
+        return response
+
+
+def _merge(table, partitions, max_items, **kwargs):
+    return listing.merge_query_page(table, partitions, lambda name: {"partition": name},
+                                    max_items, ("p", "id", "ts"), "ts", **kwargs)
+
+
+@pytest.mark.unit
+class TestMergeQueryPage:
+
+    def test_pages_merge_newest_first_and_resume_each_partition(self):
+        # Sort keys are strings, compared as DynamoDB orders them (the audit timestamps are ISO).
+        a_rows = [(f"t{t:02d}", f"a{t}") for t in range(0, 40, 2)]
+        b_rows = [(f"t{t:02d}", f"b{t}") for t in range(1, 40, 4)]
+        table = _Partitions({"a": a_rows, "b": b_rows})
+        expected = sorted(a_rows + b_rows, reverse=True)
+        found, positions = [], [("a", None), ("b", None)]
+        while positions:
+            items, left, reads = _merge(table, positions, 7)
+            found += [(item["ts"], item["id"]) for item in items]
+            assert reads <= len(positions) + listing.DEFAULT_READ_BUDGET - 1
+            positions = sorted(left.items()) if left else None
+        assert found == expected
+
+    def test_a_tie_goes_to_the_earlier_partition_and_an_exhausted_one_leaves_the_positions(self):
+        table = _Partitions({"a": [("t5", "a5")], "b": [("t5", "b5"), ("t1", "b1")]})
+        items, left, _ = _merge(table, [("a", None), ("b", None)], 2)
+        assert [item["id"] for item in items] == ["a5", "b5"]
+        assert left == {"b": {"p": "b", "id": "b5", "ts": "t5"}}
+
+    def test_a_partition_none_of_whose_items_was_taken_keeps_its_start(self):
+        table = _Partitions({"a": [("t9", "a9"), ("t8", "a8")], "b": [("t1", "b1")]})
+        items, left, _ = _merge(table, [("a", None), ("b", None)], 1)
+        assert [item["id"] for item in items] == ["a9"]
+        assert left == {"a": {"p": "a", "id": "a9", "ts": "t9"}, "b": None}

@@ -4,12 +4,16 @@
  */
 
 /**
- * `ComplianceAuditStorageTable` carries exactly three GSIs, each serving one listing of the audit
+ * `ComplianceAuditStorageTable` carries exactly four GSIs, each serving one listing of the audit
  * service. `AssetIndex` (databaseId:assetId, timestamp) is the per-asset history. `EventTypeIndex`
  * (eventType, timestamp) is the listing filtered to one event type. `AuditByDateGSI`
  * (allListPartition, timestamp) is the unfiltered listing: every audit row carries the constant
  * `allListPartition = "audit"`, so the newest-first global listing is ONE paged query — the same shape
  * as the `*ByDateGSI` indexes on the pipeline, workflow and workflow-execution V2 tables.
+ * `DatabaseIndex` (databaseId, timestamp) is one database's entries: the listing filtered by
+ * database, and the listing of a caller who may read only some databases, one query per database
+ * merged by time (D173). It keys on the `databaseId` every row already carries, so adding it to an
+ * existing table is an in-place index addition that DynamoDB backfills.
  *
  * The backend queries each index by name, so a renamed or dropped index is a runtime
  * `ValidationException` on the first request rather than a synth error; the key schema and the ALL
@@ -48,10 +52,24 @@ describe("ComplianceAuditStorageTable indexes", () => {
         expect(table.properties.KeySchema).toEqual([{ AttributeName: "entryId", KeyType: "HASH" }]);
     });
 
-    test("carries exactly AssetIndex, EventTypeIndex and AuditByDateGSI", () => {
+    test("carries exactly AssetIndex, EventTypeIndex, AuditByDateGSI and DatabaseIndex", () => {
         const table = auditTable(synth());
         const names = (table.properties.GlobalSecondaryIndexes as Gsi[]).map((g) => g.IndexName);
-        expect(names.sort()).toEqual(["AssetIndex", "AuditByDateGSI", "EventTypeIndex"]);
+        expect(names.sort()).toEqual([
+            "AssetIndex",
+            "AuditByDateGSI",
+            "DatabaseIndex",
+            "EventTypeIndex",
+        ]);
+    });
+
+    test("DatabaseIndex keys on (databaseId, timestamp) with an ALL projection", () => {
+        const gsi = indexNamed(synth(), "DatabaseIndex");
+        expect(gsi.KeySchema).toEqual([
+            { AttributeName: "databaseId", KeyType: "HASH" },
+            { AttributeName: "timestamp", KeyType: "RANGE" },
+        ]);
+        expect(gsi.Projection).toEqual({ ProjectionType: "ALL" });
     });
 
     test("AssetIndex keys on (databaseId:assetId, timestamp) with an ALL projection", () => {
@@ -94,6 +112,7 @@ describe("ComplianceAuditStorageTable indexes", () => {
             "databaseId:assetId": "S",
             eventType: "S",
             allListPartition: "S",
+            databaseId: "S",
             timestamp: "S",
         });
     });

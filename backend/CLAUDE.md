@@ -43,12 +43,17 @@ backend/
 │   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
 │   │   ├── compliance/auditRecord.py               # build_audit_item(): the ONE builder of audit rows;
 │   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
-│   │   │                                           #   fails any audit put_item that bypasses it)
+│   │   │                                           #   fails any audit put_item that bypasses it); leaves
+│   │   │                                           #   out an empty databaseId (DatabaseIndex key, D173)
 │   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
 │   │   │                                           #   fill, ≤200 rows, token = last row's index key;
 │   │   │                                           #   ≤5 reads AND ≤1 s spent in `accept`, then a
 │   │   │                                           #   short/empty page + token; `prepare` sees each
-│   │   │                                           #   read's rows first, for batched reads), once_per_key() (a
+│   │   │                                           #   read's rows first, for batched reads),
+│   │   │                                           #   merge_query_page() (one newest-first query per
+│   │   │                                           #   partition merged into one page, same budgets;
+│   │   │                                           #   the audit trail of each database a reader may
+│   │   │                                           #   read, D173), once_per_key() (a
 │   │   │                                           #   listing over many databases asks the engine
 │   │   │                                           #   once per database id, never once per row),
 │   │   │                                           #   count_items() (Select=COUNT), query_ids() (the
