@@ -42,10 +42,10 @@ Seeds the public sample files the viewer render cases in `web/e2e/viewers.spec.t
 `web/e2e/fixtures/viewer-samples-seed.json` for `E2E_VIEWER_SAMPLES`. The samples, with their source,
 licence, size and SHA-256, are listed in `web/e2e/fixtures/viewer-samples.json`; the script downloads
 each one, refuses any that does not match, writes the generated and derived samples (a coloured OFF
-cube, a text file, a CSV with a UTF-8 byte order mark) and uploads them all to one distributable asset.
+cube, a text file, a CSV with a UTF-8 byte order mark, a PLY point cloud written from a LAS file) and uploads them all to one distributable asset.
 Files the asset already holds are not uploaded again. The manifest schema (downloads, generated samples,
 `prepend-utf8-bom` / `copy` / `utf16le-bom` / `utf16be-bom` / `utf16le` / `zip` / `splat-transform`
-/ `ply-to-splat` / `ksplat` derivations, `requiresFeature`) is described in
+/ `ply-to-splat` / `ksplat` / `las-to-ply` derivations, `requiresFeature`) is described in
 `web/e2e/CLAUDE.md`, "Viewer render proof"; the script validates it before it downloads anything.
 
 ```bash

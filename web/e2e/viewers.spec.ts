@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Page, Request, Response } from "@playwright/test";
+import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
 import {
+    apiContext,
     type AssetFileRef,
+    canvasStats,
+    type CanvasStats,
     chooseViewer,
     CONSOLE_ERROR_IGNORE,
     CSP_CONSOLE_REPORT,
@@ -81,6 +84,7 @@ const cases = [
     // With ALLOWUNSAFEEVAL the SuperSplat Editor also opens .spz, so the picker appears there.
     { ext: ".spz", viewer: "Gaussian splat", select: /Gaussian Splat Viewer \(BabylonJS\)/i },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
+    { ext: ".ifczip", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
     // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
@@ -341,6 +345,12 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
+/**
+ * `potree`: the Potree viewer streams the octree the Point Cloud Potree Viewer pipeline
+ * (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so the case skips, naming the
+ * pipeline, when the file has no preview yet. It proves the cloud was drawn by Potree's own count
+ * of points resident on the GPU and by point pixels on its canvas (see `potreePointShare`).
+ */
 type RenderKind =
     | "canvas"
     | "pdf"
@@ -352,7 +362,8 @@ type RenderKind =
     | "text-encoding"
     | "not-offered"
     | "refused"
-    | "supersplat";
+    | "supersplat"
+    | "potree";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -381,7 +392,22 @@ interface RenderCase {
      * sample, read whole after the check; `[416]` = an empty file.
      */
     reads?: number[];
+    /**
+     * A web path the deployment serves only when the viewer is enabled (a licensed add-on's
+     * bundle). The case skips, with the reason, when the path is not served as JavaScript.
+     */
+    servedBundle?: string;
 }
+
+/** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
+async function servesScript(page: Page, path: string): Promise<boolean> {
+    const origin = new URL(page.url()).origin;
+    const res = await page.request.get(`${origin}${path}`);
+    return res.ok() && /javascript/i.test(res.headers()["content-type"] ?? "");
+}
+
+/** The VNTANA bundle, built only when `vntana-viewer` is enabled in addonViewerConfig.json. */
+const VNTANA_BUNDLE = "/viewers/vntana/vntana-viewer.bundle.js";
 
 /**
  * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
@@ -513,6 +539,31 @@ const renderCases: RenderCase[] = [
         reads: [206],
     },
     { sample: "env-example", viewer: "no viewer (.env.example)", kind: "not-offered" },
+    { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
+    // .ply also matches the Gaussian splat and Three.js viewers.
+    { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
+    // Licensed add-on, disabled by default: these cases run only on a build that enables it.
+    {
+        sample: "vntana-glb-box",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    {
+        sample: "vntana-glb-avocado",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    // The IFC viewer draws a grid under the model, so these cases only prove the canvas is not
+    // blank; "IFC BIM viewer panel actions" below compares the model against the bare grid.
+    { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-haus-zip", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-school-structural", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
     // SuperSplat Editor (iframe, WebGPU): splat count > 0 and a canvas that differs from the empty
     // editor's, inside the frame (expectSuperSplatRendered). One case per single-file format it is
     // offered for, SPZ v3 and v4 separately: PR-3 sends users with SPZ v4 here on ALLOWUNSAFEEVAL
@@ -621,12 +672,26 @@ test.describe("viewer render proof (seeded samples)", () => {
                 );
             }
 
+            if (c.servedBundle) {
+                test.skip(
+                    !(await servesScript(page, c.servedBundle)),
+                    `this deployment does not serve ${c.servedBundle}: ${c.viewer} is not enabled`
+                );
+            }
+
             const subject = {
                 databaseId: seeded!.databaseId,
                 assetId: seeded!.assetId,
                 key: sample.key,
             };
             const fileName = sample.key.split("/").pop()!;
+            // Register the "loaded" wait BEFORE opening the file (the log line comes from the page
+            // the file opens), and do not await it until after: awaiting it here can never finish.
+            let potreeLoaded: Promise<unknown> | null = null;
+            if (c.kind === "potree") {
+                await potreePreviewOrSkip(page, subject);
+                potreeLoaded = potreeLoadedEvent(page);
+            }
             await openViewerFile(page, subject);
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
@@ -641,6 +706,18 @@ test.describe("viewer render proof (seeded samples)", () => {
                 await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
             } else {
                 await pickViewerIfAsked(page, c.viewer, c.select);
+            }
+
+            if (c.servedBundle) {
+                // The VNTANA component shows its info panel after the element's `load` event and an
+                // error box after its `error` event (3.x reports what failed in `detail.type`).
+                // Scoped to the viewer's root: the viewer picker above it shows the same name, so a
+                // page-wide match would pass before the model loaded.
+                const root = page.locator(".vntana-viewer-root");
+                await expect(root.getByText(/Mouse: Rotate/)).toBeVisible({ timeout: 90_000 });
+                await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
+                await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
+                await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
             }
 
             if (c.kind === "canvas") {
@@ -680,6 +757,25 @@ test.describe("viewer render proof (seeded samples)", () => {
                 ).toEqual([]);
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "potree") {
+                await potreeLoaded;
+                await expect
+                    .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+                        timeout: 60_000,
+                        message: "Potree reported no points resident on the GPU",
+                    })
+                    .toBeGreaterThan(0);
+                const canvas = page.locator("#potree_render_area > canvas").first();
+                await expect(canvas).toBeVisible();
+                let share = 0;
+                await expect(async () => {
+                    share = await potreePointShare(canvas);
+                    expect(
+                        share,
+                        `${fileName}: no point pixels on the Potree canvas`
+                    ).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
+                }).toPass({ timeout: 30_000 });
+                console.log(`[viewers] ${c.sample} potree point share ${share.toFixed(4)}`);
             } else if (c.kind === "supersplat") {
                 // The editor mounts as one iframe on the self-hosted build, handed this file.
                 const editor = page.locator('iframe[title="SuperSplat Editor"]');
@@ -758,6 +854,205 @@ test.describe("viewer render proof (seeded samples)", () => {
                 expect(fileReads.reads[0]?.range).toBe("bytes=0-8191");
             }
             await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});
+
+/** Share of the Potree canvas that must hold point pixels after fitToScreen. */
+const POTREE_MIN_POINT_SHARE = 0.005;
+
+/**
+ * Share of the Potree canvas's pixels whose red channel is above Potree's background. The default
+ * background is a dark blue gradient whose red channel stays below ~35
+ * (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)); its blue spread defeats the
+ * generic most-common-colour measure in `canvasStats`, which counts the gradient itself as content.
+ * Potree renders with `preserveDrawingBuffer`, so the canvas is read back in the page.
+ */
+async function potreePointShare(canvas: Locator): Promise<number> {
+    return await canvas.evaluate((el) => {
+        const source = el as HTMLCanvasElement;
+        const copy = document.createElement("canvas");
+        copy.width = source.width;
+        copy.height = source.height;
+        const context = copy.getContext("2d")!;
+        context.drawImage(source, 0, 0);
+        const { data } = context.getImageData(0, 0, copy.width, copy.height);
+        let points = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] > 48) points += 1;
+        return points / (copy.width * copy.height);
+    });
+}
+
+/** Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams). */
+async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<void> {
+    const ctx = await apiContext(page);
+    expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
+    const relative = subject.key.replace(/^\/+/, "");
+    const metadata = await page.request.get(
+        `${ctx!.base}/database/${subject.databaseId}/assets/${subject.assetId}` +
+            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`,
+        { headers: { Authorization: `Bearer ${ctx!.token}` } }
+    );
+    test.skip(
+        metadata.status() === 404,
+        `${subject.key} has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
+    );
+    expect(metadata.ok(), `the Potree preview answered ${metadata.status()}`).toBe(true);
+}
+
+/**
+ * A promise for the Potree viewer's "loaded" log line. Returned un-awaited: the caller starts it
+ * before opening the file and awaits it once the viewer is open. The no-op catch keeps a case that
+ * fails earlier from also reporting an unhandled rejection; awaiting the promise still rejects.
+ */
+function potreeLoadedEvent(page: Page): Promise<unknown> {
+    const loaded = page.waitForEvent("console", {
+        predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
+        timeout: 120_000,
+    });
+    loaded.catch(() => undefined);
+    return loaded;
+}
+/**
+ * IFC BIM viewer panel actions (#1174), on the seeded IFC samples. The viewer draws a grid under the
+ * model, so "the canvas is not blank" cannot tell a model from an empty scene. Hide All is that empty
+ * scene: each case measures it and requires the model, Show All, Isolate and every camera move to draw
+ * more than it. Every action is local to the browser (visibility, camera, section planes,
+ * measurements), so the environment is not changed (e2e/CLAUDE.md Rule 2).
+ */
+test.describe("IFC BIM viewer panel actions (seeded samples)", () => {
+    for (const sampleId of ["ifc-haus", "ifc-haus-zip"]) {
+        test(`IFC BIM viewer runs each panel action on ${sampleId}`, async ({ page }) => {
+            test.setTimeout(240_000);
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[sampleId];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${sampleId} sample; re-run the seed script`
+            );
+
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const missing = missingFeatures(await featuresEnabled(page), "ALLOWUNSAFEEVAL");
+            test.skip(
+                missing.length > 0,
+                "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
+            );
+
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            });
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+            // Only one viewer handles .ifc/.ifczip; fail if any other viewer opened the file.
+            await pickViewerIfAsked(page, "ThatOpen IFC BIM Viewer");
+
+            // The panel mounts only once the model is parsed and the scene is ready.
+            const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
+            await expect(tablist).toBeVisible({ timeout: 120_000 });
+            const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+
+            /** Polls the canvas until `ok` holds (the renderer draws on its own frame loop). */
+            const expectCanvas = async (
+                what: string,
+                ok: (s: CanvasStats) => boolean
+            ): Promise<CanvasStats> => {
+                let last: CanvasStats | null = null;
+                await expect(async () => {
+                    last = await canvasStats(page, canvas);
+                    expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
+                }).toPass({ timeout: 20_000 });
+                return last!;
+            };
+            const model = await canvasStats(page, canvas);
+
+            // Model tree: Hide All gives the empty scene (grid only); Show All brings the model back.
+            await tablist.getByRole("tab", { name: /Model/ }).click();
+            const tree = page.getByRole("tree", { name: "Model tree" });
+            await expect(tree).toBeVisible();
+            const isolate = page.getByRole("button", { name: /^Isolate .* \(show only this\)$/ });
+            await expect(isolate.first()).toBeVisible();
+            await page.getByRole("button", { name: /Hide All/ }).click();
+            const empty = await expectCanvas(
+                "Hide All",
+                (s) => s.distinctColours < model.distinctColours
+            );
+            const drawsModel = (s: CanvasStats) =>
+                s.distinctColours > empty.distinctColours &&
+                Math.abs(s.foregroundFraction - empty.foregroundFraction) > 0.005;
+            await page.getByRole("button", { name: /Show All/ }).click();
+            await expectCanvas("Show All", drawsModel);
+
+            // Isolate the first category: some of the model, never more colours than all of it.
+            await isolate.first().click();
+            await expectCanvas(
+                "Isolate",
+                (s) =>
+                    s.distinctColours > empty.distinctColours &&
+                    s.distinctColours <= model.distinctColours + 8
+            );
+            await page.getByRole("button", { name: /Show All/ }).click();
+
+            // Select a category from the tree; Properties then shows the element.
+            await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
+            await tablist.getByRole("tab", { name: /Properties/ }).click();
+            await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
+
+            // Tools: camera presets, zoom and fit keep the model on screen.
+            await tablist.getByRole("tab", { name: /Tools/ }).click();
+            for (const view of ["Top", "Front", "Left", "Iso"]) {
+                await page.getByRole("button", { name: view, exact: true }).click();
+                await expectCanvas(`${view} view`, drawsModel);
+            }
+            await page.getByRole("button", { name: /Zoom In/ }).click();
+            await page.getByRole("button", { name: /Zoom Out/ }).click();
+            await page.getByRole("button", { name: /Fit to View/ }).click();
+            await expectCanvas("Fit to View", drawsModel);
+
+            // Section plane: enable, double-click the model, delete every plane, switch off.
+            const box = (await canvas.boundingBox())!;
+            const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.getByRole("button", { name: "Enable Section Plane" }).click();
+            await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
+            await page.mouse.move(centre.x, centre.y);
+            await page.mouse.dblclick(centre.x, centre.y);
+            await page.getByRole("button", { name: "Delete All Planes" }).click();
+            await page.getByRole("button", { name: "Section: ON" }).click();
+
+            // Length: two points on the model; Area: three points, then Finish; then clear both.
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            for (const dx of [-60, 60]) {
+                await page.mouse.move(centre.x + dx, centre.y);
+                await page.mouse.dblclick(centre.x + dx, centre.y);
+            }
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            await page.getByRole("button", { name: "Area", exact: true }).click();
+            for (const [dx, dy] of [
+                [-50, -30],
+                [50, -30],
+                [50, 40],
+            ]) {
+                await page.mouse.move(centre.x + dx, centre.y + dy);
+                await page.mouse.dblclick(centre.x + dx, centre.y + dy);
+            }
+            await page.getByRole("button", { name: /Finish Area/ }).click();
+            await page.getByRole("button", { name: "Clear Measurements" }).click();
+            await expectCanvas("after the tools", drawsModel);
+
+            await page.waitForTimeout(2000);
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, [], fileName);
             const outside = await hosts.thirdParty();
             expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
         });
