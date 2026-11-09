@@ -562,9 +562,11 @@ def query_audit(event, params):
     page first. So a page is short or empty while `NextToken` is present only when the `text` or
     `eventType` filter, or the caller's asset rules, refuse most of the entries read, or on the
     global path for a reader who may not read some databases.
-    A `databaseId` that
-    names no database, live or deleted, answers `400` "Database not found" to a caller the rows'
-    check allows on that id (`knownDatabase.database_known`).
+    Access to a `databaseId` (live or `<databaseId>#deleted`), and with `assetId` to the asset, is
+    decided before any of it is read (D175): a caller who may read nothing there gets one empty
+    page with no token, the same answer as for an id that names no database, and the request reads
+    nothing of it. A `databaseId` that names no database, live or deleted, answers `400` "Database
+    not found" to a caller allowed on that id (`knownDatabase.database_known`).
     """
     event_type = params.get("eventType") or None
     start_date = params.get("startDate")
@@ -597,30 +599,39 @@ def query_audit(event, params):
         return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    # A database filter naming no database is not an empty page (`knownDatabase`). Checked only for
-    # a caller the rows' own check allows on that id: any other caller gets the page it got before
-    # (no entry of the database is listed for it), whether the database exists or not. A deleted
-    # database still names one, so its history stays readable.
-    if (database_id and casbin_enforcer
-            and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
-            and not knownDatabase.database_known(database_table, database_id, evaluation_table)):
-        return knownDatabase.database_not_found(event)
-    # While a deleted database's compliance data moves under `<databaseId>#deleted`, every entry
-    # still under the live id is the deleted database's: the live id lists none of them, and a
-    # listing across databases shows them under `<databaseId>#deleted` (`databaseRetirement`).
-    if database_id and databaseRetirement.move_in_progress(evaluation_table, database_id):
-        return success(body={"entries": []})
+    # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
+    # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
+    # reader who may read few databases would otherwise have every other database's entries refused
+    # one by one, each refusal writing an authorization audit record.
+    readable = _database_readability(casbin_enforcer)
     presenter = databaseRetirement.Presenter(evaluation_table)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything. An
     # archived row of an earlier, deleted database with the same id is told apart with the page's
     # retirement records.
     archived = AssetAccess(asset_table, casbin_enforcer, presenter)
-    # The evaluation GET names nothing but the database id, so the engine is asked it once per id of
-    # the request (live, and `<databaseId>#deleted` for an archived asset), not once per entry: a
-    # reader who may read few databases would otherwise have every other database's entries refused
-    # one by one, each refusal writing an authorization audit record.
-    readable = _database_readability(casbin_enforcer)
+    # Access to the named database is decided before any of it is read (D175): every entry under a
+    # `databaseId` is decided first on that id (`AssetAccess.access`), so a caller refused on it
+    # may read none of them. It gets one empty page with no token, the answer for an id that names
+    # no database, and nothing is read: no audit entry, no database row, no retirement record.
+    if database_id and not readable(database_id):
+        return success(body={"entries": []})
+    # A database filter naming no database is not an empty page (`knownDatabase`), for a caller
+    # allowed on that id. A deleted database still names one, so its history stays readable.
+    if database_id and not knownDatabase.database_known(database_table, database_id,
+                                                        evaluation_table):
+        return knownDatabase.database_not_found(event)
+    # While a deleted database's compliance data moves under `<databaseId>#deleted`, every entry
+    # still under the live id is the deleted database's: the live id lists none of them, and a
+    # listing across databases shows them under `<databaseId>#deleted` (`databaseRetirement`).
+    if database_id and databaseRetirement.move_in_progress(evaluation_table, database_id):
+        return success(body={"entries": []})
+    # Every entry of an asset's history gets the same decision, the one on the asset (its database
+    # id and asset id, its row as stored): a caller refused on the asset gets the same empty page
+    # before its history is read. The asset's row is read with at most one GetItem per key.
+    if asset_id and not archived.decide(database_id, asset_id, readable,
+                                        cache_key=ARCHIVE_VISIBILITY_CACHE_KEY):
+        return success(body={"entries": []})
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.

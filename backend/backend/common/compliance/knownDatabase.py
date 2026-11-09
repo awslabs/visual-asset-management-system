@@ -9,8 +9,10 @@ So the database-level compliance reads (the database overview, and the quarantin
 audit listings filtered by `databaseId`) answer `400` "Database not found" for such an id, as the
 other compliance routes and the core handlers answer for a database a route names that does not
 exist, once the caller has passed the read's own authorization check on it. A caller refused on the id gets the
-answer it got before, whether the database exists or not, so the answer tells it nothing of the
-database's existence.
+same answer whether the database exists or not, so the answer tells it nothing of the database's
+existence: `403` from the overview; one empty page with no token from the quarantine and audit
+listings, decided before any of the database is read (D175); no row of the database from the
+cascade listing.
 
 A deleted database still names one: deleting it moves its row to `<databaseId>#deleted`, and its
 compliance data moves under that id (`databaseRetirement`), where the history reads take it

@@ -1044,7 +1044,7 @@ A record written before asset names were kept on compliance records has no `asse
 
 ## List quarantined assets
 
-Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName` and `permissions` (`release`, `exception`: whether the caller may release the asset or grant it an exception, a `POST` on the quarantined evaluation object of its database); an asset released under an exception (state `exception`) is not listed, nor is an archived asset, for any caller. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
+Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName` and `permissions` (`release`, `exception`: whether the caller may release the asset or grant it an exception, a `POST` on the quarantined evaluation object of its database); an asset released under an exception (state `exception`) is not listed, nor is an archived asset, for any caller. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned. With `databaseId`, the caller's access to that database is decided before any of it is read: a caller who may not read it gets one empty page without `NextToken`, the same answer as for an id that names no database.
 
 ```
 GET /compliance/quarantine
@@ -1405,7 +1405,7 @@ POST /compliance/cascades/{cascadeId}/reject
 
 Retrieves audit entries across assets, newest first, one page per call; entries of different event types interleave by time. The continuation token is opaque: pass it back as `startingToken` with the same filters it was issued for. Entries are filtered to those whose database the caller may read; an entry that names no database is kept only for a caller whose `complianceEvaluation` permission does not restrict `databaseId`.
 
-Only the entries a page can show are read. With `databaseId`, the listing reads that database's entries alone. Without it, a caller who may read only some databases (at most 25) reads each of them, merged by time, and a caller who may read none gets an empty page without `NextToken`. Any other caller reads the whole trail, by event type when `eventType` is given. So entries of databases the caller does not see never take a page's place.
+Only the entries a page can show are read. With `databaseId`, the listing reads that database's entries alone, once it has decided that the caller may read that database (and, with `assetId`, that asset). A caller who may not gets one empty page without `NextToken`, the same answer as for an id that names no database, and nothing of the database is read. Without it, a caller who may read only some databases (at most 25) reads each of them, merged by time, and a caller who may read none gets an empty page without `NextToken`. Any other caller reads the whole trail, by event type when `eventType` is given. So entries of databases the caller does not see never take a page's place.
 
 Each request reads a bounded part of what it reads and answers within it, so a page can still hold fewer entries than `maxItems`, even none, while `NextToken` is present. This happens when the `text` or `eventType` filter, or the caller's asset permissions, leave out most of the entries read, or when a caller who may read more than 25 databases, but not every one, reads the whole trail. Keep following `NextToken` until none is returned.
 

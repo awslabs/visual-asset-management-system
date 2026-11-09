@@ -251,8 +251,10 @@ def list_quarantined(event, query_params):
     on each asset's row, the rows of a read fetched together); `NextToken` resumes after the
     last row returned, or after the last row read when the budget ended the page first. No per-row
     lookup of the name: it is on the
-    row. A `databaseId` that names no database answers `400` "Database not found" to a caller the
-    rows' check allows on that id (`store.database_known`).
+    row. Access to a `databaseId` is decided before any of it is read (D175): a caller refused on
+    it gets one empty page with no token, the same answer as for an id that names no database, and
+    the request reads nothing. A `databaseId` that names no database answers `400` "Database not
+    found" to a caller allowed on that id (`store.database_known`).
     """
     page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_LIST_PAGE_SIZE)
     if page_size is None:
@@ -282,13 +284,20 @@ def list_quarantined(event, query_params):
         query_kwargs["FilterExpression"], text_accept = listing.asset_text_filter(text)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    # A database filter naming no database is not an empty page. Checked only for a caller the
-    # rows' own check allows on that id: any other caller gets the page it got before (no row of
-    # the database is listed for it), whether the database exists or not.
-    if (database_id and casbin_enforcer
-            and casbin_enforcer.enforce(
-                _evaluation_object(database_id, engine.STATE_QUARANTINED), "GET")
-            and not store.database_known(database_id)):
+    # The quarantined evaluation object names nothing but the database id, so the engine is asked
+    # it once per id of the request (`listing.once_per_key`), not once per row; and a row of a
+    # database the caller may not read is dropped before its database's archived assets are read.
+    may_get_database = listing.once_per_key(
+        lambda stored_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _evaluation_object(stored_id, engine.STATE_QUARANTINED), "GET"))
+    # Access to the named database is decided before any of it is read (D175): every row of the
+    # database is decided first on its id (`may_get`), so a caller refused on it may read none of
+    # them. It gets one empty page with no token, the answer for an id that names no database, and
+    # nothing is read.
+    if database_id and not may_get_database(database_id):
+        return success(body={"quarantinedAssets": []})
+    # A database filter naming no database is not an empty page, for a caller allowed on that id.
+    if database_id and not store.database_known(database_id):
         return database_not_found(event)
     # A deleted database's records are not quarantines anyone can act on: those under
     # `<databaseId>#deleted` are never listed, nor, while its move runs, those still under the
@@ -302,12 +311,6 @@ def list_quarantined(event, query_params):
     # with the page's others (`expect_items`). An archived row of an earlier, deleted database with
     # the same id is told apart with the page's retirement records.
     archived = AssetAccess(asset_table, casbin_enforcer, presenter)
-    # The quarantined evaluation object names nothing but the database id, so the engine is asked
-    # it once per id of the request (`listing.once_per_key`), not once per row; and a row of a
-    # database the caller may not read is dropped before its database's archived assets are read.
-    may_get_database = listing.once_per_key(
-        lambda stored_id: bool(casbin_enforcer) and casbin_enforcer.enforce(
-            _evaluation_object(stored_id, engine.STATE_QUARANTINED), "GET"))
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.

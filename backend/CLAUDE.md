@@ -144,7 +144,11 @@ backend/
 │   │   │                                           #   database-level reads (overview; quarantine,
 │   │   │                                           #   cascade, audit listings by databaseId) answer
 │   │   │                                           #   400 database_not_found() after their own check
-│   │   │                                           #   on the id; decoded_scope()/validate_scope() let
+│   │   │                                           #   on the id; the quarantine and audit listings
+│   │   │                                           #   make that check before any read of the id and
+│   │   │                                           #   answer a refused caller one empty page with
+│   │   │                                           #   no token, as for an unknown id (D175);
+│   │   │                                           #   decoded_scope()/validate_scope() let
 │   │   │                                           #   the history reads take `<db>%23deleted`
 │   │   ├── compliance/databaseRetirement.py        # A deleted database's compliance data moves under
 │   │   │                                           #   `<db>#deleted` (D115): begin() (inside the delete:
