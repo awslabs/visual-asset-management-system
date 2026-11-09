@@ -1008,7 +1008,7 @@ paths:
     /auth/routes/api:
         get:
             summary: "List all available API routes."
-            description: "Retrieve the full list of VAMS API endpoint routes with their HTTP methods and categories from the deployment's master route definitions. Useful when authoring API authorization constraints (route__path values)."
+            description: "Retrieve the full list of VAMS API endpoint routes with their HTTP methods and categories from the deployment's master route definitions. An add-on route is listed only when the deployment enables the add-on, or the optional add-on feature that registers it. Useful when authoring API authorization constraints (route__path values)."
             responses:
                 "200":
                     description: API routes retrieved successfully.
@@ -1084,7 +1084,8 @@ paths:
                 objectType, field, operator, permission, and permissionType selection.
                 The object types are the core types followed by any permission object types
                 the deployment registers (fork or add-on constants files); a registered type
-                is listed here even though no constraint grants access to it yet.
+                is listed here even though no constraint grants access to it yet. An add-on's
+                types are listed only while the deployment enables the add-on.
             responses:
                 "200":
                     description: Constraint object types, operators, permissions, and permission types
@@ -1101,7 +1102,7 @@ paths:
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
-            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted. Each {param} path segment is evaluated with the placeholder value 'vams:any', so a route__path criterion that names a concrete value in a parameter position (for example starts_with '/database/projA/') never matches a templated route on this check: under an allow with a positive operator, or a deny with does_not_contain or is_not_one_of, the route is left out although calls on the matching concrete paths are allowed; under a deny with a positive operator, or an allow with does_not_contain or is_not_one_of, the route is listed although those calls are refused with 403. Constraints whose values name only literal segments (for example starts_with '/database/') are reflected exactly."
+            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted, and the routes of an add-on the deployment has not enabled are not evaluated. Each {param} path segment is evaluated with the placeholder value 'vams:any', so a route__path criterion that names a concrete value in a parameter position (for example starts_with '/database/projA/') never matches a templated route on this check: under an allow with a positive operator, or a deny with does_not_contain or is_not_one_of, the route is left out although calls on the matching concrete paths are allowed; under a deny with a positive operator, or an allow with does_not_contain or is_not_one_of, the route is listed although those calls are refused with 403. Constraints whose values name only literal segments (for example starts_with '/database/') are reflected exactly."
             responses:
                 "200":
                     description: Allowed API routes retrieved successfully.

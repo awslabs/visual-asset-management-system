@@ -314,11 +314,11 @@ The request body is a permission template with a `variableValues` object added. 
 
 #### Error responses
 
-| Status | Description                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, or no constraints |
-| `403`  | Not authorized                                                                                                                          |
-| `500`  | Internal server error                                                                                                                   |
+| Status | Description                                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, an object type of an add-on the deployment has not enabled, or no constraints |
+| `403`  | Not authorized                                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                               |
 
 ---
 
@@ -326,7 +326,7 @@ The request body is a permission template with a `variableValues` object added. 
 
 Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
 
-`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does.
+`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does. An add-on's types are listed only while the deployment enables the add-on (or, for a type of an optional add-on feature, that feature); a constraint stored earlier with such a type is still returned by the constraint list and get operations, and can be deleted.
 
 ```
 GET /auth/constraints/permissionObjects
@@ -375,7 +375,7 @@ These endpoints expose the deployment's API route surface from the master route 
 
 ### List all API routes
 
-Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories.
+Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories. An add-on route is listed only when the deployment enables the add-on, or the optional add-on feature that registers the route.
 
 ```
 GET /auth/routes/api
@@ -407,7 +407,7 @@ GET /auth/routes/api
 
 ### List allowed API routes
 
-Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
+Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted. The routes of an add-on the deployment has not enabled are not evaluated, so they are neither listed nor recorded as denials.
 
 The route is itself authorized at the API tier. The web interface calls it to decide which actions to enable on pages such as Pipelines, Workflows, and Executions, and on the pages an add-on contributes, and treats a refused call as no allowed routes. A web-interface user therefore needs `GET` on it through one of their roles, for example through a `starts_with /auth/routes` criterion as in the `database-user.json` template.
 
