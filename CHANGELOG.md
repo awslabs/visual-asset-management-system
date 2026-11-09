@@ -115,7 +115,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
--   **Web** The Needle USD viewer's error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. ([#335](https://github.com/awslabs/visual-asset-management-system/issues/335))
+-   **Web** The Needle USD viewer's error panel shows its whole message at any panel width; the 3D canvas no longer stays above the text and pushes it out of view. ([#1234](https://github.com/awslabs/visual-asset-management-system/issues/1234))
 -   **Web** Fixed the Three.js viewer ignoring an OBJ file's `.mtl` material library; it loads the library and its textures from the asset. ([#923](https://github.com/awslabs/visual-asset-management-system/issues/923))
 -   **Web** Fixed the Three.js viewer requesting COLLADA (`.dae`) and 3DS textures from the web site root, which answered 403; it loads them from the asset. ([#925](https://github.com/awslabs/visual-asset-management-system/issues/925))
 -   **Web** Fixed the Three.js viewer refusing `.igs` CAD files as an unsupported format and showing a script error for a CAD file it cannot read; `.igs` opens like `.iges`, and an unreadable STEP, IGES or BREP file shows that it could not be read. ([#1199](https://github.com/awslabs/visual-asset-management-system/issues/1199))
