@@ -276,7 +276,7 @@ aws logs describe-log-groups \
     --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
     --query 'logGroups[].logGroupName' --output text
 
-# List all VAMS named log groups (audit, API access, workflow, orchestration,
+# List all VAMS named log groups (audit, workflow, orchestration,
 # VPC, CloudTrail, and per-pipeline state machine groups)
 aws logs describe-log-groups \
     --log-group-name-prefix "/aws/vendedlogs/VAMS" \
@@ -294,7 +294,7 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 
-# Delete all VAMS named vendedlogs groups (audit, API access, orchestration bus,
+# Delete all VAMS named vendedlogs groups (audit, orchestration bus,
 # VPC flow logs, per-pipeline state machine logs). Includes the conditional
 # CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
 for LG in $(aws logs describe-log-groups \

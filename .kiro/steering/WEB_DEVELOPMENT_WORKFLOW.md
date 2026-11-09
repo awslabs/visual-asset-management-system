@@ -346,6 +346,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 #### Keep the platform-specific native bindings in `optionalDependencies`
 
 `vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (the bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (the CSS minifier used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with one of:
@@ -531,6 +533,8 @@ const data = result[1];
 ```
 
 A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
+
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
 
 ### **Authentication: Dual-Mode System**
 
