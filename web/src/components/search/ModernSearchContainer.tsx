@@ -107,7 +107,7 @@ const ModernSearchContainer: React.FC<
         }
     }, [initialQuery]);
 
-    // Eagerly initialize the visualizer plugin registry so isViewableExtension()
+    // Eagerly initialize the visualizer plugin registry so isViewableSearchRow()
     // works on the file-search list before any viewer modal mounts. Without this,
     // the registry stays uninitialized on the search page and every row is treated
     // as non-viewable, so the multi-select viewer counter never increments.

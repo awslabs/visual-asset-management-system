@@ -356,6 +356,10 @@ type RenderKind =
     | "pdf"
     | "grid"
     | "text"
+    /** The Text Viewer refuses the file as binary: its notice, no highlighter (#1198). */
+    | "text-binary"
+    /** The Text Viewer names an encoding it cannot show (UTF-16 without a BOM, UTF-32) (#1198). */
+    | "text-encoding"
     | "not-offered"
     | "refused"
     | "supersplat"
@@ -379,6 +383,15 @@ interface RenderCase {
     fetches?: string;
     thresholds?: RenderThresholds;
     cspAllowed?: RegExp[];
+    /** Console lines this case alone may log, on top of `CONSOLE_ERROR_IGNORE`. Never global. */
+    consoleAllowed?: RegExp[];
+    /**
+     * The HTTP statuses, in order, of every presigned GET of the sample's own file: how the bounded
+     * text loader read it (#1198). `[206]` = the first 8 KiB held the whole verdict (a small text
+     * file, or a binary refused on its first bytes); `[206, 200]` = a text file larger than the
+     * sample, read whole after the check; `[416]` = an empty file.
+     */
+    reads?: number[];
     /**
      * A web path the deployment serves only when the viewer is enabled (a licensed add-on's
      * bundle). The case skips, with the reason, when the path is not served as JavaScript.
@@ -497,6 +510,35 @@ const renderCases: RenderCase[] = [
     { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
     { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
     { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // #1198: files with no extension, dotfiles, binary content and UTF-16 in the Text Viewer.
+    // Text Viewer is the only viewer listing "(none)", so these open without a picker.
+    { sample: "noext-license", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "noext-readme", viewer: "Text Viewer", kind: "text", reads: [206] },
+    { sample: "noext-changes", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "dotfile-gitignore", viewer: "Text Viewer", kind: "text", reads: [206] },
+    { sample: "binary-noext", viewer: "Text Viewer", kind: "text-binary", reads: [206] },
+    { sample: "binary-as-txt", viewer: "Text Viewer", kind: "text-binary", reads: [206] },
+    { sample: "license-utf16le-bom", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "license-utf16be-bom", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "license-utf16le", viewer: "Text Viewer", kind: "text-encoding", reads: [206] },
+    {
+        sample: "noext-empty",
+        viewer: "Text Viewer",
+        kind: "text",
+        reads: [416],
+        // S3 answers a range on a 0-byte object with 416, which the loader reads as empty text;
+        // Chromium still logs its own network line for it (in-dev D1 on PR #1200).
+        consoleAllowed: [/Failed to load resource.*416/i],
+    },
+    {
+        // A dotfile WITH an extension matches by it: .json lists Text and Cesium, so a pick.
+        sample: "prettierrc-json",
+        viewer: "Text Viewer",
+        kind: "text",
+        select: /^Text Viewer/i,
+        reads: [206],
+    },
+    { sample: "env-example", viewer: "no viewer (.env.example)", kind: "not-offered" },
     { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
     { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
     { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
@@ -544,6 +586,37 @@ const renderCases: RenderCase[] = [
     ),
 ];
 
+/** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
+const PRESIGNED = /X-Amz-(?:Signature|Credential)=/i;
+
+/**
+ * Records every presigned GET of one asset file (its key's tail, e.g. `/noext/LICENSE`) with its
+ * status and `Range` header, from the raw responses (a `fetch(redirect: "manual")` hides both).
+ */
+function trackFileReads(page: Page, key: string) {
+    const reads: { status: number; range: string }[] = [];
+    const onResponse = (response: Response) => {
+        const url = response.url();
+        if (!PRESIGNED.test(url)) return;
+        let path: string;
+        try {
+            path = decodeURIComponent(new URL(url).pathname);
+        } catch {
+            return;
+        }
+        if (!path.endsWith(key)) return;
+        reads.push({
+            status: response.status(),
+            range: response.request().headers()["range"] ?? "",
+        });
+    };
+    page.context().on("response", onResponse);
+    return {
+        reads,
+        stop: () => page.context().off("response", onResponse),
+    };
+}
+
 const seeded = viewerSamples();
 
 test.describe("viewer render proof (seeded samples)", () => {
@@ -566,10 +639,12 @@ test.describe("viewer render proof (seeded samples)", () => {
             // Watchers go in before the first navigation so they see the app's first document.
             const csp = await watchCspViolations(page);
             const hosts = watchRequestHosts(page);
-            const errors = watchConsoleErrors(
-                page,
-                c.cspAllowed ? [...CONSOLE_ERROR_IGNORE, CSP_CONSOLE_REPORT] : CONSOLE_ERROR_IGNORE
-            );
+            const errors = watchConsoleErrors(page, [
+                ...CONSOLE_ERROR_IGNORE,
+                ...(c.cspAllowed ? [CSP_CONSOLE_REPORT] : []),
+                ...(c.consoleAllowed ?? []),
+            ]);
+            const fileReads = c.reads ? trackFileReads(page, sample.key) : null;
             const fetched = c.fetches
                 ? page.waitForResponse(
                       (response) => response.url().includes(c.fetches!) && response.status() < 400,
@@ -739,11 +814,28 @@ test.describe("viewer render proof (seeded samples)", () => {
                     await expect(alert).not.toContainText("SuperSplat");
                 }
             } else if (c.kind === "text") {
-                await expect(
-                    page.getByText(sample.expect?.line ?? "", { exact: false })
-                ).toBeVisible({
+                // The highlighter's own controls prove the text rendered, even for an empty file.
+                await expect(page.getByText("Line numbers", { exact: true })).toBeVisible({
                     timeout: 60_000,
                 });
+                if (sample.expect?.line) {
+                    // `.first()`: a line can recur further down (LICENSE names "Apache License"
+                    // again in its appendix).
+                    await expect(
+                        page.getByText(sample.expect.line, { exact: false }).first()
+                    ).toBeVisible({ timeout: 60_000 });
+                }
+                await expect(page.getByText("Error loading file")).toHaveCount(0);
+                await expect(
+                    page.locator('[data-testid^="text-viewer-"][data-testid$="-notice"]')
+                ).toHaveCount(0);
+            } else if (c.kind === "text-binary" || c.kind === "text-encoding") {
+                const notice = c.kind === "text-binary" ? "binary" : "encoding";
+                await expect(page.getByTestId(`text-viewer-${notice}-notice`)).toBeVisible({
+                    timeout: 60_000,
+                });
+                // A refused file never reaches the highlighter.
+                await expect(page.getByText("Line numbers", { exact: true })).toHaveCount(0);
             }
 
             if (fetched) await fetched;
@@ -751,6 +843,16 @@ test.describe("viewer render proof (seeded samples)", () => {
             await page.waitForTimeout(3000);
 
             expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            if (fileReads) {
+                fileReads.stop();
+                console.log(`[viewers] ${c.sample} reads ${JSON.stringify(fileReads.reads)}`);
+                expect(
+                    fileReads.reads.map((read) => read.status),
+                    `how ${fileName} was read (presigned GETs, in order)`
+                ).toEqual(c.reads);
+                // The first read is always the bounded sample.
+                expect(fileReads.reads[0]?.range).toBe("bytes=0-8191");
+            }
             await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
             const outside = await hosts.thirdParty();
             expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
