@@ -1604,7 +1604,10 @@ class TestContainer:
 
     def test_container_commands_are_gated_on_the_containers_switch(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
-            mocks['profile_manager'].has_feature_switch.return_value = False
+            # The add-on is on and only its optional feature is off; with the add-on off the command
+            # names the add-on instead (test_edh_help_listing.py).
+            mocks['profile_manager'].has_feature_switch.side_effect = (
+                lambda name: name == 'EDH_WORKSTATIONS')
             result = cli_runner.invoke(cli, ['edh', 'container', 'catalog'])
             assert result.exit_code != 0
             assert EDH_CONTAINERS_DISABLED_MESSAGE in result.output
@@ -1859,7 +1862,10 @@ class TestAmiRecipeCommands:
 
     def test_the_feature_gate_names_ami_recipes(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("addon.edh") as mocks:
-            mocks["profile_manager"].has_feature_switch.return_value = False
+            # The add-on is on and only its optional feature is off; with the add-on off the command
+            # names the add-on instead (test_edh_help_listing.py).
+            mocks["profile_manager"].has_feature_switch.side_effect = (
+                lambda name: name == "EDH_WORKSTATIONS")
             result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "list"])
             assert result.exit_code != 0 and "AMI recipes" in result.output
 
@@ -2031,7 +2037,10 @@ class TestAmiRecipeDuplicate:
 
     def test_duplicate_is_gated_on_the_ami_recipes_switch(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("addon.edh") as mocks:
-            mocks["profile_manager"].has_feature_switch.return_value = False
+            # The add-on is on and only its optional feature is off; with the add-on off the command
+            # names the add-on instead (test_edh_help_listing.py).
+            mocks["profile_manager"].has_feature_switch.side_effect = (
+                lambda name: name == "EDH_WORKSTATIONS")
             result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "duplicate", "al2023-desktop",
                                              "--recipe-id", "team-desktop"])
             assert result.exit_code != 0

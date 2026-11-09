@@ -15,6 +15,7 @@ from ...addon_constants import (
     EDH_WORKSTATIONS_DISABLED_MESSAGE, EDH_CONTAINERS_DISABLED_MESSAGE, EDH_AMI_RECIPES_DISABLED_MESSAGE,
 )
 from ...utils.decorators import requires_setup_and_auth, requires_feature, get_profile_manager_from_context
+from ...utils.addon_group import AddonGroup
 from ...utils.api_client import APIClient
 from ...utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ...utils.addon.edh_exceptions import (
@@ -266,7 +267,21 @@ def describe_capacity(record: Dict[str, Any]) -> Optional[str]:
     return f"{label} ({reservation_id})" if label else str(reservation_id)
 
 
-@click.group()
+def requires_edh_feature(feature_name: str, error_message: str):
+    """Gate a command on one of the add-on's optional features (container jobs, AMI recipes).
+
+    The add-on's own switch is checked first, so on a deployment without the add-on the command names
+    the add-on rather than the optional feature.
+    """
+    def decorator(func):
+        return requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)(
+            requires_feature(feature_name, error_message)(func))
+    return decorator
+
+
+# Listed in `vamscli --help` only for a profile whose feature switches carry the add-on's (AddonGroup);
+# `vamscli edh ...` still runs everywhere, and each command refuses on its own without the switch.
+@click.group(cls=AddonGroup, feature_switch=FEATURE_EDH_WORKSTATIONS)
 def edh():
     """EDH Workstations add-on: GPU desktops, image catalog, cluster administration, AMI recipes, and container jobs."""
     pass
@@ -2100,7 +2115,7 @@ def ami_recipe():
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_list(ctx: click.Context, json_output: bool):
     """List every AMI recipe with its latest build.
 
@@ -2127,7 +2142,7 @@ def ami_recipe_list(ctx: click.Context, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_get(ctx: click.Context, recipe_id: str, json_output: bool):
     """Get a specific AMI recipe: its full definition and its latest build (latestBuild). List every
     build with `edh admin ami-recipe builds`.
@@ -2157,7 +2172,7 @@ def ami_recipe_get(ctx: click.Context, recipe_id: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_create(ctx: click.Context, file: str, json_output: bool):
     """Create a new AMI recipe from a JSON file. File components are inlined relative to the file directory.
 
@@ -2189,7 +2204,7 @@ def ami_recipe_create(ctx: click.Context, file: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_update(ctx: click.Context, recipe_id: str, file: str, json_output: bool):
     """Update an existing admin AMI recipe from a JSON file. File components are inlined relative to the file directory.
 
@@ -2233,7 +2248,7 @@ def ami_recipe_update(ctx: click.Context, recipe_id: str, file: str, json_output
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_duplicate(ctx: click.Context, source_id: str, recipe_id: str, display_name: Optional[str],
                          stack_name: Optional[str], keep_versions: Optional[int], json_output: bool):
     """Duplicate an AMI recipe, shipped or admin, into a new admin recipe to update and build. The copy
@@ -2269,7 +2284,7 @@ def ami_recipe_duplicate(ctx: click.Context, source_id: str, recipe_id: str, dis
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_delete(ctx: click.Context, recipe_id: str, confirm: bool, json_output: bool):
     """Delete an admin AMI recipe: the Image Builder pipeline, recipe, configurations and own-account
     components its last build recorded, and every build row; a config recipe is refused. The AMIs,
@@ -2309,7 +2324,7 @@ def ami_recipe_delete(ctx: click.Context, recipe_id: str, confirm: bool, json_ou
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_build(ctx: click.Context, recipe_id: str, json_output: bool):
     """Start a new EC2 Image Builder build for an AMI recipe.
 
@@ -2348,7 +2363,7 @@ def ami_recipe_build(ctx: click.Context, recipe_id: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_builds(ctx: click.Context, recipe_id: str, json_output: bool):
     """List all builds for an AMI recipe.
 
@@ -2380,7 +2395,7 @@ def ami_recipe_builds(ctx: click.Context, recipe_id: str, json_output: bool):
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_output: bool):
     """Retry the EDH registration of a REGISTER_FAILED build and reset its automatic attempt count.
 
@@ -2419,7 +2434,7 @@ def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_o
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_AMI_RECIPES, EDH_AMI_RECIPES_DISABLED_MESSAGE)
 def ami_recipe_retire(ctx: click.Context, recipe_id: str, version: int, confirm: bool, json_output: bool):
     """Retire an AMI build version: deactivates the EDH software stack, then deregisters the AMI and
     its snapshots and deletes the Image Builder image version once no Amazon EC2 instance uses the
@@ -2496,7 +2511,7 @@ def container():
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
 def container_catalog(ctx: click.Context, json_output: bool):
     """Show the registered job definitions, job queues and EKS clusters as EDH reports them.
 
@@ -2546,7 +2561,7 @@ def job():
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
 def job_submit(ctx: click.Context, job_definition: str, name: str, backend: str, job_queue: str,
                command_parts, env_pairs, vcpus: Optional[int], memory: Optional[int],
                gpu: Optional[int], json_output: bool):
@@ -2601,7 +2616,7 @@ def job_submit(ctx: click.Context, job_definition: str, name: str, backend: str,
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
 def job_list(ctx: click.Context, backend: Optional[str], cluster: Optional[str], namespace: Optional[str],
              json_output: bool):
     """List your container jobs on one backend.
@@ -2645,7 +2660,7 @@ def job_list(ctx: click.Context, backend: Optional[str], cluster: Optional[str],
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
+@requires_edh_feature(FEATURE_EDH_CONTAINERS, EDH_CONTAINERS_DISABLED_MESSAGE)
 def job_kill(ctx: click.Context, job_id: str, backend: Optional[str], cluster: Optional[str],
              namespace: Optional[str], confirm: bool, json_output: bool):
     """Kill one of your container jobs by JOB_ID. Irreversible; --confirm is required.
