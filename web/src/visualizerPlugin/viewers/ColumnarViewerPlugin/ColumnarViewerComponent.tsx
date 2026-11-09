@@ -94,6 +94,22 @@ const readFcsFile = (
     request.send();
 };
 
+/**
+ * A column whose key no earlier column uses. A header row can repeat a name ("value", "value"), and
+ * keying rows by the raw name made the second column overwrite the first in every row, so one of
+ * them was never shown. The repeat is keyed and labelled "value (2)", "value (3)", and so on.
+ */
+const uniqueColumn = (name: string, used: Set<string>): Column => {
+    let key = name;
+    for (let n = 2; used.has(key); n++) key = `${name} (${n})`;
+    used.add(key);
+    return { key, name: key };
+};
+
+/** A blank line, which papaparse returns as one empty cell (a trailing newline ends in one). */
+const isBlankLine = (row: unknown): boolean =>
+    Array.isArray(row) && row.length === 1 && row[0] === "";
+
 const readCsvFile = (
     remoteFileUrl: string,
     setColumns: (columns: Column[]) => void,
@@ -108,16 +124,29 @@ const readCsvFile = (
             const { data } = results;
             const newRows: Row[] = [];
             let newColumns: Column[] = [];
+            const usedKeys = new Set<string>();
             for (let i = 0; i < (data?.length || 0); i++) {
+                // A trailing newline (or a blank line) is not a data row.
+                if (i > 0 && isBlankLine(data[i])) continue;
                 if (i === 0) {
-                    newColumns = data[i].map((column: string) => {
-                        return {
-                            key: column,
-                            name: column,
-                        };
+                    // papaparse strips a UTF-8 byte order mark only from a string input or in
+                    // header mode; a downloaded file read row by row keeps it on the first
+                    // header, which then keys that column as "\uFEFFid" rather than "id".
+                    newColumns = data[i].map((column: string, j: number) => {
+                        if (j === 0 && typeof column === "string") {
+                            column = column.replace(/^\uFEFF/, "");
+                        }
+                        return uniqueColumn(column, usedKeys);
                     });
                 } else {
                     const newRow = data[i].reduce((acc: Row, cur: string, j: number) => {
+                        // A row wider than the header (ragged exports) gets a generated column
+                        // rather than indexing past the header list.
+                        while (j >= newColumns.length) {
+                            newColumns.push(
+                                uniqueColumn(`Column ${newColumns.length + 1}`, usedKeys)
+                            );
+                        }
                         acc[newColumns[j].key] = cur;
                         return acc;
                     }, {});
