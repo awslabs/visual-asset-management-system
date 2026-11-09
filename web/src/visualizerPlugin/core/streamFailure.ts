@@ -139,6 +139,37 @@ export async function streamResponseFailureMessage(
 }
 
 /**
+ * An error whose message is the API's own reason for refusing a file (`apiRefusalMessage`, D166),
+ * for example "Asset is quarantined and cannot be downloaded". A viewer shows it with no format or
+ * file hint under it ("Please ensure the file is a supported 3D format", D170): the API refused the
+ * file, and nothing about the file would change that.
+ */
+export class ApiRefusalError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "ApiRefusalError";
+    }
+}
+
+/** Whether `error` is the API's refusal of a file (`ApiRefusalError`). */
+export function isApiRefusalError(error: unknown): error is ApiRefusalError {
+    return error instanceof ApiRefusalError;
+}
+
+/**
+ * The error a viewer throws for a failed streaming-route response it fetched itself: an
+ * `ApiRefusalError` carrying the API's reason when the API refused the file with one, else an Error
+ * with `streamResponseFailureMessage`'s text (the worded 401/403/404/410/429 sentences, or
+ * `subject`).
+ */
+export async function streamResponseFailure(response: Response, subject: string): Promise<Error> {
+    const apiMessage = await responseApiMessage(response);
+    const refusal = apiRefusalMessage(response.status, apiMessage);
+    if (refusal) return new ApiRefusalError(refusal);
+    return new Error(downloadStatusMessage(response.status, subject, apiMessage));
+}
+
+/**
  * Requests `url` again with the viewer's `headers` to learn why a viewer library failed to load it.
  * Potree's loader rejects without the HTTP status, so the status comes from this second request.
  */

@@ -20,6 +20,8 @@ import {
     downloadRefusalReason,
     downloadStatusMessage,
     DOWNLOAD_FORBIDDEN_MESSAGE,
+    isApiRefusalError,
+    streamResponseFailure,
     streamResponseFailureMessage,
 } from "./streamFailure";
 import ImageViewerComponent from "../viewers/ImageViewerPlugin/ImageViewerComponent";
@@ -101,6 +103,30 @@ describe("the API's refusal reason", () => {
         expect(await streamResponseFailureMessage(failed, "Failed to load: a.glb (502)")).toBe(
             "Failed to load: a.glb (502)"
         );
+    });
+
+    it("is thrown as an ApiRefusalError by a viewer that fetched the file itself", async () => {
+        const refused = await streamResponseFailure(
+            quarantineRefusalResponse(),
+            "Failed to load: a.glb (400)"
+        );
+        expect(isApiRefusalError(refused)).toBe(true);
+        expect(refused.message).toBe(QUARANTINED);
+
+        const response = (status: number, body: any) =>
+            ({ status, clone: () => ({ json: async () => body }) } as unknown as Response);
+        const denied = await streamResponseFailure(
+            response(403, { message: "Not Authorized" }),
+            "Failed to load: a.glb (403)"
+        );
+        expect(isApiRefusalError(denied)).toBe(false);
+        expect(denied.message).toBe(DOWNLOAD_FORBIDDEN_MESSAGE);
+        const failed = await streamResponseFailure(
+            response(500, { message: "Internal server error" }),
+            "Failed to load: a.glb (500)"
+        );
+        expect(isApiRefusalError(failed)).toBe(false);
+        expect(failed.message).toBe("Failed to load: a.glb (500)");
     });
 
     it("names a stream refusal as the stream viewers word it", () => {

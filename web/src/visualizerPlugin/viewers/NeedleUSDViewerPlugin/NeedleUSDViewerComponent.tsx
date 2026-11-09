@@ -22,7 +22,11 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
-import { streamResponseFailureMessage } from "../../core/streamFailure";
+import {
+    ApiRefusalError,
+    isApiRefusalError,
+    streamResponseFailure,
+} from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -810,12 +814,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
-                        // Another refusal is named by the API's own message (D166).
-                        throw new Error(
-                            await streamResponseFailureMessage(
-                                response,
-                                `Failed to load: ${fileKey} (${response.status})`
-                            )
+                        // A refusal with the API's own reason is an ApiRefusalError carrying it
+                        // (D166); any other status keeps this file's own message.
+                        throw await streamResponseFailure(
+                            response,
+                            `Failed to load: ${fileKey} (${response.status})`
                         );
                     } else {
                         console.warn(
@@ -1186,7 +1189,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                 const authHeader = await getDualAuthorizationHeader();
                 const loadedFiles = new Set<string>();
                 const failedDownloads = new Set<string>();
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
 
                 // Store file info for driver creation
                 const fileInfos: Array<{
@@ -1327,11 +1331,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
 
                 if (fileInfos.length === 0) {
+                    // When the API refused a file with its own reason (a quarantined asset with
+                    // the download block on), that reason is what the viewer shows (D172).
+                    const refused = errors.find((err) => err.refusal);
+                    if (refused) throw new ApiRefusalError(refused.error);
                     throw new Error("No files loaded successfully");
                 }
 
