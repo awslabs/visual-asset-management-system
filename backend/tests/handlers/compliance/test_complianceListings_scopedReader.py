@@ -92,7 +92,7 @@ def _decision_cost(step):
     `_DecisionClock` charging `step` seconds a decision, instead of the host's clock."""
     clock = _DecisionClock(step)
     real = listing.query_page
-    real_merge = listing.merge_query_page
+    real_merge = getattr(listing, "merge_query_page", None)
 
     def query_page(*args, accept=None, **kwargs):
         return real(*args, accept=clock.counted(accept) if accept else None, clock=clock,
@@ -101,8 +101,9 @@ def _decision_cost(step):
     def merge_query_page(*args, accept=None, **kwargs):
         return real_merge(*args, accept=clock.counted(accept) if accept else None, clock=clock,
                           **kwargs)
+    # `create=True`: the clock also stands in where a build has no merged pages.
     with patch.object(listing, "query_page", query_page), \
-            patch.object(listing, "merge_query_page", merge_query_page):
+            patch.object(listing, "merge_query_page", merge_query_page, create=True):
         yield clock
 
 

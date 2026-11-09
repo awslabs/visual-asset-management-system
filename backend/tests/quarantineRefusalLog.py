@@ -28,8 +28,9 @@ def captured_logs(handler_module):
     """`{"handler", "guard", "general_error"}` -> a MagicMock logger in place of each one."""
     loggers = {"handler": MagicMock(name="handler.logger"), "guard": MagicMock(name="guard.logger"),
                "general_error": MagicMock(name="general_error.logger")}
+    guard_general_error = getattr(guard, "general_error", handler_module.general_error)
     general_modules = {sys.modules[handler_module.general_error.__module__],
-                       sys.modules[guard.general_error.__module__]}
+                       sys.modules[guard_general_error.__module__]}
     with ExitStack() as stack:
         stack.enter_context(patch.object(handler_module, "logger", loggers["handler"]))
         stack.enter_context(patch.object(guard, "logger", loggers["guard"]))

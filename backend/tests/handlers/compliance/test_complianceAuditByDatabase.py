@@ -64,6 +64,10 @@ BURST_ENTRIES = 3_150
 DENIED_TAG = "restricted"
 USER_ID = "audit-by-database-user"
 BASE_TIME = datetime(2026, 10, 1, tzinfo=timezone.utc)
+# The index of one database's entries and the most databases a page is merged from
+# (`complianceAuditService.DATABASE_INDEX`, `MAX_MERGED_DATABASES`, pinned below).
+DATABASE_INDEX = "DatabaseIndex"
+MERGE_BOUND = 25
 PER_ASSET_EVENTS = ("compliance_check", "compliance_check", "exception_granted",
                     "schema_binding_applied_to_asset")
 
@@ -260,7 +264,7 @@ class _Audit:
 
     def query(self, **kwargs):
         self.queries.append(kwargs.get("IndexName"))
-        if self.building and kwargs.get("IndexName") == audit_svc.DATABASE_INDEX:
+        if self.building and kwargs.get("IndexName") == DATABASE_INDEX:
             raise ClientError({"Error": {
                 "Code": "ValidationException",
                 "Message": "Cannot read from backfilling global secondary index: DatabaseIndex"}},
@@ -385,7 +389,7 @@ class TestTheFirstPageIsFullWhateverOtherDatabasesHold:
         assert [e["entryId"] for e in body["entries"]] == expected[:50]
         assert len(body["entries"]) == min(50, len(expected))
         # One DatabaseIndex query per database the caller may read, nothing of the others.
-        assert set(caller.audit.queries) == {audit_svc.DATABASE_INDEX}
+        assert set(caller.audit.queries) == {DATABASE_INDEX}
         assert reads <= 2
 
     @pytest.mark.parametrize("role", ["compliance admin of fin-db1",
@@ -465,20 +469,20 @@ class TestEveryFilterCombinationKeepsItsResults:
         with _Caller(trail, "admin") as caller:
             ids, _ = caller.walk(23, databaseId=FIN, **filters)
         assert ids == _expected("admin", dict(filters, databaseId=FIN))
-        assert set(caller.audit.queries) == {audit_svc.DATABASE_INDEX}
+        assert set(caller.audit.queries) == {DATABASE_INDEX}
 
     def test_a_scoped_callers_listing(self, trail, filters):
         role = "compliance admin of fin-db1"
         with _Caller(trail, role) as caller:
             ids, _ = caller.walk(23, **filters)
         assert ids == _expected(role, filters)
-        assert set(caller.audit.queries) == {audit_svc.DATABASE_INDEX}
+        assert set(caller.audit.queries) == {DATABASE_INDEX}
 
     def test_an_administrators_listing_across_databases(self, trail, filters):
         with _Caller(trail, "admin") as caller:
             ids, _ = caller.walk(200, **filters)
         assert ids == _expected("admin", filters)
-        assert audit_svc.DATABASE_INDEX not in caller.audit.queries
+        assert DATABASE_INDEX not in caller.audit.queries
 
 
 # --------------------------------------------------------------------------------------------
@@ -487,6 +491,10 @@ class TestEveryFilterCombinationKeepsItsResults:
 
 @pytest.mark.unit
 class TestTokens:
+
+    def test_the_constants_this_file_names_are_the_services(self):
+        assert (audit_svc.DATABASE_INDEX, audit_svc.MAX_MERGED_DATABASES) == (DATABASE_INDEX,
+                                                                               MERGE_BOUND)
 
     def test_a_date_index_token_issued_before_the_update_continues_on_its_index(self, trail):
         fin = _expected("admin", {"databaseId": FIN})
@@ -526,7 +534,7 @@ class TestTokens:
         assert ids == _expected(role)
 
     @pytest.mark.parametrize("token,filters", [
-        ({"databases": {f"db-{n}": None for n in range(audit_svc.MAX_MERGED_DATABASES + 1)}}, {}),
+        ({"databases": {f"db-{n}": None for n in range(MERGE_BOUND + 1)}}, {}),
         ({"databases": {FIN: ["t"]}}, {}),
         ({"databases": {FIN: [1, "e"]}}, {}),
         ({"databases": {"bad<id>": None}}, {}),
