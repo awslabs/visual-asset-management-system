@@ -30,6 +30,15 @@ const componentBodies = loaded.componentFiles.map((relative) => ({
     body: fs.readFileSync(path.join(REPO, relative), "utf8"),
 }));
 
+/** The text of the recipe component whose path ends with `component`; throws when the recipe has none. */
+function componentBody(component: string): string {
+    const found = componentBodies.find(({ relative }) => relative.endsWith(component));
+    if (!found) {
+        throw new Error(`the recipe has no component ${component}`);
+    }
+    return found.body;
+}
+
 // The deployment values a component reaches as ${DEPLOY_<key>}: the closed set the image builder
 // substitutes, read from the builder itself.
 const builderSource = fs.readFileSync(
@@ -2440,9 +2449,7 @@ describe("the Nucleus server component", () => {
  * runs for the step: a plain list item as written, a `|` block with its indentation removed.
  */
 function stepScript(component: string, step: string): string {
-    const all = componentBodies
-        .find(({ relative }) => relative.endsWith(component))!
-        .body.split("\n");
+    const all = componentBody(component).split("\n");
     const indentOf = (line: string) => line.length - line.trimStart().length;
     const start = all.findIndex((line) => line.trim() === `- name: ${step}`);
     if (start < 0) {
@@ -2562,9 +2569,7 @@ describe("NVIDIA data collection", () => {
     });
 
     test("the choice is checked in the component's first build step, ahead of the download", () => {
-        const body = componentBodies.find(({ relative }) =>
-            relative.endsWith("030-isaacsim.yml")
-        )!.body;
+        const body = componentBody("030-isaacsim.yml");
         const steps = [...body.matchAll(/^ {10}- name: (\w+)$/gm)].map((match) => match[1]);
         expect(steps[0]).toBe("RecordDataCollectionChoice");
         expect(steps.indexOf("RecordDataCollectionChoice")).toBeLessThan(steps.indexOf("Download"));
