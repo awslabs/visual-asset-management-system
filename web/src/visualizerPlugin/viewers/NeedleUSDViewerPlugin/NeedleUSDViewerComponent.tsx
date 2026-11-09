@@ -42,6 +42,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [additionalDepsWarning, setAdditionalDepsWarning] = useState<{
         loaded: number;
@@ -1835,6 +1837,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading USD assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load USD files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -2463,11 +2466,17 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a valid USD format (.usd, .usda, .usdz)
-                    </span>
+                    {/* The API's refusal names its own reason; a format hint would point at the
+                        file instead (D170). */}
+                    {!errorIsRefusal && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a valid USD format (.usd, .usda, .usdz)
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );

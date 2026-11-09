@@ -20,7 +20,11 @@ import { isCadSupportError } from "./utils/fileLoaders";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
 import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
-import { streamResponseFailureMessage } from "../../core/streamFailure";
+import {
+    ApiRefusalError,
+    isApiRefusalError,
+    streamResponseFailure,
+} from "../../core/streamFailure";
 
 /** Referenced files listed by name in the notice before the rest are counted. */
 const NOTICE_LISTED_FILES = 10;
@@ -95,6 +99,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     // Referenced files (textures, material libraries, USD layers) that were not loaded.
     const [unloadedReferences, setUnloadedReferences] = useState<string[]>([]);
@@ -309,6 +315,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Failed to initialize ThreeJS:", error);
                 setError("Failed to load ThreeJS dependencies");
+                setErrorIsRefusal(false);
                 setIsLoading(false);
             }
         };
@@ -394,7 +401,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (filesToLoad.length === 0) throw new Error("No files specified");
 
                 const loadedGroups: any[] = [];
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
                 const allAnimations: any[] = [];
                 const unloaded: string[] = [];
 
@@ -457,13 +465,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         if (!response.ok) {
                             // A refused download (401/403/404/410) is named from the API's status
-                            // (#1211), another refusal by the API's own message (D166); any other
-                            // status keeps this file's own message.
-                            throw new Error(
-                                await streamResponseFailureMessage(
-                                    response,
-                                    `Failed to load: ${fileName} (${response.status})`
-                                )
+                            // (#1211), another refusal by the API's own message, as an
+                            // ApiRefusalError (D166); any other status keeps this file's own
+                            // message.
+                            throw await streamResponseFailure(
+                                response,
+                                `Failed to load: ${fileName} (${response.status})`
                             );
                         }
 
@@ -539,6 +546,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
@@ -577,8 +585,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         // Show CAD/WASM error prominently
                         throw new Error(cadError.error);
                     } else if (errors.length > 0) {
-                        // Show the first error if available
-                        throw new Error(errors[0].error);
+                        // Show the first error if available; the API's refusal stays one, so no
+                        // format hint is added under its reason (D170).
+                        throw errors[0].refusal
+                            ? new ApiRefusalError(errors[0].error)
+                            : new Error(errors[0].error);
                     } else {
                         throw new Error("No files loaded successfully");
                     }
@@ -773,6 +784,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading ThreeJS assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load 3D files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -1397,17 +1409,20 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }}
                 >
                     {error}
-                    {/* A CAD setup message is about the deployment or browser, not the file, and
-                        a USD scene with nothing to draw is a supported format. */}
-                    {!isCadSupportError(error) && error !== USD_NO_GEOMETRY_MESSAGE && (
-                        <>
-                            <br />
-                            <br />
-                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                                Please ensure the file is a supported 3D format
-                            </span>
-                        </>
-                    )}
+                    {/* A CAD setup message is about the deployment or browser, not the file, a
+                        USD scene with nothing to draw is a supported format, and the API's refusal
+                        names its own reason (D170). */}
+                    {!errorIsRefusal &&
+                        !isCadSupportError(error) &&
+                        error !== USD_NO_GEOMETRY_MESSAGE && (
+                            <>
+                                <br />
+                                <br />
+                                <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                    Please ensure the file is a supported 3D format
+                                </span>
+                            </>
+                        )}
                 </div>
                 {referencesNotice}
             </div>

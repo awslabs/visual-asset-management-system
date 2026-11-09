@@ -152,6 +152,16 @@ describe("NeedleUSDViewerComponent: a file the API refused", () => {
         expect(fakeUsdModule.FS_createDataFile).not.toHaveBeenCalled();
     });
 
+    it("adds no format hint under the API's reason (D170)", async () => {
+        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+
+        render(viewer("models/scene.usda"));
+        await finishLoading();
+
+        expect(screen.getByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(FORMAT_HINT)).not.toBeInTheDocument();
+    });
+
     it("[control] keeps its own text when the download failed otherwise", async () => {
         global.fetch = jest.fn(() =>
             Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
