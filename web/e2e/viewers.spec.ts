@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Page, Request, Response } from "@playwright/test";
+import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
 import {
+    apiContext,
     type AssetFileRef,
     canvasStats,
     type CanvasStats,
@@ -344,7 +345,21 @@ for (const c of cases) {
  * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
  */
 
-type RenderKind = "canvas" | "pdf" | "grid" | "text" | "not-offered" | "refused" | "supersplat";
+/**
+ * `potree`: the Potree viewer streams the octree the Point Cloud Potree Viewer pipeline
+ * (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so the case skips, naming the
+ * pipeline, when the file has no preview yet. It proves the cloud was drawn by Potree's own count
+ * of points resident on the GPU and by point pixels on its canvas (see `potreePointShare`).
+ */
+type RenderKind =
+    | "canvas"
+    | "pdf"
+    | "grid"
+    | "text"
+    | "not-offered"
+    | "refused"
+    | "supersplat"
+    | "potree";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -482,6 +497,11 @@ const renderCases: RenderCase[] = [
     { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
     { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
     { sample: "text", viewer: "Text Viewer", kind: "text" },
+    { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
+    // .ply also matches the Gaussian splat and Three.js viewers.
+    { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
     // Licensed add-on, disabled by default: these cases run only on a build that enables it.
     {
         sample: "vntana-glb-box",
@@ -590,6 +610,13 @@ test.describe("viewer render proof (seeded samples)", () => {
                 key: sample.key,
             };
             const fileName = sample.key.split("/").pop()!;
+            // Register the "loaded" wait BEFORE opening the file (the log line comes from the page
+            // the file opens), and do not await it until after: awaiting it here can never finish.
+            let potreeLoaded: Promise<unknown> | null = null;
+            if (c.kind === "potree") {
+                await potreePreviewOrSkip(page, subject);
+                potreeLoaded = potreeLoadedEvent(page);
+            }
             await openViewerFile(page, subject);
             await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
                 timeout: 60_000,
@@ -655,6 +682,25 @@ test.describe("viewer render proof (seeded samples)", () => {
                 ).toEqual([]);
                 if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
                 if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "potree") {
+                await potreeLoaded;
+                await expect
+                    .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+                        timeout: 60_000,
+                        message: "Potree reported no points resident on the GPU",
+                    })
+                    .toBeGreaterThan(0);
+                const canvas = page.locator("#potree_render_area > canvas").first();
+                await expect(canvas).toBeVisible();
+                let share = 0;
+                await expect(async () => {
+                    share = await potreePointShare(canvas);
+                    expect(
+                        share,
+                        `${fileName}: no point pixels on the Potree canvas`
+                    ).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
+                }).toPass({ timeout: 30_000 });
+                console.log(`[viewers] ${c.sample} potree point share ${share.toFixed(4)}`);
             } else if (c.kind === "supersplat") {
                 // The editor mounts as one iframe on the self-hosted build, handed this file.
                 const editor = page.locator('iframe[title="SuperSplat Editor"]');
@@ -712,6 +758,61 @@ test.describe("viewer render proof (seeded samples)", () => {
     }
 });
 
+/** Share of the Potree canvas that must hold point pixels after fitToScreen. */
+const POTREE_MIN_POINT_SHARE = 0.005;
+
+/**
+ * Share of the Potree canvas's pixels whose red channel is above Potree's background. The default
+ * background is a dark blue gradient whose red channel stays below ~35
+ * (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)); its blue spread defeats the
+ * generic most-common-colour measure in `canvasStats`, which counts the gradient itself as content.
+ * Potree renders with `preserveDrawingBuffer`, so the canvas is read back in the page.
+ */
+async function potreePointShare(canvas: Locator): Promise<number> {
+    return await canvas.evaluate((el) => {
+        const source = el as HTMLCanvasElement;
+        const copy = document.createElement("canvas");
+        copy.width = source.width;
+        copy.height = source.height;
+        const context = copy.getContext("2d")!;
+        context.drawImage(source, 0, 0);
+        const { data } = context.getImageData(0, 0, copy.width, copy.height);
+        let points = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] > 48) points += 1;
+        return points / (copy.width * copy.height);
+    });
+}
+
+/** Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams). */
+async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<void> {
+    const ctx = await apiContext(page);
+    expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
+    const relative = subject.key.replace(/^\/+/, "");
+    const metadata = await page.request.get(
+        `${ctx!.base}/database/${subject.databaseId}/assets/${subject.assetId}` +
+            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`,
+        { headers: { Authorization: `Bearer ${ctx!.token}` } }
+    );
+    test.skip(
+        metadata.status() === 404,
+        `${subject.key} has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
+    );
+    expect(metadata.ok(), `the Potree preview answered ${metadata.status()}`).toBe(true);
+}
+
+/**
+ * A promise for the Potree viewer's "loaded" log line. Returned un-awaited: the caller starts it
+ * before opening the file and awaits it once the viewer is open. The no-op catch keeps a case that
+ * fails earlier from also reporting an unhandled rejection; awaiting the promise still rejects.
+ */
+function potreeLoadedEvent(page: Page): Promise<unknown> {
+    const loaded = page.waitForEvent("console", {
+        predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
+        timeout: 120_000,
+    });
+    loaded.catch(() => undefined);
+    return loaded;
+}
 /**
  * IFC BIM viewer panel actions (#1174), on the seeded IFC samples. The viewer draws a grid under the
  * model, so "the canvas is not blank" cannot tell a model from an empty scene. Hide All is that empty
