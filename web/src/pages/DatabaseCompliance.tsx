@@ -30,6 +30,7 @@ import {
     bindSchemaToDatabase,
     bindingResultText,
     bindingApplyOutcomeText,
+    formatCount,
     bindingApplyPollDelay,
     bindingApplyProgressText,
     bindingEvaluationsProgressText,
@@ -168,18 +169,26 @@ export const COMPLIANCE_EXCEPTION_API_ROUTE =
  * how many were skipped as archived or as assets the caller may not read.
  */
 export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => {
-    const parts = [result.message || `Evaluation triggered for ${result.assetsTriggered.length}`];
+    const parts = [
+        result.message || `Evaluation triggered for ${formatCount(result.assetsTriggered.length)}`,
+    ];
     if (result.registered) {
-        parts.push(`${result.registered} newly registered under the ${Synonyms.database} schema`);
+        parts.push(
+            `${formatCount(result.registered)} newly registered under the ${
+                Synonyms.database
+            } schema`
+        );
     }
     if (result.skippedArchived) {
-        parts.push(`${result.skippedArchived} archived, not evaluated`);
+        parts.push(`${formatCount(result.skippedArchived)} archived, not evaluated`);
     }
     if (result.skippedNotAuthorized) {
-        parts.push(`${result.skippedNotAuthorized} skipped (you may not read them)`);
+        parts.push(`${formatCount(result.skippedNotAuthorized)} skipped (you may not read them)`);
     }
     if (result.assetsRemaining) {
-        parts.push(`${result.assetsRemaining} not reached yet; choose Evaluate All again`);
+        parts.push(
+            `${formatCount(result.assetsRemaining)} not reached yet; choose Evaluate All again`
+        );
     }
     return parts.join("; ") + ".";
 };
@@ -670,9 +679,9 @@ const DatabaseCompliancePage: React.FC = () => {
                             : 0
                     }
                     description={bindingApplyProgressText(bindingApply)}
-                    additionalInfo={`${bindingApply.assetsProcessed.toLocaleString(
-                        "en-US"
-                    )} of ${bindingApply.assetCount.toLocaleString("en-US")} done`}
+                    additionalInfo={`${formatCount(bindingApply.assetsProcessed)} of ${formatCount(
+                        bindingApply.assetCount
+                    )} done`}
                     ariaLabel="Binding change progress"
                 />
             </SpaceBetween>
@@ -902,7 +911,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     ariaLabel={`Show every tracked ${Synonyms.asset}`}
                                     onClick={() => setFilters({ state: "", evaluationError: "" })}
                                 >
-                                    {totalTracked}
+                                    {formatCount(totalTracked)}
                                 </Button>
                             </Box>
                         </div>
@@ -925,7 +934,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                         <StatusIndicator
                                             type={COMPLIANCE_STATE_INDICATORS[tile.state].type}
                                         >
-                                            {(summary as any)?.[tile.state] || 0}
+                                            {formatCount((summary as any)?.[tile.state])}
                                             {filters.state === tile.state ? " (shown)" : ""}
                                         </StatusIndicator>
                                     </Button>
@@ -948,7 +957,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     }
                                 >
                                     <StatusIndicator type="error">
-                                        {summary?.error || 0}
+                                        {formatCount(summary?.error)}
                                         {filters.evaluationError === "true" ? " (shown)" : ""}
                                     </StatusIndicator>
                                 </Button>
@@ -971,16 +980,26 @@ const DatabaseCompliancePage: React.FC = () => {
                                 loadFailed
                                     ? undefined
                                     : filtersActive
-                                    ? `(${pageAssets.length}${hasMore ? "+" : ""})`
-                                    : `(${pageAssets.length} of ${totalTracked})`
+                                    ? `(${formatCount(pageAssets.length)}${hasMore ? "+" : ""})`
+                                    : `(${formatCount(pageAssets.length)} of ${formatCount(
+                                          totalTracked
+                                      )})`
                             }
                             description={
                                 loadFailed
                                     ? undefined
                                     : filtersActive
-                                    ? `${Synonyms.Assets} matching the filters; the summary above covers all ${totalTracked} tracked ${Synonyms.assets}.`
+                                    ? `${
+                                          Synonyms.Assets
+                                      } matching the filters; the summary above covers all ${formatCount(
+                                          totalTracked
+                                      )} tracked ${Synonyms.assets}.`
                                     : isPaging
-                                    ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
+                                    ? `Showing ${formatCount(pageAssets.length)} of ${formatCount(
+                                          totalTracked
+                                      )} tracked ${
+                                          Synonyms.assets
+                                      }; the summary above covers all of them.`
                                     : undefined
                             }
                         >

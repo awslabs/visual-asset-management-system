@@ -15,13 +15,15 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
-import DatabaseCompliancePage from "./DatabaseCompliance";
+import DatabaseCompliancePage, { evaluateAllMessage } from "./DatabaseCompliance";
 import {
     BINDING_APPLY_POLL_DELAYS_MS,
     ComplianceBindingApply,
     bindingApplyOutcomeText,
     bindingApplyPollDelay,
     bindingApplyProgressText,
+    bindingEvaluationsProgressText,
+    bindingResultText,
 } from "../services/ComplianceService";
 
 jest.mock("react-router-dom", () => ({
@@ -187,7 +189,7 @@ describe("a binding change applied in the background", () => {
         // The end: the counts, the overview read again, the controls back.
         expect(
             await screen.findByText(
-                "The binding was applied to 2,500 assets: 2497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated."
+                "The binding was applied to 2,500 assets: 2,497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated."
             )
         ).toBeInTheDocument();
         expect(screen.queryByText("Applying the binding")).not.toBeInTheDocument();
@@ -385,7 +387,7 @@ describe("the evaluations a binding change queues (D161 follow-up)", () => {
         fireEvent.click(screen.getByRole("button", { name: "Change" }));
         expect(
             await screen.findByText(
-                "The binding was applied to 2,500 assets: 2497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated. The evaluations of 2,500 assets are being queued."
+                "The binding was applied to 2,500 assets: 2,497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated. The evaluations of 2,500 assets are being queued."
             )
         ).toBeInTheDocument();
         expect(screen.getByText("Queueing evaluations")).toBeInTheDocument();
@@ -460,5 +462,88 @@ describe("binding change texts", () => {
                 apply({ operation: "evaluatePending", status: "applied", evaluationsQueued: 7 })
             )
         ).toBe("The evaluations of 7 assets were queued.");
+    });
+});
+
+describe("one number format for every count (D165)", () => {
+    it("groups every count of a binding change's messages by thousands", () => {
+        expect(bindingApplyOutcomeText(applied)).toBe(
+            "The binding was applied to 2,500 assets: 2,497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated."
+        );
+        expect(
+            bindingApplyOutcomeText(
+                apply({
+                    operation: "unbind",
+                    status: "applied",
+                    assetsProcessed: 2500,
+                    removedComplianceRecords: 2500,
+                    assetsKeptQuarantined: 1200,
+                    evaluationsQueued: 0,
+                })
+            )
+        ).toBe(
+            "The binding was removed from 2,500 assets: 2,500 compliance records removed. 1,200 quarantined assets stay quarantined until re-evaluated."
+        );
+        expect(
+            bindingApplyOutcomeText(
+                apply({
+                    status: "applied",
+                    assetsProcessed: 3000,
+                    assetsPendingEvaluation: 2998,
+                    assetsKeptQuarantined: 2,
+                    evaluationsQueued: 3000,
+                    evaluationStatus: "queued",
+                })
+            )
+        ).toBe(
+            "The binding was applied to 3,000 assets: 2,998 pending evaluation. 2 quarantined assets stay quarantined until re-evaluated. 3,000 evaluations were queued."
+        );
+        expect(
+            bindingEvaluationsProgressText(
+                apply({ evaluationsQueued: 1200, evaluationsToQueue: 3000 })
+            )
+        ).toBe("1,200 of 3,000 evaluations queued");
+        expect(
+            bindingResultText({
+                changed: true,
+                assetsKeptQuarantined: 1500,
+                evaluationsQueued: 2500,
+            } as any)
+        ).toBe(
+            "1,500 quarantined assets stay quarantined until re-evaluated. 2,500 evaluations were queued."
+        );
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 100 assets",
+                assetsTriggered: [],
+                assetsRemaining: 2400,
+                registered: 1100,
+                skippedArchived: 1001,
+                skippedNotAuthorized: 1002,
+            } as any)
+        ).toBe(
+            "Evaluation triggered for 100 assets; 1,100 newly registered under the database schema; 1,001 archived, not evaluated; 1,002 skipped (you may not read them); 2,400 not reached yet; choose Evaluate All again."
+        );
+    });
+
+    it("groups the overview's tile counts and the table counter the same way", async () => {
+        mockAllowed = VIEW;
+        service().getDatabaseBindings.mockResolvedValue(bindings("std", null));
+        service().fetchDatabaseComplianceOverview.mockResolvedValue([
+            true,
+            {
+                ...overview,
+                totalAssets: 3000,
+                summary: { compliant: 1800, quarantined: 1200, error: 1001 },
+            },
+        ]);
+        await mount();
+        const page = document.body.textContent || "";
+        expect(page).toContain("3,000");
+        expect(page).toContain("1,800");
+        expect(page).toContain("1,200");
+        expect(page).toContain("1,001");
+        expect(page).toContain("(1 of 3,000)");
+        expect(page).not.toMatch(/\b(3000|1800|1200|1001)\b/);
     });
 });

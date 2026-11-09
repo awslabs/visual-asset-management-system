@@ -442,8 +442,15 @@ export const BINDING_APPLY_POLL_DELAYS_MS = [2000, 3000, 5000, 8000, 10000, 1500
 export const bindingApplyPollDelay = (attempt: number): number =>
     BINDING_APPLY_POLL_DELAYS_MS[Math.min(attempt, BINDING_APPLY_POLL_DELAYS_MS.length - 1)];
 
+/**
+ * A count as the compliance pages and their messages show it: grouped by thousands ("2,500"),
+ * the same on every tile, header, progress line and alert (D165).
+ */
+export const formatCount = (count: number | null | undefined): string =>
+    (typeof count === "number" && Number.isFinite(count) ? count : 0).toLocaleString("en-US");
+
 const assetsText = (count: number): string =>
-    `${count.toLocaleString("en-US")} ${count === 1 ? "asset" : "assets"}`;
+    `${formatCount(count)} ${count === 1 ? "asset" : "assets"}`;
 
 /** What a change being applied says while it runs: "Applying the binding to 2,500 assets". */
 export const bindingApplyProgressText = (apply: ComplianceBindingApply): string => {
@@ -470,21 +477,21 @@ export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string =
     }
     if (apply.operation === "unbind") {
         parts.push(
-            `The binding was removed from ${assetsText(apply.assetsProcessed)}: ${
+            `The binding was removed from ${assetsText(apply.assetsProcessed)}: ${formatCount(
                 apply.removedComplianceRecords
-            } compliance ${apply.removedComplianceRecords === 1 ? "record" : "records"} removed.`
+            )} compliance ${apply.removedComplianceRecords === 1 ? "record" : "records"} removed.`
         );
     } else {
         parts.push(
-            `The binding was applied to ${assetsText(apply.assetsProcessed)}: ${
+            `The binding was applied to ${assetsText(apply.assetsProcessed)}: ${formatCount(
                 apply.assetsPendingEvaluation
-            } pending evaluation.`
+            )} pending evaluation.`
         );
     }
     const kept = apply.assetsKeptQuarantined;
     if (kept > 0) {
         parts.push(
-            `${kept} quarantined ${
+            `${formatCount(kept)} quarantined ${
                 kept === 1 ? "asset stays" : "assets stay"
             } quarantined until re-evaluated.`
         );
@@ -495,7 +502,7 @@ export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string =
         );
     } else if (apply.evaluationsQueued > 0) {
         parts.push(
-            `${apply.evaluationsQueued} ${
+            `${formatCount(apply.evaluationsQueued)} ${
                 apply.evaluationsQueued === 1 ? "evaluation was" : "evaluations were"
             } queued.`
         );
@@ -505,9 +512,9 @@ export const bindingApplyOutcomeText = (apply: ComplianceBindingApply): string =
 
 /** The evaluations phase while it runs: "120 of 2,500 evaluations queued". */
 export const bindingEvaluationsProgressText = (apply: ComplianceBindingApply): string =>
-    `${(apply.evaluationsQueued || 0).toLocaleString("en-US")} of ${(
-        apply.evaluationsToQueue || 0
-    ).toLocaleString("en-US")} evaluations queued`;
+    `${formatCount(apply.evaluationsQueued)} of ${formatCount(
+        apply.evaluationsToQueue
+    )} evaluations queued`;
 
 export type ComplianceEvaluationVerdict =
     | "compliant"
@@ -1493,13 +1500,15 @@ export const bindingResultText = (result?: ComplianceBindingResult): string | nu
     const parts: string[] = [];
     if (kept > 0) {
         parts.push(
-            `${kept} quarantined ${
+            `${formatCount(kept)} quarantined ${
                 kept === 1 ? "asset stays" : "assets stay"
             } quarantined until re-evaluated.`
         );
     }
     if (queued > 0) {
-        parts.push(`${queued} ${queued === 1 ? "evaluation was" : "evaluations were"} queued.`);
+        parts.push(
+            `${formatCount(queued)} ${queued === 1 ? "evaluation was" : "evaluations were"} queued.`
+        );
     }
     return parts.length ? parts.join(" ") : null;
 };
