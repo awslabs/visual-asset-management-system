@@ -161,6 +161,10 @@ locators — the app's markup is not always guessable, and these were establishe
 | `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
 | `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
 | `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
+| `profileMenuName(page)` / `profileMenuTrigger(page)`          | The signed-in user name / the top-bar profile-menu trigger (named "Profile menu" without a name)   |
+| `openProfileMenu(page)`                                       | Open the profile menu by keyboard; returns `menu`, or `overflow` when it sits under "More" (phone) |
+| `profileMenuLink(page, href)`                                 | A visible page link in the open profile menu, by href (e.g. `#/auth/api-keys/?mode=user`)          |
+| `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                              |
 
 **Selector facts worth not rediscovering:**
 

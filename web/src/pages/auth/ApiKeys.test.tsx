@@ -11,15 +11,16 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import {
     ALLOWED_API_ROUTES_CACHE_KEY,
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
 } from "../../common/constants/authRoutes";
 import { API_KEY_LISTING_PAGE_SIZE } from "../../common/constants/apiKeys";
-import ApiKeys, { apiKeyStatus } from "./ApiKeys";
+import ApiKeys, { apiKeyStatus, requestedApiKeyMode, resolveApiKeyMode } from "./ApiKeys";
 
 const mockFetchApiKeys = jest.fn();
 const mockFetchUserApiKeys = jest.fn();
@@ -34,6 +35,14 @@ jest.mock("../../services/APIService", () => ({
 
 jest.mock("./CreateApiKey", () => ({ __esModule: true, default: () => null }));
 jest.mock("./UpdateApiKey", () => ({ __esModule: true, default: () => null }));
+
+/** The page sits under the HashRouter; `entry` is the route plus any `?mode=` query. */
+const renderApiKeys = (entry = "/auth/api-keys/") =>
+    render(
+        <MemoryRouter initialEntries={[entry]}>
+            <ApiKeys />
+        </MemoryRouter>
+    );
 
 const cacheRoutes = (...paths: string[]) =>
     appCache.setItemWithExpiry(
@@ -55,7 +64,7 @@ describe("ApiKeys mode resolution", () => {
         // about this user's access.
         mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error", 500]);
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() =>
             expect(screen.getByText("Could not determine your permissions")).toBeInTheDocument()
@@ -80,7 +89,7 @@ describe("ApiKeys mode resolution", () => {
             },
         ]);
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         const retry = await screen.findByTestId("retry-resolve-api-key-modes-button");
         await userEvent.click(retry);
@@ -95,7 +104,7 @@ describe("ApiKeys mode resolution", () => {
         // "check failed" — without it, the fail-closed assertion above would also hold here.
         mockFetchAllowedApiRoutes.mockResolvedValue([false, "Not Found", 404]);
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
         expect(screen.getByText("API Keys")).toBeInTheDocument();
@@ -105,7 +114,7 @@ describe("ApiKeys mode resolution", () => {
     it("positive control: a self-service-only user gets user mode, not admin", async () => {
         cacheRoutes("/auth/user/api-keys");
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
         expect(mockFetchApiKeys).not.toHaveBeenCalled();
@@ -137,7 +146,7 @@ describe("ApiKeys server-side paging", () => {
     it("requests the backend's page size and no token on the first page", async () => {
         mockFetchApiKeys.mockResolvedValue({ Items: [key("k1")] });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
         expect(mockFetchApiKeys).toHaveBeenCalledWith({
@@ -151,7 +160,7 @@ describe("ApiKeys server-side paging", () => {
             .mockResolvedValueOnce({ Items: [key("k1")], NextToken: "tok-2", truncated: true })
             .mockResolvedValueOnce({ Items: [key("k2")] });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
 
@@ -174,7 +183,7 @@ describe("ApiKeys server-side paging", () => {
             truncated: true,
         });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
         expect(
@@ -185,7 +194,7 @@ describe("ApiKeys server-side paging", () => {
     it("negative control: a complete listing offers no next page and issues one request", async () => {
         mockFetchApiKeys.mockResolvedValue({ Items: [key("k1"), key("k2")] });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
         expect(screen.getByText("name-k2")).toBeInTheDocument();
@@ -206,7 +215,7 @@ describe("ApiKeys server-side paging", () => {
         });
         mockFetchUserApiKeys.mockResolvedValue({ Items: [key("mine")] });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         await waitFor(() => expect(screen.getByText("name-k1")).toBeInTheDocument());
 
@@ -259,9 +268,120 @@ describe("ApiKeys status column", () => {
             ],
         });
 
-        render(<ApiKeys />);
+        renderApiKeys();
 
         expect(await screen.findByText("old-key")).toBeInTheDocument();
         expect(screen.getByText("Expired")).toBeInTheDocument();
+    });
+});
+
+/**
+ * The profile menu opens `?mode=user` and Admin - Auth opens `?mode=admin`. The query is a
+ * preference validated against the modes the API's allowed-routes listing allowed: a URL never opens
+ * the tenant-wide admin mode for a role the listing does not allow.
+ */
+describe("ApiKeys ?mode= preference", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        mockFetchApiKeys.mockResolvedValue({ Items: [] });
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [] });
+    });
+
+    it("ignores ?mode=admin when the listing does not allow admin mode", async () => {
+        cacheRoutes("/auth/user/api-keys");
+
+        renderApiKeys("/auth/api-keys/?mode=admin");
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(mockFetchApiKeys).not.toHaveBeenCalled();
+        expect(screen.getByText("My API Keys")).toBeInTheDocument();
+        expect(screen.queryByText("All Keys (Admin)")).not.toBeInTheDocument();
+    });
+
+    it("ignores ?mode=admin when the listing is unavailable, and fails closed", async () => {
+        mockFetchAllowedApiRoutes.mockResolvedValue([false, "Internal Server Error", 500]);
+
+        renderApiKeys("/auth/api-keys/?mode=admin");
+
+        await waitFor(() =>
+            expect(screen.getByText("Could not determine your permissions")).toBeInTheDocument()
+        );
+        expect(mockFetchApiKeys).not.toHaveBeenCalled();
+    });
+
+    it("opens the user's own keys for ?mode=user when both modes are allowed", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        renderApiKeys("/auth/api-keys/?mode=user");
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(mockFetchApiKeys).not.toHaveBeenCalled();
+        expect(screen.getByText("My API Keys")).toBeInTheDocument();
+    });
+
+    it("opens the admin view for ?mode=admin when the listing allows it", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        renderApiKeys("/auth/api-keys/?mode=admin");
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+        expect(mockFetchUserApiKeys).not.toHaveBeenCalled();
+    });
+
+    it("positive control: with no ?mode= and both modes allowed, admin stays the default", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+
+        renderApiKeys();
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+        expect(mockFetchUserApiKeys).not.toHaveBeenCalled();
+    });
+
+    it("follows a later ?mode= change while the page stays open, within the allowed modes", async () => {
+        cacheRoutes("/auth/api-keys", "/auth/user/api-keys");
+        let go: (to: string) => void = () => undefined;
+        function Navigator() {
+            const navigate = useNavigate();
+            go = (to) => navigate(to);
+            return null;
+        }
+        render(
+            <MemoryRouter initialEntries={["/auth/api-keys/?mode=user"]}>
+                <Navigator />
+                <ApiKeys />
+            </MemoryRouter>
+        );
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(mockFetchApiKeys).not.toHaveBeenCalled();
+
+        // The Admin - Auth link, followed from the user view.
+        act(() => go("/auth/api-keys/?mode=admin"));
+
+        await waitFor(() => expect(mockFetchApiKeys).toHaveBeenCalled());
+    });
+
+    it("titles the document like its h1", async () => {
+        cacheRoutes("/auth/user/api-keys");
+
+        renderApiKeys("/auth/api-keys/?mode=user");
+
+        await waitFor(() => expect(mockFetchUserApiKeys).toHaveBeenCalled());
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("API Key Management");
+        expect(document.title).toMatch(/ - API Key Management$/);
+    });
+
+    it("resolves the mode from the request and the allowed modes", () => {
+        expect(requestedApiKeyMode("?mode=admin")).toBe("admin");
+        expect(requestedApiKeyMode("?mode=user")).toBe("user");
+        expect(requestedApiKeyMode("?mode=root")).toBeNull();
+        expect(requestedApiKeyMode("")).toBeNull();
+
+        expect(resolveApiKeyMode("admin", false, true)).toBe("user");
+        expect(resolveApiKeyMode("admin", true, true)).toBe("admin");
+        expect(resolveApiKeyMode("user", true, false)).toBe("admin");
+        expect(resolveApiKeyMode("user", true, true)).toBe("user");
+        expect(resolveApiKeyMode(null, true, true)).toBe("admin");
+        expect(resolveApiKeyMode(null, false, true)).toBe("user");
     });
 });

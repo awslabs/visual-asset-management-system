@@ -32,11 +32,18 @@ The API Key Management page operates in two modes, depending on which API routes
 
 Users with access to both modes see a toggle at the top of the page.
 
+You reach the page from two places:
+
+-   **API Key Management** in the profile menu (the menu with your user name in the top bar) opens **My Keys**, your own keys.
+-   **API Keys (all users)** under **Admin - Auth** in the left sidebar opens **All Keys (Admin)**. It appears only when your roles allow the administrative `GET /auth/api-keys` route.
+
+The mode a link asks for is a preference: the page opens it only when your roles allow it, and otherwise opens the mode they do allow. The API checks every request either way.
+
 ---
 
 ## Creating an API key
 
-1. Navigate to **User** > **API Key Management** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
+1. Open the profile menu in the top bar and choose **API Key Management**, or, for keys of any user, choose **Admin - Auth** > **API Keys (all users)** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
 2. Choose **Create API Key**.
 3. Complete the form fields:
 

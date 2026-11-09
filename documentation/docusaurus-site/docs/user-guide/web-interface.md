@@ -6,15 +6,30 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups shared pages into five sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, and **Admin - Auth**. Your own pages, such as **API Key Management**, are in the profile menu in the top bar (see [Profile menu](#profile-menu)). Pages in both places are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
+
+If it shows **Your pages are in the profile menu**, your role allows only pages that live in the profile menu. Open the menu with your user name in the top bar to reach them.
 
 If it shows **Navigation could not be loaded**, the check for which pages you can open did not complete. Choose **Retry**. While the check has failed, Home still opens, and other pages show **Page access could not be checked** with a **Retry** button.
 :::
 
 The side navigation panel can be collapsed or expanded using the toggle control. VAMS remembers your panel state across page navigations within a session.
+
+### Profile menu
+
+The menu with your user name in the top bar lists the pages that belong to you, then **Sign out**:
+
+| Item                   | Description                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| **API Key Management** | Opens your own API keys (**My Keys**). See [API keys](api-keys.md).                              |
+| **Sign out**           | Ends your session. It is always the last item and is available even when your pages cannot load. |
+
+The menu lists only the pages your role allows. While the check for which pages you can open is loading, or if it did not complete, the menu shows **Sign out** only; the pages appear after you next move to another page. The menu is keyboard-operable: focus it, press **Enter** to open it, use the arrow keys to move, and press **Escape** to close it. On narrow screens it is inside the **More** menu.
+
+The **Settings** menu next to it holds the theme choice, which is stored in your browser. See [Setting your theme preference](getting-started.mdx#setting-your-theme-preference).
 
 ---
 

@@ -176,7 +176,7 @@ To fully revoke a user's access:
 
 1. **Remove role assignments** -- Navigate to **Admin - Auth** > **Users in Roles** and remove the user from all roles.
 2. **Delete or disable the user** -- Delete the user from the User Management page (Cognito deployments) or disable the user in your external IdP.
-3. **Revoke API keys** -- If the user had any API keys, navigate to **API Key Management** and deactivate or delete them. See [API Keys](api-keys.md) for details.
+3. **Revoke API keys** -- If the user had any API keys, navigate to **Admin - Auth** > **API Keys (all users)** and deactivate or delete them. See [API Keys](api-keys.md) for details.
 
 :::note[With a default role, the identity is what ends access]
 When `app.authProvider.authorizerOptions.defaultUserRoleName` is set, a signed-in user whose role assignments are all removed receives that default role, so step 1 alone leaves them with its access; their access ends at step 2, when the identity is deleted or disabled. API keys of a user with no role assignments are already refused, but revoke them anyway (step 3). See [Authorizer options](../deployment/configuration-reference.md#authorizer-options-appauthproviderauthorizeroptions).

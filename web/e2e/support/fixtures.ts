@@ -1301,3 +1301,72 @@ export async function pickViewerIfAsked(
     if (asked) await chooseViewer(page, option);
     await expectViewerSelected(page, expected);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Top-bar profile menu (the user's own pages from the navigation registry, then Sign out)
+// ---------------------------------------------------------------------------------------------
+
+/** The signed-in user's name as the top bar shows it (the `user` entry the auth flow stores). */
+export async function profileMenuName(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+        try {
+            const user = JSON.parse(localStorage.getItem("user") ?? "null");
+            return typeof user?.username === "string" && user.username ? user.username : null;
+        } catch {
+            return null;
+        }
+    });
+}
+
+/**
+ * The profile menu's trigger in the top bar: the button named with the user's name, or "Profile
+ * menu" when the top bar has no name to show. Settings never collapses; at narrow widths the
+ * profile menu moves into the "More" overflow menu, so use `openProfileMenu` to reach it.
+ */
+export async function profileMenuTrigger(page: Page): Promise<Locator> {
+    const name = await profileMenuName(page);
+    return page
+        .locator("#headerWrapper")
+        .getByRole("button", { name: name ?? "Profile menu", exact: true });
+}
+
+/**
+ * Open the profile menu by keyboard (focus, then Enter) and return how it was reached: `menu` when
+ * the trigger is in the top bar, `overflow` when TopNavigation collapsed it into "More" (phone
+ * widths), where the user's entry opens a submenu view. Page links are `a[href="#/..."]` in both.
+ */
+export async function openProfileMenu(page: Page): Promise<"menu" | "overflow"> {
+    const header = page.locator("#headerWrapper");
+    const trigger = await profileMenuTrigger(page);
+    if (await trigger.isVisible()) {
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        return "menu";
+    }
+    const more = header.getByRole("button", { name: "More", exact: true });
+    await expect(
+        more,
+        "neither the profile menu nor the More menu is in the top bar"
+    ).toBeVisible();
+    await more.focus();
+    await page.keyboard.press("Enter");
+    const name = await profileMenuName(page);
+    const entry = page.getByRole("button", { name: name ?? "Profile menu", exact: true }).last();
+    await expect(entry, "the profile entry of the More menu").toBeVisible();
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    return "overflow";
+}
+
+/** A page link in the open profile menu, by its href (for example `#/auth/api-keys/?mode=user`). */
+export function profileMenuLink(page: Page, href: string): Locator {
+    return page.locator(`a[href="${href}"]`).filter({ visible: true });
+}
+
+/**
+ * The side navigation: the `nav` landmark holding the app's hash-route links. The top bar's links
+ * are outside any `nav`, and the phone toolbar's `nav` holds no links.
+ */
+export function sideNavigation(page: Page): Locator {
+    return page.locator("nav").filter({ has: page.locator('a[href^="#/"]') });
+}

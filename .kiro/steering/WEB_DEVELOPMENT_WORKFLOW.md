@@ -28,7 +28,7 @@ web/
   e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -77,9 +77,9 @@ web/
       addons/               # Add-on API calls (physnaAPIService.ts)
 
     addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
-                            #   — see WEB_FRONTEND.md 7.5
+                            #   — see WEB_FRONTEND.md 7.5, 7.6
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
-                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5, 7.6
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
@@ -133,7 +133,9 @@ web/
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts
     layout/
-      Navigation.tsx        # Left sidebar navigation
+      navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
+      Navigation.tsx        # Left sidebar navigation (side entries)
+      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
@@ -183,7 +185,7 @@ web/
 -   [ ] **Create thin page wrapper**: In `src/pages/`
 -   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
--   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
+-   [ ] **Add navigation entry**: In `src/layout/navigationRegistry.ts` if needed (`placement: "profile"` for a page of the signed-in user)
 
 ### **Phase 3: Quality Assurance**
 
@@ -626,6 +628,7 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 
@@ -885,7 +888,7 @@ npm run prettier-fix
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
 3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+5. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### **Adding a new API call**
 

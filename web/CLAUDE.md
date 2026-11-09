@@ -33,7 +33,7 @@ web/
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
     routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
@@ -103,13 +103,13 @@ web/
       MetadataSchemaService.ts
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
-      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx, Navigation, profile menu
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
     addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
-      customNavigation.ts   #   customNavSections, appended to the side navigation
+      customNavigation.ts   #   customNavSections, appended by layout/navigationRegistry.ts
       customFeatures.ts     #   names of the fork's feature switches
       services/             #   fork API calls (may import apiClient)
       pages/                #   fork pages
@@ -170,7 +170,9 @@ web/
 
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts
-    layout/Navigation.tsx   # Left sidebar navigation
+    layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom, side/profile placement
+    layout/Navigation.tsx   # Left sidebar navigation (side entries)
+    layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, then Sign out)
 
     utils/
       apiEndpoint.ts        # Resolves the API base URL
@@ -864,7 +866,13 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+### 7.6 Navigation Placement
+
+Every page link is declared in one registry, `src/layout/navigationRegistry.ts`: the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` and feature switches are read at runtime), then `addonNavSections`, then `customNavSections` (`allNavEntries()`). A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. `entriesFor(placement)` returns one placement in registry order and strips the registry-only fields before Cloudscape sees them.
+
+Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. When the side navigation is empty but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check.
 
 ---
 
@@ -1297,6 +1305,7 @@ When in doubt about patterns, reference these well-structured files:
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 
@@ -1344,7 +1353,7 @@ export const myServiceFunction = async ({ databaseId }) => {
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
 3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+5. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### Adding a new API call
 

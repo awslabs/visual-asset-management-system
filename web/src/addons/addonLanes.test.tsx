@@ -11,15 +11,18 @@
  * custom lane: the route table is core, then add-on, then custom; an add-on page is lazy-loaded and
  * rendered only when the `web` constraint allows its path; an add-on path that repeats a core path
  * never replaces the core page; and the add-on navigation section is filtered by the same check and
- * placed after the core sections and before the fork's.
+ * placed after the core sections and before the fork's. Entries with `placement: "profile"` from
+ * either lane go to the top-bar profile menu instead, filtered by the same check and placed after
+ * the core profile entries.
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { routeTable, AppRoutes } from "../routes";
 import { Navigation } from "../layout/Navigation";
+import { useProfileMenuItems } from "../layout/useProfileMenuItems";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 
 jest.mock("../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
@@ -61,6 +64,12 @@ jest.mock("./addonNavigation", () => ({
             text: "Add-on probe",
             items: [{ type: "link", text: "Add-on probe page", href: "#/addon-probe/" }],
         },
+        {
+            type: "link",
+            text: "Add-on profile probe",
+            href: "#/addon-profile-probe/",
+            placement: "profile",
+        },
     ],
 }));
 
@@ -70,6 +79,12 @@ jest.mock("../custom/customNavigation", () => ({
             type: "section",
             text: "Custom probe",
             items: [{ type: "link", text: "Custom probe page", href: "#/custom/probe/" }],
+        },
+        {
+            type: "section",
+            text: "Custom profile probe",
+            placement: "profile",
+            items: [{ type: "link", text: "Custom profile page", href: "#/custom/profile-probe/" }],
         },
     ],
 }));
@@ -180,5 +195,51 @@ describe("navigation lanes", () => {
         await waitFor(() => expect(nav?.findLinkByHref("#/databases/")).toBeTruthy());
         expect(nav?.findLinkByHref("#/addon-probe/")).toBeFalsy();
         expect(screen.queryByText("Add-on probe")).not.toBeInTheDocument();
+    });
+
+    it("keeps profile-placed add-on and custom entries out of the side navigation", async () => {
+        allowRoutes("/databases", "/addon-profile-probe", "/custom/profile-probe");
+        const container = await renderNavigation();
+        const nav = createWrapper(container).findSideNavigation();
+
+        await waitFor(() => expect(nav?.findLinkByHref("#/databases/")).toBeTruthy());
+        expect(nav?.findLinkByHref("#/addon-profile-probe/")).toBeFalsy();
+        expect(nav?.findLinkByHref("#/custom/profile-probe/")).toBeFalsy();
+    });
+});
+
+describe("profile menu lanes", () => {
+    function hrefs(items: any[]): string[] {
+        return items.flatMap((item) => [
+            ...(item.href ? [item.href] : []),
+            ...hrefs(item.items ?? []),
+        ]);
+    }
+
+    it("places add-on, then custom profile entries after the core ones, before Sign out", async () => {
+        allowRoutes("/auth/api-keys", "/addon-profile-probe", "/custom/profile-probe");
+        const { result } = renderHook(() => useProfileMenuItems());
+
+        await waitFor(() => expect(hrefs(result.current)).toContain("#/custom/profile-probe/"));
+        expect(hrefs(result.current)).toEqual([
+            "#/auth/api-keys/?mode=user",
+            "#/addon-profile-probe/",
+            "#/custom/profile-probe/",
+        ]);
+        const ids = (result.current as any[]).map((item) => item.id);
+        expect(ids[ids.length - 1]).toBe("signout");
+        expect(ids).toContain("group:Custom profile probe");
+    });
+
+    it("filters add-on and custom profile entries by the same web-route check", async () => {
+        allowRoutes("/auth/api-keys");
+        const { result } = renderHook(() => useProfileMenuItems());
+
+        await waitFor(() => expect(hrefs(result.current)).toContain("#/auth/api-keys/?mode=user"));
+        expect(hrefs(result.current)).not.toContain("#/addon-profile-probe/");
+        expect(hrefs(result.current)).not.toContain("#/custom/profile-probe/");
+        expect((result.current as any[]).map((item) => item.id)).not.toContain(
+            "group:Custom profile probe"
+        );
     });
 });
