@@ -25,7 +25,7 @@ The asset detail page is organized into three vertically stacked sections:
 
 The details pane is the top section and displays the asset's core properties alongside action buttons.
 
-![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20261109_v2.7.png)
 
 | Element                  | Description                                                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -302,7 +302,7 @@ Preview images appear in the file details panel and are used as thumbnails in se
 
 ### Download and Share URLs
 
-![Download dialog for multiple file selection](/img/download_file_multiple_20260323_v2.5.png)
+![Download dialog for multiple file selection](/img/download_file_multiple_20261109_v2.7.png)
 
 For distributable assets, you can generate shareable download URLs:
 
@@ -439,7 +439,7 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20261109_v2.7.png)
 
 ### Viewing Execution History
 

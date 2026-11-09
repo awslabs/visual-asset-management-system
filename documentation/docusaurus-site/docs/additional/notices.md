@@ -218,6 +218,20 @@ The Image to 3D pipeline's print-readiness cleanup runs a ladder of mesh repair 
 Because **pymeshfix** and **PyMeshLab** are present in every Image to 3D container image, GPL-3.0 terms apply to those images regardless of which backends a run selects. GPL-3.0 is a strong copyleft license whose obligations differ materially from the MIT, Apache-2.0, and LGPL-2.1 terms elsewhere in VAMS, and they include source availability obligations if you redistribute the images. Review the license requirements with your legal team before deploying the Image to 3D pipeline, and leave the pipeline disabled where GPL-3.0 components cannot be accepted in your container images. This mirrors the copyleft considerations already noted for Blender (GPL-3.0) in the GenAI Metadata 3D Labeling pipeline and for the LGPL-2.1 CAD components.
 :::
 
+### Sample Assets in Documentation Screenshots
+
+The screenshots in this documentation use sample 3D models from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) repository:
+
+| Model                                                                                                  | Author                     | Licence                                                       |
+| ------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------- |
+| [BoomBox](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoomBox)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Avocado](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [WaterBottle](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/WaterBottle)         | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Lantern](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Lantern)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [IridescenceLamp](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp) | Eric Chadwick, Wayfair LLC | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)     |
+
+The USDZ model shown in the file viewer screenshots was created for this documentation. The models appear only in the screenshots; they are not distributed with VAMS.
+
 ---
 
 ## Operational Metrics Collection

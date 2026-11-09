@@ -37,7 +37,7 @@ The **Settings** menu next to it holds the theme choice, which is stored in your
 
 The **Databases** page displays all databases you have access to in a searchable, sortable table.
 
-![Database listing page showing all databases in a searchable table](/img/database_page_20260323_v2.5.png)
+![Database listing page showing all databases in a searchable table](/img/database_page_20261109_v2.7.png)
 
 ### Key Features
 
@@ -67,7 +67,9 @@ Each database record displays the following information:
 
 The **Assets and Files** page is the primary interface for discovering and browsing assets. It supports multiple view modes and powerful filtering capabilities.
 
-![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
+![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20261109_v2.7.png)
+
+_Screenshot sample model: IridescenceLamp by Eric Chadwick (Wayfair LLC), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp)._
 
 ### View Modes
 
@@ -102,7 +104,7 @@ Select any asset row in the table view or any card in the card view to navigate 
 
 The asset detail page is the central hub for viewing and managing a single asset. It is divided into three main sections: the **details pane**, the **tabbed container**, and the **metadata section**.
 
-![Asset detail page showing preview, properties, and tabbed container](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing preview, properties, and tabbed container](/img/view_asset_page_20261109_v2.7.png)
 
 ### Breadcrumb Navigation
 
@@ -147,7 +149,7 @@ Below the tabbed container, the metadata section displays all key-value metadata
 
 When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. If only one viewer plugin supports the file extension, the page opens the file in it; if several do, you choose one from the viewer dropdown.
 
-![File viewer page displaying a USDZ 3D model](/img/view_file_page_usdz_20260323_v2.5.png)
+![File viewer page displaying a USDZ 3D model in the Three.js Viewer](/img/view_file_page_usdz_20261109_v2.7.png)
 
 ### Supported Viewer Types
 
@@ -185,13 +187,13 @@ Each pipeline entry shows its name and id, its execution type, its owning databa
 
 Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 
-![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
+![Pipelines page listing two built-in pipelines grouped by category](/img/pipelines_page_20261109_v2.7.png)
 
 ### Workflows Page
 
 The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows run automatically when one of their triggers matches an upload, or manually from the workflow's own **Execute** action or an asset's **Automation** menu.
 
-![Workflows page listing workflows with pipeline, execution, and trigger counts](/img/workflows_page_20260803_v2.6.png)
+![Workflows page listing two built-in workflows with pipeline, execution, and trigger counts](/img/workflows_page_20261109_v2.7.png)
 
 Each entry shows the workflow's name and id, its database and category, how many pipelines it runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off. Filters narrow the list by status, by whether the workflow has an enabled trigger, and by database.
 
@@ -199,7 +201,7 @@ Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions
 
 Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** step lists the steps in order alongside a graph of the resulting sequence.
 
-![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260803_v2.6.png)
+![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20261109_v2.7.png)
 
 ### Executions Page
 
@@ -207,7 +209,7 @@ The **Executions** page lists workflow executions across every workflow and data
 
 A **Skipped** row records file-upload trigger launches that the workflow's concurrency restriction refused while another execution held the asset, file or file version. One row counts every launch that execution refused, shows how many under the badge and gives the reason on hover. Its detail view lists the files and, when you may read it, links the execution that blocked them. Skipped rows have no Abort action. Choose **All except skipped** in the status filter to hide them.
 
-![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20261109_v2.7.png)
 
 ---
 

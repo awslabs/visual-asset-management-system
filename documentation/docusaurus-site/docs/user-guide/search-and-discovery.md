@@ -2,7 +2,9 @@
 
 VAMS provides a powerful search interface for locating assets and files across all databases. The search system is powered by Amazon OpenSearch Service and supports full-text queries, metadata filtering, and geospatial map visualization.
 
-![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
+![Asset search page showing table view with filters and search bar](/img/asset_search_table_20261109_v2.7.png)
+
+_Screenshot sample model: IridescenceLamp by Eric Chadwick (Wayfair LLC), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp)._
 
 ## Search modes
 
@@ -25,7 +27,9 @@ The text query is combined with all other active filters using **AND** logic —
 
 Results include a relevance score. Choose the information icon next to any result to see which fields matched and why the result was returned.
 
-![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
+![File search page showing file results in table view](/img/file_search_table_20261109_v2.7.png)
+
+_Screenshot sample model: IridescenceLamp by Eric Chadwick (Wayfair LLC), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp)._
 
 ## Filters
 
@@ -125,7 +129,7 @@ When you switch to map view, location-related metadata filters are automatically
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
-![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
+![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20261109_v2.7.png)
 
 ### Geospatial filter
 

@@ -231,9 +231,9 @@ These extensions have a viewer only when `ALLOWUNSAFEEVAL` is enabled.
 
 ## Viewer screenshots
 
-### USD viewer (Needle Engine) -- Experimental
+### USD file in the Three.js Viewer
 
-![VAMS file viewer page displaying a USDZ 3D model rendered by the Needle USD Viewer](/img/view_file_page_usdz_20260323_v2.5.png)
+![VAMS file viewer page displaying a USDZ 3D model rendered by the Three.js Viewer](/img/view_file_page_usdz_20261109_v2.7.png)
 
 ### VEERUM point cloud viewer
 
