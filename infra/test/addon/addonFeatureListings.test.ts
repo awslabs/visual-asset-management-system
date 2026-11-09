@@ -100,18 +100,19 @@ describe("the add-on switches reach the listing Lambdas", () => {
 });
 
 describe("the backend reads the same variable and switch names", () => {
-    const source = fs.readFileSync(ADDON_FEATURES_PY, "utf-8");
+    // Read inside each test, so a missing file fails the test that needs it, not the whole file.
+    const backendSource = () => fs.readFileSync(ADDON_FEATURES_PY, "utf-8");
 
     test("the variable name", () => {
-        expect(source).toMatch(
+        expect(backendSource()).toMatch(
             new RegExp(`^ADDON_FEATURES_ENABLED_ENV = "${ADDON_FEATURES_ENABLED_ENV}"$`, "m")
         );
     });
 
     test("one ADDON_FEATURE_* constant per ADDON_APP_FEATURES member, and no other", () => {
-        const declared = [...source.matchAll(/^ADDON_FEATURE_[A-Z0-9_]+ = "([A-Z0-9_]+)"$/gm)].map(
-            (m) => m[1]
-        );
+        const declared = [
+            ...backendSource().matchAll(/^ADDON_FEATURE_[A-Z0-9_]+ = "([A-Z0-9_]+)"$/gm),
+        ].map((m) => m[1]);
         expect(declared.length).toBeGreaterThan(0);
         expect([...declared].sort()).toEqual(Object.values(ADDON_APP_FEATURES).sort());
     });

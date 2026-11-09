@@ -19,7 +19,12 @@
  * placed in); every other nested stack keeps the dependencies it has for the same VPC setting.
  */
 
-import { ALL_TEMPLATES, SynthResult, TemplateName, synthTemplate } from "../../support/templateSynth";
+import {
+    ALL_TEMPLATES,
+    SynthResult,
+    TemplateName,
+    synthTemplate,
+} from "../../support/templateSynth";
 import { enableEdh } from "./support/edhSynth";
 
 // Up to eight full-app synths, most shared with other suites through the per-run cache.
@@ -141,13 +146,17 @@ describe("with EDH off the nested stacks deploy in the order they have without t
         const on = rootGraph(edhOn("commercial"));
         const off = rootGraph(vpcOnly());
         const others = (graph: Record<string, string[]>) =>
-            Object.fromEntries(Object.entries(graph).filter(([k]) => !k.startsWith("AddonBuilder")));
+            Object.fromEntries(
+                Object.entries(graph).filter(([k]) => !k.startsWith("AddonBuilder"))
+            );
         expect(others(on)).toEqual(others(off));
         const before = addonDependencies(off);
         const after = addonDependencies(on);
         expect(before.every((d) => after.includes(d))).toBe(true);
         const added = after.filter((d) => !before.includes(d));
         expect(added.filter(isApiBuilder)).toHaveLength(1);
-        expect(added.filter((d) => !isApiBuilder(d)).every((d) => /^VPCBuilder/.test(d))).toBe(true);
+        expect(added.filter((d) => !isApiBuilder(d)).every((d) => /^VPCBuilder/.test(d))).toBe(
+            true
+        );
     });
 });
