@@ -312,7 +312,7 @@ For distributable assets, you can generate shareable download URLs:
     - **URLs (Embedded Auth)** -- Generates time-limited presigned URLs with embedded authentication. These expire after the timeout configured by your administrator (24 hours by default), or earlier if the credentials that signed them expire first.
     - **URLs (API Stream)** -- Generates long-lasting streaming URLs that require an Authorization header with a Bearer token. These do not expire as long as the caller is authenticated.
 
-![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
+![Share files modal for generating presigned URLs](/img/share_files_modal_20261109_v2.7.png)
 
 ---
 
