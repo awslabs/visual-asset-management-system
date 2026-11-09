@@ -4,8 +4,8 @@
  */
 
 /**
- * The workflow execution status change rule (lib/lambdaBuilder/workflowStatusEvents.ts), in every
- * partition template and with a customer managed key.
+ * The workflow execution status change rule (`buildWorkflowStatusChangeRule` in lib/lambdaBuilder/workflowFunctions.ts),
+ * in every partition template and with a customer managed key.
  *
  * The rule is what reconciles a run that ended outside VAMS without a read, so it has four contracts:
  * it matches only terminal status changes of this account and Region's workflow state machines (no
@@ -31,7 +31,7 @@ import {
     WORKFLOW_STATUS_CHANGE_PERMISSION_ID,
     WORKFLOW_STATUS_CHANGE_RULE_ID,
     WORKFLOW_STATUS_EVENT_STATUSES,
-} from "../../lib/lambdaBuilder/workflowStatusEvents";
+} from "../../lib/lambdaBuilder/workflowFunctions";
 
 jest.setTimeout(900_000);
 

@@ -149,8 +149,8 @@ describe.each(TEMPLATES)("%s: EKS execution-end cleanup", (name) => {
             .ofType("AWS::Events::Rule")
             .filter((r) => (r.properties.EventPattern?.source ?? []).includes("aws.states"))
             .filter((r) => r.logicalId !== handlerRules()[0].logicalId);
-        // The workflow execution status change rule (lib/lambdaBuilder/workflowStatusEvents.ts)
-        // matches the backend's `vams-` workflow state machines and invokes the execution service,
+        // The workflow execution status change rule (`buildWorkflowStatusChangeRule` in
+        // lib/lambdaBuilder/workflowFunctions.ts) matches the backend's `vams-` workflow state machines and invokes the execution service,
         // never this handler.
         expect(others.map((r) => r.logicalId.replace(/[0-9A-F]{8}$/, ""))).toEqual([
             "WorkflowExecutionStatusChangeRule",

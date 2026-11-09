@@ -42,12 +42,10 @@ import {
     buildRegisterPipelineExecutionFunction,
     buildWorkflowRole,
     grantWorkflowServiceInternalInvoke,
-} from "../../lambdaBuilder/workflowFunctions";
-import {
     attachSystemPipelineCallbacks,
     SystemPipelineCallbackRegistry,
-} from "../../lambdaBuilder/systemPipelineCallbacks";
-import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
+    buildWorkflowStatusChangeRule,
+} from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
