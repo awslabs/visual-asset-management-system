@@ -30,6 +30,7 @@ from ..constants import (
     COMPLIANCE_AUDIT_DEFAULT_LIMIT,
     COMPLIANCE_BINDING_APPLY_APPLIED,
     COMPLIANCE_BINDING_APPLY_APPLYING,
+    COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON,
     COMPLIANCE_BINDING_APPLY_FAILED,
     COMPLIANCE_BINDING_APPLY_POLL_DELAYS,
     COMPLIANCE_BINDING_APPLY_STALLED,
@@ -296,21 +297,34 @@ def format_binding_change(result: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
-def _wait_for_binding_apply(api_client: APIClient, database_id: str, apply_id: str, timeout: int,
-                            json_output: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
-    """Read the database's binding until the change `apply_id` is no longer applying, backing off
-    over COMPLIANCE_BINDING_APPLY_POLL_DELAYS, for at most `timeout` seconds. Returns `(apply as
-    last read, timed out)`. A read that names another change (a later one replaced it) ends the
-    wait with that read."""
+def _wait_for_binding_apply(api_client: APIClient, database_id: str, accepted: Dict[str, Any],
+                            timeout: int, json_output: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Read the database's binding until the change `accepted` (the apply of the bind or unbind
+    answer) is no longer applying, backing off over COMPLIANCE_BINDING_APPLY_POLL_DELAYS, for at
+    most `timeout` seconds. Returns `(apply as last read, timed out)`. A read that names another
+    change (a later one replaced it) ends the wait with that read.
+
+    A read that answers the database not found ends the wait with the change failed: the database
+    was deleted while the change was applied, so the change cannot finish, and the API records it
+    `failed` with COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON. The apply returned is the last
+    one read with that status and reason, so the failure is reported as any other is (D171). While
+    the API still answers the read, the failed change it returns carries its own reason."""
+    apply_id = accepted.get('applyId')
+    last = accepted
     deadline = time.monotonic() + timeout
     attempt = 0
     while True:
-        read = api_client.get_compliance_bindings(database_id, max_items=1)
+        try:
+            read = api_client.get_compliance_bindings(database_id, max_items=1)
+        except DatabaseNotFoundError:
+            return dict(last, status=COMPLIANCE_BINDING_APPLY_FAILED,
+                        reason=COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON), False
         apply = read.get('apply') if isinstance(read, dict) else None
         if not apply or apply.get('applyId') != apply_id:
             return apply, False
         if apply.get('status') != COMPLIANCE_BINDING_APPLY_APPLYING:
             return apply, False
+        last = apply
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return apply, True
@@ -338,8 +352,8 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
     timed_out = False
     if wait and apply.get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
         output_status("Waiting for the binding change to be applied...", json_output)
-        last, timed_out = _wait_for_binding_apply(api_client, database_id, apply.get('applyId'),
-                                                  wait_timeout, json_output)
+        last, timed_out = _wait_for_binding_apply(api_client, database_id, apply, wait_timeout,
+                                                  json_output)
         if last and last.get('applyId') == apply.get('applyId'):
             apply = last
             result = dict(result, apply=last, applyStatus=last.get('status'))

@@ -3085,6 +3085,112 @@ class TestTheWaitsExitStatusThroughTheEntryPoint:
                 'compliance', 'unbind', '-d', 'my-database', '--wait']) == 1
 
 
+DATABASE_DELETED = 'The database was deleted while the binding was being applied'
+
+
+class TestADatabaseDeletedWhileTheWaitFollowsTheChange:
+    """D171: after the change was accepted, a binding read that answers the database not found
+    means the database was deleted while the change was applied. The change failed: the wait prints
+    it as any other failure, with the reason the API records for it, and exits 1, instead of the
+    generic "Database Not Found" error. These go through `main()` as the console script does."""
+
+    UNBIND = ['compliance', 'unbind', '-d', 'my-database', '--wait']
+
+    @pytest.fixture
+    def no_sleep(self, monkeypatch):
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', lambda seconds: None)
+
+    @staticmethod
+    def _run(monkeypatch, capsys, mocks_factory, reads, argv):
+        removal = _apply(operation='unbind', schemaName=None, assetCount=12)
+        with mocks_factory('compliance') as mocks:
+            mocks['api_client'].unbind_compliance_schema.return_value = _accepted(
+                removal, previousSchema='cad-quality')
+            mocks['api_client'].get_compliance_bindings.side_effect = reads(removal)
+            code = TestTheWaitsExitStatusThroughTheEntryPoint._exit_code(monkeypatch, argv)
+        captured = capsys.readouterr()
+        return code, captured.out, captured.err
+
+    @staticmethod
+    def _deleted_after_one_read(removal):
+        return [_read(dict(removal, assetsProcessed=4)),
+                DatabaseNotFoundError('Database not found')]
+
+    def test_text_names_the_failure_and_its_reason_and_exits_1(
+            self, monkeypatch, generic_command_mocks, no_sleep, capsys):
+        code, out, err = self._run(monkeypatch, capsys, generic_command_mocks,
+                                   self._deleted_after_one_read, self.UNBIND)
+
+        assert code == 1
+        assert '✗ The binding change failed.' in out
+        assert 'Binding Change: removal, failed (4 of 12 assets)' in out
+        assert f'Reason: {DATABASE_DELETED}' in out
+        assert 'Database Not Found' not in out + err
+        assert 'Stopped waiting' not in out
+
+    def test_json_carries_the_fields_of_any_other_failure_and_exits_1(
+            self, monkeypatch, generic_command_mocks, no_sleep, capsys):
+        code, out, _err = self._run(monkeypatch, capsys, generic_command_mocks,
+                                    self._deleted_after_one_read, [*self.UNBIND, '--json-output'])
+        assert code == 1
+        deleted = json.loads(out)
+
+        # The same change failing on a read the API still answers, for comparison.
+        code, out, _err = self._run(
+            monkeypatch, capsys, generic_command_mocks,
+            lambda removal: [_read(dict(removal, assetsProcessed=4, status='failed',
+                                        reason=DATABASE_DELETED))],
+            [*self.UNBIND, '--json-output'])
+        assert code == 1
+        failed = json.loads(out)
+
+        assert set(deleted) == set(failed)
+        assert deleted['applyStatus'] == failed['applyStatus'] == 'failed'
+        assert deleted['apply'] == failed['apply']
+        assert deleted['apply']['reason'] == DATABASE_DELETED
+        assert 'waitTimedOut' not in deleted
+
+    def test_a_database_gone_at_the_first_read_is_the_same_failure(
+            self, monkeypatch, generic_command_mocks, no_sleep, capsys):
+        code, out, _err = self._run(
+            monkeypatch, capsys, generic_command_mocks,
+            lambda removal: [DatabaseNotFoundError('Database not found')],
+            [*self.UNBIND, '--json-output'])
+
+        assert code == 1
+        result = json.loads(out)
+        assert result['apply']['status'] == 'failed'
+        assert result['apply']['reason'] == DATABASE_DELETED
+        assert result['apply']['applyId'] == 'apply-1'
+        assert result['apply']['assetsProcessed'] == 0
+
+    def test_a_bind_waits_the_same_way(self, monkeypatch, generic_command_mocks, no_sleep, capsys):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.side_effect = DatabaseNotFoundError(
+                'Database not found')
+            code = TestTheWaitsExitStatusThroughTheEntryPoint._exit_code(monkeypatch, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+        out = capsys.readouterr().out
+
+        assert code == 1
+        assert '✗ The binding change failed.' in out
+        assert f'Reason: {DATABASE_DELETED}' in out
+
+    def test_control_a_database_missing_when_the_change_is_asked_for_stays_not_found(
+            self, monkeypatch, generic_command_mocks, capsys):
+        """[control] Before any change was accepted, a missing database is the error it was."""
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].unbind_compliance_schema.side_effect = DatabaseNotFoundError(
+                'Database not found')
+            code = TestTheWaitsExitStatusThroughTheEntryPoint._exit_code(monkeypatch, self.UNBIND)
+            mocks['api_client'].get_compliance_bindings.assert_not_called()
+        captured = capsys.readouterr()
+
+        assert code == 1
+        assert 'Database Not Found' in captured.out + captured.err
+
+
 class TestTheEvaluationsABindingChangeQueues:
     """D161 follow-up: once every record carries the binding the change is applied, and its
     evaluations are queued afterwards; --wait waits for the binding, and the output says where the

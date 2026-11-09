@@ -224,6 +224,12 @@ COMPLIANCE_BINDING_APPLY_STALLED = "stalled"
 COMPLIANCE_BINDING_APPLY_APPLIED = "applied"
 COMPLIANCE_BINDING_APPLY_FAILED = "failed"
 COMPLIANCE_BINDING_APPLY_POLL_DELAYS = (2, 3, 5, 8, 10, 15)
+# The reason the API records on a change whose database was deleted while it was applied
+# (backend complianceBindingApply.FAILED_DATABASE_DELETED). When the database is gone during
+# `--wait`, the binding read answers not found; the change has failed, and the wait reports it
+# with this reason.
+COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON = (
+    "The database was deleted while the binding was being applied")
 DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT = 900
 MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT = 86400
 # The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
