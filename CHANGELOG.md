@@ -314,6 +314,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the Text Diff Viewer labelling the latest version with its version id when Compare opens from the file viewer for one file; a side pinned to the file's current version reads `(latest)` after its id. ([#1202](https://github.com/awslabs/visual-asset-management-system/issues/1202))
 -   **Web** Fixed the core viewers showing a generic download error when the API refuses a file with 403; they now say "You do not have permission to view or download this file.", a 401 says the session has expired and to sign in again, and the Text Diff Viewer uses the same wording. ([#1211](https://github.com/awslabs/visual-asset-management-system/issues/1211))
 -   **Backend** Fixed the Image Viewer and asset previews showing nothing for SVG files: download and stream links for a `.svg` file now return it as `image/svg+xml` with an attachment disposition, so the viewer renders it and opening the link directly downloads it. Stored files are unchanged. ([#1201](https://github.com/awslabs/visual-asset-management-system/issues/1201))
+-   **Pipelines** Fixed the CAD/Mesh Metadata Extraction failure message naming the temporary download (`input.step`) instead of the input file; it now names the input's path within its asset, so an asset holding several files says which one failed. ([#1188](https://github.com/awslabs/visual-asset-management-system/issues/1188))
 
 ### Chores
 
