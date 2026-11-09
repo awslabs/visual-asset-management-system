@@ -129,7 +129,10 @@ class DetailsGroup(click.Group):
 @execution.command('list')
 @click.option('-w', '--workflow-id', help='Filter by workflow ID')
 @click.option('--workflow-database-id', help='Filter by workflow database ID')
-@click.option('--status', help='Filter by execution status (e.g. RUNNING, SUCCEEDED, FAILED)')
+@click.option('--status', help='Filter by execution status (e.g. RUNNING, SUCCEEDED, FAILED, SKIPPED)')
+@click.option('--exclude-status',
+              help='Exclude executions of these statuses, one or comma-separated (e.g. SKIPPED); applied by '
+                   'the service before the page is cut')
 @click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
@@ -149,8 +152,8 @@ class DetailsGroup(click.Group):
 @click.pass_context
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_database_id: Optional[str],
-                    status: Optional[str], trigger_type: Optional[str], group_id: Optional[str],
-                    triggered_by: Optional[str], filter_start_date: Optional[str],
+                    status: Optional[str], exclude_status: Optional[str], trigger_type: Optional[str],
+                    group_id: Optional[str], triggered_by: Optional[str], filter_start_date: Optional[str],
                     filter_end_date: Optional[str], page_size: Optional[int], max_items: Optional[int],
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
@@ -166,6 +169,7 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     Examples:
         vamscli execution list
         vamscli execution list -w my-workflow --status RUNNING
+        vamscli execution list --exclude-status SKIPPED
         vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
         vamscli execution list --group-id grp-123 --auto-paginate
     """
@@ -192,6 +196,8 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             params['workflowDatabaseId'] = workflow_database_id
         if status:
             params['status'] = status
+        if exclude_status:
+            params['excludeStatus'] = exclude_status
         if trigger_type:
             params['triggerType'] = trigger_type
         if group_id:
@@ -249,6 +255,11 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('executionStartDate', 'N/A')}")
+            # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
+            if ex.get('executionStatus') == 'SKIPPED':
+                out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
+                if ex.get('skipReason'):
+                    out.append(f"  Skip reason: {ex['skipReason']}")
             if ex.get('executionGroupId'):
                 out.append(f"  Group: {ex['executionGroupId']}")
             # The output kinds the run produced (File / Metadata / Result subset). Omitted when the
@@ -444,6 +455,27 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
             ]
             if message.get('executionError'):
                 out.append(f"Error: {message['executionError']}")
+            # A SKIPPED record: the file-upload trigger launches a concurrency restriction refused. The
+            # blocking run is listed only when the API returned it (the caller may read that run).
+            skip = message.get('skip')
+            if isinstance(skip, dict):
+                out.append(f"\nSkipped launches: {skip.get('count', 0)} ({skip.get('scope') or 'N/A'})")
+                if skip.get('reason'):
+                    out.append(f"  Reason: {skip['reason']}")
+                out.append(f"  First skipped: {skip.get('firstSkippedDate') or 'N/A'}")
+                out.append(f"  Last skipped: {skip.get('lastSkippedDate') or 'N/A'}")
+                if skip.get('blockingExecutionId'):
+                    out.append(f"  Blocked by: {skip['blockingExecutionId']}")
+                skip_files = skip.get('files') or []
+                if skip_files:
+                    more = " [more files exist; see 'execution details files']" \
+                        if skip.get('filesTruncated') else ""
+                    out.append(f"  Files ({len(skip_files)}){more}:")
+                    for f in skip_files:
+                        version = f.get('versionId', '')
+                        out.append(f"    {f.get('databaseId', '?')}:{f.get('assetId', '?')}"
+                                   f"{f.get('inputAssetFileKey', '')}"
+                                   + (f"  (v {version})" if version else ""))
             pipelines = message.get('pipelines', [])
             if pipelines:
                 out.append(f"\nPipelines ({len(pipelines)}):")

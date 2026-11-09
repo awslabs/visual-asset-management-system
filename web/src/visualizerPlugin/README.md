@@ -112,7 +112,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 2. Online3dViewerPlugin
 
--   **ID**: `online3d-viewer`
+-   **ID**: `online3d-viewer` (`.amf`, `.bim`, `.off`, `.wrl`) and `online3d-viewer-rhino` (`.3dm`, offered only with `ALLOWUNSAFEEVAL` because rhino3dm compiles with `eval`)
 -   **Extensions**: `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`
 -   **Features**: 3D model viewing with Online3DViewer
 -   **Multi-file**: Yes (can load multiple models simultaneously)
@@ -313,8 +313,8 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 20. ThreeJSViewerPlugin
 
 -   **ID**: `threejs-viewer`
--   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
--   **Features**: Mesh and CAD viewing with Three.js: scene graph, material editing, and transform controls. Loads a glTF file's external dependencies and renders one selected file at a time.
+-   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
+-   **Features**: Mesh, USD and CAD viewing with Three.js: scene graph, material editing, and transform controls. Loads the files a model references from the same asset (glTF buffers and images, OBJ material libraries and textures, COLLADA/3DS/FBX textures, USD references, payloads and textures; USD is packaged in memory as a `.usdz`), lists any it did not load in a notice, and renders one selected file at a time. USD needs no `ALLOWUNSAFEEVAL`.
 -   **Multi-file**: No
 -   **Dependencies**: `three` (bundled by `customInstalls/threejs`); the CAD formats also need its optional OCCT (`occt-import-js`) build
 -   **Priority**: 1

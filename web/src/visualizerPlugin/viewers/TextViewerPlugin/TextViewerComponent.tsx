@@ -22,6 +22,7 @@ import htmlbars from "react-syntax-highlighter/dist/esm/languages/hljs/htmlbars"
 import yaml from "react-syntax-highlighter/dist/esm/languages/hljs/yaml";
 import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 import { loadTextFile } from "../../core/textContent";
 
@@ -142,7 +143,9 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
-                        throw new Error("Failed to download file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download file")
+                        );
                     } else {
                         // Read the first bytes and stop there when they are not text: a binary file
                         // (an image under an extensionless name, a renamed archive) is never

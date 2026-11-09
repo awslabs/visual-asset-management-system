@@ -20,6 +20,7 @@ import {
 import { buildSpatialTree } from "./utils/spatialTree";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
+import { downloadStatusMessage } from "../../core/streamFailure";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
 // customInstall (see customInstalls/thatopenwebifc). Served same-origin so it
@@ -193,7 +194,10 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                 });
                 if (!response.ok) {
                     throw new Error(
-                        `Failed to load: ${assetKey.split("/").pop()} (${response.status})`
+                        downloadStatusMessage(
+                            response.status,
+                            `Failed to load: ${assetKey.split("/").pop()} (${response.status})`
+                        )
                     );
                 }
                 // Refuse before buffering: arrayBuffer() on a multi-GB file takes

@@ -116,7 +116,7 @@ const PNG_BYTES = new Uint8Array([
     0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x06, 0x00, 0x00, 0x00,
 ]);
 
-const renderDiff = (files = [LEFT, RIGHT]) =>
+const renderDiff = (files: Array<Record<string, unknown>> = [LEFT, RIGHT]) =>
     render(
         <TextDiffViewerComponent
             assetId="asset-A"
@@ -200,11 +200,57 @@ describe("TextDiffViewerComponent", () => {
         renderDiff();
 
         await waitFor(() => expect(screen.getByText("Not authorized")).toBeInTheDocument());
-        expect(screen.getByText("You are not authorized to view this file.")).toBeInTheDocument();
+        expect(
+            screen.getByText("You do not have permission to view or download this file.")
+        ).toBeInTheDocument();
         // Left side content is still on screen; the whole diff did not collapse into one error.
         expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
         expect(screen.queryByTestId("diff")).toBeNull();
         expect(screen.queryByText("Error loading diff")).toBeNull();
+    });
+
+    it("labels a side pinned to the current version as latest (#1202)", async () => {
+        // The File Manager hands a lone file over with the versionId it listed (the current one),
+        // so the seeded pair is [file @ current id, file unpinned]. Both sides are the latest version.
+        const current = { ...RIGHT, versionId: "v-latest" };
+        const unpinned = { ...RIGHT };
+        renderDiff([current, unpinned]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-latest (latest)"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-right")).toHaveTextContent(
+            "config.json (latest)"
+        );
+    });
+
+    it("[control] labels a side pinned to an older version without (latest)", async () => {
+        renderDiff([{ ...RIGHT, versionId: "v-old" }, { ...RIGHT }]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-old"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-left")).not.toHaveTextContent("latest");
+    });
+
+    it("tells a signed-out user to sign in again on 401, per side", async () => {
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B"
+                ? [false, "Unauthorized", 401]
+                : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Signed out")).toBeInTheDocument());
+        expect(
+            screen.getByText("Your session has expired. Sign in again to view this file.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Not authorized")).toBeNull();
     });
 
     it("labels an archived version (410) per side", async () => {
@@ -254,6 +300,23 @@ describe("TextDiffViewerComponent", () => {
         await waitFor(() => expect(screen.getByText("Not authorized")).toBeInTheDocument());
         expect(screen.getByTestId("text-diff-side-binary")).toBeInTheDocument();
         expect(screen.getByTestId("text-diff-side-forbidden")).toBeInTheDocument();
+        expect(screen.queryByTestId("highlighted")).toBeNull();
+    });
+
+    it("shows a binary side beside a signed-out side, each with its own state (#1198, #1211)", async () => {
+        bodies[urlFor("asset-A")] = PNG_BYTES;
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B"
+                ? [false, "Unauthorized", 401]
+                : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Signed out")).toBeInTheDocument());
+        expect(screen.getByTestId("text-diff-side-binary")).toBeInTheDocument();
+        expect(screen.getByTestId("text-diff-side-unauthenticated")).toBeInTheDocument();
+        expect(screen.queryByText("Not authorized")).toBeNull();
         expect(screen.queryByTestId("highlighted")).toBeNull();
     });
 
