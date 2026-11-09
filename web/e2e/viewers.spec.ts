@@ -364,7 +364,22 @@ interface RenderCase {
     fetches?: string;
     thresholds?: RenderThresholds;
     cspAllowed?: RegExp[];
+    /**
+     * A web path the deployment serves only when the viewer is enabled (a licensed add-on's
+     * bundle). The case skips, with the reason, when the path is not served as JavaScript.
+     */
+    servedBundle?: string;
 }
+
+/** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
+async function servesScript(page: Page, path: string): Promise<boolean> {
+    const origin = new URL(page.url()).origin;
+    const res = await page.request.get(`${origin}${path}`);
+    return res.ok() && /javascript/i.test(res.headers()["content-type"] ?? "");
+}
+
+/** The VNTANA bundle, built only when `vntana-viewer` is enabled in addonViewerConfig.json. */
+const VNTANA_BUNDLE = "/viewers/vntana/vntana-viewer.bundle.js";
 
 /**
  * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
@@ -467,6 +482,21 @@ const renderCases: RenderCase[] = [
     { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
     { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
     { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // Licensed add-on, disabled by default: these cases run only on a build that enables it.
+    {
+        sample: "vntana-glb-box",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    {
+        sample: "vntana-glb-avocado",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
     // The IFC viewer draws a grid under the model, so these cases only prove the canvas is not
     // blank; "IFC BIM viewer panel actions" below compares the model against the bare grid.
     { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
@@ -547,6 +577,13 @@ test.describe("viewer render proof (seeded samples)", () => {
                 );
             }
 
+            if (c.servedBundle) {
+                test.skip(
+                    !(await servesScript(page, c.servedBundle)),
+                    `this deployment does not serve ${c.servedBundle}: ${c.viewer} is not enabled`
+                );
+            }
+
             const subject = {
                 databaseId: seeded!.databaseId,
                 assetId: seeded!.assetId,
@@ -567,6 +604,18 @@ test.describe("viewer render proof (seeded samples)", () => {
                 await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
             } else {
                 await pickViewerIfAsked(page, c.viewer, c.select);
+            }
+
+            if (c.servedBundle) {
+                // The VNTANA component shows its info panel after the element's `load` event and an
+                // error box after its `error` event (3.x reports what failed in `detail.type`).
+                // Scoped to the viewer's root: the viewer picker above it shows the same name, so a
+                // page-wide match would pass before the model loaded.
+                const root = page.locator(".vntana-viewer-root");
+                await expect(root.getByText(/Mouse: Rotate/)).toBeVisible({ timeout: 90_000 });
+                await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
+                await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
+                await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
             }
 
             if (c.kind === "canvas") {

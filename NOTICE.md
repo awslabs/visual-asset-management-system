@@ -150,10 +150,12 @@ The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are bu
 
 **Commercial/Paid Licenses**
 
-| Package                | Version                                                              | License           |
-| :--------------------- | :------------------------------------------------------------------- | :---------------- |
-| VNTANA 3D Model Viewer | [@vntana/viewer@2.3.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
-| Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial |
+| Package                | Version                                                              | License                |
+| :--------------------- | :------------------------------------------------------------------- | :--------------------- |
+| VNTANA 3D Model Viewer | [@vntana/viewer@3.0.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial \*\* |
+| Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial      |
+
+\*\* **VNTANA License Note**: `@vntana/viewer` is published under the VNTANA Viewer Commercial License (Version 1.0, effective June 5, 2025; `LICENSE.md` in the package). Use requires a commercial license purchased from VNTANA; without one, the package may be used for internal evaluation only, for 30 days from first installation, with no commercial use. The license does not permit distributing, sublicensing or modifying the software. VAMS ships the `vntana-viewer` plugin disabled and does not include the package: the install script fetches and bundles it only in a deployment that enables the viewer.
 
 ---
 
