@@ -369,6 +369,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: the VEERUM directory has no `.npmrc`; its package comes from the vendor's private registry. ([#334](https://github.com/awslabs/visual-asset-management-system/issues/334))
 -   **Web** The Needle USD viewer stays at commit `aab170a`: later upstream commits relicense it under the PolyForm Noncommercial License 1.0.0, and `NOTICE.md` records why. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 -   **Web** The Playwright viewer spec proves that the Cesium, PlayCanvas, Online 3D, PDF, Columnar and Text viewers draw public sample files, which `tools/VamsCLI/examples/seed_viewer_samples.py` uploads from the manifest `web/e2e/fixtures/viewer-samples.json`, and fails on a new Content Security Policy violation or a request outside the deployment. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
+-   **Web** The ThatOpen IFC BIM viewer bundle moves to `@thatopen/components`, `@thatopen/components-front` and `@thatopen/fragments` 3.6.0 and its own isolated `three` 0.184.0, keeping `web-ifc` at 0.0.77 because 0.0.78's single-threaded browser build fails every IFC import ([ThatOpen/engine_web-ifc#2219](https://github.com/ThatOpen/engine_web-ifc/issues/2219), fixed upstream but not yet released); the bundle build fails when a web-ifc WASM file or the Fragments worker it copies is missing. ([#1174](https://github.com/awslabs/visual-asset-management-system/issues/1174))
 
 ### Known Outstanding Issues
 
