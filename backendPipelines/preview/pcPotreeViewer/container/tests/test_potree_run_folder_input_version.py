@@ -48,6 +48,11 @@ def _construct_pipeline():
         mod.safeLogger = lambda **kw: MagicMock()
         pkg.logger = mod
         sys.modules["customLogging"], sys.modules["customLogging.logger"] = pkg, mod
+    # constructPipeline imports its sibling lasHeader, as it does from the Lambda code root. Appended,
+    # not prepended, so nothing in the Lambda folder shadows a container module.
+    lambda_dir = os.path.dirname(_LAMBDA_FILE)
+    if lambda_dir not in sys.path:
+        sys.path.append(lambda_dir)
     spec = importlib.util.spec_from_file_location("pc_potree_construct_pipeline", _LAMBDA_FILE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

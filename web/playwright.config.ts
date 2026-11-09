@@ -26,6 +26,9 @@ if (!BASE_URL) {
     );
 }
 const ADMIN_STATE = "e2e/.auth/admin.json";
+const WEBGPU = process.env.E2E_WEBGPU === "1";
+/** Titles of the viewers.spec.ts SuperSplat Editor render cases. */
+const SUPERSPLAT_CASES = /SuperSplat Editor \(PlayCanvas\) renders /;
 
 export default defineConfig({
     testDir: "./e2e",
@@ -53,6 +56,27 @@ export default defineConfig({
             name: "chromium",
             use: { ...devices["Desktop Chrome"], storageState: ADMIN_STATE },
             dependencies: ["setup"],
+            // With E2E_WEBGPU=1 the SuperSplat cases run in chromium-webgpu below instead.
+            ...(WEBGPU ? { grepInvert: SUPERSPLAT_CASES } : {}),
         },
+        // Headless Chromium exposes no WebGPU adapter, and the SuperSplat Editor renders only
+        // through WebGPU. E2E_WEBGPU=1 runs just the SuperSplat cases in a browser launched with
+        // WebGPU on (a software SwiftShader adapter on a machine without a GPU), so no other case
+        // sees a WebGPU adapter it would not see without the variable.
+        ...(WEBGPU
+            ? [
+                  {
+                      name: "chromium-webgpu",
+                      testMatch: /viewers\.spec\.ts/,
+                      grep: SUPERSPLAT_CASES,
+                      use: {
+                          ...devices["Desktop Chrome"],
+                          storageState: ADMIN_STATE,
+                          launchOptions: { args: ["--enable-unsafe-webgpu"] },
+                      },
+                      dependencies: ["setup"],
+                  },
+              ]
+            : []),
     ],
 });
