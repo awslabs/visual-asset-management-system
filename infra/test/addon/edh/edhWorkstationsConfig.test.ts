@@ -2029,6 +2029,26 @@ describe("amiBuilds and amiRecipes", () => {
         );
     });
 
+    test("isaacSimDataCollectionConsent is N or Y, refused by name otherwise", () => {
+        for (const value of ["N", "Y"]) {
+            expect(
+                loadWithManifest({ parameters: { isaacSimDataCollectionConsent: value } }).manifest
+                    .parameters
+            ).toEqual({ isaacSimDataCollectionConsent: value });
+        }
+        for (const value of ["", "n", "y", "yes", "true", " N", "N\n", "Y; touch pwned"]) {
+            expect(() =>
+                loadWithManifest({ parameters: { isaacSimDataCollectionConsent: value } })
+            ).toThrow(
+                "parameters.isaacSimDataCollectionConsent must be N (desktops decline NVIDIA data collection) or Y (the image consents to it for every desktop user)."
+            );
+        }
+        // Only that key is held to the choice; another parameter may carry the same values freely.
+        expect(() => loadWithManifest({ parameters: { otherFlag: "yes" } })).not.toThrow();
+        // A key the map does not name, even one an object inherits, is not held to a choice.
+        expect(() => loadWithManifest({ parameters: { toString: "x" } })).not.toThrow();
+    });
+
     test("resolveEdhAmiRecipes merges shipped recipes with operator overrides", () => {
         const config = enabledEdhConfig()();
         const edh = config.app.addons.useEdhWorkstations;

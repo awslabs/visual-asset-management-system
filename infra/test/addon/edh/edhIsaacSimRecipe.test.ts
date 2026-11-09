@@ -184,6 +184,8 @@ describe("the shipped Isaac Sim recipe", () => {
             nvidiaDriverMinMajor: "595",
             // Optional, and empty in the shipped recipe: the image then names no Nucleus server.
             nucleusServer: "",
+            // The shipped image declines NVIDIA data collection; an operator opts in with Y.
+            isaacSimDataCollectionConsent: "N",
         });
     });
 
@@ -1376,12 +1378,16 @@ function runLauncher(
         connectorInstalled = true,
         runtime,
         nucleusHelper,
+        dataCollection,
     }: {
         connectorInstalled?: boolean;
         runtime?: string | null;
         // A stand-in for the Nucleus registration helper the 068 component installs; without it the
         // launcher finds no helper on this host and skips the step, as on an image built before it.
         nucleusHelper?: "adds" | "fails";
+        // What the 030 component recorded from isaacSimDataCollectionConsent; without it the
+        // launcher finds no record, as on an image built before the parameter.
+        dataCollection?: string;
     } = {}
 ) {
     const prelude = [
@@ -1402,7 +1408,9 @@ function runLauncher(
         .split("/etc/profile.d/vams-isaacsim.sh")
         .join("${HOME}/no-profile.sh")
         .split("/usr/local/bin/vams-isaacsim-nucleus-register")
-        .join("${HOME}/nucleus-register");
+        .join("${HOME}/nucleus-register")
+        .split("/etc/vams-isaacsim-data-collection")
+        .join("${HOME}/data-collection");
     const forwardSlashes = (dir: string) => dir.split(path.sep).join("/");
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-connector-"));
     // The image installs the connector folder root-owned and 0755, so the desktop user cannot write
@@ -1425,6 +1433,9 @@ function runLauncher(
                 prelude,
                 seed: {
                     ...seed,
+                    ...(dataCollection !== undefined
+                        ? { "data-collection": `${dataCollection}\n` }
+                        : {}),
                     ...(nucleusHelper
                         ? {
                               "nucleus-register": [
@@ -1483,13 +1494,22 @@ function runLauncher(
     }
 }
 
+/** The Kit settings the launcher adds when the image declines NVIDIA data collection. */
+const DECLINED_KIT_SETTINGS = [
+    "--/telemetry/enableAnonymousData=false",
+    "--/structuredLog/enable=false",
+    "--/structuredLog/privacySettingsFile=/etc/vams-isaacsim-privacy.toml",
+];
+
 describe("the Isaac Sim launcher", () => {
     const retrying = "still being retried in the background";
     const profileOverride = `--/exts/vams.connector.isaacsim/profile=edh-${INSTANCE_ID}`;
     const workDirName = /^vams-isaacsim\.[A-Za-z0-9]{6}$/;
 
     test("starts at once on this desktop's own profile when this boot signed in", () => {
-        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` });
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            dataCollection: "N",
+        });
         expect(run.status).toBe(0);
         expect(run.sleeps).toEqual([]);
         expect(run.notifications.filter((text) => text.includes(retrying))).toEqual([]);
@@ -1499,6 +1519,7 @@ describe("the Isaac Sim launcher", () => {
             "--enable",
             "vams.connector.isaacsim",
             profileOverride,
+            ...DECLINED_KIT_SETTINGS,
         ]);
         expect(run.files[`${HOST}/isaacsim-launch.log`]).toContain("Isaac Sim is starting");
     });
@@ -2411,5 +2432,320 @@ describe("the Nucleus server component", () => {
         const validate = body.slice(body.indexOf("- name: validate"));
         expect(validate).toContain("import ast, sys, tomllib");
         expect(validate).toContain('HOME="${home}" /usr/local/bin/vams-isaacsim-nucleus-register');
+    });
+});
+
+/**
+ * The commands of one step of a component, joined into the one script Image Builder's ExecuteBash
+ * runs for the step: a plain list item as written, a `|` block with its indentation removed.
+ */
+function stepScript(component: string, step: string): string {
+    const all = componentBodies
+        .find(({ relative }) => relative.endsWith(component))!
+        .body.split("\n");
+    const indentOf = (line: string) => line.length - line.trimStart().length;
+    const start = all.findIndex((line) => line.trim() === `- name: ${step}`);
+    if (start < 0) {
+        throw new Error(`${component} has no step ${step}`);
+    }
+    const next = all.findIndex(
+        (line, i) => i > start && line.trim() !== "" && indentOf(line) <= indentOf(all[start])
+    );
+    const lines = all.slice(start + 1, next < 0 ? all.length : next);
+    let i = lines.findIndex((line) => line.trim() === "commands:") + 1;
+    const itemIndent = indentOf(lines[i]);
+    const items: string[] = [];
+    while (i < lines.length) {
+        const item = lines[i].slice(itemIndent);
+        i += 1;
+        if (item === "- |") {
+            const block: string[] = [];
+            while (i < lines.length && (!lines[i].trim() || indentOf(lines[i]) > itemIndent)) {
+                block.push(lines[i]);
+                i += 1;
+            }
+            const indent = Math.min(...block.filter((line) => line.trim()).map(indentOf));
+            items.push(block.map((line) => line.slice(indent)).join("\n"));
+        } else if (item.startsWith("- ")) {
+            items.push(item.slice(2));
+        }
+    }
+    return `${items.join("\n")}\n`;
+}
+
+const CONSENT_REFUSAL =
+    "isaacSimDataCollectionConsent must be N (desktops decline NVIDIA data collection) or Y (the image consents to it for every desktop user)";
+const DECLINED_PRIVACY_FILE = [
+    "# NVIDIA data collection is declined on this desktop. The Isaac Sim launcher points",
+    "# Kit at this file in place of the user's own privacy settings.",
+    "[privacy]",
+    "usage = false",
+    "performance = false",
+    "personalization = false",
+    "",
+].join("\n");
+
+/**
+ * Runs the 030 component's record and profile steps with `value` as isaacSimDataCollectionConsent,
+ * and then its validate phase's check after `tamper` (given the scratch /etc) has changed what they
+ * wrote, with /etc and /var/tmp moved into a scratch directory. Returns each step's status and output
+ * (undefined for a step not reached), every file written, and the environment a login shell gets from
+ * the profile.
+ */
+function buildConsent(value: string, tamper?: (etc: string) => void) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-consent-"));
+    const where = dir.split(path.sep).join("/");
+    const run = (script: string) => {
+        const localized = script
+            .split("/etc/")
+            .join(`${where}/etc/`)
+            .split("/var/tmp/")
+            .join(`${where}/var/tmp/`);
+        const result = spawnSync("bash", ["-c", localized], { encoding: "utf8" });
+        return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    };
+    try {
+        for (const sub of ["etc/profile.d", "etc/skel", "var/tmp"]) {
+            fs.mkdirSync(path.join(dir, sub), { recursive: true });
+        }
+        const record = run(
+            stepScript("030-isaacsim.yml", "RecordDataCollectionChoice").replace(
+                "${PARAM_isaacSimDataCollectionConsent}",
+                () => value
+            )
+        );
+        const profile =
+            record.status === 0
+                ? run(stepScript("030-isaacsim.yml", "AnswerFirstRunPrompts"))
+                : undefined;
+        tamper?.(path.join(dir, "etc"));
+        const validate =
+            profile?.status === 0
+                ? run(stepScript("030-isaacsim.yml", "DataCollectionChoiceApplied"))
+                : undefined;
+        const profilePath = path.join(dir, "etc", "profile.d", "vams-isaacsim.sh");
+        const loginEnv = fs.existsSync(profilePath)
+            ? spawnSync(
+                  "env",
+                  [
+                      "-i",
+                      `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`,
+                      "bash",
+                      "--noprofile",
+                      "--norc",
+                      "-c",
+                      '. "$1" && env',
+                      "_",
+                      profilePath.split(path.sep).join("/"),
+                  ],
+                  { encoding: "utf8" }
+              ).stdout
+            : "";
+        const env: Record<string, string> = {};
+        for (const line of loginEnv.split("\n")) {
+            const match = /^(PRIVACY_\w*|OMNI_\w*|ACCEPT_EULA|ISAACSIM_PATH)=(.*)$/.exec(line);
+            if (match) {
+                env[match[1]] = match[2];
+            }
+        }
+        return { record, profile, validate, files: snapshot(dir), env };
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe("NVIDIA data collection", () => {
+    const shipped = loaded.manifest.parameters?.isaacSimDataCollectionConsent ?? "";
+
+    test("the shipped recipe declines it", () => {
+        expect(shipped).toBe("N");
+    });
+
+    test("the choice is checked in the component's first build step, ahead of the download", () => {
+        const body = componentBodies.find(({ relative }) =>
+            relative.endsWith("030-isaacsim.yml")
+        )!.body;
+        const steps = [...body.matchAll(/^ {10}- name: (\w+)$/gm)].map((match) => match[1]);
+        expect(steps[0]).toBe("RecordDataCollectionChoice");
+        expect(steps.indexOf("RecordDataCollectionChoice")).toBeLessThan(steps.indexOf("Download"));
+    });
+
+    test("the profile's fixed part answers the licence prompt and consents to nothing", () => {
+        // The operator who builds the recipe accepts the NVIDIA licence; consent to data collection
+        // is the recipe parameter's to give, never the profile's own.
+        const fixed = installedScript("030-isaacsim.yml", "PROFILE");
+        expect(fixed).toContain("export OMNI_KIT_ACCEPT_EULA=Y\n");
+        expect(fixed).toContain("export ACCEPT_EULA=Y\n");
+        expect(fixed).toContain("export ISAACSIM_PATH=/opt/isaacsim\n");
+        expect(fixed).not.toContain("PRIVACY_CONSENT");
+    });
+
+    test("the shipped value turns Kit's anonymous data mode off, sets no consent, and writes the declined privacy file", () => {
+        const build = buildConsent(shipped);
+        expect(build.record.status).toBe(0);
+        expect(build.profile?.status).toBe(0);
+        expect(build.files["etc/vams-isaacsim-data-collection"]).toBe("N\n");
+        expect(build.env).toEqual({
+            OMNI_KIT_ACCEPT_EULA: "Y",
+            ACCEPT_EULA: "Y",
+            ISAACSIM_PATH: "/opt/isaacsim",
+            OMNI_TELEMETRY_DISABLE_ANONYMOUS_DATA: "1",
+        });
+        expect(build.files["etc/profile.d/vams-isaacsim.sh"]).not.toContain("PRIVACY_CONSENT");
+        expect(build.files["etc/vams-isaacsim-privacy.toml"]).toBe(DECLINED_PRIVACY_FILE);
+        expect(build.validate?.status).toBe(0);
+    });
+
+    test("Y consents for every desktop user through NVIDIA's own variable and leaves Kit's defaults", () => {
+        const build = buildConsent("Y");
+        expect(build.record.status).toBe(0);
+        expect(build.files["etc/vams-isaacsim-data-collection"]).toBe("Y\n");
+        expect(build.env).toEqual({
+            OMNI_KIT_ACCEPT_EULA: "Y",
+            ACCEPT_EULA: "Y",
+            ISAACSIM_PATH: "/opt/isaacsim",
+            PRIVACY_CONSENT: "Y",
+        });
+        expect(build.files["etc/vams-isaacsim-privacy.toml"]).toBeUndefined();
+        expect(build.validate?.status).toBe(0);
+    });
+
+    test.each(["", "n", "y", "yes", "true", "0", " N", "N ", "N\nY", "Y; touch pwned"])(
+        "fails the build on %j before the download, and writes nothing",
+        (value) => {
+            const build = buildConsent(value);
+            expect(build.record.status).not.toBe(0);
+            expect(build.record.output).toContain(CONSENT_REFUSAL);
+            expect(build.profile).toBeUndefined();
+            expect(build.files).toEqual({});
+        }
+    );
+
+    test("reads the parameter as data: shell syntax in it is never run", () => {
+        const marker = path.join(os.tmpdir(), `vams-consent-ran-${process.pid}`);
+        const build = buildConsent(`$(touch ${marker.split(path.sep).join("/")})`);
+        expect(build.record.status).not.toBe(0);
+        expect(fs.existsSync(marker)).toBe(false);
+    });
+
+    const append = (file: string, text: string) => (etc: string) =>
+        fs.appendFileSync(path.join(etc, file), text);
+    test.each([
+        [
+            "N",
+            "a profile that consents",
+            append("profile.d/vams-isaacsim.sh", "export PRIVACY_CONSENT=Y\n"),
+        ],
+        [
+            "N",
+            "a privacy file that consents to a level",
+            (etc: string) =>
+                fs.writeFileSync(
+                    path.join(etc, "vams-isaacsim-privacy.toml"),
+                    DECLINED_PRIVACY_FILE.replace("usage = false", "usage = true")
+                ),
+        ],
+        [
+            "N",
+            "no privacy file",
+            (etc: string) => fs.rmSync(path.join(etc, "vams-isaacsim-privacy.toml")),
+        ],
+        [
+            "N",
+            "privacy settings for new users' homes",
+            (etc: string) => {
+                fs.mkdirSync(path.join(etc, "skel", ".nvidia-omniverse", "config"), {
+                    recursive: true,
+                });
+                fs.writeFileSync(
+                    path.join(etc, "skel", ".nvidia-omniverse", "config", "privacy.toml"),
+                    "[privacy]\nusage = true\n"
+                );
+            },
+        ],
+        [
+            "Y",
+            "a profile that also turns anonymous data off",
+            append(
+                "profile.d/vams-isaacsim.sh",
+                "export OMNI_TELEMETRY_DISABLE_ANONYMOUS_DATA=1\n"
+            ),
+        ],
+        [
+            "Y",
+            "a declined privacy file",
+            (etc: string) =>
+                fs.writeFileSync(
+                    path.join(etc, "vams-isaacsim-privacy.toml"),
+                    DECLINED_PRIVACY_FILE
+                ),
+        ],
+    ])("the validate phase fails a %s image with %s", (value, _label, tamper) => {
+        const build = buildConsent(value, tamper);
+        expect(build.profile?.status).toBe(0);
+        expect(build.validate?.status).not.toBe(0);
+    });
+
+    test("the launcher declines with Kit's anonymous data mode and structured logging off, reading the image's privacy file", () => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            dataCollection: "N",
+        });
+        expect(run.status).toBe(0);
+        expect(run.kitArgs.slice(-DECLINED_KIT_SETTINGS.length)).toEqual(DECLINED_KIT_SETTINGS);
+        // The file the launcher names is the one the component writes for the declined image.
+        const named = DECLINED_KIT_SETTINGS.map((setting) =>
+            /^--\/structuredLog\/privacySettingsFile=\/(.*)$/.exec(setting)
+        ).find(Boolean)?.[1];
+        expect(named).toBe("etc/vams-isaacsim-privacy.toml");
+        expect(buildConsent("N").files[named ?? ""]).toBe(DECLINED_PRIVACY_FILE);
+    });
+
+    test.each([
+        ["no record", undefined],
+        ["a record it does not recognise", "yes"],
+    ])("the launcher declines on an image with %s", (_label, dataCollection) => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            dataCollection,
+        });
+        expect(run.status).toBe(0);
+        expect(run.kitArgs.slice(-DECLINED_KIT_SETTINGS.length)).toEqual(DECLINED_KIT_SETTINGS);
+    });
+
+    test("the launcher adds no Kit setting on an image that consents", () => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            dataCollection: "Y",
+        });
+        expect(run.status).toBe(0);
+        expect(run.kitArgs).toEqual([
+            "--ext-folder",
+            run.connector,
+            "--enable",
+            "vams.connector.isaacsim",
+            `--/exts/vams.connector.isaacsim/profile=edh-${INSTANCE_ID}`,
+        ]);
+    });
+
+    test("the backend and the infra loader hold the parameter to the same choice", () => {
+        const python = fs.readFileSync(
+            path.join(REPO, "backend/backend/models/addon/edh.py"),
+            "utf8"
+        );
+        const typescript = fs.readFileSync(
+            path.join(REPO, "infra/config/addon/edhWorkstationsConfig.ts"),
+            "utf8"
+        );
+        const backend =
+            /'isaacSimDataCollectionConsent': \(\s*\(([^)]*)\),\s*'([^']*)',?\s*\)/.exec(python);
+        const loader =
+            /isaacSimDataCollectionConsent: \{\s*values: \[([^\]]*)\],\s*meaning:\s*"([^"]*)",?\s*\}/.exec(
+                typescript
+            );
+        expect(backend?.[2]).toBe(
+            CONSENT_REFUSAL.replace("isaacSimDataCollectionConsent must be ", "")
+        );
+        expect(loader?.[2]).toBe(backend?.[2]);
+        const values = (list: string) => [...list.matchAll(/['"](\w+)['"]/g)].map((m) => m[1]);
+        expect(values(backend?.[1] ?? "")).toEqual(["N", "Y"]);
+        expect(values(loader?.[1] ?? "")).toEqual(["N", "Y"]);
     });
 });

@@ -85,11 +85,25 @@ phases:
                             && ! /usr/local/bin/vams-isaacsim-nucleus-register >>"${LOG}" 2>&1; then
                             notify "The Nucleus server this desktop's image names could not be added to Isaac Sim's server list; ${LOG} says why. Isaac Sim starts without it."
                         fi
+                        # NVIDIA data collection is declined unless the image consents to it, which the
+                        # recipe's isaacSimDataCollectionConsent records at build time. Declined, Kit runs with
+                        # its anonymous data mode off, structured logging off, which also keeps it from
+                        # starting the telemetry transmitter, and the image's privacy file, which declines
+                        # every consent level, read in place of the user's own.
+                        KIT_PRIVACY=(
+                            "--/telemetry/enableAnonymousData=false"
+                            "--/structuredLog/enable=false"
+                            "--/structuredLog/privacySettingsFile=/etc/vams-isaacsim-privacy.toml"
+                        )
+                        if [ "$(cat /etc/vams-isaacsim-data-collection 2>/dev/null)" = Y ]; then
+                            KIT_PRIVACY=()
+                        fi
                         notify "Isaac Sim is starting. The first launch warms shaders for 5-10 minutes and the window stays black until that finishes."
                         exec "${LAUNCHER}" \
                             --ext-folder "${EXT_PARENT}" \
                             --enable vams.connector.isaacsim \
-                            "--/exts/vams.connector.isaacsim/profile=${PROFILE}" >>"${LOG}" 2>&1
+                            "--/exts/vams.connector.isaacsim/profile=${PROFILE}" \
+                            "${KIT_PRIVACY[@]}" >>"${LOG}" 2>&1
                         LAUNCH
                     - chmod 0755 /usr/local/bin/vams-isaacsim-launch.sh
           - name: InstallPreflightUnit
@@ -178,6 +192,7 @@ phases:
                     - test -x /usr/local/bin/vams-isaacsim-launch.sh
                     - grep -Fq -- '--enable vams.connector.isaacsim' /usr/local/bin/vams-isaacsim-launch.sh
                     - grep -Fq -- '--/exts/vams.connector.isaacsim/profile=' /usr/local/bin/vams-isaacsim-launch.sh
+                    - grep -Fq -- '--/telemetry/enableAnonymousData=false' /usr/local/bin/vams-isaacsim-launch.sh
                     - test -x /usr/local/bin/vams-instance-id
                     - grep -Fq 'Exec=/usr/local/bin/vams-isaacsim-launch.sh' /etc/xdg/autostart/vams-isaacsim.desktop
                     - bash -n /usr/local/bin/vams-isaacsim-preflight.sh

@@ -67,7 +67,8 @@
         "isaacSimSha256": "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
         "isaacSimLauncher": "isaac-sim.sh",
         "nvidiaDriverMinMajor": "595",
-        "nucleusServer": ""
+        "nucleusServer": "",
+        "isaacSimDataCollectionConsent": "N"
     },
     "keepVersions": 3,
     "recipeRevision": 1,

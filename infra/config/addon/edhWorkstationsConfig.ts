@@ -91,6 +91,20 @@ const EDH_PARAMETER_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const EDH_AMI_RECIPE_MAX_ASSETS = 8;
 const EDH_AMI_RECIPE_MAX_PARAMETERS = 16;
 const EDH_AMI_RECIPE_PARAMETER_VALUE_MAX = 1024;
+/**
+ * Parameters a shipped component reads as one of a closed set of values, each with the sentence a
+ * refusal gives; the backend keeps the same map (AMI_RECIPE_PARAMETER_CHOICES in
+ * backend/backend/models/addon/edh.py).
+ */
+const EDH_AMI_RECIPE_PARAMETER_CHOICES: Readonly<
+    Record<string, { values: readonly string[]; meaning: string }>
+> = {
+    isaacSimDataCollectionConsent: {
+        values: ["N", "Y"],
+        meaning:
+            "N (desktops decline NVIDIA data collection) or Y (the image consents to it for every desktop user)",
+    },
+};
 // A recipe names one build instance type, or a list Image Builder chooses among by availability.
 const EDH_AMI_RECIPE_MAX_BUILD_INSTANCE_TYPES = 8;
 const EDH_AMI_RECIPE_BUILD_INSTANCE_TYPE_MAX_LENGTH = 64;
@@ -1416,6 +1430,17 @@ export function loadEdhAmiRecipe(
             if (typeof value !== "string" || value.length > EDH_AMI_RECIPE_PARAMETER_VALUE_MAX) {
                 throw new Error(
                     `Configuration Error: ${context}: parameters.${key} must be a string of at most ${EDH_AMI_RECIPE_PARAMETER_VALUE_MAX} characters.`
+                );
+            }
+            const choices = Object.prototype.hasOwnProperty.call(
+                EDH_AMI_RECIPE_PARAMETER_CHOICES,
+                key
+            )
+                ? EDH_AMI_RECIPE_PARAMETER_CHOICES[key]
+                : undefined;
+            if (choices && !choices.values.includes(value)) {
+                throw new Error(
+                    `Configuration Error: ${context}: parameters.${key} must be ${choices.meaning}.`
                 );
             }
         }

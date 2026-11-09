@@ -101,6 +101,15 @@ EDH_PARENT_SSM_PREFIX = 'ssm:/aws/service/'
 AMI_RECIPE_MAX_ASSETS = 8
 AMI_RECIPE_MAX_PARAMETERS = 16
 AMI_RECIPE_PARAMETER_VALUE_MAX = 1024
+# Parameters a shipped component reads as one of a closed set of values, each with the sentence a refusal
+# gives, so a bad value is refused on save rather than by a failed build. The infra loader keeps the same
+# map (EDH_AMI_RECIPE_PARAMETER_CHOICES in infra/config/addon/edhWorkstationsConfig.ts).
+AMI_RECIPE_PARAMETER_CHOICES = {
+    'isaacSimDataCollectionConsent': (
+        ('N', 'Y'),
+        'N (desktops decline NVIDIA data collection) or Y (the image consents to it for every desktop user)',
+    ),
+}
 
 
 def _require_one_of(values, field, allowed):
@@ -627,4 +636,7 @@ class AmiRecipeRequestModel(BaseModel, extra='ignore'):
             if any(len(value) > AMI_RECIPE_PARAMETER_VALUE_MAX for value in parameters.values()):
                 raise ValueError(
                     f"parameters values are limited to {AMI_RECIPE_PARAMETER_VALUE_MAX} characters")
+            for key, (allowed, meaning) in AMI_RECIPE_PARAMETER_CHOICES.items():
+                if key in parameters and parameters[key] not in allowed:
+                    raise ValueError(f"parameters.{key} must be {meaning}")
         return values

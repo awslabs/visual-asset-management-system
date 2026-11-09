@@ -1,6 +1,9 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """AmiRecipeRequestModel: the recipe shape shared by recipe.json, the Admin routes and the seeding."""
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -211,6 +214,32 @@ class TestAmiRecipeRequestModel:
         with pytest.raises(ValidationError) as err:
             AmiRecipeRequestModel(**{**VALID, "parameters": parameters})
         assert fragment in str(err.value)
+
+    @pytest.mark.parametrize("value", ["N", "Y"])
+    def test_isaac_sim_data_collection_consent_accepts_n_and_y(self, value):
+        model = AmiRecipeRequestModel(**{**VALID, "parameters": {"isaacSimDataCollectionConsent": value}})
+        assert model.parameters == {"isaacSimDataCollectionConsent": value}
+
+    @pytest.mark.parametrize("value", ["", "n", "y", "yes", "true", "0", " N", "N ", "N\nY", "Y; touch pwned"])
+    def test_isaac_sim_data_collection_consent_refuses_any_other_value_by_name(self, value):
+        """A bad value is refused when the recipe is saved, naming the two choices and what each means,
+        rather than by a build that fails at its first step; the value itself is not echoed."""
+        with pytest.raises(ValidationError) as err:
+            AmiRecipeRequestModel(**{**VALID, "parameters": {"isaacSimDataCollectionConsent": value}})
+        assert ("parameters.isaacSimDataCollectionConsent must be N (desktops decline NVIDIA data collection) "
+                "or Y (the image consents to it for every desktop user)") in str(err.value)
+        assert "touch pwned" not in str(err.value)
+
+    def test_the_shipped_isaac_sim_parameters_pass_and_decline_data_collection(self):
+        """The seeding validates recipe.json with this model, so the shipped parameter set must pass it."""
+        recipe = Path(__file__).resolve().parents[5] / "backendAddons/edh/amiRecipes/isaacsim/recipe.json"
+        shipped = json.loads(recipe.read_text(encoding="utf-8"))["parameters"]
+        model = AmiRecipeRequestModel(**{**VALID, "parameters": shipped})
+        assert model.parameters["isaacSimDataCollectionConsent"] == "N"
+
+    def test_only_the_consent_key_is_held_to_its_choice(self):
+        model = AmiRecipeRequestModel(**{**VALID, "parameters": {"otherFlag": "yes", "isaacSimVersion": "6.2.0"}})
+        assert model.parameters == {"otherFlag": "yes", "isaacSimVersion": "6.2.0"}
 
     def test_the_longest_key_and_asset_id_the_patterns_admit_are_accepted(self):
         """Positive controls for the two length bounds: a 64-character key, a 32-character id."""
