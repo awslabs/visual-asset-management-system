@@ -490,6 +490,8 @@ Some deployments, sign-ins and API-key requests carry no MFA state, so an MFA-re
 
 ## Step 8: Verify the add-on
 
+Until the add-on is enabled, a deployment shows nothing of it: no navigation section or page, no `edh*` object type or EDH route in the access control constraint editor, no `edh` in `vamscli --help` and no EDH tool in the MCP server ([Feature flags](overview.md#feature-flags) lists each surface). Once the deployment completes, reload the web application, and run `vamscli auth login` again and restart the MCP server, since both read the feature switches at sign-in.
+
 1. In the profile that [Step 7](#step-7-grant-access) signs in as the initial administrator, confirm that the add-on is enabled. The command reads the feature switches the profile stores at sign-in, so when the profile was signed in before [Step 6](#step-6-deploy-vams), first sign in again with `vamscli auth login -u <app.adminUserId>`:
 
     ```bash
@@ -573,6 +575,8 @@ Each registered reservation carries `fallbackToOnDemand` (on by default), which 
 ## Disable or remove the add-on
 
 Setting `app.addons.useEdhWorkstations.enabled` and `amiBuilds.enabled` to `false` and redeploying removes the add-on's nested stack; configuration validation rejects AMI builds without the add-on, and turns `containers.enabled` off with a warning. `cdk destroy` removes the nested stack with the rest of VAMS. Before either, while the add-on is still deployed, complete the [pre-uninstall steps](uninstall.md#pre-uninstall-steps): delete the desktops, retire the AMI builds and delete the administrator recipes, delete the registered images, and revoke any load balancer ingress rule that names the add-on's Lambda security group.
+
+A constraint an administrator created or imported on an `edh*` object type stays stored after the add-on is turned off. The access control constraint editor no longer offers the type and shows it on such a constraint as not offered on this deployment; the constraint can be deleted, or kept for when the add-on is enabled again, and saving changes to it is refused until then.
 
 The EDH cluster stays as it is. What the add-on created there and was not removed beforehand stays too: software stacks, desktops, and the directory users the add-on created, which VAMS never deletes. The job definitions VAMS registered stay in AWS Batch. See [Objects left in EDH](uninstall.md#objects-left-in-edh). With AMI builds, the AMIs, snapshots and EC2 Image Builder resources that retirement does not remove stay in the account as well; see [Remove EDH AMIs](uninstall.md#remove-edh-amis). The AWS CodeBuild log groups of the container image builds and the EC2 Image Builder log groups of the AMI builds also remain (see [Delete the EDH log groups](uninstall.md#delete-the-edh-log-groups)), and with session bootstrap a desktop left running leaves its session secret (see [Remove EDH session secrets](uninstall.md#remove-edh-session-secrets)). The root-key and CA bundle secrets are operator-managed, and VAMS does not delete them.
 
