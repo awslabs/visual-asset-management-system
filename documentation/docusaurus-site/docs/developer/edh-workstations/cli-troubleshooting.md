@@ -614,7 +614,7 @@ Create or update API keys from the web interface or from a CLI session signed in
 **Symptoms:**
 
 -   On the desktop, `vamscli` commands fail with `Override token has expired. …`, or with `Override token authentication failed. The token may be invalid or expired. …`
--   The Isaac Sim connector's status line reads `access refused - …`
+-   The Isaac Sim connector's status line shows the CLI's refusal followed by `if this desktop was just started, its VAMS sign-in may not have completed; …`
 -   `vamscli --profile "edh-$(/usr/local/bin/vams-instance-id)" auth status` reports an expiration that has passed
 
 **Cause:**

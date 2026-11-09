@@ -986,12 +986,19 @@ class TestTheExportAction:
             "Uploaded export.usd to Asset One (2 file path(s) point outside this asset and will "
             "not resolve elsewhere), but the file list did not refresh: API Error: 500 Server Error")
 
-    def test_a_refused_refresh_on_the_desktop_session_says_how_to_recover(self, export, extension):
+    def test_a_refused_refresh_on_the_desktop_session_says_how_to_recover(
+            self, export, extension, tmp_path, monkeypatch):
+        # A desktop's own profile whose sign-in left its log: the desktop advice follows the error.
+        host_dir = tmp_path / ".vams" / "hosts" / "i-0123456789abcdef0"
+        host_dir.mkdir(parents=True)
+        (host_dir / "session-bootstrap.log").write_text("boot\n")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        extension._profile = "edh-i-0123456789abcdef0"
         extension._session_adopted = True
         refusal = VamsAccessDeniedError("Permission Denied: Access forbidden.")
         assert export(_Exporter(list_error=refusal)) == (
             "Uploaded export.usd to Asset One, but the file list did not refresh: "
-            f"{_SIGN_IN_PENDING} (Permission Denied: Access forbidden.)")
+            f"Permission Denied: Access forbidden. - {_SIGN_IN_PENDING}")
 
 
 # The fields of Isaac Sim 6.2's importer configs, from the API reference of

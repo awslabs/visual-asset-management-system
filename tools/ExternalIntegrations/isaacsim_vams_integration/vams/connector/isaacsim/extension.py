@@ -41,11 +41,17 @@ HORIZONTAL_SPACING = 4
 _WF_TEXT_CHARS = 48
 _CHECK = "* "
 _NOCHECK = "  "
-# Leads the status of a refused call on a session the desktop signed in, so the ways to recover read
-# first; the CLI's own error follows.
-_SIGN_IN_PENDING = ("access refused - if this desktop was just started, its VAMS sign-in may not have "
-                    "completed; select Refresh Databases later. If the sign-in has expired, renew the "
-                    "workstation's lease in VAMS, or sign in under Authentication")
+# Follows the CLI's own error on the status line when VAMS refused a session the extension took over
+# from the CLI profile. On an EDH Workstations desktop, whose sign-in at desktop login writes its log
+# and markers under ~/.vams/hosts/<instance-id>/ for the desktop's own profile edh-<instance-id>, the
+# refusal usually means that sign-in has not completed yet or its key has expired:
+_SIGN_IN_PENDING = ("if this desktop was just started, its VAMS sign-in may not have completed; select "
+                    "Refresh Databases later. If the sign-in has expired, renew the workstation's lease "
+                    "in VAMS, or sign in under Authentication")
+# Anywhere else, the session was signed in some other way, so only signing in again helps:
+_TAKEN_OVER_REFUSED = "the session this extension took over was refused; sign in under Authentication"
+# A desktop's own CLI profile, as the EDH Workstations desktop sign-in names it.
+_DESKTOP_PROFILE = re.compile(r"^edh-(i-[0-9a-f]{8,17})$")
 # A run refused for a template tag with no value; the connector does not collect template tags.
 _TEMPLATE_TAG_REFUSAL = re.compile(r"tag '[^']*' is required")
 _CHOOSE_TEMPLATE = "Choose a template"
@@ -59,6 +65,18 @@ except ImportError:
 
 def _get_style():
     return _get_nvidia_style() if _HAS_ISAAC_STYLE else {}
+
+
+def _desktop_sign_in_ran(profile, home=None):
+    """Whether ``profile`` is an EDH Workstations desktop's own profile whose sign-in ran on this boot
+    or an earlier one: its host directory holds the sign-in's log and no marker saying the desktop has
+    no VAMS session. Read from local files only."""
+    match = _DESKTOP_PROFILE.match(profile or "")
+    if not match:
+        return False
+    host_dir = os.path.join(home or os.path.expanduser("~"), ".vams", "hosts", match.group(1))
+    return (os.path.isfile(os.path.join(host_dir, "session-bootstrap.log"))
+            and not os.path.exists(os.path.join(host_dir, "session-none")))
 
 
 def _defer(fn):
@@ -180,6 +198,7 @@ class VamsConnectorExtension(omni.ext.IExt):
         settings = carb.settings.get_settings()
         profile = settings.get(SETTING_PROFILE) or "default"
         vamscli_path = settings.get(SETTING_VAMSCLI_PATH) or None
+        self._profile = profile
 
         self._connector = None
         self._window = None
@@ -372,10 +391,13 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._status_label.tooltip = text
 
     def _failure_status(self, prefix, error):
-        """The status line for a failed call. A refusal of the session the desktop signed in usually
-        means that sign-in has not completed or has expired, so the line says how to recover."""
+        """The status line for a failed call: the CLI's error, and for a refusal of a session taken over
+        from the CLI profile, how to recover. Only an EDH Workstations desktop whose sign-in ran gets
+        the desktop sign-in and lease advice; any other session gets the neutral sentence."""
         if self._session_adopted and isinstance(error, VamsAccessDeniedError):
-            return f"{prefix}: {_SIGN_IN_PENDING} ({error})"
+            if _desktop_sign_in_ran(getattr(self, "_profile", None)):
+                return f"{prefix}: {error} - {_SIGN_IN_PENDING}"
+            return f"{prefix}: {error} - {_TAKEN_OVER_REFUSED}"
         return f"{prefix}: {error}"
 
     # =========================================================================

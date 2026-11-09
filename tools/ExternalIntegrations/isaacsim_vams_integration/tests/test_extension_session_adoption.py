@@ -6,7 +6,9 @@ then pick the session up once the sign-in lands, not only at startup; and shutti
 session the extension did not create signed in, because the desktop has no other way to sign it
 back in. A session it took over can also hold the key VAMS revoked when the desktop last stopped, or
 a key that expired, which the CLI reports as a permission error, so a refusal of that session says
-how to recover.
+how to recover after the CLI's own error: on an EDH Workstations desktop whose sign-in ran (its own
+profile edh-<instance-id> and the sign-in's log under ~/.vams/hosts/<instance-id>/), the desktop
+sign-in and lease advice; anywhere else, that the session was refused and to sign in again.
 """
 
 import json
@@ -29,9 +31,11 @@ from vams.connector.isaacsim.vams_cli_service import (
 
 _FORBIDDEN = ("API Error: Failed to list databases: Access forbidden. You do not have permission to "
               "perform this action. Contact your administrator if you believe this is an error.")
-_HINT = ("access refused - if this desktop was just started, its VAMS sign-in may not have completed; "
-         "select Refresh Databases later. If the sign-in has expired, renew the workstation's lease in "
-         "VAMS, or sign in under Authentication")
+_HINT = ("if this desktop was just started, its VAMS sign-in may not have completed; select Refresh "
+         "Databases later. If the sign-in has expired, renew the workstation's lease in VAMS, or sign in "
+         "under Authentication")
+_NEUTRAL = "the session this extension took over was refused; sign in under Authentication"
+_INSTANCE = "i-0123456789abcdef0"
 
 
 def _raise(error):
@@ -81,10 +85,22 @@ class _Model:
 
 
 @pytest.fixture
-def extension(monkeypatch):
+def desktop_home(tmp_path, monkeypatch):
+    """A home directory in which this EDH desktop's sign-in has run: its log under the host directory."""
+    host_dir = tmp_path / ".vams" / "hosts" / _INSTANCE
+    host_dir.mkdir(parents=True)
+    (host_dir / "session-bootstrap.log").write_text("boot\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return host_dir
+
+
+@pytest.fixture
+def extension(monkeypatch, desktop_home):
     monkeypatch.setattr(extension_module, "_defer", lambda fn: fn())
     ext = VamsConnectorExtension()
     ext._init_state()
+    # The profile the EDH desktop's launcher hands the extension.
+    ext._profile = f"edh-{_INSTANCE}"
     ext._window = None
     ext._connector = _Profile()
     ext._username_model = _Model()
@@ -163,7 +179,7 @@ def test_a_refused_desktop_session_says_how_to_recover(extension):
     extension._connector.signed_in = True
     extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._check_existing_session()
-    assert extension._status_label.text == f"  Error: {_HINT} ({_FORBIDDEN})"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_HINT}"
 
 
 def test_a_refused_desktop_session_says_how_to_recover_from_a_file_action(extension):
@@ -175,7 +191,7 @@ def test_a_refused_desktop_session_says_how_to_recover_from_a_file_action(extens
         VamsAccessDeniedError("Permission Denied: Access forbidden."))
     extension._on_load_file(AssetFile(relative_path="/house.usda"))
     assert extension._status_label.text == (
-        f"  Load error: {_HINT} (Permission Denied: Access forbidden.)")
+        f"  Load error: Permission Denied: Access forbidden. - {_HINT}")
 
 
 def test_a_refused_desktop_session_says_how_to_recover_from_download_only(extension):
@@ -187,7 +203,7 @@ def test_a_refused_desktop_session_says_how_to_recover_from_download_only(extens
         VamsAccessDeniedError("Permission Denied: Access forbidden."))
     extension._on_download_file(AssetFile(relative_path="/house/textures/color.jpg"))
     assert extension._status_label.text == (
-        f"  Download failed: {_HINT} (Permission Denied: Access forbidden.)")
+        f"  Download failed: Permission Denied: Access forbidden. - {_HINT}")
 
 
 def test_the_recovery_hint_covers_an_expired_sign_in():
@@ -229,3 +245,30 @@ def test_any_other_error_on_a_desktop_session_carries_no_hint(extension):
     extension._connector.list_databases = _raise(VamsCliError(failure))
     extension._load_databases()
     assert extension._status_label.text == f"  Error: {failure}"
+
+
+def test_a_refused_session_off_an_edh_desktop_carries_no_desktop_advice(extension):
+    """A session taken over on any other machine: the CLI's error, then the neutral sentence."""
+    extension._profile = "default"
+    extension._connector.signed_in = True
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
+    extension._check_existing_session()
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"
+    assert "lease" not in extension._status_label.text
+
+
+def test_a_desktop_profile_without_the_sign_in_log_carries_no_desktop_advice(extension, desktop_home):
+    (desktop_home / "session-bootstrap.log").unlink()
+    extension._connector.signed_in = True
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
+    extension._check_existing_session()
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"
+
+
+def test_a_desktop_with_no_vams_session_carries_no_desktop_advice(extension, desktop_home):
+    """The sign-in found no VAMS session for this desktop (session-none), so there is no lease to renew."""
+    (desktop_home / "session-none").write_text("boot\n")
+    extension._connector.signed_in = True
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
+    extension._check_existing_session()
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"
