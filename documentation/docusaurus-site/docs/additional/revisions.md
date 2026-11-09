@@ -83,6 +83,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Columnar Data Viewer CSV files** — A CSV saved with a UTF-8 byte order mark no longer keys its first column with the mark (issue #1182); a CSV whose rows have more cells than the header opens with generated names for the extra columns instead of loading forever (issue #1183); a trailing newline no longer adds an empty last row (issue #1184); and columns that share a header name are all shown, labelled `value`, `value (2)` and so on (issue #1185).
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 -   **Three.js Viewer PLY point clouds and colours** — A PLY file with no faces draws as a point cloud instead of grey streaks, and a PLY's per-vertex colours are used for points and meshes; a PLY without colours stays grey. (issue #1257)
+-   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 
 **Other changes:**
 
