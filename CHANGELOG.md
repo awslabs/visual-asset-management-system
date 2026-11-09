@@ -56,6 +56,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the Columnar Data Viewer staying on its loading spinner for a CSV whose rows have more cells than the header; the extra cells get generated column names. ([#1183](https://github.com/awslabs/visual-asset-management-system/issues/1183))
 -   **Web** Fixed the Columnar Data Viewer showing an empty last row for a CSV that ends with a newline. ([#1184](https://github.com/awslabs/visual-asset-management-system/issues/1184))
 -   **Web** Fixed the Columnar Data Viewer showing only one of the columns that share a CSV header name; each is shown, labelled `value`, `value (2)` and so on. ([#1185](https://github.com/awslabs/visual-asset-management-system/issues/1185))
+-   **Backend** Fixed the Image Viewer and asset previews showing nothing for SVG files: download and stream links for a `.svg` file now return it as `image/svg+xml` with an attachment disposition, so the viewer renders it and opening the link directly downloads it. Stored files are unchanged. ([#1201](https://github.com/awslabs/visual-asset-management-system/issues/1201))
 
 ### Chores
 
