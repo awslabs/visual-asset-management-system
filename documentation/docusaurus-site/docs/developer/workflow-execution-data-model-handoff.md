@@ -213,7 +213,7 @@ The registry of callback targets is the `CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER` e
 (`{"<stored trigger value>": "<function name>"}`) on the three functions that run the terminal writers:
 `processWorkflowExecutionOutput`, `handleExecutionError` and `executionService`. A feature registers its
 callback in the `systemPipelineCallbacks` registry in `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`;
-`attachSystemPipelineCallbacks` (`infra/lib/lambdaBuilder/systemPipelineCallbacks.ts`) sets the variable
+`attachSystemPipelineCallbacks` (`infra/lib/lambdaBuilder/workflowFunctions.ts`) sets the variable
 and grants those three roles `lambda:InvokeFunction` on exactly the registered functions, through one
 customer managed policy attached to all three. The grant stays out of their inline policies, which are
 close to IAM's inline quota in the AWS GovCloud (US) and AWS European Sovereign Cloud templates. The registry

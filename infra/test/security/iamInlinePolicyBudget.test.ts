@@ -24,7 +24,7 @@
 
 import * as fs from "fs";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
-import * as seam from "../../lib/lambdaBuilder/systemPipelineCallbacks";
+import * as seam from "../../lib/lambdaBuilder/workflowFunctions";
 import {
     IAM_INLINE_POLICY_LIMIT,
     IAM_MANAGED_POLICY_LIMIT,

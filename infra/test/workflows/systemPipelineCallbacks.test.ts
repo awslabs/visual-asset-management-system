@@ -4,7 +4,8 @@
  */
 
 /**
- * The system-pipeline terminal-callback registry (lib/lambdaBuilder/systemPipelineCallbacks.ts).
+ * The system-pipeline terminal-callback registry (`attachSystemPipelineCallbacks` in
+ * lib/lambdaBuilder/workflowFunctions.ts).
  *
  * The registry is how the workflow core reaches a feature's callback without importing it, so it has
  * four contracts to hold: an empty registry leaves the terminal-writer functions exactly as they were
@@ -24,7 +25,7 @@ import {
     SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV,
     SYSTEM_PIPELINE_CALLBACK_POLICY_ID,
     SYSTEM_PIPELINE_TRIGGER_TYPES,
-} from "../../lib/lambdaBuilder/systemPipelineCallbacks";
+} from "../../lib/lambdaBuilder/workflowFunctions";
 import { newTestApp } from "../support/testApp";
 
 const BACKEND_HELPER = path.join(
