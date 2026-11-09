@@ -16,7 +16,11 @@ import fs from "fs";
 import path from "path";
 import viewerConfig from "./viewerConfig.json";
 import addonViewerConfig from "./addonViewerConfig.json";
-import { OCCT_FORMATS } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
+import {
+    OCCT_FORMATS,
+    THREE_MESH_FORMATS,
+    USD_FORMATS,
+} from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
 import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
 import { VIEWER_COMPONENTS } from "../viewers/manifest";
 import { ADDON_DEPENDENCY_MANAGERS, ADDON_VIEWER_COMPONENTS } from "../viewers/addonManifest";
@@ -44,6 +48,19 @@ describe("viewerConfig vs the loaders", () => {
         expect(missingFrom(byId("threejs-viewer").supportedExtensions, OCCT_FORMATS)).toEqual([]);
     });
 
+    it("offers the Three.js viewer for every USD format its loader routes to USDLoader", () => {
+        expect(missingFrom(byId("threejs-viewer").supportedExtensions, USD_FORMATS)).toEqual([]);
+    });
+
+    it("declares only formats a Three.js loader parses", () => {
+        // Every declared extension must reach a loader, or the viewer never finishes loading.
+        const parsed = [...THREE_MESH_FORMATS, ...USD_FORMATS, ...OCCT_FORMATS];
+        const declared = byId("threejs-viewer").supportedExtensions.map((ext: string) =>
+            ext.replace(/^\./, "")
+        );
+        expect(declared.filter((ext: string) => !parsed.includes(ext))).toEqual([]);
+    });
+
     it("missingFrom reports a gap when one exists", () => {
         // Positive control for the assertion above: the same check against a list
         // that omits the OCCT formats must not come back empty.
@@ -56,6 +73,24 @@ describe("viewerConfig vs the loaders", () => {
         const columnar = byId("columnar-viewer");
         expect(columnar.supportedExtensions.sort()).toEqual([".csv", ".fcs"]);
         expect(columnar.supportedExtensions).not.toContain(".rds");
+    });
+});
+
+describe("viewerConfig vs the default Content Security Policy", () => {
+    // rhino3dm, which Online3DViewer loads for .3dm, compiles with eval; the default CSP refuses it
+    // and the viewer then fails with "Failed to load rhino3dm" (#921). Offered only with
+    // ALLOWUNSAFEEVAL, a default deployment takes the standard "no compatible viewer" path instead.
+    it("offers .3dm only from a viewer gated on ALLOWUNSAFEEVAL", () => {
+        const offering = viewers.filter((viewer) => viewer.supportedExtensions.includes(".3dm"));
+        expect(offering.map((viewer) => viewer.id)).toEqual(["online3d-viewer-rhino"]);
+        expect(offering[0].featuresEnabledRestriction).toContain("ALLOWUNSAFEEVAL");
+    });
+
+    it("keeps the other Online 3D Viewer formats ungated, rendered by the same component", () => {
+        const online3d = byId("online3d-viewer");
+        expect(online3d.featuresEnabledRestriction ?? []).toEqual([]);
+        expect([...online3d.supportedExtensions].sort()).toEqual([".amf", ".bim", ".off", ".wrl"]);
+        expect(byId("online3d-viewer-rhino").componentPath).toBe(online3d.componentPath);
     });
 });
 

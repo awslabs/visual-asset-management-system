@@ -190,6 +190,8 @@ Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** 
 
 The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
 
+A **Skipped** row records file-upload trigger launches that the workflow's concurrency restriction refused while another execution held the asset, file or file version. One row counts every launch that execution refused, shows how many under the badge and gives the reason on hover. Its detail view lists the files and, when you may read it, links the execution that blocked them. Skipped rows have no Abort action. Choose **All except skipped** in the status filter to hide them.
+
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
 ---

@@ -80,6 +80,8 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
+                            #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -287,6 +289,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
 `vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (Vite's bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (Vite's CSS minifier, used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) — a lockfile written on Windows lists `@rolldown/binding-win32-x64-msvc` and nothing else, and a later `npm install` on Linux does **not** add the missing one. The build then dies with one of:
@@ -489,7 +493,8 @@ Key patterns to follow:
 2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
 3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
-5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
+6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`; the asset and file pages)
 
 ### 4.2 Consuming API Results
 
@@ -874,7 +879,7 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
 -   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers, which ship disabled) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts` in that order
 -   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
 -   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
@@ -940,7 +945,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
 -   Additional flags may exist in deployed configurations
 

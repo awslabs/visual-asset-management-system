@@ -10,15 +10,15 @@ The following open-source projects are integrated into VAMS as viewer plugins, p
 
 ### 3D Viewers
 
-| Integration                                       | Purpose                                                     | License               | VAMS Component                                        |
-| ------------------------------------------------- | ----------------------------------------------------------- | --------------------- | ----------------------------------------------------- |
-| [Online 3D Viewer](https://3dviewer.net/)         | Web viewer for Rhinoceros 3D, AMF, BIM, OFF, VRML formats   | MIT                   | Viewer plugin (`online3d-viewer`)                     |
-| [CesiumJS](https://cesium.com/platform/cesiumjs/) | Geospatial 3D tileset viewer with streaming support         | Apache-2.0            | Viewer plugin (`cesium-viewer`)                       |
-| [Potree](https://potree.github.io/)               | Point cloud viewer for E57, LAS, LAZ formats                | BSD-2-Clause          | Viewer plugin (`potree-viewer`) + processing pipeline |
-| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY and SPZ files                 | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)     |
-| [PlayCanvas](https://playcanvas.com/)             | Gaussian splat viewer for PLY and SOG files                 | MIT                   | Viewer plugin (`gaussian-splat-viewer-playcanvas`)    |
-| [Needle Engine](https://needle.tools/)            | USD format WASM viewer for .usd, .usda, .usdc, .usdz        | Apache-2.0 (Modified) | Viewer plugin (`needletools-usd-viewer`)              |
-| [Three.js](https://threejs.org/)                  | General-purpose 3D viewer for mesh and optional CAD formats | MIT                   | Viewer plugin (`threejs-viewer`)                      |
+| Integration                                       | Purpose                                                     | License               | VAMS Component                                              |
+| ------------------------------------------------- | ----------------------------------------------------------- | --------------------- | ----------------------------------------------------------- |
+| [Online 3D Viewer](https://3dviewer.net/)         | Web viewer for Rhinoceros 3D, AMF, BIM, OFF, VRML formats   | MIT                   | Viewer plugins (`online3d-viewer`, `online3d-viewer-rhino`) |
+| [CesiumJS](https://cesium.com/platform/cesiumjs/) | Geospatial 3D tileset viewer with streaming support         | Apache-2.0            | Viewer plugin (`cesium-viewer`)                             |
+| [Potree](https://potree.github.io/)               | Point cloud viewer for E57, LAS, LAZ formats                | BSD-2-Clause          | Viewer plugin (`potree-viewer`) + processing pipeline       |
+| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY and SPZ files                 | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)           |
+| [PlayCanvas](https://playcanvas.com/)             | Gaussian splat viewer for PLY and SOG files                 | MIT                   | Viewer plugin (`gaussian-splat-viewer-playcanvas`)          |
+| [Needle Engine](https://needle.tools/)            | USD format WASM viewer for .usd, .usda, .usdc, .usdz        | Apache-2.0 (Modified) | Viewer plugin (`needletools-usd-viewer`)                    |
+| [Three.js](https://threejs.org/)                  | General-purpose 3D viewer for mesh and optional CAD formats | MIT                   | Viewer plugin (`threejs-viewer`)                            |
 
 ### Processing Pipelines
 

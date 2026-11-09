@@ -13,6 +13,8 @@ import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
 import {
     isRequestableDependencyPath,
@@ -20,6 +22,7 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
+import { downloadStatusMessage } from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -42,6 +45,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     }>({ loaded: 0, unresolved: 0 });
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
     const [sceneReady, setSceneReady] = useState(false);
     const [selectedObjects, setSelectedObjects] = useState<any[]>([]);
     const [loadedFileGroups, setLoadedFileGroups] = useState<any[]>([]);
@@ -806,7 +810,12 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
-                        throw new Error(`Failed to load: ${fileKey} (${response.status})`);
+                        throw new Error(
+                            downloadStatusMessage(
+                                response.status,
+                                `Failed to load: ${fileKey} (${response.status})`
+                            )
+                        );
                     } else {
                         console.warn(
                             `Dependency not found (skipping): ${fileKey} (${response.status})`
@@ -2474,7 +2483,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -2535,7 +2544,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             borderRadius: "4px",
                             padding: "12px 16px",
                             margin: "8px",
-                            zIndex: 1001,
+                            zIndex: VIEWER_LAYER.notice,
                             fontSize: "0.85em",
                         }}
                     >
@@ -2575,6 +2584,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <NeedleUSDPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     renderer={viewerInstanceRef.current.renderer}
@@ -2622,7 +2632,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -2632,6 +2642,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: fileErrors.length > 0 ? "auto" : "10px",
@@ -2642,7 +2653,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Needle USD Viewer</div>
