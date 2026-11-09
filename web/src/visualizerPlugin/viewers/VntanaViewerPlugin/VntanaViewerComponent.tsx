@@ -5,6 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { VntanaDependencyManager } from "./dependencies";
 import { VntanaViewerProps, VntanaViewerElement } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -201,7 +202,8 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                     }
                 } else {
                     console.error("VNTANA Viewer: Failed to download asset");
-                    setError("Failed to download asset");
+                    // A refused download names why, from the API's answer (#1211, D166).
+                    setError(downloadFailureMessage(response, "Failed to download asset"));
                     setIsLoading(false);
                 }
             } catch (error) {

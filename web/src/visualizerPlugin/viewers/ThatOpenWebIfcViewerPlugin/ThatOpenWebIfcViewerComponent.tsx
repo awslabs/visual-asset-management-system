@@ -20,7 +20,7 @@ import {
 import { buildSpatialTree } from "./utils/spatialTree";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
-import { downloadStatusMessage } from "../../core/streamFailure";
+import { streamResponseFailureMessage } from "../../core/streamFailure";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
 // customInstall (see customInstalls/thatopenwebifc). Served same-origin so it
@@ -193,9 +193,10 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
                     signal: downloadAbortRef.current.signal,
                 });
                 if (!response.ok) {
+                    // Another refusal is named by the API's own message (D166).
                     throw new Error(
-                        downloadStatusMessage(
-                            response.status,
+                        await streamResponseFailureMessage(
+                            response,
                             `Failed to load: ${assetKey.split("/").pop()} (${response.status})`
                         )
                     );

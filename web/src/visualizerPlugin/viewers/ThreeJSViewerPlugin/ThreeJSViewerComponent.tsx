@@ -20,7 +20,7 @@ import { isCadSupportError } from "./utils/fileLoaders";
 import { AssetDependencyResolver } from "./utils/assetDependencyResolver";
 import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
-import { downloadStatusMessage } from "../../core/streamFailure";
+import { streamResponseFailureMessage } from "../../core/streamFailure";
 
 /** Referenced files listed by name in the notice before the rest are counted. */
 const NOTICE_LISTED_FILES = 10;
@@ -457,10 +457,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         if (!response.ok) {
                             // A refused download (401/403/404/410) is named from the API's status
-                            // (#1211); any other status keeps this file's own message.
+                            // (#1211), another refusal by the API's own message (D166); any other
+                            // status keeps this file's own message.
                             throw new Error(
-                                downloadStatusMessage(
-                                    response.status,
+                                await streamResponseFailureMessage(
+                                    response,
                                     `Failed to load: ${fileName} (${response.status})`
                                 )
                             );

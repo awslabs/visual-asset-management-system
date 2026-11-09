@@ -37,6 +37,7 @@ import {
     complianceStateIndicator,
 } from "../compliance/complianceStateBadge";
 import PreviewModal from "../filemanager/components/PreviewModal";
+import { downloadRefusalReason } from "../../visualizerPlugin/core/streamFailure";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
@@ -175,6 +176,8 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
+    // The API's own reason when it refused the preview (D166), shown in its place.
+    const [thumbnailRefusal, setThumbnailRefusal] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState<boolean>(false);
 
     // Load preview thumbnail when asset changes
@@ -188,6 +191,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         let cancelled = false;
         setThumbnailLoading(true);
         setThumbnailError(false);
+        setThumbnailRefusal(null);
         setThumbnailUrl(null);
 
         (async () => {
@@ -204,6 +208,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     setThumbnailUrl(response[1]);
                 } else {
                     setThumbnailError(true);
+                    setThumbnailRefusal(downloadRefusalReason(response));
                 }
             } catch {
                 if (!cancelled) setThumbnailError(true);
@@ -440,6 +445,14 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </div>
                         )}
 
+                        {/* A preview the API refused shows the API's reason in its place (D166). */}
+                        {hasPreview && !thumbnailLoading && thumbnailRefusal && (
+                            <div style={{ flexShrink: 0, maxWidth: "240px" }}>
+                                <Box color="text-status-error" fontSize="body-s">
+                                    {thumbnailRefusal}
+                                </Box>
+                            </div>
+                        )}
                         {/* Optional preview thumbnail — only takes the space it needs */}
                         {hasPreview && thumbnailUrl && (
                             <div

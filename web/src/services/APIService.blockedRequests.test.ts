@@ -92,9 +92,23 @@ describe("downloadAsset", () => {
         expect(await download()).toStrictEqual([false, BLOCKED_MESSAGE, undefined]);
     });
 
-    it("keeps the 403 of a permission denial", async () => {
+    it("keeps the 403 of a permission denial, with the API's message beside it", async () => {
         (apiClient.post as jest.Mock).mockRejectedValue(denied());
-        expect(await download()).toStrictEqual([false, "Not Authorized", 403]);
+        expect(await download()).toStrictEqual([false, "Not Authorized", 403, "Not Authorized"]);
+    });
+
+    it("carries the API's own reason for a refusal, such as a quarantined asset (D166)", async () => {
+        (apiClient.post as jest.Mock).mockRejectedValue(
+            new ApiError("Asset is quarantined and cannot be downloaded", 400, {
+                message: "Asset is quarantined and cannot be downloaded",
+            })
+        );
+        expect(await download()).toStrictEqual([
+            false,
+            "Asset is quarantined and cannot be downloaded",
+            400,
+            "Asset is quarantined and cannot be downloaded",
+        ]);
     });
 });
 

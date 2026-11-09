@@ -22,7 +22,7 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
-import { downloadStatusMessage } from "../../core/streamFailure";
+import { streamResponseFailureMessage } from "../../core/streamFailure";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -810,9 +810,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (!response.ok) {
                     if (isMainFile) {
+                        // Another refusal is named by the API's own message (D166).
                         throw new Error(
-                            downloadStatusMessage(
-                                response.status,
+                            await streamResponseFailureMessage(
+                                response,
                                 `Failed to load: ${fileKey} (${response.status})`
                             )
                         );

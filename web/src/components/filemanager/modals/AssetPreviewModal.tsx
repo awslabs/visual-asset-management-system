@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from "react";
 import { Box, Button, Modal, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import "./AssetPreviewModal.css";
 
 interface AssetPreviewModalProps {
@@ -34,6 +35,8 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<boolean>(false);
+    // The API's own reason when it refused the file (D166), shown in place of the fixed text.
+    const [refusal, setRefusal] = useState<string | null>(null);
     const [viewerMode, setViewerMode] = useState<"normal" | "wide" | "fullscreen">("normal");
 
     useEffect(() => {
@@ -41,6 +44,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
         if (visible) {
             setLoading(true);
             setError(false);
+            setRefusal(null);
             setUrl(null);
 
             // Don't attempt to load if no preview key is provided
@@ -66,6 +70,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                         if (response[0] === false) {
                             console.error("Error downloading preview:", response[1]);
                             setError(true);
+                            setRefusal(downloadRefusalReason(response));
                         } else {
                             setUrl(response[1]);
                         }
@@ -190,7 +195,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                                     style={{ width: "50px", height: "50px" }}
                                 />
                             </Box>
-                            <div>Preview not available</div>
+                            <div>{refusal ?? "Preview not available"}</div>
                         </div>
                     )}
 
