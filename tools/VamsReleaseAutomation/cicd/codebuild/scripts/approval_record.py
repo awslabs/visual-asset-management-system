@@ -221,9 +221,14 @@ def gitlab_deployment_of_job(environ=None) -> dict:
     if not (api and project and token):
         raise Refused("CI_API_V4_URL, CI_PROJECT_ID and VRA_GITLAB_API_TOKEN (read_api) are required")
 
+    if not api.startswith("https://"):
+        raise Refused("CI_API_V4_URL must be an https:// URL")
+
     def get(path: str):
         req = urllib.request.Request(f"{api}/projects/{project}{path}", headers={"PRIVATE-TOKEN": token})
-        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed https API from the runner env
+        # the URL is checked for https:// above
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 # nosec B310 - https enforced above
             return json.load(r)
     name = env.get("CI_ENVIRONMENT_NAME") or env.get("VRA_ENV")
     for d in get(f"/deployments?environment={urllib.parse.quote(name)}&order_by=id&sort=desc&per_page=50"):

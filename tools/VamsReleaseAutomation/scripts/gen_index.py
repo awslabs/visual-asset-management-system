@@ -124,6 +124,9 @@ DESCRIPTIONS = {
     "engine/tests/fixtures/iam/vams-2.6.6-iam-role-transform.aspect.ts":
         "VAMS v2.6.6 IamRoleTransform aspect source (the boundary core patch applies to it)",
     ".gitattributes": "Keeps the core patch files LF on checkout (the repository root checks `*.patch` out as CRLF)",
+    "engine/tests/test_https_only_endpoints.py":
+        "Token-bearing calls (Bitbucket API, GitLab deployments API of the approval script) refuse non-https URLs",
+    "engine/tests/test_junit_no_dtd.py": "JUnit results with a DTD count as unparseable and are never expanded",
     "engine/tests/test_core_patch_line_endings.py":
         "The shipped core patches keep LF line endings on checkout (`.gitattributes`)",
     "engine/tests/fixtures/iam/vams-development-2fb310762-iam-role-transform.aspect.ts":

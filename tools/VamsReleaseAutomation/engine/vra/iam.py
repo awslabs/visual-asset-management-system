@@ -868,7 +868,7 @@ _CfnLoader.add_multi_constructor("!", _cfn_ctor)
 
 
 def load_cfn_yaml(text: str) -> dict:
-    return yaml.load(text, Loader=_CfnLoader)  # noqa: S506 - SafeLoader subclass with CFN tags only
+    return yaml.load(text, Loader=_CfnLoader)  # noqa: S506 # nosec B506 - SafeLoader subclass with CFN tags only
 
 
 def bootstrap_roles(ctx, env: str, s: dict, template_text: str | None = None) -> list[dict]:

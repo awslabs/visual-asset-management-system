@@ -270,6 +270,8 @@ class AwsFactory:
     def _config_dir(self) -> Path:
         if self._cfg_dir is None:
             self._cfg_dir = Path(tempfile.mkdtemp(prefix="vra-aws-"))
+            # 0o700: owner-only, the most restrictive mode for a directory the owner uses
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
             os.chmod(self._cfg_dir, 0o700)
         return self._cfg_dir
 

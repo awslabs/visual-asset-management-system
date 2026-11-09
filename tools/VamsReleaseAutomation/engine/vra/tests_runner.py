@@ -72,7 +72,13 @@ def _aggregate(files: list[Path]) -> dict:
     total = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "files": [], "failed": []}
     for f in files:
         try:
-            root = ET.parse(f).getroot()
+            data = f.read_bytes()
+            # JUnit XML never needs a DTD; refusing one rules out entity expansion and external entities, so
+            # the standard library parser is safe on what is left (defusedxml is not a dependency)
+            if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+                raise ET.ParseError("DTD in a JUnit file")
+            # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
+            root = ET.fromstring(data)  # nosec B314 - no DTD (checked above)
         except ET.ParseError:
             total["errors"] += 1
             total["failed"].append(f"{f.name}: unparseable JUnit")

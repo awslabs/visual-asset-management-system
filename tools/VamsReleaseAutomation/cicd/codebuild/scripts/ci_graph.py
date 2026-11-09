@@ -160,6 +160,9 @@ def render_github(graph: dict[str, dict], build_job: str = "build") -> str:
                   f"            requires-approval: {str(e['requiresApproval']).lower()}",
                   f"            build-id: ${{{{ needs.{build_job}.outputs.build-id }}}}",
                   f"            test-suites: \"{suites_for(e)}\"",
+                  "        # inherit: no workflow that runs fork code names the home write token; only "
+                  "vra-home-publish.yml reads it",
+                  "        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit",
                   "        secrets: inherit",
                   ""]
     return "\n".join(lines)

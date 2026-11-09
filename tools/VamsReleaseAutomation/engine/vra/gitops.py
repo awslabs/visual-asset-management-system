@@ -599,5 +599,8 @@ def archive_to(g: Git, commit: str, dest: Path, paths: list[str] | None = None) 
     proc = subprocess.run(argv, capture_output=True)
     if proc.returncode != 0:
         raise VraError(f"git archive failed: {proc.stderr.decode(errors='replace')[:300]}")
+    # the archive is `git archive` of the fork's own commit, and filter="data" refuses absolute paths, ".."
+    # members and links that leave dest
+    # nosemgrep: trailofbits.python.tarfile-extractall-traversal.tarfile-extractall-traversal
     with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tf:
         tf.extractall(dest, filter="data")

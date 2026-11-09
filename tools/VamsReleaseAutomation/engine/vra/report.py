@@ -230,7 +230,9 @@ def _post_json(url: str, payload: dict) -> None:
         raise ValueError("webhook URL must be https")
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - https enforced above
+    # the URL is checked for https:// above
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 # nosec B310 - https enforced above
         resp.read()
 
 

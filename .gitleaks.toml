@@ -168,4 +168,14 @@ regexes = [
     '''(t|e)\._sortKey(Forward|Shadow),i=e\._sortKey(Forward|Shadow);''',
     '''this\._keys0,r=this\._indices0;''',
     '''this\.keyGenerator,s=this\.gpuSorter;''',
+
+    # Release automation test stubs (tools/VamsReleaseAutomation/engine/tests/). `AKIAABCDEFGHIJKLMNOP`
+    # is the alphabet in order after the access-key prefix, written into a ledger file by
+    # test_freeze_restore_signing.py to prove `vra ledger validate` refuses a ledger that holds an access
+    # key id, so the literal has to be present for the test to prove anything. `vams_abcdefgh123` is the
+    # API key a mocked Secrets Manager returns in test_config_and_topology.py, 16 characters spelling the
+    # alphabet; a minted key is `vams_` + 64 characters of random url-safe base64. The key stub is
+    # anchored on its closing quote so a longer value with the same prefix is still reported.
+    '''AKIAABCDEFGHIJKLMNOP''',
+    '''vams_abcdefgh123["]''',
 ]

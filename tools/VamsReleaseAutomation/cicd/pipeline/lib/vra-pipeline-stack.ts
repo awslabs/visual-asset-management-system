@@ -632,6 +632,8 @@ export class VraPipelineStack extends Stack {
     // ====================================================================== helpers
 
     private buildspec(file: string): codebuild.BuildSpec {
+        // file is one of the package's fixed buildspec names
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const doc = parseYaml(readFileSync(join(this.buildspecDir, file), { encoding: "utf8" }));
         return codebuild.BuildSpec.fromObjectToYaml(doc);
     }

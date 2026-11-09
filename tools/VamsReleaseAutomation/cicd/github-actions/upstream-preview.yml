@@ -134,6 +134,8 @@ jobs:
         uses: ./.github/workflows/vra-home-publish.yml
         with:
             state-artifact: vra-home-state-merge-build-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
         secrets: inherit
 
     deploy-preview:
@@ -146,6 +148,8 @@ jobs:
             requires-approval: false
             build-id: ${{ needs.merge-build.outputs.build-id }}
             test-suites: "live-cli,live-web,customer"
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
         secrets: inherit
 
     rollback-preview:
@@ -232,4 +236,6 @@ jobs:
         uses: ./.github/workflows/vra-home-publish.yml
         with:
             state-artifact: vra-home-state-rollback-preview-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
         secrets: inherit

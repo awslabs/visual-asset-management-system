@@ -471,10 +471,14 @@ function roleName(arn: unknown): string | undefined {
 
 /** Role names and approval keys of envs/<name>/env.yaml (what `vra ledger graph` does not carry). */
 export function envDetailsFromLedger(ledgerDir: string): Map<string, Partial<ReleaseEnv>> {
+    // ledgerDir is the operator's own pipeline config (synth input), not request data
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
     const envsDir = join(ledgerDir, "envs");
     if (!existsSync(envsDir)) throw new Error(`ledgerDir ${ledgerDir} has no envs/ directory`);
     const out = new Map<string, Partial<ReleaseEnv>>();
     for (const dir of readdirSync(envsDir, { withFileTypes: true })) {
+        // dir.name is a directory entry readdirSync just listed under envsDir
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         const file = join(envsDir, dir.name, "env.yaml");
         if (!dir.isDirectory() || !existsSync(file)) continue;
         const e = (parseYaml(readFileSync(file, { encoding: "utf8" })) ?? {}) as Record<
@@ -497,6 +501,8 @@ export function envDetailsFromLedger(ledgerDir: string): Map<string, Partial<Rel
  * ledgerDir env.yaml values, fill in role names and approval keys), else release.envs.
  */
 export function resolveReleaseEnvs(cfg: PipelineConfig, baseDir = "."): ReleaseEnv[] {
+    // paths of the operator's own pipeline config, resolved against its directory
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
     const abs = (p: string) => (isAbsolute(p) ? p : resolve(baseDir, p));
     if (!cfg.ledgerGraph) {
         if (cfg.ledgerDir)
@@ -554,6 +560,8 @@ export function testsIsolated(
 }
 
 export function loadConfig(path: string): PipelineConfig {
+    // the config file path the operator passed to the CDK app
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
     const abs = resolve(path);
     const cfg = JSON.parse(readFileSync(abs, { encoding: "utf8" })) as PipelineConfig;
     const envs = resolveReleaseEnvs(cfg, dirname(abs));

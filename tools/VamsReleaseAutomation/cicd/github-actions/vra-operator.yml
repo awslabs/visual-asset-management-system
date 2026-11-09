@@ -133,4 +133,6 @@ jobs:
         uses: ./.github/workflows/vra-home-publish.yml
         with:
             state-artifact: vra-home-state-operator-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
         secrets: inherit

@@ -92,11 +92,15 @@ class BitbucketHost(GitHost):
 
     def _api(self, method: str, path: str, payload: dict | None = None) -> Any:
         base = (self.cfg.get("apiUrl") or "https://api.bitbucket.org/2.0").rstrip("/")
+        if not base.startswith("https://"):
+            raise UsageError("githost.apiUrl must be an https:// URL")
         req = urllib.request.Request(f"{base}{path}", method=method,
                                      data=json.dumps(payload).encode() if payload is not None else None,
                                      headers={"Authorization": f"Bearer {self._token()}",
                                               "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - https API URL from ledger
+        # the URL is checked for https:// above
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 # nosec B310 - https enforced above
             return json.loads(resp.read().decode() or "{}")
 
     def find_pr(self, head, base):
