@@ -1,0 +1,45 @@
+Core patch api-deployment-role-name (CP-1210)
+
+VAMS fork core patch for GitHub issue #1210: the REST API's AWS::ApiGateway::Deployment gets its
+logical id from a hash of the OpenAPI spec only (rest-api-gateway-construct.ts,
+deployment.addToLogicalId(spec)). The spec names the authorizer invoke role through an unresolved
+Fn::GetAtt, whose hashed form does not change when only the role's name changes. Switching the
+role-name prefix (cdk.json environments.aws.IamRoleNamePrefix, read by the IamRoleTransform aspect;
+vra's iam.mode boundary sets it) replaces every role, but no new Deployment is created, so the
+stage keeps serving a snapshot whose authorizer credentials name the deleted role: every route,
+authenticated or anonymous, answers HTTP 500 AuthorizerConfigurationException.
+
+This patch also hashes the literal prefix into the Deployment's logical id when it is set. An empty
+prefix adds nothing, so a deployment without a prefix keeps its logical id (no redeploy). A changed
+prefix creates a new Deployment that names the new role. It does not change any role or the spec.
+
+Made against VAMS v2.6.6 (line 327) and also applies to development a9ac094c4 (line 354): the hunk
+keeps one trailing context line because the line after it differs between the two. Activate: copy
+this file to <home>/ledger/core-patches/ and list it in core-patches.md (see
+ledger-template/core-patches.md). Needed together with CP-431 whenever iam.mode is boundary with a
+rolePrefix, on an upgrade over a deployment that ran without that prefix. Retire the entry when
+upstream fixes GitHub issue #1210 (the engine reports the patch as "present" once the fork has it).
+
+diff --git a/infra/lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts b/infra/lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts
+--- a/infra/lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts
++++ b/infra/lib/nestedStacks/apiLambda/constructs/rest-api-gateway-construct.ts
+@@ -324,4 +324,19 @@
+         });
+ 
+         const deployment = new apigw.Deployment(this, "Deployment", { api: this.restApi });
++        // Core patch api-deployment-role-name (GitHub issue #1210): the spec names the authorizer
++        // invoke role through an unresolved GetAtt, whose hash does not change when only the role's
++        // name changes. A new role-name prefix (cdk.json environments.aws.IamRoleNamePrefix, read by
++        // the IamRoleTransform aspect) replaces every role, so without this the stage keeps serving
++        // a deployment whose authorizer credentials name a deleted role (HTTP 500 on every route).
++        // Hashing the literal prefix in forces a new deployment; an empty prefix adds nothing, so
++        // the logical id of a deployment without a prefix stays as it was.
++        const iamRoleNamePrefix = this.node.tryGetContext("environments")?.aws?.IamRoleNamePrefix;
++        if (
++            typeof iamRoleNamePrefix === "string" &&
++            iamRoleNamePrefix !== "" &&
++            !cdk.Token.isUnresolved(iamRoleNamePrefix)
++        ) {
++            deployment.addToLogicalId({ iamRoleNamePrefix });
++        }
+         deployment.addToLogicalId(spec); // any spec change -> new deployment -> auto redeploy

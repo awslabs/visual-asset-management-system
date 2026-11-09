@@ -1,0 +1,76 @@
+{
+    "prefix": "vra",
+    "toolsAccount": "111111111111",
+    "signingKeyArn": "arn:aws:kms:us-east-1:111111111111:key/00000000-0000-0000-0000-000000000000",
+    "region": "us-east-1",
+    "sources": {
+        "fork": {
+            "type": "codestar",
+            "connectionArn": "arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-0000-0000-000000000000",
+            "repo": "example-org/vams-fork",
+            "branch": "main"
+        },
+        "forkPreview": {
+            "type": "codestar",
+            "connectionArn": "arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-0000-0000-000000000000",
+            "repo": "example-org/vams-fork",
+            "branch": "preview/main"
+        },
+        "vra": {
+            "type": "codestar",
+            "connectionArn": "arn:aws:codeconnections:us-east-1:111111111111:connection/00000000-0000-0000-0000-000000000000",
+            "repo": "example-org/vams-release-automation",
+            "branch": "release-0.1"
+        }
+    },
+    "home": {
+        "repoUrl": "https://github.com/example-org/vams-home.git",
+        "ref": "main",
+        "tokenSecretName": "vra/github-home-token"
+    },
+    "release": {
+        "envs": [
+            {
+                "name": "dev",
+                "account": "222222222222"
+            },
+            {
+                "name": "test",
+                "account": "333333333333",
+                "promotesFrom": "dev",
+                "requiresApproval": true
+            },
+            {
+                "name": "prod",
+                "account": "444444444444",
+                "promotesFrom": "test",
+                "requiresApproval": true
+            }
+        ]
+    },
+    "preview": {
+        "env": {
+            "name": "dev-preview",
+            "account": "222222222222"
+        }
+    },
+    "watch": {
+        "enabled": true,
+        "schedule": "cron(0 6 * * ? *)",
+        "timeZone": "America/New_York",
+        "command": "sync",
+        "packageRepoUrl": "https://github.com/example-org/vams-release-automation.git",
+        "packageRef": "v0.4.0",
+        "gitTokenSecretName": "vra/github-token"
+    },
+    "notifications": {
+        "topicArn": "arn:aws:sns:us-east-1:111111111111:vra-notifications"
+    },
+    "codebuild": {
+        "vpc": {
+            "vpcId": "vpc-00000000000000000",
+            "availabilityZones": ["us-east-1a", "us-east-1b"],
+            "privateSubnetIds": ["subnet-00000000000000001", "subnet-00000000000000002"]
+        }
+    }
+}

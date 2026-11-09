@@ -1,0 +1,141 @@
+# Reference workflow for the PRIVATE vra home repository (.github/workflows/upstream-release.yml): pick up a new VAMS
+# release. Daily and on demand: `vra sync` fetches upstream and fast-forwards the vendor mirrors; when it reports a new
+# release tag (or the ref input names one), `vra merge --lane release` merges it into sync/release-<tag> in the fork
+# and opens a pull request into the fork's target branch. Conflicts the path policy cannot resolve stop the run with
+# exit 20 (NEEDS_HUMAN): the run report names them, and an operator or agent resolves them (`vra merge --continue`).
+#
+# Nothing is deployed here. The pull request runs the fork's pr-checks.yml / security-scan.yml (it is opened with
+# VRA_GIT_TOKEN, not GITHUB_TOKEN, so those workflows trigger); once it is merged, the fork's trunk push starts
+# deploy.yml (repository_dispatch) or the CodePipeline release pipeline (hand-off-to-codepipeline.yml).
+#
+# GitHub environment `vra-sync`: no reviewers, deployment branch rule = default branch. Its VRA_CI_ROLE_ARN is only
+# needed with stateStore.type s3 (state and locks in S3); leave it unset otherwise and no AWS credentials are used.
+# Secrets: VRA_GIT_TOKEN (read the fork, the upstream mirror and the package; push sync/* branches; open pull
+# requests), optional VRA_HOME_TOKEN (contents write here, so the job pushes the state it writes).
+# GHES: gh and git target this server (setup-vra sets GH_HOST); see README.md "GitHub Enterprise Server".
+name: vra-upstream-release
+
+on:
+    schedule:
+        - cron: "41 5 * * *"
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: Release tag to merge now (default = the newest release vra sync reports)
+                type: string
+                required: false
+                default: ""
+
+permissions:
+    contents: read
+
+concurrency:
+    # one upstream sync at a time (shared with upstream-preview.yml); never cancelled
+    group: vra-upstream-sync
+    cancel-in-progress: false
+
+jobs:
+    sync-merge:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: vra-sync
+        timeout-minutes: 60
+        permissions:
+            id-token: write
+            contents: read
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+            VRA_HOME: ${{ github.workspace }}/vra-home
+            VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+            # a parked run (IT request, conflicts) is reported by vra; it does not fail the schedule
+            VRA_SOFT_EXIT_CODES: "10 20"
+            REQUESTED_REF: ${{ inputs.ref }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              if: vars.VRA_CI_ROLE_ARN != ''
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-sync-${{ github.run_id }}
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: vra sync
+              id: sync
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh sync sync
+                  ref="${REQUESTED_REF}"
+                  if [ -z "${ref}" ]; then
+                    ref="$(python3 -c 'import json,sys;print((json.load(open(sys.argv[1])).get("result") or {}).get("newRelease") or "")' vra-out/sync.json)"
+                  fi
+                  [[ -z "${ref}" || "${ref}" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "not a release ref: ${ref}"; exit 2; }
+                  echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+                  echo "upstream release to merge: ${ref:-none}" >> "$GITHUB_STEP_SUMMARY"
+            - name: vra merge (release lane, opens the fork pull request)
+              if: steps.sync.outputs.ref != ''
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_ENTERPRISE_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  REF: ${{ steps.sync.outputs.ref }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh merge-release merge --lane release --ref "${REF}"
+                  python3 - vra-out/merge-release.json >> "$GITHUB_STEP_SUMMARY" <<'PY'
+                  import json, sys
+                  doc = json.load(open(sys.argv[1]))
+                  pub = ((doc.get("result") or {}).get("publish") or {})
+                  pr = (pub.get("pr") or {}).get("url")
+                  print(f"- merge: exit {doc.get('exitCode', 0)} {doc.get('status', '')} {doc.get('message', '')}".rstrip())
+                  print(f"- pull request: {pr}" if pr else "- pull request: none (see the run report)")
+                  PY
+            - name: vra report
+              if: always()
+              run: bash vra-src/cicd/codebuild/scripts/run-vra.sh sync-report report --notify || true
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-sync-merge-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-upstream-release-${{ github.run_id }}
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-sync-merge:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [sync-merge]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-sync-merge-${{ github.run_id }}
+        secrets: inherit

@@ -1,0 +1,15 @@
+# Source-side approval for a prod -> test data copy: the owner of the PRODUCTION data approves it
+# leaving prod. EXAMPLE ONLY. Filed under the SOURCE env; subject data-copy-to:<target>;
+# approver in envs/prod/env.yaml dataOwners. The target-side record is
+# approvals/test/data-copy-prod-to-test-2026-01-20.yaml.
+# `vra data-copy --from prod --to test --approval <target record> --source-approval approvals/prod/data-copy-to_test.yaml`
+build: "data-copy-to:test"
+env: prod
+approver: data-owner@example.com
+approvedAt: "2026-01-20T13:30:00Z"
+expiresAt: "2026-01-21T13:30:00Z"
+scope: [data-copy]
+masked: false # what the approver agreed to; vra refuses a copy whose masking differs
+ticket: DATA-0001
+notes: Full, unmasked copy for UAT regression; classification reviewed. Cognito users not copied.
+source: manual

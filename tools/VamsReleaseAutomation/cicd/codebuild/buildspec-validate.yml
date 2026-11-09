@@ -1,0 +1,57 @@
+# vra: validate stage. Ledger schema check, topology check, IAM preflight for the envs this project's role
+# may reach.
+# Inputs (CodePipeline): primary = Vra (this package). The home repository (ledger + shared state) is
+#   cloned by vra-home.sh (VRA_HOME_REPO, VRA_HOME_REF, VRA_HOME_TOKEN).
+# Environment: VRA_LANE (release|preview), VRA_ENVS (space-separated env names; the pipeline passes only
+#   the dev-tier envs: every other env is preflighted inside its own deploy with its own role),
+#   VRA_PREFLIGHT_WORKFLOWS (default "deploy backup migrate test-live"), VRA_PIPELINE_TOPOLOGY (JSON
+#   release.envs the pipeline was synthesized from; the stage fails when the ledger's topology has changed
+#   since, so the pipeline is redeployed before it promotes along an outdated graph).
+version: 0.2
+
+env:
+    shell: bash
+    variables:
+        VRA_LANE: release
+        VRA_ENVS: "dev"
+        VRA_PREFLIGHT_WORKFLOWS: "deploy backup migrate test-live"
+        VRA_PIPELINE_TOPOLOGY: ""
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 22
+            python: 3.12
+        commands:
+            - export VRA_PKG_DIR="${CODEBUILD_SRC_DIR}"
+            - export VRA_HOME="${CODEBUILD_SRC_DIR}/vra-home"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/install-toolchain.sh"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" checkout
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-pull
+    build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" ledger-validate ledger validate
+            - |
+                if [ -n "${VRA_PIPELINE_TOPOLOGY}" ]; then
+                  printf '%s' "${VRA_PIPELINE_TOPOLOGY}" > vra-out/pipeline-topology.json
+                  bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-py.sh" ci_graph.py check --platform codepipeline \
+                    --ledger "${VRA_HOME}/ledger" --file vra-out/pipeline-topology.json
+                fi
+            - |
+                rc=0
+                for env in ${VRA_ENVS}; do
+                  for wf in ${VRA_PREFLIGHT_WORKFLOWS}; do
+                    bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "preflight-${env}-${wf}" \
+                      preflight --env "${env}" --workflow "${wf}" || rc=$?
+                  done
+                done
+                exit "${rc}"
+    post_build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-push || true
+
+artifacts:
+    name: vra-validate
+    files:
+        - vra-out/**/*
+    discard-paths: no

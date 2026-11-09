@@ -1,0 +1,10 @@
+# FINAL approval for prod. EXAMPLE ONLY: delete before first use.
+build: cust-v2.6.6-1
+env: prod
+approver: release-manager@example.com
+approvedAt: "2026-01-16T18:30:00Z"
+expiresAt: "2026-01-18T06:00:00Z" # inside the next change window
+ticket: CHG-0002
+notes: UAT sign-off by uat-lead@example.com on 2026-01-15; CAB approved.
+scope: [promote]
+source: "codepipeline:vra-release/00000000-0000-0000-0000-000000000000" # <pipeline>/<execution id>

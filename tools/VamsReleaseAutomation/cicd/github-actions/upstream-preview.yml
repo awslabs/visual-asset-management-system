@@ -1,0 +1,235 @@
+# Reference workflow for the PRIVATE vra home repository (.github/workflows/upstream-preview.yml): follow the VAMS
+# development branch in the preview lane. Daily and on demand: `vra sync`; when it reports a new upstream development
+# commit, `vra merge --lane preview` merges it into sync/preview-<sha> and fast-forwards the fork's preview branch
+# (lanes.preview.autoMerge; with autoMerge false it opens a pull request instead and nothing is built), `vra build
+# --lane preview` builds it, and the build is deployed to the preview env and tested (vra-deploy-env.yml). A failed
+# deploy or test rolls the preview env back to its previous good build.
+#
+# The preview env (vars.VRA_PREVIEW_ENV, default dev-preview) must be an ungated env of the preview lane
+# (requiresApproval false): the deploy job stops with exit 20 when the ledger gates it. Its GitHub environment has
+# no reviewers and a VRA_CI_ROLE_ARN that can assume only that env's deploy role. The merge and build run in
+# environment vra-build (build-only role: vra-synth-* lookups, no deploy role).
+#
+# Variables: as deploy.yml, plus VRA_PREVIEW_ENV and VRA_PREVIEW_AUTO_ROLLBACK (default true). Secrets: VRA_GIT_TOKEN
+# (also pushes sync/preview-* and the preview branch), optional VRA_HOME_TOKEN.
+name: vra-upstream-preview
+
+on:
+    schedule:
+        - cron: "11 6 * * *"
+    workflow_dispatch: {}
+
+permissions:
+    contents: read
+
+env:
+    VRA_HOME: ${{ github.workspace }}/vra-home
+
+jobs:
+    merge-build:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: vra-build
+        timeout-minutes: 120
+        concurrency:
+            group: vra-upstream-sync
+            cancel-in-progress: false
+        permissions:
+            id-token: write
+            contents: read
+        outputs:
+            build-id: ${{ steps.build.outputs.build-id }}
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+            VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-preview-build-${{ github.run_id }}
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: vra sync
+              id: sync
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh sync sync
+                  sha="$(python3 -c 'import json,sys;print((json.load(open(sys.argv[1])).get("result") or {}).get("newPreviewCommit") or "")' vra-out/sync.json)"
+                  [[ -z "${sha}" || "${sha}" =~ ^[0-9a-f]{7,40}$ ]] || { echo "not a commit: ${sha}"; exit 2; }
+                  echo "ref=${sha:0:12}" >> "$GITHUB_OUTPUT"
+                  echo "new upstream development commit: ${sha:-none}" >> "$GITHUB_STEP_SUMMARY"
+            - name: vra merge (preview lane)
+              id: merge
+              if: steps.sync.outputs.ref != ''
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_ENTERPRISE_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  REF: ${{ steps.sync.outputs.ref }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh merge-preview merge --lane preview --ref "${REF}"
+                  python3 - vra-out/merge-preview.json >> "$GITHUB_OUTPUT" <<'PY'
+                  import json, sys
+                  res = json.load(open(sys.argv[1])).get("result") or {}
+                  pub = res.get("publish") or {}
+                  # build only what reached the preview branch (autoMerge); a pull request waits for review
+                  print(f"branch={res.get('branch') or ''}" if pub.get("fastForwarded") else "branch=")
+                  PY
+            - name: vra build (preview lane)
+              id: build
+              if: steps.merge.outputs.branch != ''
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  BRANCH: ${{ steps.merge.outputs.branch }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh build build --lane preview --ref "${BRANCH}"
+                  echo "build-id=$(python3 -c 'import json;print(json.load(open("vra-out/build.json"))["buildId"])')" >> "$GITHUB_OUTPUT"
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-out vra-bundle
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-merge-build-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-build
+                  path: |
+                      vra-out/
+                      vra-bundle/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-merge-build:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [merge-build]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-merge-build-${{ github.run_id }}
+        secrets: inherit
+
+    deploy-preview:
+        needs: [merge-build]
+        if: needs.merge-build.outputs.build-id != ''
+        uses: ./.github/workflows/vra-deploy-env.yml
+        with:
+            env-name: ${{ vars.VRA_PREVIEW_ENV || 'dev-preview' }}
+            promote-from: ""
+            requires-approval: false
+            build-id: ${{ needs.merge-build.outputs.build-id }}
+            test-suites: "live-cli,live-web,customer"
+        secrets: inherit
+
+    rollback-preview:
+        needs: [merge-build, deploy-preview]
+        if: >-
+            failure() && needs.deploy-preview.result == 'failure' && vars.VRA_PREVIEW_AUTO_ROLLBACK != 'false'
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: ${{ vars.VRA_PREVIEW_ENV || 'dev-preview' }}
+        timeout-minutes: 240
+        concurrency:
+            group: vra-env-${{ vars.VRA_PREVIEW_ENV || 'dev-preview' }}
+            cancel-in-progress: false
+        permissions:
+            id-token: write
+            contents: read
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+            VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+            VRA_ENV: ${{ vars.VRA_PREVIEW_ENV || 'dev-preview' }}
+            VRA_LOCK_WAIT_MINUTES: ${{ vars.VRA_LOCK_WAIT_MINUTES || '30' }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-preview-rollback-${{ github.run_id }}
+                  role-duration-seconds: 14400
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: vra rollback
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+              run: |
+                  [[ "${VRA_ENV}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "VRA_PREVIEW_ENV is not an env name"; exit 2; }
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh "rollback-${VRA_ENV}" \
+                    rollback --env "${VRA_ENV}" --lock-wait "${VRA_LOCK_WAIT_MINUTES}"
+            - name: vra report
+              if: always()
+              run: bash vra-src/cicd/codebuild/scripts/run-vra.sh "report-${VRA_ENV}" report --notify || true
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-rollback-preview-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-rollback-${{ github.run_id }}
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-rollback-preview:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [rollback-preview]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-rollback-preview-${{ github.run_id }}
+        secrets: inherit

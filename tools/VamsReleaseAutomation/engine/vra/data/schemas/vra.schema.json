@@ -1,0 +1,287 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vra/vra.schema.json",
+    "title": "vra ledger project file (ledger/vra.yaml)",
+    "type": "object",
+    "required": ["project", "upstream", "fork", "githost", "trunk", "tagPrefix", "lanes"],
+    "additionalProperties": false,
+    "properties": {
+        "schemaVersion": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "project": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "minLength": 1
+                },
+                {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "description": {
+                            "type": "string"
+                        }
+                    }
+                }
+            ]
+        },
+        "upstream": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "minLength": 1
+                },
+                {
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
+                }
+            ]
+        },
+        "fork": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "minLength": 1
+                },
+                {
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "localPath": {
+                            "type": ["string", "null"]
+                        }
+                    }
+                }
+            ]
+        },
+        "githost": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+                "type": {
+                    "enum": ["github", "gitlab", "bitbucket", "codecommit", "local"]
+                },
+                "repo": {
+                    "type": ["string", "null"],
+                    "description": "owner/repo (github), group/project (gitlab), workspace/repo (bitbucket)"
+                },
+                "apiUrl": {
+                    "type": ["string", "null"]
+                },
+                "tokenSecret": {
+                    "type": ["string", "null"],
+                    "description": "Secrets Manager secret NAME holding an API token (bitbucket); never the token"
+                },
+                "repositoryName": {
+                    "type": ["string", "null"],
+                    "description": "codecommit repository name"
+                },
+                "region": {
+                    "type": ["string", "null"]
+                },
+                "pushVendorBranches": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "trunk": {
+            "type": "string",
+            "minLength": 1
+        },
+        "tagPrefix": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._/-]*$"
+        },
+        "lanes": {
+            "type": "object",
+            "required": ["release"],
+            "additionalProperties": false,
+            "properties": {
+                "release": {
+                    "$ref": "#/$defs/lane"
+                },
+                "preview": {
+                    "$ref": "#/$defs/lane"
+                }
+            }
+        },
+        "notifications": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+                "type": {
+                    "enum": ["none", "sns", "email", "slack-webhook", "teams-webhook"]
+                },
+                "target": {
+                    "type": ["string", "null"],
+                    "description": "Secrets Manager secret NAME holding the topic ARN / address / webhook URL"
+                },
+                "from": {
+                    "type": ["string", "null"]
+                },
+                "region": {
+                    "type": ["string", "null"]
+                },
+                "onlyOn": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "stateStore": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+                "type": {
+                    "enum": ["home", "local", "s3"],
+                    "description": "home (default): the shared home folder; local is its former name; s3: S3 bucket + DynamoDB lock table"
+                },
+                "bucket": {
+                    "type": ["string", "null"]
+                },
+                "prefix": {
+                    "type": ["string", "null"]
+                },
+                "lockTable": {
+                    "type": ["string", "null"]
+                },
+                "region": {
+                    "type": ["string", "null"]
+                }
+            }
+        },
+        "toolsAccount": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9]{12}$"
+        },
+        "automation": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automation tier: who drives the release flow. agent (default): a local agent or operator runs vra; hybrid: CI runs watch, build and the envs without approval, people or agents run the gated envs; pipeline: CodePipeline end to end; pipeline+actions: GitHub Actions for checks and scans, CodePipeline for deploys.",
+            "properties": {
+                "mode": {
+                    "enum": ["agent", "hybrid", "pipeline", "pipeline+actions"]
+                },
+                "pipeline": {
+                    "type": "object",
+                    "description": "cicd/pipeline config (lib/config.ts PipelineConfig) without ledgerGraph, ledgerDir and automationMode, which vra sets from `vra ledger graph` and mode. Rendered by `vra pipeline plan`."
+                },
+                "actions": {
+                    "type": "object",
+                    "description": "Optional notes on the GitHub Actions side of pipeline+actions; vra does not read it (the workflows in cicd/github-actions carry their own settings)."
+                },
+                "approvalEnv": {
+                    "type": ["string", "null"],
+                    "description": "env whose approvers authorize a human-only `vra pipeline deploy` without a terminal (default: the first prod-class gated env)"
+                }
+            }
+        },
+        "build": {
+            "type": "object",
+            "properties": {
+                "ash": {
+                    "type": "boolean"
+                },
+                "sbom": {
+                    "type": "boolean"
+                },
+                "signing": {
+                    "type": "object",
+                    "description": "KMS signing of every bundle manifest; deploys verify it",
+                    "required": ["kmsKeyArn"],
+                    "properties": {
+                        "kmsKeyArn": {
+                            "type": "string",
+                            "pattern": "^arn:aws(-[a-z]+)*:kms:"
+                        },
+                        "algorithm": {
+                            "enum": [
+                                "ECDSA_SHA_256",
+                                "ECDSA_SHA_384",
+                                "RSASSA_PSS_SHA_256",
+                                "RSASSA_PKCS1_V1_5_SHA_256"
+                            ]
+                        },
+                        "region": {
+                            "type": ["string", "null"]
+                        },
+                        "tags": {
+                            "type": "boolean",
+                            "description": "also sign release tags with this KMS key (SSH signature format, key spec ECC_NIST_P256); deploy, promote and rollback refuse an unsigned or invalid tag"
+                        }
+                    }
+                },
+                "signTags": {
+                    "type": "boolean",
+                    "description": "git tag -s with the build host's own GPG/SSH key (not verified by vra); prefer signing.tags"
+                },
+                "pushTags": {
+                    "type": "boolean"
+                },
+                "unitSuites": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "cdkCli": {
+                    "type": ["string", "null"]
+                }
+            }
+        },
+        "cdk": {
+            "type": "object",
+            "properties": {
+                "qualifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "engineVersion": {
+            "type": ["string", "null"],
+            "description": "vra version this ledger is operated with; a different engine refuses gated actions"
+        }
+    },
+    "$defs": {
+        "lane": {
+            "type": "object",
+            "required": ["source"],
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "vendorBranch": {
+                    "type": "string"
+                },
+                "targetBranch": {
+                    "type": "string"
+                },
+                "autoMerge": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        }
+    }
+}

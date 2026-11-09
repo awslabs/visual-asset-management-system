@@ -1,0 +1,31 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vra/customer-tests.schema.json",
+    "title": "customer regression hooks (ledger/tests/customer.yaml)",
+    "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/hook" } },
+        {
+            "type": "object",
+            "required": ["hooks"],
+            "properties": { "hooks": { "type": "array", "items": { "$ref": "#/$defs/hook" } } }
+        }
+    ],
+    "$defs": {
+        "hook": {
+            "type": "object",
+            "required": ["name", "cmd"],
+            "properties": {
+                "name": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+                "cmd": {
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                    ]
+                },
+                "envs": { "type": "array", "items": { "type": "string" } },
+                "timeoutMin": { "type": "number", "exclusiveMinimum": 0 },
+                "cwd": { "type": ["string", "null"] }
+            }
+        }
+    }
+}

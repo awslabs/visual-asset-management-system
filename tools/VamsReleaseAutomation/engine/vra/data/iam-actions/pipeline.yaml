@@ -1,0 +1,216 @@
+# IAM action manifest: pipeline (`vra pipeline plan | deploy | status | sync-ledger | push-source`)
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+# Every statement applies to the operator or agent identity in the TOOLS account: `vra pipeline` touches no env
+# account. `cdk deploy` of the cicd/pipeline app runs through the tools account's CDK bootstrap roles; the
+# pipeline's own roles (CodeBuild tiers, pipeline and action roles) are listed by `vra pipeline plan` in the IT
+# package (state/iam/pipeline/<n>/IT-ROLES.md), not here.
+workflow: pipeline
+schemaVersion: 1
+description: >-
+    Render the CodePipeline lane from the ledger graph, synthesize it offline, compare it with the deployed
+    pipeline stack (read-only), deploy it through the CDK bootstrap roles of the tools account, read the
+    pipelines' state, and feed the S3 source the stack created (upload the fork branch zip, start the pipeline).
+statements:
+    - sid: ToolsPipelineStackRead
+      actions:
+          - cloudformation:DescribeStacks
+          - cloudformation:GetTemplate
+          - cloudformation:DescribeStackEvents
+      resources:
+          - arn:${Partition}:cloudformation:*:*:stack/vra-pipeline/*
+      note: >-
+          plan (first deploy or not, IAM and approval changes against the deployed template), status (outputs
+          TopologyDigest, pipeline names, connection ARNs), deploy (the stack still matches the plan). Narrow the
+          stack name when automation.pipeline.prefix is not vra.
+
+    - sid: ToolsCdkBootstrapRoles
+      actions:
+          - sts:AssumeRole
+          - sts:TagSession
+      resources:
+          - arn:${Partition}:iam::*:role/cdk-${CdkQualifier}-deploy-role-*
+          - arn:${Partition}:iam::*:role/cdk-${CdkQualifier}-file-publishing-role-*
+          - arn:${Partition}:iam::*:role/cdk-${CdkQualifier}-lookup-role-*
+      note: >-
+          cdk diff (lookup role, read-only) and cdk deploy (deploy and file-publishing roles) of the pipeline stack in
+          the tools account. Narrow the account to the tools account at render time.
+
+    - sid: ToolsCdkBootstrapVersion
+      actions:
+          - ssm:GetParameter
+      resources:
+          - arn:${Partition}:ssm:*:*:parameter/cdk-bootstrap/${CdkQualifier}/version
+      note: The CDK CLI checks the bootstrap version before a deploy.
+
+    - sid: ToolsPipelineState
+      actions:
+          - codepipeline:GetPipelineState
+          - codepipeline:ListPipelineExecutions
+          - codepipeline:GetPipelineExecution
+      resources:
+          - arn:${Partition}:codepipeline:*:*:vra-*
+      note: status (stage states, pending approvals, recent executions).
+
+    - sid: ToolsPipelineStart
+      actions:
+          - codepipeline:StartPipelineExecution
+      resources:
+          - arn:${Partition}:codepipeline:*:*:vra-*
+      optional: true
+      note: push-source starts the pipeline after it uploaded a changed branch (S3 sources the stack created).
+
+    - sid: ToolsPushSource
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-pipeline-sourcebucket*/*
+      optional: true
+      note: >-
+          push-source: HeadObject (as s3:GetObject) to skip an unchanged revision, PutObject of the branch or package
+          zip (SSE-KMS with the pipeline key). Only for S3 sources the stack created (no bucketName).
+
+    - sid: ToolsPushSourceKey
+      actions:
+          - kms:GenerateDataKey
+          - kms:Decrypt
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-pipeline
+      optional: true
+      note: The source bucket is encrypted with the pipeline's key (alias/vra-pipeline).
+
+    - sid: ToolsGitHostToken
+      actions:
+          - secretsmanager:GetSecretValue
+          - secretsmanager:DescribeSecret
+      resources:
+          - arn:${Partition}:secretsmanager:*:*:secret:vra/*
+      optional: true
+      note: push-source fetches the fork branch it uploads (git-host token named in vra.yaml githost).
+
+    - sid: ToolsVerifyApprovalSignature
+      optional: true
+      actions:
+          - kms:Verify
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      note: >-
+          Only when the approval env (automation.approvalEnv) sets approvalSigningKeyArn: a human:pipeline-deploy
+          record that authorizes a human-only pipeline deploy must carry a KMS signature, which vra verifies.
+          Scope the resource to that key ARN; the identity that deploys the pipeline never needs kms:Sign on it.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

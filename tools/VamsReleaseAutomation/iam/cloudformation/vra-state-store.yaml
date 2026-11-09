@@ -1,0 +1,411 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+    vams-release-automation (vra) state store for the TOOLS account: KMS key, versioned S3 bucket
+    for run state / build bundles / checkpoints, DynamoDB lock table (PITR), and an SNS topic for
+    notifications. Partition-generic. Referenced by vra.yaml stateStore {type: s3, bucket, lockTable}.
+
+Parameters:
+    StateBucketName:
+        Type: String
+        Default: ""
+        Description: Optional explicit bucket name. Empty = vra-state-<account>-<region>. Must start with "vra-state-" to match iam/actions manifests.
+        AllowedPattern: "^$|^vra-state-[a-z0-9.-]{1,52}$"
+    LockTableName:
+        Type: String
+        Default: vra-locks
+        AllowedPattern: "^[A-Za-z0-9_.-]{3,255}$"
+    NoncurrentVersionRetentionDays:
+        Type: Number
+        Default: 90
+        MinValue: 1
+        Description: Days to keep noncurrent object versions (run history, superseded bundles).
+    AccessLogBucketName:
+        Type: String
+        Default: ""
+        Description: Optional existing S3 server access log bucket. Empty = no access logging (add one for regulated environments).
+    KeyAdminPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: Optional IAM principals allowed to administer the key. Empty = the account root (IAM policies decide).
+    NotificationEmail:
+        Type: String
+        Default: ""
+        Description: Optional email endpoint subscribed to the notifications topic (requires confirmation).
+    ProtectHistory:
+        Type: String
+        Default: "true"
+        AllowedValues: ["true", "false"]
+        Description: Deny deleting env history records (<prefix>/history/*) to every principal except HistoryAdminPrincipalArns.
+    HistoryAdminPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Principals that may delete history records (break-glass, retention clean-up). Empty = nobody. Lifecycle
+            expiry of noncurrent versions (NoncurrentVersionRetentionDays) still applies to deleted records.
+    ProtectLocks:
+        Type: String
+        Default: "true"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Resource policy on the lock table: only lock items (env#<env>, env#watch, run#<runId>) with the engine's
+            attributes may be written, and UpdateItem / batch / PartiQL writes are denied to every principal except
+            LockAdminPrincipalArns. Set "false" only in a partition without DynamoDB resource-based policies.
+    LockAdminPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: Principals exempt from the lock-table resource policy (break-glass). Empty = nobody.
+
+Conditions:
+    ProtectHistoryOn: !Equals [!Ref ProtectHistory, "true"]
+    ProtectLocksOn: !Equals [!Ref ProtectLocks, "true"]
+    HasBucketName: !Not [!Equals [!Ref StateBucketName, ""]]
+    HasAccessLogs: !Not [!Equals [!Ref AccessLogBucketName, ""]]
+    HasKeyAdmins: !Not [!Equals [!Join ["", !Ref KeyAdminPrincipalArns], ""]]
+    HasEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+    StateKey:
+        Type: AWS::KMS::Key
+        DeletionPolicy: Retain
+        UpdateReplacePolicy: Retain
+        Properties:
+            Description: vra state store (S3, DynamoDB, SNS)
+            EnableKeyRotation: true
+            KeyPolicy:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: AccountRootDelegatesToIam
+                      Effect: Allow
+                      Principal:
+                          AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+                      Action: kms:*
+                      Resource: "*"
+                    - !If
+                      - HasKeyAdmins
+                      - Sid: KeyAdministrators
+                        Effect: Allow
+                        Principal:
+                            AWS: !Ref KeyAdminPrincipalArns
+                        Action:
+                            - kms:Describe*
+                            - kms:List*
+                            - kms:Get*
+                            - kms:Put*
+                            - kms:Update*
+                            - kms:Enable*
+                            - kms:Disable*
+                            - kms:TagResource
+                            - kms:UntagResource
+                            - kms:ScheduleKeyDeletion
+                            - kms:CancelKeyDeletion
+                        Resource: "*"
+                      - !Ref AWS::NoValue
+                    - Sid: AllowSnsAndCodestarNotifications
+                      Effect: Allow
+                      Principal:
+                          Service:
+                              - sns.amazonaws.com
+                              - codestar-notifications.amazonaws.com
+                              - events.amazonaws.com
+                      Action:
+                          - kms:GenerateDataKey*
+                          - kms:Decrypt
+                      Resource: "*"
+                      Condition:
+                          StringEquals:
+                              aws:SourceAccount: !Ref AWS::AccountId
+
+    StateKeyAlias:
+        Type: AWS::KMS::Alias
+        Properties:
+            AliasName: alias/vra-state
+            TargetKeyId: !Ref StateKey
+
+    StateBucket:
+        Type: AWS::S3::Bucket
+        DeletionPolicy: Retain
+        UpdateReplacePolicy: Retain
+        Properties:
+            BucketName: !If
+                - HasBucketName
+                - !Ref StateBucketName
+                - !Sub vra-state-${AWS::AccountId}-${AWS::Region}
+            VersioningConfiguration:
+                Status: Enabled
+            BucketEncryption:
+                ServerSideEncryptionConfiguration:
+                    - ServerSideEncryptionByDefault:
+                          SSEAlgorithm: aws:kms
+                          KMSMasterKeyID: !GetAtt StateKey.Arn
+                      BucketKeyEnabled: true
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: true
+                BlockPublicPolicy: true
+                IgnorePublicAcls: true
+                RestrictPublicBuckets: true
+            OwnershipControls:
+                Rules:
+                    - ObjectOwnership: BucketOwnerEnforced
+            LifecycleConfiguration:
+                Rules:
+                    - Id: ExpireNoncurrentVersions
+                      Status: Enabled
+                      NoncurrentVersionExpiration:
+                          NoncurrentDays: !Ref NoncurrentVersionRetentionDays
+                    - Id: AbortIncompleteUploads
+                      Status: Enabled
+                      AbortIncompleteMultipartUpload:
+                          DaysAfterInitiation: 7
+            LoggingConfiguration: !If
+                - HasAccessLogs
+                - DestinationBucketName: !Ref AccessLogBucketName
+                  LogFilePrefix: vra-state/
+                - !Ref AWS::NoValue
+
+    StateBucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Properties:
+            Bucket: !Ref StateBucket
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: DenyInsecureTransport
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:*
+                      Resource:
+                          - !GetAtt StateBucket.Arn
+                          - !Sub ${StateBucket.Arn}/*
+                      Condition:
+                          Bool:
+                              aws:SecureTransport: "false"
+                    - Sid: DenyOldTls
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:*
+                      Resource:
+                          - !GetAtt StateBucket.Arn
+                          - !Sub ${StateBucket.Arn}/*
+                      Condition:
+                          NumericLessThan:
+                              s3:TlsVersion: 1.2
+                    # A request that names a KMS key must name the state key; a request without the header gets the
+                    # bucket default (the state key). StringNotEqualsIfExists alone would also deny the header-less
+                    # writes vra makes, because a missing key evaluates the condition to true.
+                    - Sid: DenyWrongKmsKey
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:PutObject
+                      Resource: !Sub ${StateBucket.Arn}/*
+                      Condition:
+                          "Null":
+                              s3:x-amz-server-side-encryption-aws-kms-key-id: "false"
+                          StringNotEquals:
+                              s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt StateKey.Arn
+                    # Env history (deploy / test / rollback / approval consumption) is the promotion and audit evidence:
+                    # append-only. vra writes each record once (If-None-Match); nobody but the listed admins deletes it.
+                    - !If
+                      - ProtectHistoryOn
+                      - Sid: ProtectHistory
+                        Effect: Deny
+                        Principal: "*"
+                        Action:
+                            - s3:DeleteObject
+                            - s3:DeleteObjectVersion
+                        Resource:
+                            - !Sub ${StateBucket.Arn}/*/history/*
+                        Condition:
+                            ArnNotLike:
+                                aws:PrincipalArn: !Ref HistoryAdminPrincipalArns
+                      - !Ref AWS::NoValue
+                    # An approval claim (approvals-consumed/<env>/<sha256>.json) is the proof an approval was used once.
+                    - !If
+                      - ProtectHistoryOn
+                      - Sid: ProtectApprovalClaims
+                        Effect: Deny
+                        Principal: "*"
+                        Action:
+                            - s3:DeleteObject
+                            - s3:DeleteObjectVersion
+                        Resource:
+                            - !Sub ${StateBucket.Arn}/*/approvals-consumed/*
+                        Condition:
+                            ArnNotLike:
+                                aws:PrincipalArn: !Ref HistoryAdminPrincipalArns
+                      - !Ref AWS::NoValue
+                    # S3 conditional writes, enforced for every principal. vra writes each history record and each bundle
+                    # file once (If-None-Match: *); a write without the header could overwrite evidence or a tested bundle.
+                    # s3:ObjectCreationOperation exempts the parts of a multipart upload, which take no conditional header.
+                    - Sid: HistoryAndBundlesCreateOnly
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:PutObject
+                      Resource:
+                          - !Sub ${StateBucket.Arn}/*/history/*
+                          - !Sub ${StateBucket.Arn}/*/artifacts/*
+                          # IT role packages and IT responses (iam/<env>/<n>/*, iam/<env>/responses/*); the apply
+                          # record iam/<env>/applied.json is one level up and is replaced by `vra iam apply`
+                          - !Sub ${StateBucket.Arn}/*/iam/*/*/*
+                          - !Sub ${StateBucket.Arn}/*/pipeline/*
+                      Condition:
+                          "Null":
+                              s3:if-none-match: "true"
+                          Bool:
+                              s3:ObjectCreationOperation: "true"
+                    # Run state is compare-before-write: If-Match <etag> (update) or If-None-Match: * (create).
+                    - Sid: RunStateConditionalWrites
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:PutObject
+                      Resource: !Sub ${StateBucket.Arn}/*/runs/*/state.json
+                      Condition:
+                          "Null":
+                              s3:if-match: "true"
+                              s3:if-none-match: "true"
+                          Bool:
+                              s3:ObjectCreationOperation: "true"
+
+    LockTable:
+        Type: AWS::DynamoDB::Table
+        DeletionPolicy: Retain
+        UpdateReplacePolicy: Retain
+        Properties:
+            TableName: !Ref LockTableName
+            BillingMode: PAY_PER_REQUEST
+            AttributeDefinitions:
+                - AttributeName: lockId
+                  AttributeType: S
+            KeySchema:
+                - AttributeName: lockId
+                  KeyType: HASH
+            TimeToLiveSpecification:
+                AttributeName: expiresAt
+                Enabled: true
+            PointInTimeRecoverySpecification:
+                PointInTimeRecoveryEnabled: true
+            SSESpecification:
+                SSEEnabled: true
+                SSEType: KMS
+                KMSMasterKeyId: !GetAtt StateKey.Arn
+            DeletionProtectionEnabled: true
+            # vra reads with ConsistentRead, writes whole items with PutItem (attribute_not_exists(lockId) OR
+            # ver = :v) and deletes with DeleteItem (ver = :v; `vra unlock` unconditionally). Anything else is denied.
+            ResourcePolicy: !If
+                - ProtectLocksOn
+                - PolicyDocument:
+                      Version: "2012-10-17"
+                      Statement:
+                          - Sid: DenyPartialAndBulkWrites
+                            Effect: Deny
+                            Principal: "*"
+                            Action:
+                                - dynamodb:UpdateItem
+                                - dynamodb:BatchWriteItem
+                                - dynamodb:PartiQLInsert
+                                - dynamodb:PartiQLUpdate
+                                - dynamodb:PartiQLDelete
+                                - dynamodb:ImportTable
+                                - dynamodb:RestoreTableToPointInTime
+                            Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LockTableName}
+                            Condition:
+                                StringNotLike:
+                                    aws:PrincipalArn: !Ref LockAdminPrincipalArns
+                          - Sid: OnlyLockItems
+                            Effect: Deny
+                            Principal: "*"
+                            Action:
+                                - dynamodb:GetItem
+                                - dynamodb:PutItem
+                                - dynamodb:DeleteItem
+                            Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LockTableName}
+                            Condition:
+                                ForAnyValue:StringNotLike:
+                                    dynamodb:LeadingKeys:
+                                        - env#*
+                                        - run#*
+                                StringNotLike:
+                                    aws:PrincipalArn: !Ref LockAdminPrincipalArns
+                          # The engine's lock attributes (engine/vra/state.py DynamoLock); expiresAt is the TTL attribute
+                          # (lease + 7 days, or + 30 days while dirty / held).
+                          - Sid: OnlyLockAttributes
+                            Effect: Deny
+                            Principal: "*"
+                            Action: dynamodb:PutItem
+                            Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LockTableName}
+                            Condition:
+                                ForAnyValue:StringNotEquals:
+                                    dynamodb:Attributes:
+                                        - lockId
+                                        - key
+                                        - env
+                                        - runId
+                                        - ownerHash
+                                        - host
+                                        - pid
+                                        - acquiredAt
+                                        - heartbeatAt
+                                        - leaseUntil
+                                        - dirty
+                                        - held
+                                        - heldReason
+                                        - expiresAt
+                                        - ver
+                                        - takeovers
+                                StringNotLike:
+                                    aws:PrincipalArn: !Ref LockAdminPrincipalArns
+                - !Ref AWS::NoValue
+
+    NotificationsTopic:
+        Type: AWS::SNS::Topic
+        Properties:
+            TopicName: vra-notifications
+            KmsMasterKeyId: !Ref StateKey
+
+    NotificationsTopicPolicy:
+        Type: AWS::SNS::TopicPolicy
+        Properties:
+            Topics:
+                - !Ref NotificationsTopic
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: DenyInsecureTransport
+                      Effect: Deny
+                      Principal: "*"
+                      Action: sns:Publish
+                      Resource: !Ref NotificationsTopic
+                      Condition:
+                          Bool:
+                              aws:SecureTransport: "false"
+                    - Sid: AllowNotificationServices
+                      Effect: Allow
+                      Principal:
+                          Service:
+                              - codestar-notifications.amazonaws.com
+                              - events.amazonaws.com
+                      Action: sns:Publish
+                      Resource: !Ref NotificationsTopic
+                      Condition:
+                          StringEquals:
+                              aws:SourceAccount: !Ref AWS::AccountId
+
+    NotificationEmailSubscription:
+        Type: AWS::SNS::Subscription
+        Condition: HasEmail
+        Properties:
+            TopicArn: !Ref NotificationsTopic
+            Protocol: email
+            Endpoint: !Ref NotificationEmail
+
+Outputs:
+    StateBucketName:
+        Value: !Ref StateBucket
+        Description: vra.yaml stateStore.bucket
+    LockTableName:
+        Value: !Ref LockTable
+        Description: vra.yaml stateStore.lockTable
+    StateKeyArn:
+        Value: !GetAtt StateKey.Arn
+    NotificationsTopicArn:
+        Value: !Ref NotificationsTopic
+        Description: vra.yaml notifications.target when notifications.type is sns

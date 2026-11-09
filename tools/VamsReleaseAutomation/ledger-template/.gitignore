@@ -1,0 +1,9 @@
+# The ledger holds configuration and audit records only. Never commit secrets or run output.
+.vra/
+vra-out/
+*.pem
+*.key
+.env
+.env.*
+**/credentials
+**/*.secret

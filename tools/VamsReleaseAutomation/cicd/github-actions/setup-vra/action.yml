@@ -1,0 +1,52 @@
+name: setup-vra
+description: >-
+    Install the pinned vra toolchain (Node 22, npm 11, Python, uv) and the vra engine from ./vra-src (pyproject.toml at
+    its root). Works on GitHub Enterprise Cloud and GitHub Enterprise Server: GH_HOST is set from the server URL, and git
+    reads VRA_GIT_TOKEN from the job environment at call time (never written to disk).
+inputs:
+    node-version:
+        default: "22"
+    npm-version:
+        default: "11.19.1"
+    python-version:
+        default: "3.12"
+    uv-version:
+        default: "0.12.17"
+    vra-package:
+        description: Engine spec; default ./vra-src (the pinned checkout)
+        default: ""
+    git-credentials:
+        description: >-
+            "true": git authenticates HTTPS to this GitHub host with $VRA_GIT_TOKEN from the environment of the step
+            that runs git (the engine's fork clone, push of sync/* branches). Nothing is stored.
+        default: "true"
+runs:
+    using: composite
+    steps:
+        - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          with:
+              node-version: ${{ inputs.node-version }}
+        - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+          with:
+              python-version: ${{ inputs.python-version }}
+        - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+          with:
+              version: ${{ inputs.uv-version }}
+        - shell: bash
+          env:
+              NPM_VERSION: ${{ inputs.npm-version }}
+              VRA_PACKAGE: ${{ inputs.vra-package }}
+              GIT_CREDENTIALS: ${{ inputs.git-credentials }}
+          run: |
+              npm install -g "npm@${NPM_VERSION}" --no-audit --no-fund
+              uv tool install --force --python "$(command -v python3)" "${VRA_PACKAGE:-${GITHUB_WORKSPACE}/vra-src}"
+              echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+              # gh (pull requests, approvals API) targets this server: github.com, <tenant>.ghe.com or a GHES host.
+              # gh reads GH_TOKEN for github.com / *.ghe.com and GH_ENTERPRISE_TOKEN for a GHES host; the workflows
+              # set both.
+              echo "GH_HOST=${GITHUB_SERVER_URL#https://}" >> "$GITHUB_ENV"
+              if [ "${GIT_CREDENTIALS}" = "true" ]; then
+                # The helper reads the token when git calls it; a step without VRA_GIT_TOKEN gets no credentials.
+                git config --global "credential.${GITHUB_SERVER_URL}.helper" \
+                  '!f() { [ -n "${VRA_GIT_TOKEN:-}" ] || exit 0; echo "username=x-access-token"; echo "password=${VRA_GIT_TOKEN}"; }; f'
+              fi

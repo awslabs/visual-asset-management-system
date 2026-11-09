@@ -1,0 +1,88 @@
+# vra: scheduled watch (EventBridge Scheduler -> codebuild:StartBuild, daily).
+# sync -> merge -> build -> deploy dev / dev-preview -> test -> rollback on failure -> report.
+# `vra watch` never touches envs with autoDeploy: false, so it can never reach test or prod.
+#
+# NO_SOURCE project: the home repository and this package are cloned here, because a scheduled build has
+# no pipeline artifacts. Environment:
+#   VRA_HOME_REPO        git URL of the private home repository (vra-home.yaml, ledger/, state/)
+#   VRA_HOME_REF         default main
+#   VRA_HOME_TOKEN       HTTPS token for the home repository (read + push the state this build writes);
+#                        CodeBuild env var of type SECRETS_MANAGER, never plaintext. Not needed for CodeCommit
+#                        (codecommit::<region>://<repo> URLs, IAM auth, every partition)
+#   VRA_PACKAGE_REPO     git URL of vams-release-automation (wrapper scripts + engine source)
+#   VRA_PACKAGE          optional pinned engine spec (wheel / index version) instead of the package source
+#   VRA_PACKAGE_REF      tag or commit to run (pin it; do not track a moving branch)
+#   VRA_PACKAGE_S3_URI   s3://<bucket>/<key> of the package zip (pipeline S3 source for vra); replaces the clone
+#   VRA_SOURCE_BUCKET, VRA_SOURCE_RELEASE_KEY / VRA_SOURCE_PREVIEW_KEY, VRA_RELEASE_PIPELINE / VRA_PREVIEW_PIPELINE
+#                        S3 fork sources the stack created: pipeline-watch.sh uploads the branch and starts the
+#                        pipeline (`vra pipeline push-source`)
+#   VRA_GIT_TOKEN        HTTPS token for the fork and package hosts (SECRETS_MANAGER type)
+# Project: privileged mode ON (build step synthesizes with docker bundling), concurrent build limit 1.
+version: 0.2
+
+env:
+    shell: bash
+    variables:
+        VRA_HOME_REF: main
+        VRA_REQUIRE_DOCKER: "true"
+        # A parked run (BLOCKED_ON_IT / NEEDS_HUMAN) is reported and notified by vra itself;
+        # the scheduled build should not fail for it. Remove to make parked runs fail the build.
+        VRA_SOFT_EXIT_CODES: "10 20"
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 22
+            python: 3.12
+        commands:
+            - |
+                set -euo pipefail
+                if [ -n "${VRA_GIT_TOKEN:-}" ]; then
+                  # Credential helper reads the token from the environment; it is never written to disk.
+                  git config --global credential.helper '!f() { echo "username=x-access-token"; echo "password=${VRA_GIT_TOKEN}"; }; f'
+                fi
+                if grep -q 'codecommit::' <<<"${VRA_HOME_REPO:-} ${VRA_PACKAGE_REPO:-}"; then
+                  python3 -m pip install --quiet git-remote-codecommit==1.17
+                fi
+                # The package source carries the wrapper scripts; VRA_PACKAGE, when set, only overrides where
+                # the engine itself is installed from. VRA_PACKAGE_S3_URI (the pipeline's S3 "Vra" source, fed
+                # by `vra pipeline push-source --package`) replaces the git clone.
+                if [ -n "${VRA_PACKAGE_S3_URI:-}" ]; then
+                  mkdir -p "${CODEBUILD_SRC_DIR}/vra-src"
+                  aws s3 cp --only-show-errors "${VRA_PACKAGE_S3_URI}" "${CODEBUILD_SRC_DIR}/vra-package.zip"
+                  (cd "${CODEBUILD_SRC_DIR}/vra-src" && unzip -q "${CODEBUILD_SRC_DIR}/vra-package.zip")
+                else
+                  : "${VRA_PACKAGE_REPO:?VRA_PACKAGE_REPO not set}"
+                  : "${VRA_PACKAGE_REF:?pin VRA_PACKAGE_REF to a tag or commit}"
+                  git clone --quiet "${VRA_PACKAGE_REPO}" "${CODEBUILD_SRC_DIR}/vra-src"
+                  git -C "${CODEBUILD_SRC_DIR}/vra-src" checkout --quiet "${VRA_PACKAGE_REF}"
+                fi
+                export VRA_SRC_DIR="${CODEBUILD_SRC_DIR}/vra-src"
+                export VRA_PKG_DIR="${VRA_SRC_DIR}"
+                export VRA_HOME="${CODEBUILD_SRC_DIR}/vra-home"
+                bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/install-toolchain.sh"
+                bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" checkout
+                bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-pull
+    build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" watch watch
+    post_build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" watch-report report --notify || true
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-push
+
+reports:
+    vra-watch:
+        files:
+            - "**/*.xml"
+        base-directory: vra-home/state/runs
+        file-format: JUNITXML
+        discard-paths: no
+
+artifacts:
+    name: vra-watch
+    files:
+        - vra-out/**/*
+        - vra-home/state/iam/**/*
+        - vra-home/state/runs/**/*
+    discard-paths: no

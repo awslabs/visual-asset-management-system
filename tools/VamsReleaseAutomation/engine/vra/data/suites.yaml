@@ -1,0 +1,182 @@
+# VAMS unit suites, mirroring .github/workflows/ci.yml on origin/development.
+# Each suite is a list of commands run in a repo-relative cwd. `junit` names a pytest-style flag the
+# runner appends so the suite writes JUnit itself; otherwise the runner records one synthetic test case
+# per command. ${PYTHON} is the interpreter used for Python suites (VRA_SUITE_PYTHON, default python3);
+# ${NPM_VERSION} the npm version VAMS CI pins (VRA_NPM_VERSION, default 11.19.1). A step with `optionalPath` is
+# skipped when that repo-relative file does not exist at the built commit.
+schemaVersion: 1
+suites:
+    lint:
+        # lockfile sync (the check `npm ci` does) over the four npm projects, with the npm CI pins (${NPM_VERSION})
+        - {
+              cwd: ".",
+              cmd:
+                  [
+                      "npx",
+                      "-y",
+                      "-p",
+                      "npm@${NPM_VERSION}",
+                      "npm",
+                      "ci",
+                      "--dry-run",
+                      "--ignore-scripts",
+                      "--no-audit",
+                      "--no-fund",
+                  ],
+          }
+        - {
+              cwd: "web",
+              cmd:
+                  [
+                      "npx",
+                      "-y",
+                      "-p",
+                      "npm@${NPM_VERSION}",
+                      "npm",
+                      "ci",
+                      "--dry-run",
+                      "--ignore-scripts",
+                      "--no-audit",
+                      "--no-fund",
+                  ],
+          }
+        - {
+              cwd: "infra",
+              cmd:
+                  [
+                      "npx",
+                      "-y",
+                      "-p",
+                      "npm@${NPM_VERSION}",
+                      "npm",
+                      "ci",
+                      "--dry-run",
+                      "--ignore-scripts",
+                      "--no-audit",
+                      "--no-fund",
+                  ],
+          }
+        - {
+              cwd: "documentation/docusaurus-site",
+              cmd:
+                  [
+                      "npx",
+                      "-y",
+                      "-p",
+                      "npm@${NPM_VERSION}",
+                      "npm",
+                      "ci",
+                      "--dry-run",
+                      "--ignore-scripts",
+                      "--no-audit",
+                      "--no-fund",
+                  ],
+              optionalPath: "documentation/docusaurus-site/package-lock.json",
+          }
+        - { cwd: ".", cmd: ["npm", "ci"] }
+        - { cwd: ".", cmd: ["npm", "audit", "--omit=dev"] }
+        - { cwd: ".", cmd: ["npm", "run", "prettier-check"] }
+        - { cwd: "web", cmd: ["npm", "ci", "--ignore-scripts"] }
+        - { cwd: ".", cmd: ["npm", "run", "lint"] }
+    web:
+        - { cwd: "web", cmd: ["npm", "ci"] }
+        - { cwd: "web", cmd: ["npm", "run", "typecheck"] }
+        - { cwd: "web", cmd: ["npx", "jest", "--ci"] }
+        - { cwd: "web", cmd: ["npm", "run", "build.lowmem"] }
+    infra:
+        - { cwd: "infra", cmd: ["npm", "ci"] }
+        - { cwd: "infra", cmd: ["npm", "run", "typecheck"] }
+        - { cwd: "infra", cmd: ["npx", "jest", "--ci"] }
+    backend:
+        - {
+              cwd: "backend",
+              cmd: ["${PYTHON}", "-m", "pip", "install", "-r", "requirements-dev.txt"],
+          }
+        - {
+              cwd: "backend",
+              cmd:
+                  [
+                      "${PYTHON}",
+                      "-m",
+                      "pytest",
+                      "-q",
+                      "--tb=short",
+                      "-n",
+                      "auto",
+                      "--dist",
+                      "loadfile",
+                  ],
+              junit: "--junitxml",
+          }
+    vamscli:
+        - { cwd: "tools/VamsCLI", cmd: ["${PYTHON}", "-m", "pip", "install", "-e", ".[dev]"] }
+        - {
+              cwd: "tools/VamsCLI",
+              cmd: ["${PYTHON}", "-m", "pytest", "-q", "--tb=short"],
+              junit: "--junitxml",
+          }
+    vamsmcp:
+        - { cwd: "tools/VamsMCP", cmd: ["${PYTHON}", "-m", "pip", "install", "-e", ".[dev]"] }
+        - {
+              cwd: "tools/VamsMCP",
+              cmd: ["${PYTHON}", "-m", "pytest", "-q", "--tb=short"],
+              junit: "--junitxml",
+          }
+    pipelines:
+        - {
+              cwd: ".",
+              cmd:
+                  [
+                      "${PYTHON}",
+                      "backendPipelines/ci/pipeline_tests.py",
+                      "run",
+                      "--group",
+                      "1",
+                      "--work-dir",
+                      "${SCRATCH}/pipeline-tests",
+                      "--low-disk",
+                  ],
+          }
+        - {
+              cwd: ".",
+              cmd:
+                  [
+                      "${PYTHON}",
+                      "backendPipelines/ci/pipeline_tests.py",
+                      "run",
+                      "--group",
+                      "2",
+                      "--work-dir",
+                      "${SCRATCH}/pipeline-tests",
+                      "--low-disk",
+                  ],
+          }
+        - {
+              cwd: ".",
+              cmd:
+                  [
+                      "${PYTHON}",
+                      "backendPipelines/ci/pipeline_tests.py",
+                      "run",
+                      "--group",
+                      "3",
+                      "--work-dir",
+                      "${SCRATCH}/pipeline-tests",
+                      "--low-disk",
+                  ],
+          }
+    ash:
+        - {
+              cwd: ".",
+              cmd: ["ash", "--source-dir", ".", "--output-dir", "${SCRATCH}/ash-output"],
+              optionalTool: "ash",
+          }
+    # this package's own check, for forks that carry it under tools/ (not a default build suite)
+    vams-release-automation:
+        - {
+              cwd: "tools/VamsReleaseAutomation",
+              cmd: ["${PYTHON}", "-m", "pip", "install", "-e", ".[dev]"],
+          }
+        - { cwd: "tools/VamsReleaseAutomation", cmd: ["bash", "scripts/check.sh"] }
+# Suites `vra build` runs by default (override with vra.yaml build.unitSuites).
+defaultBuildSuites: [lint, web, infra, backend, vamscli, vamsmcp, pipelines]

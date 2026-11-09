@@ -1,0 +1,137 @@
+// Reference Jenkins pipeline for vra (VRA_CI_PROVIDER=generic). Copy into the PRIVATE vra home repository
+// and adapt the stages to your ledger's release lane (envs/*/env.yaml promotesFrom / requiresApproval):
+//   python3 vra-src/cicd/codebuild/scripts/ci_graph.py graph --ledger ledger
+// Every stage calls cicd/generic/vra-ci.sh; vra enforces every gate.
+//
+// Requirements:
+//  - Plugins: Pipeline, Credentials Binding, Lockable Resources (one lock per env: vra-env-<env>).
+//  - Agents with Node 22, Python 3.12, uv, git, docker (build and deploy stages), and the vra engine installed
+//    from the pinned package checkout (vra-src): `uv tool install vra-src`.
+//  - AWS credentials per stage tier, never one identity for everything: the build stage may assume only the
+//    build-only vra-synth-<env> roles; each env's stage runs on an agent (label) or with a credential binding
+//    that may assume only vra-deploy-<env>. The withAWS / credential bindings below are placeholders.
+//  - Credentials: vra-git-token (read the fork and package, push sync/*), vra-home-token (optional: push the
+//    state each stage writes to the home repository; omit with stateStore.type s3).
+// Separation of duties: VRA_INITIATOR is the user who started the build (build cause), the approver is the
+// `submitter` of the input step (submitterParameter), and vra refuses an approval by the initiator. Restrict
+// each input's `submitter` to that env's approvers group and list the same ids in envs/<env>/env.yaml approvers.
+// Not exercised on a live Jenkins controller.
+
+def vraCi(String args) {
+    sh "bash vra-src/cicd/generic/vra-ci.sh ${args}"
+}
+
+pipeline {
+    agent { label 'vra' }
+    options {
+        disableConcurrentBuilds()          // one release at a time per job; vra env locks guard across jobs
+        timeout(time: 24, unit: 'HOURS')
+    }
+    parameters {
+        string(name: 'FORK_REF', defaultValue: 'main', description: 'Fork commit or tag to build')
+    }
+    environment {
+        VRA_CI_PROVIDER = 'generic'
+        VRA_RUN_REF = "jenkins:${env.JOB_NAME}/${env.BUILD_NUMBER}"
+        VRA_HOME = "${env.WORKSPACE}/vra-home"
+        VRA_HOME_REPO = 'https://git.example.com/example-org/vams-home.git'
+        VRA_HOME_REF = 'main'
+        VRA_PACKAGE_REF = 'v0.4.0'
+        VRA_GIT_TOKEN = credentials('vra-git-token')
+        VRA_HOME_TOKEN = credentials('vra-home-token')
+    }
+    stages {
+        stage('Setup') {
+            steps {
+                script {
+                    // the authenticated user who started the build; a timer or SCM trigger has no user
+                    def cause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                    env.VRA_INITIATOR = cause ? cause[0].userId : "jenkins-trigger:${env.JOB_NAME}"
+                }
+                sh '''
+                    git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet \
+                      https://git.example.com/example-org/vams-release-automation.git vra-src
+                    git -C vra-src checkout --quiet "${VRA_PACKAGE_REF}"
+                    uv tool install --force vra-src
+                '''
+                vraCi('home')
+            }
+        }
+        stage('Build') {
+            steps {
+                // build tier credentials: may assume only vra-synth-<env>
+                script {
+                    env.VRA_BUILD_ID = sh(returnStdout: true,
+                        script: "bash vra-src/cicd/generic/vra-ci.sh build --lane release --ref '${params.FORK_REF}'").trim()
+                }
+            }
+            post { always { vraCi('finish') } }
+        }
+        stage('dev') {
+            steps {
+                // dev tier credentials: may assume only vra-deploy-dev
+                lock('vra-env-dev') {
+                    vraCi('home')
+                    vraCi("deploy --env dev --build '${env.VRA_BUILD_ID}'")
+                    // live suites on the build commit (the promotion evidence test needs), not the fork tip
+                    sh '''
+                        commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' \
+                          "${VRA_HOME}/artifacts/${VRA_BUILD_ID}/manifest.json")"
+                        git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet \
+                          https://git.example.com/example-org/vams-fork.git fork
+                        git -C fork checkout --quiet "${commit}"
+                    '''
+                    vraCi('test --env dev --suites live-cli,live-web,customer --fork-dir fork')
+                }
+            }
+            post { always { vraCi('finish') } }
+        }
+        stage('test') {
+            steps {
+                script {
+                    // the approver is the input submitter (Jenkins records who clicked), never typed in
+                    def approval = input(id: 'approve-test', message: "Promote ${env.VRA_BUILD_ID} from dev to test?",
+                        submitter: 'vams-uat-approvers', submitterParameter: 'APPROVER',
+                        parameters: [string(name: 'COMMENT', defaultValue: 'ticket: ; notes: ',
+                            description: 'ticket: <id>; notes: <text>')])
+                    env.VRA_APPROVAL_REF = "jenkins:${env.JOB_NAME}/${env.BUILD_NUMBER}/approve-test"
+                    lock('vra-env-test') {
+                        vraCi('home')
+                        withEnv(["APPROVER=${approval.APPROVER}", "COMMENT=${approval.COMMENT}"]) {
+                            sh '''bash vra-src/cicd/generic/vra-ci.sh deploy --env test --build "${VRA_BUILD_ID}" \
+                                    --promote-from dev --approver "${APPROVER}" --comment "${COMMENT}"'''
+                        }
+                        // test feeds prod: its live suites are prod's promotion evidence
+                        vraCi('test --env test --suites live-cli,live-web,customer --fork-dir fork')
+                    }
+                }
+            }
+            post { always { vraCi('finish') } }
+        }
+        stage('prod') {
+            steps {
+                script {
+                    def approval = input(id: 'approve-prod', message: "Promote ${env.VRA_BUILD_ID} from test to prod?",
+                        submitter: 'vams-release-approvers', submitterParameter: 'APPROVER',
+                        parameters: [string(name: 'COMMENT', defaultValue: 'ticket: ; notes: ',
+                            description: 'ticket: <id>; notes: <text>')])
+                    env.VRA_APPROVAL_REF = "jenkins:${env.JOB_NAME}/${env.BUILD_NUMBER}/approve-prod"
+                    lock('vra-env-prod') {
+                        vraCi('home')
+                        withEnv(["APPROVER=${approval.APPROVER}", "COMMENT=${approval.COMMENT}"]) {
+                            sh '''bash vra-src/cicd/generic/vra-ci.sh deploy --env prod --build "${VRA_BUILD_ID}" \
+                                    --promote-from test --approver "${APPROVER}" --comment "${COMMENT}"'''
+                        }
+                    }
+                }
+            }
+            post { always { vraCi('finish') } }
+        }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'vra-out/**, vra-home/state/runs/**', allowEmptyArchive: true
+            junit testResults: 'vra-home/state/runs/**/junit/**/*.xml', allowEmptyResults: true
+        }
+    }
+}

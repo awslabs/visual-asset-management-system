@@ -1,0 +1,51 @@
+# Per-transition migration notes for VAMS data migrations. The engine discovers the actual
+# vX_to_vY directories in the checked-out ref and chains them; this matrix annotates each with
+# whether an A/B (blue/green) deployment is required and any manual steps the automation cannot do.
+# Keys are "<from>_to_<to>" matching infra/deploymentDataMigration/.
+# resolvesViaSsm=false means the migration config needs explicit physical table names
+# (pre-v2.6 scripts); the engine fills them from SSM where it can, else flags for the operator.
+schemaVersion: 1
+transitions:
+    v2.1_to_v2.2:
+        script: v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration.py
+        resolvesViaSsm: false
+        requiresAB: false
+        manualSteps:
+            - "Set explicit table names in the migration config (source deployment publishes no SSM names)."
+    v2.2_to_v2.3:
+        script: v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration.py
+        resolvesViaSsm: false
+        requiresAB: false
+    v2.3_to_v2.4:
+        script: v2.3_to_v2.4/upgrade/v2.3_to_v2.4_migration.py
+        resolvesViaSsm: false
+        requiresAB: false
+    v2.4_to_v2.5:
+        script: v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration.py
+        resolvesViaSsm: false
+        requiresAB: false
+        notes: "Full-table copy V1 -> V2 tables; --clear-v2 to reset the V2 targets on re-run."
+    v2.5_to_v2.6:
+        script: v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration.py
+        resolvesViaSsm: true
+        requiresAB: false
+        steps:
+            [
+                reindex,
+                assetHistory,
+                workflowExecutions,
+                auxPreviewRelocation,
+                pipelineWorkflowDefinitions,
+                globalListBackfill,
+                tagsNamespacing,
+            ]
+        notes: >-
+            Single consolidated script; --steps selects steps. Reindex invokes the deployed reindexer Lambda.
+            Provisioned OpenSearch only: if the 2.7->3.5 domain upgrade fails on an existing domain, deploy once
+            with config.app.openSearch.useProvisioned.enabled=false, then re-enable (see migration README).
+# manualSteps = prerequisites a human MUST do; the engine stops before that migration (exit 20) until
+# `vra resume <run-id> --confirm`. Conditional advice belongs in `notes` (shown in the plan, never gates).
+# Default assumptions for a transition not listed above (newer than this matrix):
+defaults:
+    resolvesViaSsm: true
+    requiresAB: false

@@ -1,0 +1,363 @@
+# Reference pipeline: vra release lane on GitLab CI. Copy into the PRIVATE vra home project (vra-home.yaml,
+# ledger/, state/) as .gitlab-ci.yml. Every job wraps the vra CLI; vra enforces the gates.
+#
+# The deploy jobs follow the engine's view of the ledger (`vra --json ledger graph`: promotesFrom,
+# requiresApproval, requiredSuites). Regenerate them after a topology change with
+#   bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py render --platform gitlab --ledger ledger
+# The validate job checks this file against the ledger and fails on any difference.
+#
+# Project settings to configure:
+#   Settings > CI/CD > Variables (protected, masked where sensitive):
+#     VRA_AWS_REGION, VRA_PACKAGE_REPO_URL, VRA_PACKAGE_REF (pinned tag/commit),
+#     VRA_FORK_REPO_URL, VRA_GIT_TOKEN (masked; read the fork and the package, push sync/*),
+#     VRA_GITLAB_API_TOKEN (masked, protected; read_api: reads the deployment approvals),
+#     VRA_HOME_TOKEN (optional, masked, protected; write_repository on this project: jobs push the state they
+#       write. Leave it unset with stateStore.type s3: jobs then clone this project read-only),
+#     VRA_CI_ROLE_ARN scoped per environment (environment scope: build, watch, <env>, ...) = roles from
+#       cicd/oidc/vra-ci-oidc-role.yaml (Provider=gitlab). The variable scope only hides the role NAME; the
+#       boundary is the token audience: every job requests its own audience (id_tokens aud vra-<env>, build jobs
+#       vra-build, watch vra-watch) and each role trusts only its own audience, so a job can never assume
+#       another job's role. The build role is deployed with DeployableEnvs=none, AllowSynthRoles=true.
+#   Settings > CI/CD > Protected environments: every env with requiresApproval, "Allowed to deploy" = release
+#     managers, "Approvals" (GitLab Premium) = UAT owners / release approvers. Required: without
+#     deployment approvals the gated jobs refuse to deploy (the job player is never the approver).
+#   Protected branch: main (only protected branches may run protected-environment jobs).
+# Separation of duties: vra's initiator is GITLAB_USER_LOGIN (who started the pipeline / played the job);
+# the approver comes from the deployment approvals API. List GitLab usernames in envs/<env> approvers.
+# No AWS access keys are stored: each job exchanges its GitLab id_token for the role (OIDC). The
+# AWS SDK / CLI refresh web-identity credentials themselves, so long deploys keep working.
+# Concurrency: every deploy job holds resource_group vra-<env>, so one job per env runs at a time; a vra env lock
+# held by an operator is waited for up to VRA_LOCK_WAIT_MINUTES (default 30) minutes (--lock-wait).
+# Never set a VAMS config variable (STACK_NAME, REGION, ADMIN_EMAIL_ADDRESS, ...) on the project or the image:
+# run-vra.sh refuses them (the env's values come from the ledger overlay and env.yaml synthEnv).
+# Human-only actions (unlock, takeover, confirm): the manual `operator` job below, run from "Run pipeline" with
+# VRA_JOB=operator.
+#
+# Container images: pin by digest in production (image: name@sha256:...).
+
+stages: [validate, build, deploy]
+
+# Release-lane jobs never run in the scheduled watch pipeline or an operator pipeline.
+.release-rules:
+    rules:
+        - if: $VRA_JOB == "watch" || $VRA_JOB == "operator"
+          when: never
+        - when: on_success
+
+variables:
+    VRA_CI_IMAGE: public.ecr.aws/docker/library/node:22-bookworm
+    NPM_VERSION: "11.19.1"
+    UV_VERSION: "0.12.17"
+    VRA_HOME: "$CI_PROJECT_DIR/vra-home"
+    VRA_HOME_REF: "$CI_DEFAULT_BRANCH"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+
+workflow:
+    rules:
+        - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"
+        - if: $CI_PIPELINE_SOURCE == "schedule"
+        - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+          when: never # ledger and state commits alone do not deploy; trigger from the fork or run manually
+
+.vra:
+    # Pin by digest in production (VRA_CI_IMAGE=registry/name@sha256:...); vra records the image and
+    # VRA_CI_IMAGE_DIGEST in each bundle manifest (buildEnvironment).
+    # No id_tokens here: each job requests its own audience, a job without one gets no AWS access.
+    image: ${VRA_CI_IMAGE}
+    before_script:
+        - apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip git >/dev/null
+        - npm install -g "npm@${NPM_VERSION}" --no-audit --no-fund
+        - python3 -m pip install --quiet --break-system-packages "uv==${UV_VERSION}"
+        - git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet "${VRA_PACKAGE_REPO_URL}" vra-src
+        - git -C vra-src checkout --quiet "${VRA_PACKAGE_REF}"
+        - uv tool install --force --python "$(command -v python3)" ./vra-src
+        - export PATH="${HOME}/.local/bin:${PATH}"
+        # OIDC: the SDKs and CLI read these and refresh credentials on their own.
+        - |
+            if [ -n "${VRA_OIDC_TOKEN:-}" ]; then
+              printf '%s' "${VRA_OIDC_TOKEN}" > "${CI_PROJECT_DIR}/.oidc-token" && chmod 600 "${CI_PROJECT_DIR}/.oidc-token"
+              export AWS_WEB_IDENTITY_TOKEN_FILE="${CI_PROJECT_DIR}/.oidc-token"
+              export AWS_ROLE_ARN="${VRA_CI_ROLE_ARN}"
+              export AWS_ROLE_SESSION_NAME="vra-${CI_JOB_NAME_SLUG}-${CI_PIPELINE_ID}"
+            fi
+        - export AWS_REGION="${VRA_AWS_REGION}" AWS_DEFAULT_REGION="${VRA_AWS_REGION}"
+        # The home folder: a clone of this project on its default branch (read-only with the job token; with
+        # VRA_HOME_TOKEN the job pushes the state it writes).
+        - |
+            if [ -n "${VRA_HOME_TOKEN:-}" ]; then
+              export VRA_HOME_REPO="${VRA_HOME_REPO:-${CI_SERVER_URL}/${CI_PROJECT_PATH}.git}"
+            else
+              export VRA_HOME_REPO="${VRA_HOME_REPO:-${CI_REPOSITORY_URL}}"
+            fi
+        - bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+        - bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+    after_script:
+        - rm -f "${CI_PROJECT_DIR}/.oidc-token"
+        - export PATH="${HOME}/.local/bin:${PATH}"; bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-push
+    artifacts:
+        when: always
+        expire_in: 90 days
+        paths:
+            - vra-out/
+            - vra-home/state/runs/
+        reports:
+            junit: vra-home/state/runs/**/junit/**/*.xml
+
+.docker:
+    services:
+        - name: public.ecr.aws/docker/library/docker:27-dind
+          alias: docker
+    tags: [privileged] # runner with privileged mode, needed for CDK docker bundling / image assets
+
+validate:
+    extends: [.vra, .release-rules]
+    stage: validate
+    environment: { name: build, action: prepare }
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-build
+    script:
+        # No env preflight here: the build tier holds no env deploy role; each deploy job preflights its
+        # own env with that env's role.
+        - bash vra-src/cicd/codebuild/scripts/run-vra.sh ledger-validate ledger validate
+        - >-
+            bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py check --platform gitlab
+            --ledger "${VRA_HOME}/ledger" --file "${VRA_HOME}/.gitlab-ci.yml"
+
+build:
+    extends: [.vra, .docker, .release-rules]
+    stage: build
+    environment: { name: build, action: prepare }
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-build
+    script:
+        - bash vra-src/cicd/codebuild/scripts/run-vra.sh build build --lane release --ref "${VRA_REF:-main}"
+        - echo "VRA_BUILD_ID=$(python3 -c 'import json;print(json.load(open("vra-out/build.json"))["buildId"])')" > build.env
+        - bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-out vra-bundle
+    artifacts:
+        when: always
+        expire_in: 90 days
+        paths:
+            - vra-out/
+            - vra-bundle/
+            - vra-home/state/runs/
+        reports:
+            dotenv: build.env
+            junit: vra-home/state/runs/**/junit/**/*.xml
+
+.deploy:
+    extends: [.vra, .docker]
+    stage: deploy
+    timeout: 8h
+    script:
+        - bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-in vra-bundle
+        - |
+            # Approval record only when the ledger gates the env (requiresApproval), whether or not the job is a
+            # promotion. It comes from the protected environment's DEPLOYMENT APPROVALS (GitLab Premium), read
+            # through the API (VRA_GITLAB_API_TOKEN, read_api). The approver must be someone other than
+            # GITLAB_USER_LOGIN, the user who played this job (vra's initiator). Without deployment approvals
+            # the script refuses (exit 20).
+            mkdir -p vra-out
+            approval=()
+            needs_approval="$(bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py requires-approval \
+              --ledger "${VRA_HOME}/ledger" --env "${VRA_ENV}")"
+            if [ "${needs_approval}" != "${VRA_REQUIRES_APPROVAL}" ]; then
+              echo "envs/${VRA_ENV}: the ledger says requiresApproval ${needs_approval}, this job was rendered with" \
+                "${VRA_REQUIRES_APPROVAL}: regenerate the jobs (ci_graph.py render --platform gitlab)"
+              exit 20
+            fi
+            if [ "${needs_approval}" = "true" ]; then
+              scope=promote
+              [ -z "${VRA_PROMOTE_FROM:-}" ] && scope=deploy
+              python3 vra-src/cicd/codebuild/scripts/approval_record.py gitlab \
+                --env "${VRA_ENV}" --build "${VRA_BUILD_ID}" --scope "${scope}" --out "vra-out/approval-${VRA_ENV}.yaml"
+              approval=(--approval "vra-out/approval-${VRA_ENV}.yaml")
+            fi
+            if [ -n "${VRA_PROMOTE_FROM:-}" ]; then
+              bash vra-src/cicd/codebuild/scripts/run-vra.sh "promote-${VRA_ENV}" \
+                promote --from "${VRA_PROMOTE_FROM}" --to "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${approval[@]}" \
+                --lock-wait "${VRA_LOCK_WAIT_MINUTES:-30}"
+            else
+              bash vra-src/cicd/codebuild/scripts/run-vra.sh "deploy-${VRA_ENV}" \
+                deploy --env "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${approval[@]}" \
+                --lock-wait "${VRA_LOCK_WAIT_MINUTES:-30}"
+            fi
+        - |
+            if [ -n "${VRA_TEST_SUITES:-}" ] && [ "${VRA_ISOLATE_TESTS:-false}" != "true" ]; then
+              # test the deployed revision (the build commit), not the fork trunk tip
+              commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' "${VRA_HOME}/artifacts/${VRA_BUILD_ID}/manifest.json")"
+              git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet "${VRA_FORK_REPO_URL}" fork
+              git -C fork checkout --quiet "${commit}"
+              if [[ ",${VRA_TEST_SUITES}," == *",live-web,"* ]]; then
+                (cd fork/web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+              fi
+              (cd fork && VRA_OUT_DIR="${CI_PROJECT_DIR}/vra-out" bash ../vra-src/cicd/codebuild/scripts/run-vra.sh "test-${VRA_ENV}" test --env "${VRA_ENV}" --suites "${VRA_TEST_SUITES}")
+            fi
+    after_script:
+        - rm -f "${CI_PROJECT_DIR}/.oidc-token"
+        - export PATH="${HOME}/.local/bin:${PATH}"; bash vra-src/cicd/codebuild/scripts/run-vra.sh "report-${VRA_ENV}" report --notify || true
+        - export PATH="${HOME}/.local/bin:${PATH}"; bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-push
+
+# Ungated env: runs as soon as its parent succeeded.
+.deploy-auto:
+    extends: .deploy
+    variables:
+        VRA_REQUIRES_APPROVAL: "false"
+    rules:
+        - if: $VRA_JOB == "watch" || $VRA_JOB == "operator"
+          when: never
+        - when: on_success
+
+# Gated env (requiresApproval): manual job on protected branches only, in a protected environment.
+.deploy-gated:
+    extends: .deploy
+    allow_failure: false # manual; blocks the pipeline until played
+    variables:
+        VRA_REQUIRES_APPROVAL: "true"
+    rules:
+        - if: $VRA_JOB == "watch" || $VRA_JOB == "operator"
+          when: never
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+          when: manual
+
+# Live suites under a test-only role (VRA_ISOLATE_TESTS=true). One job per env that runs tests:
+# environment <env>-tests, audience vra-<env>-tests, VRA_CI_ROLE_ARN scoped to that environment = a role that may
+# assume only vra-test-<env> (vra-ci-oidc-role.yaml DeployableEnvs=none, TestEnvs=<env>).
+.tests:
+    extends: [.vra]
+    stage: deploy
+    timeout: 2h
+    rules:
+        - if: $VRA_JOB == "watch" || $VRA_JOB == "operator"
+          when: never
+        - if: $VRA_ISOLATE_TESTS == "true"
+          when: on_success
+    script:
+        - bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-in vra-bundle
+        - |
+            commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' "${VRA_HOME}/artifacts/${VRA_BUILD_ID}/manifest.json")"
+            git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet "${VRA_FORK_REPO_URL}" fork
+            git -C fork checkout --quiet "${commit}"
+            if [[ ",${VRA_TEST_SUITES}," == *",live-web,"* ]]; then
+              (cd fork/web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+            fi
+            (cd fork && VRA_OUT_DIR="${CI_PROJECT_DIR}/vra-out" bash ../vra-src/cicd/codebuild/scripts/run-vra.sh "test-${VRA_ENV}" test --env "${VRA_ENV}" --suites "${VRA_TEST_SUITES}")
+
+# ---------------------------------------------------------------- release lane (ci_graph.py render --platform gitlab)
+deploy-dev:
+    extends: [.deploy-auto]
+    needs: [build]
+    environment: { name: dev }
+    resource_group: vra-dev
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-dev
+    variables:
+        VRA_ENV: dev
+        VRA_PROMOTE_FROM: ""
+        VRA_TEST_SUITES: "live-cli,live-web,customer"
+
+deploy-test:
+    extends: [.deploy-gated]
+    needs: [build, deploy-dev]
+    environment: { name: test }
+    resource_group: vra-test
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-test
+    variables:
+        VRA_ENV: test
+        VRA_PROMOTE_FROM: "dev"
+        VRA_TEST_SUITES: "live-cli,live-web,customer"
+
+deploy-prod:
+    extends: [.deploy-gated]
+    needs: [build, deploy-test]
+    environment: { name: prod }
+    resource_group: vra-prod
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-prod
+    variables:
+        VRA_ENV: prod
+        VRA_PROMOTE_FROM: "test"
+        VRA_TEST_SUITES: ""
+
+# Example of an isolated test job (VRA_ISOLATE_TESTS=true): copy per env that runs tests.
+tests-test:
+    extends: [.tests]
+    needs: [build, deploy-test]
+    environment: { name: test-tests, action: verify }
+    resource_group: vra-test
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-test-tests
+    variables:
+        VRA_ENV: test
+        VRA_TEST_SUITES: "live-cli,live-web,customer"
+
+# Daily watch: create a pipeline schedule (CI/CD > Schedules) with variable VRA_JOB=watch (and
+# VRA_WATCH_COMMAND=sync when this pipeline owns dev deploys). Scope the "watch" environment's VRA_CI_ROLE_ARN to
+# a role (audience vra-watch) that can assume only the dev and dev-preview deploy roles.
+watch:
+    extends: [.vra, .docker]
+    stage: build
+    timeout: 8h
+    environment: { name: watch, action: prepare }
+    resource_group: vra-watch
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-watch
+    rules:
+        - if: $CI_PIPELINE_SOURCE == "schedule" && $VRA_JOB == "watch"
+    variables:
+        VRA_SOFT_EXIT_CODES: "10 20"
+    script:
+        - bash vra-src/cicd/codebuild/scripts/run-vra.sh watch "${VRA_WATCH_COMMAND:-watch}"
+    after_script:
+        - rm -f "${CI_PROJECT_DIR}/.oidc-token"
+        - export PATH="${HOME}/.local/bin:${PATH}"; bash vra-src/cicd/codebuild/scripts/run-vra.sh watch-report report --notify || true
+        - export PATH="${HOME}/.local/bin:${PATH}"; bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-push
+
+# Human-only actions from CI: "Run pipeline" on the default branch with VRA_JOB=operator, VRA_ENV=<env>,
+# VRA_OPERATOR_ACTION=unlock|takeover|confirm, VRA_RUN=<run id> (takeover, confirm; optional for unlock) and
+# VRA_REASON (unlock). The job deploys to the env's protected environment, so its deployment approvals are the
+# approval (GitLab records the job as a deployment of the env); approval_record.py gitlab --human writes the
+# record (subject human:<action>, scope [<action>]) and vra runs with --human-approval. The user who plays the
+# job is never the approver.
+operator:
+    extends: [.vra]
+    stage: deploy
+    timeout: 1h
+    environment: { name: $VRA_ENV }
+    resource_group: vra-$VRA_ENV
+    id_tokens:
+        VRA_OIDC_TOKEN:
+            aud: vra-$VRA_ENV
+    rules:
+        - if: $VRA_JOB == "operator" && $CI_COMMIT_REF_PROTECTED == "true"
+          when: manual
+    allow_failure: false
+    script:
+        - |
+            [[ "${VRA_ENV:-}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "VRA_ENV is not an env name"; exit 2; }
+            [[ "${VRA_RUN:-}" =~ ^[A-Za-z0-9._-]*$ ]] || { echo "VRA_RUN is not a run id"; exit 2; }
+            mkdir -p vra-out
+            case "${VRA_OPERATOR_ACTION:-}" in
+              unlock)
+                [ -n "${VRA_REASON:-}" ] || { echo "unlock needs VRA_REASON"; exit 2; }
+                args=(unlock --env "${VRA_ENV}" --reason "${VRA_REASON}")
+                [ -n "${VRA_RUN:-}" ] && args+=(--run "${VRA_RUN}") ;;
+              takeover | confirm)
+                [ -n "${VRA_RUN:-}" ] || { echo "${VRA_OPERATOR_ACTION} needs VRA_RUN"; exit 2; }
+                args=(resume "${VRA_RUN}" "--${VRA_OPERATOR_ACTION}") ;;
+              *) echo "VRA_OPERATOR_ACTION must be unlock, takeover or confirm"; exit 2 ;;
+            esac
+            python3 vra-src/cicd/codebuild/scripts/approval_record.py gitlab --env "${VRA_ENV}" \
+              --human "${VRA_OPERATOR_ACTION}" --out "vra-out/human-${VRA_OPERATOR_ACTION}.yaml"
+            VRA_HUMAN_APPROVAL="vra-out/human-${VRA_OPERATOR_ACTION}.yaml" \
+              bash vra-src/cicd/codebuild/scripts/run-vra.sh "operator-${VRA_OPERATOR_ACTION}" "${args[@]}"

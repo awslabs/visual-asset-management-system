@@ -1,0 +1,16 @@
+# Azure Pipelines step template: report, publish the state this job wrote, keep the run artifacts.
+steps:
+    - bash: bash vra-src/cicd/generic/vra-ci.sh finish
+      displayName: vra finish
+      condition: always()
+      env:
+          VRA_HOME_TOKEN: $(VRA_HOME_TOKEN)
+    - task: PublishTestResults@2
+      condition: always()
+      inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: "$(VRA_HOME)/state/runs/**/junit/**/*.xml"
+          failTaskOnMissingResultsFile: false
+    - publish: $(System.DefaultWorkingDirectory)/vra-out
+      artifact: vra-out-$(System.JobId)
+      condition: always()

@@ -1,0 +1,378 @@
+# Sample workflow for the customer's VAMS FORK repository (.github/workflows/vra-pr-checks.yml): the VAMS unit
+# suites, lint and synth on every pull request and on pushes to fork branches, plus the vra checks.
+#
+# The VAMS jobs mirror the upstream .github/workflows/ci.yml jobs (lint, vamscli-test, web-build, infra-typecheck,
+# infra-test, synth + cfn_nag, web-test, backend-test, pipelines-test, vamsmcp-test) with the same commands, with
+# every action pinned to a commit SHA (action-pins.json). ASH moved to security-scan.yml. Upstream ci.yml stays in
+# the fork (it is VAMS core; deleting it conflicts on every sync): disable it in the fork's Actions settings so
+# the suites do not run twice.
+#
+# vra jobs:
+#   vra-plan         `vra ledger validate` and `vra --dry-run build` for the ref (needs the vra home repository:
+#                    vars.VRA_HOME_REPO + secret VRA_HOME_TOKEN with read access). No AWS access, no fork code run.
+#   customer-checks  the fork's own offline regression hook, when the file vars.VRA_PR_HOOKS (default
+#                    .github/vra-pr-hooks.sh) exists. Live regression hooks (ledger tests/) run after deploys.
+#
+# GitHub Enterprise Server: set vars.VRA_RUNS_ON to the runner labels as JSON (e.g. ["self-hosted","linux","x64"]);
+# GHES has no GitHub-hosted runners. See README.md "GitHub Enterprise Server" for actions availability.
+# Also callable from another workflow (workflow_call), e.g. an organization required workflow.
+name: vra-pr-checks
+
+on:
+    pull_request: {}
+    push:
+        # vendor/* are the engine's upstream mirrors; upstream already tested them
+        branches-ignore: ["vendor/**"]
+    workflow_call: {}
+    workflow_dispatch: {}
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+    cancel-in-progress: true
+
+env:
+    NODE_VERSION: "22"
+    NPM_VERSION: "11.19.1"
+    PYTHON_VERSION: "3.12.7"
+
+jobs:
+    lint:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: |
+                      package-lock.json
+                      web/package-lock.json
+                      infra/package-lock.json
+                      documentation/docusaurus-site/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Check package-lock.json files are in sync
+              run: |
+                  for dir in . web infra documentation/docusaurus-site; do
+                      echo "::group::npm ci --dry-run ($dir)"
+                      (cd "$dir" && npx -y -p npm@11 npm ci --dry-run --ignore-scripts --no-audit --no-fund)
+                      echo "::endgroup::"
+                  done
+            - name: Npm ci root directory
+              run: npm ci
+            - name: Npm audit root directory
+              run: npm audit --omit=dev
+            - name: Prettier Check
+              run: npm run prettier-check
+            - name: Npm ci web directory
+              working-directory: web
+              run: npm ci --ignore-scripts
+            - name: eslint
+              run: npm run lint
+
+    vamscli-test:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+            - name: Install VamsCLI dependencies
+              working-directory: tools/VamsCLI
+              run: pip install -e ".[dev]"
+            - name: Run VamsCLI pytest tests
+              working-directory: tools/VamsCLI
+              run: pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
+            - name: Upload VamsCLI test results
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vamscli-test-results
+                  path: |
+                      tools/VamsCLI/pytest_output.txt
+                      tools/VamsCLI/coverage.xml
+
+    web-build:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: web/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Npm ci web directory
+              working-directory: web
+              run: npm ci
+            - name: Web build
+              working-directory: web
+              env:
+                  CI: ""
+              run: npm run build.lowmem
+            - name: Upload web build
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: web-dist
+                  path: web/dist/
+                  if-no-files-found: error
+                  include-hidden-files: true
+                  retention-days: 1
+
+    infra-typecheck:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: infra/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Npm ci infrastructure directory
+              working-directory: infra
+              run: npm ci --ignore-scripts
+            - name: Infra type check
+              working-directory: infra
+              run: npm run typecheck
+
+    infra-test:
+        needs: web-build
+        name: infra-test (shard ${{ matrix.shard }}/6)
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [1, 2, 3, 4, 5, 6]
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: web-dist
+                  path: web/dist
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: |
+                      package-lock.json
+                      infra/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Npm ci root directory
+              run: npm ci --ignore-scripts
+            - name: Npm ci infrastructure directory
+              working-directory: infra
+              run: npm ci
+            - name: Infra tests
+              working-directory: infra
+              env:
+                  CI: "true"
+                  SHARD: ${{ matrix.shard }}
+              run: npm test -- --ci "--shard=${SHARD}/6"
+
+    synth:
+        # Synthesizes with the fork's own config (no ledger overlay); per-env synth with the ledger overlay is
+        # `vra build` (deploy.yml). The stack name is pinned so the cfn_nag paths are stable.
+        needs: web-build
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        env:
+            SYNTH_STACK: ci
+            SYNTH_REGION: ${{ vars.VRA_SYNTH_REGION || 'us-east-1' }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: web-dist
+                  path: web/dist
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: infra/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Npm ci infrastructure directory
+              working-directory: infra
+              run: npm ci
+            - name: Synthesize Cloudformation templates
+              working-directory: infra
+              env:
+                  CDK_NAG_ENABLED: "true"
+              # region and stack name as CDK context (never as VAMS config environment variables)
+              run: npx cdk synth -c "region=${SYNTH_REGION}" -c "stack-name=${SYNTH_STACK}"
+            - name: Scan VAMS WAF Cloudformation template
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # commit pinned by upstream ci.yml
+              with:
+                  input_path: infra/cdk.out/vams-waf-${{ env.SYNTH_STACK }}-${{ env.SYNTH_REGION }}.template.json
+            - name: Scan VAMS Cloudformation template
+              uses: stelligent/cfn_nag@8b5f03da74202ba323a145e9d037ddce6cab9dec # commit pinned by upstream ci.yml
+              with:
+                  input_path: infra/cdk.out/vams-core-${{ env.SYNTH_STACK }}-${{ env.SYNTH_REGION }}.template.json
+
+    web-test:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+                  cache-dependency-path: web/package-lock.json
+            - name: Pin npm version
+              run: npm install -g "npm@${NPM_VERSION}"
+            - name: Npm ci web directory
+              working-directory: web
+              run: npm ci --ignore-scripts
+            - name: Web test
+              working-directory: web
+              env:
+                  CI: "true"
+              run: npx jest --ci --coverage
+
+    backend-test:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+              with:
+                  python-version: "3.13"
+            - name: Install backend dependencies
+              working-directory: backend
+              run: pip install -r requirements-dev.txt
+            - name: Run backend pytest tests
+              working-directory: backend
+              run: pytest -q --tb=short -n auto --dist loadfile
+
+    pipelines-test:
+        name: pipelines-test (group ${{ matrix.group }}/3)
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                group: [1, 2, 3]
+        env:
+            GROUP: ${{ matrix.group }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+            - name: Install the system packages the group's suites need
+              run: |
+                  read -ra packages <<< "$(python backendPipelines/ci/pipeline_tests.py system-packages --group "${GROUP}")"
+                  if [ "${#packages[@]}" -gt 0 ]; then
+                      sudo apt-get update
+                      sudo apt-get install -y --no-install-recommends "${packages[@]}"
+                  fi
+            - name: Run pipeline pytest tests
+              run: |
+                  python backendPipelines/ci/pipeline_tests.py run --group "${GROUP}" \
+                    --work-dir "$RUNNER_TEMP/pipeline-tests" --low-disk
+            - name: Upload pipeline test logs
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: pipelines-test-logs-${{ matrix.group }}
+                  path: ${{ runner.temp }}/pipeline-tests/logs/
+                  retention-days: 7
+
+    vamsmcp-test:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+            - name: Install VamsMCP dependencies
+              working-directory: tools/VamsMCP
+              run: |
+                  pip install -e ../VamsCLI
+                  pip install -e ".[dev]"
+            - name: Run VamsMCP pytest tests
+              working-directory: tools/VamsMCP
+              run: pytest -q --tb=short
+
+    vra-plan:
+        # Pushes and same-repository pull requests only: a pull request from another repository gets no secrets.
+        if: >-
+            vars.VRA_HOME_REPO != '' && (github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.full_name == github.repository)
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 30
+        env:
+            VRA_HOME: ${{ github.workspace }}/vra-home
+            # the branch of a pull request (the engine fetches it from the fork's origin), else the pushed commit
+            VRA_REF: ${{ github.event.pull_request.head.ref || github.sha }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  # read-only token; kept for the engine's `git pull` of the home (nothing is pushed: --dry-run)
+                  repository: ${{ vars.VRA_HOME_REPO }}
+                  path: vra-home
+                  token: ${{ secrets.VRA_HOME_TOKEN }}
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN || github.token }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - name: ledger validate + build plan (dry run)
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh ledger-validate ledger validate
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh build-plan --dry-run build --lane release --ref "${VRA_REF}"
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-plan-${{ github.run_id }}
+                  path: vra-out/
+                  retention-days: 14
+
+    customer-checks:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 60
+        env:
+            HOOK: ${{ vars.VRA_PR_HOOKS || '.github/vra-pr-hooks.sh' }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - name: customer regression hook
+              run: |
+                  case "${HOOK}" in /* | *..*) echo "VRA_PR_HOOKS must be a path inside the repository"; exit 2 ;; esac
+                  if [ ! -f "${HOOK}" ]; then
+                    echo "no ${HOOK} in this branch: nothing to run"
+                    exit 0
+                  fi
+                  bash "${HOOK}"

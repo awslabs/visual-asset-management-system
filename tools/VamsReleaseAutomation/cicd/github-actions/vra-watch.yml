@@ -1,0 +1,111 @@
+# Reference workflow: daily `vra watch` on GitHub Actions (vra home repository .github/workflows/).
+# sync -> merge -> build -> deploy the autoDeploy envs (dev / dev-preview) -> test -> rollback on failure ->
+# report. vra only acts on envs with autoDeploy: true, and this job's OIDC role (environment "vra-watch")
+# should only be able to assume the dev and dev-preview deploy roles (EnvAccountIds + the deploy roles'
+# TrustedPrincipalArns), so the schedule can never reach test or prod even if misconfigured.
+# Deploy that role with vra-ci-oidc-role.yaml CiEnvName=vra-watch, DeployableEnvs=dev,dev-preview.
+#
+# Dev ownership: when vra-release.yml deploys dev on every trunk update, run `vra sync` here instead of
+# `vra watch` (VRA_WATCH_COMMAND=sync) so only one workflow deploys dev; otherwise the env lock makes the
+# second deploy stop with exit 20 (reported, not failed: VRA_SOFT_EXIT_CODES).
+name: vra-watch
+
+on:
+    schedule:
+        - cron: "0 6 * * *"
+    workflow_dispatch: {}
+
+permissions:
+    contents: read
+
+concurrency:
+    group: vra-watch
+    cancel-in-progress: false
+
+jobs:
+    watch:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: vra-watch
+        timeout-minutes: 480
+        permissions:
+            id-token: write
+            contents: read
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+            VRA_HOME: ${{ github.workspace }}/vra-home
+            VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+            # Parked runs (BLOCKED_ON_IT, NEEDS_HUMAN) are reported by vra; do not fail the schedule.
+            VRA_SOFT_EXIT_CODES: "10 20"
+            VRA_WATCH_COMMAND: ${{ vars.VRA_WATCH_COMMAND || 'watch' }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-watch-${{ github.run_id }}
+                  role-duration-seconds: 14400
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: vra watch
+              env:
+                  # git (fork clone, sync/* push) through setup-vra's credential helper; gh (pull requests)
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  GH_ENTERPRISE_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+              run: |
+                  case "${VRA_WATCH_COMMAND}" in
+                    watch | sync) ;;
+                    *) echo "VRA_WATCH_COMMAND must be watch or sync"; exit 2 ;;
+                  esac
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh watch "${VRA_WATCH_COMMAND}"
+            - name: vra report
+              if: always()
+              run: bash vra-src/cicd/codebuild/scripts/run-vra.sh watch-report report --notify || true
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-watch-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-watch-${{ github.run_id }}
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-watch:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [watch]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-watch-${{ github.run_id }}
+        secrets: inherit

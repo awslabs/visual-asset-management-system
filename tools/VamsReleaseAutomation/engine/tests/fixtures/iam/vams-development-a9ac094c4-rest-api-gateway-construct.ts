@@ -1,0 +1,621 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import * as cdk from "aws-cdk-lib";
+import { Construct } from "constructs";
+import * as apigw from "aws-cdk-lib/aws-apigateway";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as wafv2 from "aws-cdk-lib/aws-wafv2";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as route53targets from "aws-cdk-lib/aws-route53-targets";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { NagSuppressions } from "cdk-nag";
+import * as Config from "../../../../config/config";
+import { Service, Partition } from "../../../helper/service-helper";
+import { storageResources } from "../../storage/storageBuilder-nestedStack";
+import { authResources } from "../../auth/authBuilder-nestedStack";
+import { RouteRegistry } from "../apiRouteRegistry";
+import { buildOpenApiSpec } from "./buildOpenApiSpec";
+import { buildApiGatewayAuthorizerRestFunction } from "../../../lambdaBuilder/authFunctions";
+import { generateUniqueNameHash } from "../../../helper/security";
+import { ApiOriginVerifySecretRef } from "../../../helper/apiOriginVerify";
+import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
+import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
+import { samlSettings } from "../../../../config/saml-config";
+import { oidcSettings } from "../../../../config/oidc-config";
+import { HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
+
+/**
+ * Common surface every API implementation exposes so the API nested stack can treat
+ * implementations uniformly and downstream stacks (static web fronting, outputs) stay
+ * implementation-agnostic.
+ *
+ */
+export interface IApiImplementation {
+    /** Host of the API endpoint (no scheme), e.g. `{id}.execute-api.{region}.amazonaws.com`. */
+    readonly apiEndpoint: string;
+    /** Full invoke URL including the stage path, e.g. `https://{host}/{stage}`. */
+    readonly invokeUrlWithStage: string;
+    /** The deployment stage name fronting absorbs (CloudFront originPath / ALB redirect). */
+    readonly stageName: string;
+    /**
+     * Regional domain name of the API's custom domain (the DNS target for its host), or undefined
+     * when `app.api.apiGatewayRest.customDomain` is off.
+     */
+    readonly customDomainTarget?: string;
+}
+
+export interface RestApiGatewayConstructProps {
+    config: Config.Config;
+    authResources: authResources;
+    storageResources: storageResources;
+    lambdaAuthorizerLayer: LayerVersion;
+    registry: RouteRegistry;
+    vpc: ec2.IVpc;
+    subnets: ec2.ISubnet[];
+    /** Execute-api interface VPC endpoint id created by VAMS (undefined when not created). */
+    vamsCreatedApiGatewayVpcEndpointId?: string;
+    /** Resolved WAF web ACL ARN ("" when WAF is disabled). */
+    wafArn?: string;
+    /**
+     * The API origin verification secret (CloudFront deployments only). The REST authorizer reads it
+     * to recognise requests CloudFront forwarded.
+     */
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
+}
+
+/**
+ * API Gateway REST implementation of the VAMS backend API.
+ *
+ * Builds a single `SpecRestApi` from the cross-stack {@link RouteRegistry}: renders one
+ * inline OpenAPI document (with the custom REQUEST Lambda authorizer, CORS, the gateway
+ * responses, and the anonymous amplify-config/version routes), creates an explicit Deployment + Stage whose
+ * logical id is hashed against the whole spec and the gateway responses (so any cross-stack
+ * route change auto-redeploys), grants API Gateway invoke on every registered Lambda, and
+ * optionally associates a regional WAF web ACL.
+ *
+ * The API is fully self-contained: it is publicly addressable on its own and does not
+ * require CloudFront or an ALB in front of it. When a front is present it absorbs the
+ * stage path, but direct execute-api access works the same.
+ *
+ */
+export class RestApiGatewayConstruct extends Construct implements IApiImplementation {
+    public restApi: apigw.SpecRestApi;
+    public readonly apiEndpoint: string;
+    public readonly stageName: string;
+    public readonly invokeUrlWithStage: string;
+    public readonly customDomainTarget?: string;
+
+    constructor(parent: Construct, name: string, props: RestApiGatewayConstructProps) {
+        super(parent, name);
+        const { config, storageResources, registry } = props;
+        const apiGatewayRest = config.app.api.apiGatewayRest;
+        const customDomainHost = Config.apiCustomDomainHost(config);
+        // The deployment stage name is a fixed constant (shared with the VamsCLI endpoint
+        // constants and the web /api/* fronting), not a per-deployment config option.
+        this.stageName = Config.API_GATEWAY_STAGE_NAME;
+
+        // Implementation-specific decision 1: which execute-api VPC endpoint id (if any)
+        // this REST API should use. PRIVATE uses VAMS' endpoint when addVpcEndpoints created
+        // one, otherwise the operator-supplied external endpoint id (config validation
+        // requires one of the two). REGIONAL is a public endpoint and never routes through a
+        // VPC endpoint, so this resolves to undefined for REGIONAL.
+        const apiGatewayVpcEndpointId = resolveApiGatewayVpcEndpointId(
+            config,
+            props.vamsCreatedApiGatewayVpcEndpointId
+        );
+
+        // Implementation-specific decision 2: attach the regional-scoped WAF web ACL to the
+        // REST API stage whenever WAF is enabled. The ACL passed in (props.wafArn) is always
+        // the regional-scoped ACL created in the core Region, which is what API Gateway
+        // requires — for both REGIONAL and PRIVATE endpoint types, and independently of
+        // whether CloudFront or an ALB fronts the app. (The CloudFront-scoped ACL is a
+        // separate us-east-1 ACL attached to the distribution, not here.) This protects the
+        // API's direct execute-api endpoint, which stays reachable regardless of fronting.
+        const wafEnabled = config.app.useWaf;
+
+        // 1) REST authorizer Lambda (custom; reuses shared auth core)
+        const authorizerFn = buildApiGatewayAuthorizerRestFunction(
+            this,
+            props.lambdaAuthorizerLayer,
+            storageResources,
+            config,
+            props.vpc,
+            props.subnets,
+            props.apiOriginVerifySecret
+        );
+        if (config.app.authProvider.useCognito.enabled) {
+            authorizerFn.addEnvironment("USER_POOL_ID", props.authResources.cognito.userPoolId);
+            authorizerFn.addEnvironment("APP_CLIENT_ID", props.authResources.cognito.webClientId);
+            // The authorizer resolves the user's MFA preference (AdminGetUser) and passes it
+            // to handler Lambdas through the authorizer context
+            authorizerFn.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["cognito-idp:AdminGetUser"],
+                    resources: [props.authResources.cognito.userPool.userPoolArn],
+                })
+            );
+        }
+
+        // 2) Role API Gateway assumes to invoke the authorizer
+        //
+        // The trust narrows API Gateway to acting for this account, so an API in another account
+        // cannot name this role as its own `authorizerCredentials` and drive the authorizer with
+        // events it controls.
+        //
+        // The condition is one key under the `...IfExists` operator form, and both halves of that
+        // are load-bearing. API Gateway does not document which global condition keys it populates
+        // on the `sts:AssumeRole` it makes for authorizer credentials, and that assume-role is the
+        // only path to the authorizer — so a condition that fails closed returns 500 on every
+        // route, including the anonymous ones, since they share this authorizer. `...IfExists`
+        // denies a foreign account whenever the key is supplied and leaves the assume-role working
+        // when it is not. The key is `aws:SourceAccount` because it has a single possible value
+        // shape (this account id), whereas an API Gateway `aws:SourceArn` has two plausible ones —
+        // the `execute-api` data-plane ARN and the `apigateway` control-plane ARN, whose account
+        // field is empty — so a pattern written for either one fails closed against the other.
+        // Naming the API in an ARN is not available here in any case: the API's inline OpenAPI
+        // document carries this role's ARN, so referring to `this.restApiId` makes the two
+        // resources reference each other.
+        const authInvokeRole = new iam.Role(this, "RestAuthorizerInvokeRole", {
+            assumedBy: new iam.PrincipalWithConditions(Service("APIGATEWAY").Principal, {
+                StringEqualsIfExists: { "aws:SourceAccount": config.env.account },
+            }),
+        });
+        authorizerFn.grantInvoke(authInvokeRole);
+
+        // Cognito hosted UI domain for federated (SAML or OIDC) sign-in. Amplify's oauth.domain
+        // expects a bare hostname (it prepends https:// itself). The entry exists only in the
+        // commercial partition and is read as the standard auth.{region} domain.
+        const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
+            ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : config.app.authProvider.useCognito.useOidc
+            ? `${oidcSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : "";
+
+        // SAML and OIDC are mutually exclusive (enforced in getConfig), so at most one of these
+        // yields a federated config; neither does for a plain Cognito deployment, and the frontend
+        // then reports COGNITO_FEDERATED=false and renders the native Authenticator.
+        const federatedIdentitySettings = config.app.authProvider.useCognito.useSaml
+            ? samlSettings
+            : config.app.authProvider.useCognito.useOidc
+            ? oidcSettings
+            : undefined;
+
+        const amplifyConfig = new AmplifyConfigLambdaConstruct(this, "AmplifyConfig", {
+            config,
+            authResources: props.authResources,
+            region: config.env.region,
+            // With a custom domain the clients are given its stage-inclusive URL; otherwise the URL is
+            // derived at runtime from the request context (see construct)
+            apiUrl: customDomainHost ? `https://${customDomainHost}/${this.stageName}/` : "",
+            ...(federatedIdentitySettings
+                ? {
+                      cognitoFederatedConfig: {
+                          customCognitoAuthDomain: cognitoHostedUiDomain,
+                          customFederatedIdentityProviderName: federatedIdentitySettings.name,
+                          idpDisplayName: federatedIdentitySettings.displayName,
+                      },
+                  }
+                : {}),
+        });
+        const versionFn = new VamsVersionLambdaConstruct(this, "Version", { config });
+        registry.register({
+            path: "/api/amplify-config",
+            method: HttpMethod.GET,
+            lambdaFn: amplifyConfig.lambdaFn,
+            allowAnonymous: true,
+        });
+        registry.register({
+            path: "/api/version",
+            method: HttpMethod.GET,
+            lambdaFn: versionFn.lambdaFn,
+            allowAnonymous: true,
+        });
+
+        // The CloudFront distribution forwards only these stage-prefixed paths with the stage as
+        // origin path; any other `/api/*` request reaches route `/{rest}`. A route registered under
+        // `/api/` would therefore be unreachable through CloudFront at the path its name suggests.
+        assertNoStagePrefixedRoutes(
+            registry.list().map((r) => r.path),
+            this.stageName
+        );
+
+        // 3) Build the OpenAPI document from the full registry
+        const spec = buildOpenApiSpec(registry.list(), {
+            authorizerFnArn: authorizerFn.functionArn,
+            authorizerRole: authInvokeRole.roleArn,
+            region: config.env.region,
+            partition: Partition(),
+            cors: {
+                allowOrigins: "*",
+                allowHeaders:
+                    "Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin",
+                allowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
+            },
+            endpointType: apiGatewayRest.endpointType,
+            vpcEndpointIds: apiGatewayVpcEndpointId ? [apiGatewayVpcEndpointId] : undefined,
+            title: `${config.env.coreStackName}Api`,
+            timeoutSeconds: apiGatewayRest.apiGatewayTimeoutTime,
+        });
+
+        // CORS headers on gateway-level responses (authorizer denials and errors).
+        // Responses produced by API Gateway itself — the custom authorizer returning
+        // Unauthorized (401) or Access Denied (403), a missing authentication token, and 4XX/5XX
+        // errors — never reach a Lambda, so the per-handler `commonHeaders()` cannot add the
+        // Access-Control-Allow-Origin header to them. Without it, the browser CORS-blocks these
+        // responses and a benign token-expiry 401 surfaces as an unexplained CORS/network error
+        // in the web app. Inject the allow-origin/headers on the default 4XX and 5XX gateway
+        // responses (these cover UNAUTHORIZED, ACCESS_DENIED, MISSING_AUTHENTICATION_TOKEN, etc.)
+        // and a request the AWS WAF web ACL blocked (WAF_FILTERED), whose body names the web ACL
+        // and the request ID, so cross-origin callers can read the real status.
+        const gatewayResponseCorsHeaders = {
+            "Access-Control-Allow-Origin": "'*'",
+            "Access-Control-Allow-Headers":
+                "'Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin'",
+        };
+        const gatewayResponses = gatewayResponseDefinitions(gatewayResponseCorsHeaders);
+        // The responses are part of the API definition as well as resources of their own. AWS
+        // CloudFormation imports the definition again whenever it changes, and an import resets
+        // every gateway response the definition omits to its default, while a response resource is
+        // applied again only when it changes itself. The resources stay, so that no update deletes
+        // one after the import has set it.
+        Object.assign(spec, {
+            "x-amazon-apigateway-gateway-responses": openApiGatewayResponses(gatewayResponses),
+        });
+
+        // 4) SpecRestApi with explicit deployment control
+        this.restApi = new apigw.SpecRestApi(this, "Api", {
+            apiDefinition: apigw.ApiDefinition.fromInline(spec),
+            endpointTypes: [
+                apiGatewayRest.endpointType === "PRIVATE"
+                    ? apigw.EndpointType.PRIVATE
+                    : apigw.EndpointType.REGIONAL,
+            ],
+            deploy: false,
+            // Provision the account-level API Gateway CloudWatch role (required for the
+            // stage's execution logging). The policy applies to both the role and the
+            // AWS::ApiGateway::Account resource it is attached to, and that resource is an
+            // account + Region singleton shared by every REST API there — so RETAIN keeps
+            // API Gateway logging in place for co-resident deployments when this one is torn
+            // down. The retained role carries a fixed name (the IamRoleTransform aspect names
+            // every role in the tree), so it has to be deleted before this deployment is
+            // redeployed into the same account and Region.
+            cloudWatchRole: true,
+            cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
+        });
+
+        // Minimum TLS version + cipher suite on the REST API itself. `securityPolicy` is a
+        // property of AWS::ApiGateway::RestApi — not only of a custom DomainName — so it applies to
+        // the default execute-api endpoint VAMS serves from, which has no custom domain to attach a
+        // policy to. The L2 SpecRestApi does not surface the property, so it is set on the L1.
+        //
+        // A policy is set only outside the GovCloud mode. There, a Regional API otherwise defaults
+        // to TLS_1_0, which accepts TLS 1.0 and TLS 1.1; SecurityPolicy_TLS13_1_2_2021_06 raises the
+        // floor to TLS 1.2 while still accepting TLS 1.3, so it stays compatible with every fronting
+        // mode — notably CloudFront, which negotiates at most TLS 1.2 to a custom origin and so
+        // cannot reach a TLS 1.3-only API. The value is not present in the aws-cdk-lib
+        // SecurityPolicy enum, so it is written as its literal CloudFormation string.
+        //
+        // It is an enhanced policy (the `SecurityPolicy_` prefix) and so requires an endpoint access
+        // mode. BASIC (rather than STRICT) keeps CloudFront `/api/*` origin requests, the
+        // ALB-to-execute-api redirect, and direct execute-api access working — all of which are
+        // cross-host or cross-endpoint-type by design.
+        //
+        // The GovCloud mode (which the EU Sovereign Cloud also enables for its partition guardrails)
+        // is left unset so the API keeps whatever default its partition and Region apply. Those
+        // partitions do not offer TLS_1_0 for Regional APIs and their APIs are FIPS-compliant by
+        // default, so the default floor is already TLS 1.2 without VAMS asserting a specific policy.
+        if (!config.app.govCloud.enabled) {
+            const cfnRestApi = this.restApi.node.defaultChild as apigw.CfnRestApi;
+            cfnRestApi.addPropertyOverride("SecurityPolicy", "SecurityPolicy_TLS13_1_2_2021_06");
+            cfnRestApi.addPropertyOverride("EndpointAccessMode", "BASIC");
+        }
+
+        // 5) Grant API Gateway permission to invoke every registered Lambda
+        const sourceArn = `arn:${Partition()}:execute-api:${config.env.region}:${
+            config.env.account
+        }:${this.restApi.restApiId}/*/*/*`;
+        const invokedFns = new Set<string>();
+        for (const r of registry.list()) {
+            if (invokedFns.has(r.lambdaFn.functionArn)) continue;
+            invokedFns.add(r.lambdaFn.functionArn);
+            // Keyed on the function's construct path, which is fixed by the code. The ARN is an
+            // unresolved Token at synth, and hashing its string form made seven of these ids differ
+            // between two synths of one unchanged configuration -- a replaced permission on every deploy.
+            new cdk.aws_lambda.CfnPermission(
+                this,
+                `Invoke-${generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    r.lambdaFn.node.path,
+                    10
+                )}`,
+                {
+                    action: "lambda:InvokeFunction",
+                    functionName: r.lambdaFn.functionArn,
+                    principal: Service("APIGATEWAY").PrincipalString,
+                    sourceArn: sourceArn,
+                }
+            );
+        }
+
+        const accessLogs = new logs.LogGroup(this, "VAMS-REST-API-AccessLogs", {
+            encryptionKey: storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        const deployment = new apigw.Deployment(this, "Deployment", { api: this.restApi });
+        deployment.addToLogicalId(spec); // any spec change -> new deployment -> auto redeploy
+        addGatewayResponses(this, this.restApi, deployment, gatewayResponses);
+
+        const stage = new apigw.Stage(this, "Stage", {
+            deployment,
+            stageName: this.stageName,
+            throttlingBurstLimit: apiGatewayRest.globalBurstLimit,
+            throttlingRateLimit: apiGatewayRest.globalRateLimit,
+            accessLogDestination: new apigw.LogGroupLogDestination(accessLogs),
+            accessLogFormat: apigw.AccessLogFormat.jsonWithStandardFields(),
+            loggingLevel: apigw.MethodLoggingLevel.INFO,
+        });
+        this.restApi.deploymentStage = stage;
+
+        // 6.5) WAF association for the REST API stage (regional-scoped ACL — see above).
+        if (props.wafArn && props.wafArn !== "" && wafEnabled) {
+            const wafAssociation = new wafv2.CfnWebACLAssociation(this, "RestApiWafAssociation", {
+                resourceArn: `arn:${Partition()}:apigateway:${config.env.region}::/restapis/${
+                    this.restApi.restApiId
+                }/stages/${this.stageName}`,
+                webAclArn: props.wafArn,
+            });
+            // The resource ARN is a hand-built string, so CloudFormation cannot infer
+            // that the stage must exist before the association is created.
+            wafAssociation.node.addDependency(stage);
+        }
+
+        // 6.6) Optional Regional custom domain. Base path `api` maps to the stage, so
+        // https://{domainHost}/api/{route} has the shape of the execute-api invoke URL and of the
+        // CloudFront `/api/*` paths. The regional web ACL stays associated with the stage, which
+        // covers requests arriving through the domain. The execute-api endpoint stays enabled.
+        if (customDomainHost) {
+            const customDomain = apiGatewayRest.customDomain;
+            const domainName = new apigw.DomainName(this, "ApiCustomDomain", {
+                domainName: customDomainHost,
+                certificate: acm.Certificate.fromCertificateArn(
+                    this,
+                    "ApiCustomDomainCertificate",
+                    customDomain.certificateArn
+                ),
+                endpointType: apigw.EndpointType.REGIONAL,
+                securityPolicy: apigw.SecurityPolicy.TLS_1_2,
+            });
+            // The same policy and access mode as the REST API itself (see above), applied outside the
+            // GovCloud mode only; there the TLS_1_2 policy is the floor.
+            if (!config.app.govCloud.enabled) {
+                const cfnDomainName = domainName.node.defaultChild as apigw.CfnDomainName;
+                cfnDomainName.addPropertyOverride(
+                    "SecurityPolicy",
+                    "SecurityPolicy_TLS13_1_2_2021_06"
+                );
+                cfnDomainName.addPropertyOverride("EndpointAccessMode", "BASIC");
+            }
+            new apigw.BasePathMapping(this, "ApiCustomDomainBasePathMapping", {
+                domainName,
+                restApi: this.restApi,
+                stage,
+                basePath: this.stageName,
+            });
+
+            const hostedZoneId = customDomain.optionalHostedZoneId;
+            if (hostedZoneId && hostedZoneId !== "" && hostedZoneId !== "UNDEFINED") {
+                const zone = route53.HostedZone.fromHostedZoneAttributes(
+                    this,
+                    "ApiCustomDomainHostedZone",
+                    {
+                        zoneName: customDomainHost.substring(customDomainHost.indexOf(".") + 1),
+                        hostedZoneId,
+                    }
+                );
+                const aliasTarget = route53.RecordTarget.fromAlias(
+                    new route53targets.ApiGatewayDomain(domainName)
+                );
+                new route53.ARecord(this, "ApiCustomDomainAliasRecord", {
+                    zone,
+                    recordName: `${customDomainHost}.`,
+                    target: aliasTarget,
+                });
+                new route53.AaaaRecord(this, "ApiCustomDomainAliasRecordIpv6", {
+                    zone,
+                    recordName: `${customDomainHost}.`,
+                    target: aliasTarget,
+                });
+            }
+            this.customDomainTarget = domainName.domainNameAliasDomainName;
+        }
+
+        // 7) Endpoint outputs (non-FIPS URL in non-GovCloud, as today)
+        this.apiEndpoint = `${this.restApi.restApiId}.${Service("EXECUTE_API", false).Endpoint}`;
+        this.invokeUrlWithStage = `https://${this.apiEndpoint}/${this.stageName}`;
+
+        new cdk.CfnOutput(this, "GatewayUrl", { value: `${this.invokeUrlWithStage}/` });
+
+        // 8) Justified CDK Nag suppressions (spec-defined methods/authorizer)
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-APIG2",
+                    reason: "Request validation is performed in Lambda handlers via Pydantic models; the REST API uses Lambda proxy integrations defined in the OpenAPI spec.",
+                },
+                {
+                    id: "AwsSolutions-APIG4",
+                    reason: "Authorization is enforced by the custom REQUEST Lambda authorizer declared as the OpenAPI security scheme on all non-anonymous routes; cdk-nag cannot introspect spec-defined methods.",
+                },
+                {
+                    id: "AwsSolutions-COG4",
+                    reason: "VAMS intentionally uses a custom Lambda authorizer (Cognito + external OAuth + API key + IP), not a Cognito user pool authorizer, per project Rule 5.",
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "API Gateway invoke permission scoped to this REST API's execute-api source ARN; Lambda execution roles use standard managed policies.",
+                },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "API Gateway's account-level CloudWatch role requires the AWS-managed AmazonAPIGatewayPushToCloudWatchLogs policy to deliver REST API execution/access logs; this role is auto-created by the SpecRestApi construct and cannot use a customer-managed policy.",
+                    appliesTo: [
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs",
+                    ],
+                },
+            ],
+            true
+        );
+    }
+}
+
+/**
+ * Resolve the execute-api VPC interface endpoint id the REST API should use, or undefined
+ * when no VPC endpoint applies.
+ *
+ * - REGIONAL: a public endpoint — never routes through a VPC endpoint. Always undefined,
+ *   even when a VPC and endpoints are enabled (any created/external endpoint is ignored).
+ * - PRIVATE: reachable only through an execute-api endpoint. Uses the VAMS-created endpoint
+ *   when `useGlobalVpc.addVpcEndpoints` created one, otherwise the operator-supplied
+ *   `optionalExternalPrivateApigVPCEId`. Config validation guarantees one of the two is set.
+ */
+export function resolveApiGatewayVpcEndpointId(
+    config: Config.Config,
+    vamsCreatedApiGatewayVpcEndpointId?: string
+): string | undefined {
+    const apiGatewayRest = config.app.api.apiGatewayRest;
+
+    if (apiGatewayRest.endpointType !== "PRIVATE") {
+        // REGIONAL is public; ignore any created or external endpoint.
+        return undefined;
+    }
+
+    const vamsEndpointAvailable =
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.addVpcEndpoints;
+    if (vamsEndpointAvailable && vamsCreatedApiGatewayVpcEndpointId) {
+        return vamsCreatedApiGatewayVpcEndpointId;
+    }
+    const external = apiGatewayRest.optionalExternalPrivateApigVPCEId;
+    return external && external !== "" ? external : undefined;
+}
+
+/**
+ * Throws when a route other than `API_STAGE_PREFIXED_ROUTE_PATHS` begins with the stage segment.
+ *
+ * CloudFront forwards those exact paths with the stage as origin path and every other `/api/*` path
+ * without one, so `<cf>/api/{route}` reaches route `/{route}`. A route registered as `/api/{name}`
+ * would be reached only at `<cf>/api/api/{name}`.
+ */
+export function assertNoStagePrefixedRoutes(routePaths: string[], stageName: string): void {
+    const prefixed = routePaths.filter(
+        (p) =>
+            (p === `/${stageName}` || p.startsWith(`/${stageName}/`)) &&
+            Config.API_STAGE_PREFIXED_ROUTE_PATHS.indexOf(p) === -1
+    );
+    if (prefixed.length > 0) {
+        throw new Error(
+            `Route(s) ${Array.from(new Set(prefixed)).join(", ")} begin with the stage segment ` +
+                `/${stageName}/. Only ${Config.API_STAGE_PREFIXED_ROUTE_PATHS.join(" and ")} ` +
+                `(API_STAGE_PREFIXED_ROUTE_PATHS in config.ts) are registered under it, because ` +
+                `CloudFront forwards every other /${stageName}/* path without the stage prefix. ` +
+                `Register the route without the /${stageName} prefix.`
+        );
+    }
+}
+
+/** The body API Gateway answers a request the AWS WAF web ACL blocked with. */
+export const WAF_FILTERED_RESPONSE_TEMPLATE =
+    '{"message":"Request blocked by the deployment\'s AWS WAF web ACL","blockedBy":"waf","requestId":"$context.extendedRequestId"}';
+
+/** One gateway response: a response API Gateway itself produces, never a Lambda's. */
+export interface GatewayResponseDefinition {
+    id: string;
+    type: apigw.ResponseType;
+    statusCode?: string;
+    responseHeaders: Record<string, string>;
+    templates?: Record<string, string>;
+}
+
+/** The gateway responses of the REST API, each carrying the CORS headers. */
+export function gatewayResponseDefinitions(
+    corsHeaders: Record<string, string>
+): GatewayResponseDefinition[] {
+    return [
+        {
+            id: "GatewayResponseDefault4XX",
+            type: apigw.ResponseType.DEFAULT_4XX,
+            responseHeaders: corsHeaders,
+        },
+        {
+            id: "GatewayResponseDefault5XX",
+            type: apigw.ResponseType.DEFAULT_5XX,
+            responseHeaders: corsHeaders,
+        },
+        {
+            id: "GatewayResponseWafFiltered",
+            type: apigw.ResponseType.WAF_FILTERED,
+            statusCode: "403",
+            responseHeaders: corsHeaders,
+            templates: { "application/json": WAF_FILTERED_RESPONSE_TEMPLATE },
+        },
+    ];
+}
+
+/**
+ * The gateway responses as the `x-amazon-apigateway-gateway-responses` extension of an API
+ * definition, keyed by response type, with the values `addGatewayResponses` gives the resources.
+ */
+export function openApiGatewayResponses(
+    definitions: GatewayResponseDefinition[]
+): Record<string, Record<string, unknown>> {
+    return Object.fromEntries(
+        definitions.map((d) => [
+            d.type.responseType,
+            {
+                ...(d.statusCode ? { statusCode: d.statusCode } : {}),
+                responseParameters: Object.fromEntries(
+                    Object.entries(d.responseHeaders).map(([name, value]) => [
+                        `gatewayresponse.header.${name}`,
+                        value,
+                    ])
+                ),
+                ...(d.templates ? { responseTemplates: d.templates } : {}),
+            },
+        ])
+    );
+}
+
+/**
+ * Creates the gateway responses and ties them to the deployment. A gateway response reaches the stage
+ * only through a new deployment, and the deployment's logical id otherwise covers the spec alone.
+ */
+export function addGatewayResponses(
+    scope: Construct,
+    restApi: apigw.IRestApi,
+    deployment: apigw.Deployment,
+    definitions: GatewayResponseDefinition[]
+): apigw.GatewayResponse[] {
+    const responses = definitions.map(
+        (d) =>
+            new apigw.GatewayResponse(scope, d.id, {
+                restApi,
+                type: d.type,
+                statusCode: d.statusCode,
+                responseHeaders: d.responseHeaders,
+                templates: d.templates,
+            })
+    );
+    responses.forEach((response) => deployment.node.addDependency(response));
+    deployment.addToLogicalId({
+        gatewayResponses: definitions.map((d) => ({ ...d, type: d.type.responseType })),
+    });
+    return responses;
+}

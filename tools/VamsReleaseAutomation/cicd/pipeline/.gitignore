@@ -1,0 +1,9 @@
+node_modules/
+cdk.out/
+*.js
+!jest.config.js
+*.d.ts
+# The real config names your accounts; keep it in the private ledger repo, not here.
+config/pipeline.json
+# tools/.gitignore ignores every lib/ directory (Python packaging); this one is CDK source.
+!lib/

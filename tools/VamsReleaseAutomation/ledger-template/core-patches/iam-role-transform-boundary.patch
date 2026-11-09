@@ -1,0 +1,47 @@
+Core patch iam-role-transform-boundary (CP-431)
+
+VAMS fork core patch for GitHub issue #431: the IamRoleTransform aspect
+(infra/lib/aspects/iam-role-transform.aspect.ts) overrides PermissionsBoundary with
+AWS::NoValue in both branches, so cdk.json environments.aws.PermissionBoundaryArn never
+reaches a role and the CDK @aws-cdk/core:permissionsBoundary context is removed too. This
+patch sets the boundary on every AWS::IAM::Role when the ARN is non-empty and leaves the
+property alone when it is empty. It does not change the role naming (every role still gets
+an explicit RoleName).
+
+Made against VAMS v2.6.6. The development branch fixed #431 upstream on 2026-11-05 in a different
+form, so on a fork based on it the patch neither applies nor reads as present: remove the entry there.
+Activate: copy this file to <home>/ledger/core-patches/ and list it in core-patches.md
+(see ledger-template/core-patches.md). vra build and vra iam plan apply it to their scratch
+copy of the fork; vra build then checks that every role in the synthesized templates carries
+the boundary. Retire the entry when upstream ships the fix (the engine reports the patch as
+"present" once the fork already contains the change).
+
+diff --git a/infra/lib/aspects/iam-role-transform.aspect.ts b/infra/lib/aspects/iam-role-transform.aspect.ts
+--- a/infra/lib/aspects/iam-role-transform.aspect.ts
++++ b/infra/lib/aspects/iam-role-transform.aspect.ts
+@@ -56,11 +56,20 @@ export class IamRoleTransform implements cdk.IAspect {
+                     () => {},
+                     this.ApplyOverride(node, "RoleName", this.getRoleName(node))
+                 );
+-                cdk.Fn.conditionIf(
+-                    this.conditionBoundary.logicalId,
+-                    this.ApplyOverride(node, "PermissionsBoundary", Aws.NO_VALUE),
+-                    this.ApplyOverride(node, "PermissionsBoundary", Aws.NO_VALUE)
+-                );
++                // Core patch iam-role-transform-boundary (GitHub issue #431): apply the boundary when it is
++                // set. A literal ARN (cdk.json environments.aws.PermissionBoundaryArn) is set as is; a token
++                // (the rolePrefix/permissionBoundaryArn parameters of RoleRename) is resolved by the
++                // conditionBoundary condition. An empty ARN leaves the property alone, so the CDK
++                // @aws-cdk/core:permissionsBoundary context still applies.
++                const boundary = this.permissionsBoundaryArn;
++                if (cdk.Token.isUnresolved(boundary)) {
++                    node.addPropertyOverride(
++                        "PermissionsBoundary",
++                        cdk.Fn.conditionIf(this.conditionBoundary.logicalId, Aws.NO_VALUE, boundary)
++                    );
++                } else if (boundary) {
++                    this.ApplyOverride(node, "PermissionsBoundary", boundary);
++                }
+             }
+         }
+     }

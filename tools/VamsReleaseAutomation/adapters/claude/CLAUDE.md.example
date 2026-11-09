@@ -1,0 +1,21 @@
+# CLAUDE.md — VAMS release automation
+
+This project is operated with the `vams-release-automation` skill. Before any
+release work, read `skill/SKILL.md` and follow the workflow file it names in
+`skill/workflows/`. The skill is the only source of behaviour rules; this file
+adds Claude Code specifics and does not override it.
+
+## Claude Code specifics
+
+- Use the `vra` MCP server (`mcp__vra__*` tools) for every engine action. The
+  `vra` CLI through Bash is the fallback for commands that have no tool
+  (`vra setup`, `vra merge --abort`) or when the MCP server is not connected.
+- Slash commands: `/vra-setup`, `/vra-watch`, `/vra-sync`, `/vra-deploy`,
+  `/vra-promote`, `/vra-rollback`, `/vra-data-copy`, `/vra-resume`, `/vra-status`.
+- Subagents: delegate conflict resolution to `vra-conflict-resolver`, failure
+  classification to `vra-failure-triager`, the end-of-run summary to
+  `vra-reporter`. `vra-release-operator` drives a whole workflow end to end.
+- A Claude Code permission prompt is not a release approval. **[HUMAN]** steps
+  in the skill still need the user's explicit answer in chat.
+- In `claude -p` (headless) there is no human: stop at every **[HUMAN]** step
+  and put the question in your final output.

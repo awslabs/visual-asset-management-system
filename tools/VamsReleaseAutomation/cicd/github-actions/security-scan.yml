@@ -1,0 +1,262 @@
+# Sample workflow for the customer's VAMS FORK repository (.github/workflows/vra-security-scan.yml): security scans
+# on pull requests, pushes to fork branches, weekly, and on demand. Results go to code scanning as SARIF.
+#
+#   ash                ASH (Automated Security Helper) at the commit the upstream VAMS ci.yml pins, with the same
+#                      pinned Trivy; summary table + one SARIF file per scanner (category ash)
+#   codeql             CodeQL for actions, javascript-typescript and python (build-mode none)
+#   dependency-review  pull requests only: vulnerable or denied dependency changes fail the check
+#   sbom               SPDX JSON software bill of materials of the repository (syft), kept as an artifact
+#   secrets            gitleaks over the full history (pinned binary, SHA-256 checked), SARIF (category gitleaks)
+#
+# GitHub's own secret scanning and push protection are repository settings (Settings > Advanced Security), not a
+# workflow step: turn them on as well; this job adds a scan that runs on every pull request and keeps a SARIF record.
+#
+# Code scanning upload (SARIF) needs code scanning enabled: public repositories, or GitHub Advanced Security / Code
+# Security on private and internal repositories (GHEC and GHES). Without it set vars.VRA_SARIF_UPLOAD=false; the
+# SARIF files stay in the job artifacts. dependency-review needs the dependency graph (and GHAS for private
+# repositories). GHES: see README.md "GitHub Enterprise Server" (bundled CodeQL action, self-hosted runners with
+# Docker for ASH, actions-sync or GitHub Connect for the non-bundled actions).
+#
+# The scripts come from the pinned vra package checkout (vars.VRA_PACKAGE_REPO at vars.VRA_PACKAGE_REF).
+name: vra-security-scan
+
+on:
+    pull_request: {}
+    push:
+        branches-ignore: ["vendor/**"]
+    schedule:
+        - cron: "23 4 * * 1"
+    workflow_call: {}
+    workflow_dispatch: {}
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+    PYTHON_VERSION: "3.12.7"
+
+jobs:
+    ash:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 90
+        permissions:
+            contents: read
+            security-events: write # upload SARIF
+            actions: read # code scanning upload on private repositories
+        env:
+            ASH_REF: af1206aff596f1288ad066828058b3011de2a998 # v3.7.1, as in upstream ci.yml
+            TRIVY_VERSION: "0.69.3"
+            TRIVY_SHA256: 1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vams
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN || github.token }}
+                  persist-credentials: false
+            - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+            - name: Clone automated security helper
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  # GHES without GitHub Connect: mirror the repository and set vars.VRA_ASH_REPO
+                  repository: ${{ vars.VRA_ASH_REPO || 'aws-samples/automated-security-helper' }}
+                  ref: ${{ env.ASH_REF }}
+                  path: ash
+                  persist-credentials: false
+            - name: Provide a pinned Trivy to the ASH image build
+              run: |
+                  set -euo pipefail
+                  test "$(uname -m)" = "x86_64"
+                  archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+                  curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$archive" \
+                    "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+                  echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+                  mkdir -p ash/ci-trivy
+                  tar -xzf "$RUNNER_TEMP/$archive" -C ash/ci-trivy trivy
+                  python3 - <<'PY'
+                  import os, re, sys
+                  path = "ash/Dockerfile"
+                  text = open(path, encoding="utf-8").read()
+                  if f'ARG TRIVY_VERSION="v{os.environ["TRIVY_VERSION"]}"' not in text:
+                      sys.exit("::error title=Trivy pin::the ASH Dockerfile does not pin this Trivy version")
+                  pattern = re.compile(r"^RUN .*aquasecurity/trivy/\$\{TRIVY_VERSION\}/contrib/install\.sh.*$", re.M)
+                  text, count = pattern.subn("COPY ci-trivy/trivy /usr/local/bin/trivy", text)
+                  if count != 1:
+                      sys.exit(f"::error title=Trivy pin::expected one Trivy install line in the ASH Dockerfile, found {count}")
+                  open(path, "w", encoding="utf-8").write(text)
+                  PY
+            - name: Pull the ASH base image
+              run: |
+                  ecr_image=$(sed -n 's/^ARG BASE_IMAGE=//p' ash/Dockerfile | head -n 1)
+                  hub_image="docker.io/${ecr_image#public.ecr.aws/docker/}"
+                  for attempt in 1 2 3 4; do
+                      docker pull "$ecr_image" && exit 0
+                      sleep $((attempt * 20))
+                  done
+                  echo "::warning title=ASH base image::public ECR refused $ecr_image; trying Docker Hub"
+                  for attempt in 1 2 3; do
+                      if docker pull "$hub_image"; then
+                          echo "DOCKER_EXTRA_ARGS=--build-arg BASE_IMAGE=$hub_image" >> "$GITHUB_ENV"
+                          exit 0
+                      fi
+                      sleep $((attempt * 20))
+                  done
+                  echo "::error title=ASH base image::the base image could not be pulled"
+                  exit 1
+            - name: Run automated security helper
+              run: |
+                  cd ash
+                  export PATH=$PATH:./
+                  rc=0
+                  ash --source-dir ../vams --output-dir "$GITHUB_WORKSPACE/ash-output" || rc=$?
+                  echo "ASH_EXIT_CODE=$rc" >> "$GITHUB_ENV"
+            - name: Summarize and convert to SARIF
+              if: always()
+              env:
+                  # pushes (the trunk, which the hand-off releases) fail on HIGH by default; pull requests report
+                  # only by default (vars.VRA_ASH_FAIL_ON_PR); both configurable: none | high | critical
+                  FAIL_ON: >-
+                      ${{ github.event_name == 'pull_request' && (vars.VRA_ASH_FAIL_ON_PR || 'none') ||
+                      (vars.VRA_ASH_FAIL_ON || 'high') }}
+              run: |
+                  python3 vra-src/cicd/github-actions/scripts/ash_report.py \
+                    --results ash-output/ash_aggregated_results.json --sarif-dir ash-sarif \
+                    --summary "$GITHUB_STEP_SUMMARY" --exit-code "${ASH_EXIT_CODE:-unknown}" --fail-on "${FAIL_ON}" \
+                    --json-out ash-output/vra-ash-summary.json
+            - name: Upload SARIF (code scanning)
+              if: always() && vars.VRA_SARIF_UPLOAD != 'false' && hashFiles('ash-sarif/*.sarif') != ''
+              uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+              with:
+                  sarif_file: ash-sarif
+                  category: ash
+                  checkout_path: vams
+            - name: Upload Report
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: automated-security-helper-report
+                  path: |
+                      ash-output/
+                      ash-sarif/
+                  retention-days: 30
+
+    codeql:
+        name: codeql (${{ matrix.language }})
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 120
+        permissions:
+            contents: read
+            security-events: write
+            actions: read
+            packages: read
+        strategy:
+            fail-fast: false
+            matrix:
+                language: [actions, javascript-typescript, python]
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+              with:
+                  languages: ${{ matrix.language }}
+                  build-mode: none
+            - uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+              with:
+                  category: /language:${{ matrix.language }}
+                  upload: ${{ vars.VRA_SARIF_UPLOAD == 'false' && 'never' || 'always' }}
+
+    dependency-review:
+        if: github.event_name == 'pull_request'
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 15
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+              with:
+                  fail-on-severity: ${{ vars.VRA_DEPENDENCY_FAIL_ON || 'high' }}
+
+    sbom:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 30
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+              with:
+                  path: .
+                  format: spdx-json
+                  output-file: sbom/vams.spdx.json
+                  upload-artifact: false
+                  dependency-snapshot: false
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: sbom-${{ github.sha }}
+                  path: sbom/
+                  retention-days: 90
+
+    secrets:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        timeout-minutes: 30
+        permissions:
+            contents: read
+            security-events: write
+            actions: read
+        env:
+            GITLEAKS_VERSION: "8.30.1"
+            GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - name: Install gitleaks (pinned, checksum verified)
+              run: |
+                  set -euo pipefail
+                  archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+                  curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$archive" \
+                    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+                  echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+                  mkdir -p "$RUNNER_TEMP/gitleaks"
+                  tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/gitleaks" gitleaks
+            - name: gitleaks
+              run: |
+                  mkdir -p gitleaks-sarif
+                  rc=0
+                  "$RUNNER_TEMP/gitleaks/gitleaks" git . --redact --no-banner \
+                    --report-format sarif --report-path gitleaks-sarif/gitleaks.sarif || rc=$?
+                  echo "GITLEAKS_EXIT_CODE=$rc" >> "$GITHUB_ENV"
+            - name: Upload SARIF (code scanning)
+              if: always() && vars.VRA_SARIF_UPLOAD != 'false' && hashFiles('gitleaks-sarif/*.sarif') != ''
+              uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+              with:
+                  sarif_file: gitleaks-sarif
+                  category: gitleaks
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: gitleaks-${{ github.run_id }}
+                  path: gitleaks-sarif/
+                  retention-days: 30
+            - name: Result
+              run: |
+                  # gitleaks exits 1 when it finds a leak (redacted in the report)
+                  [ "${GITLEAKS_EXIT_CODE}" = "0" ] || { echo "::error title=gitleaks::secrets found; see the SARIF report"; exit 1; }

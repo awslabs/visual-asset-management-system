@@ -1,0 +1,164 @@
+# IAM action manifest: preflight (and the permission loop)
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+workflow: preflight
+schemaVersion: 1
+role: deploy
+description: >-
+    Simulate the actions of a workflow manifest against the deploy role before running it, and
+    classify AccessDenied errors when a step fails. iam:SimulatePrincipalPolicy is preferred; when
+    it is denied the engine falls back to dry-run probes and reports that simulation was skipped.
+statements:
+    - sid: CallerIdentity
+      actions:
+          - sts:GetCallerIdentity
+      resources:
+          - "*"
+      note: Find the principal to simulate (assumed-role ARN mapped back to its role ARN).
+
+    - sid: SimulateOwnRole
+      actions:
+          - iam:SimulatePrincipalPolicy
+          - iam:GetContextKeysForPrincipalPolicy
+          - iam:GetRole
+          - iam:ListAttachedRolePolicies
+          - iam:ListRolePolicies
+          - iam:GetRolePolicy
+      resources:
+          - arn:${Partition}:iam::${Account}:role/vra-*
+      note: >-
+          Simulate only the vra roles' own policies. Note that simulation cannot see SCPs, resource
+          policies in other accounts, or KMS key policies; preflight reports those as "not simulated".
+
+    - sid: ReadAttachedPolicies
+      actions:
+          - iam:GetPolicy
+          - iam:GetPolicyVersion
+      resources:
+          - arn:${Partition}:iam::${Account}:policy/vra-*
+          - arn:${Partition}:iam::aws:policy/*
+      note: Read managed policy documents attached to the vra roles to build the least-privilege diff in an IT request.
+
+    - sid: DecodeAuthorizationMessage
+      actions:
+          - sts:DecodeAuthorizationMessage
+      resources:
+          - "*"
+      note: Decode encoded authorization failure messages (EC2 and others); not resource-scoped.
+
+    - sid: CloudTrailLookup
+      actions:
+          - cloudtrail:LookupEvents
+      resources:
+          - "*"
+      note: Find the exact denied action and resource for an error that does not name them. Not resource-scoped; optional.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.
