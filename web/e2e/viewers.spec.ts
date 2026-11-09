@@ -6,6 +6,8 @@
 import { test, expect, Page, Request, Response } from "@playwright/test";
 import {
     type AssetFileRef,
+    canvasStats,
+    type CanvasStats,
     chooseViewer,
     CONSOLE_ERROR_IGNORE,
     CSP_CONSOLE_REPORT,
@@ -81,6 +83,7 @@ const cases = [
     // With ALLOWUNSAFEEVAL the SuperSplat Editor also opens .spz, so the picker appears there.
     { ext: ".spz", viewer: "Gaussian splat", select: /Gaussian Splat Viewer \(BabylonJS\)/i },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
+    { ext: ".ifczip", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
     // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
@@ -494,6 +497,11 @@ const renderCases: RenderCase[] = [
         select: /VNTANA/i,
         servedBundle: VNTANA_BUNDLE,
     },
+    // The IFC viewer draws a grid under the model, so these cases only prove the canvas is not
+    // blank; "IFC BIM viewer panel actions" below compares the model against the bare grid.
+    { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-haus-zip", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-school-structural", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
     // SuperSplat Editor (iframe, WebGPU): splat count > 0 and a canvas that differs from the empty
     // editor's, inside the frame (expectSuperSplatRendered). One case per single-file format it is
     // offered for, SPZ v3 and v4 separately: PR-3 sends users with SPZ v4 here on ALLOWUNSAFEEVAL
@@ -698,6 +706,150 @@ test.describe("viewer render proof (seeded samples)", () => {
 
             expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
             await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});
+
+/**
+ * IFC BIM viewer panel actions (#1174), on the seeded IFC samples. The viewer draws a grid under the
+ * model, so "the canvas is not blank" cannot tell a model from an empty scene. Hide All is that empty
+ * scene: each case measures it and requires the model, Show All, Isolate and every camera move to draw
+ * more than it. Every action is local to the browser (visibility, camera, section planes,
+ * measurements), so the environment is not changed (e2e/CLAUDE.md Rule 2).
+ */
+test.describe("IFC BIM viewer panel actions (seeded samples)", () => {
+    for (const sampleId of ["ifc-haus", "ifc-haus-zip"]) {
+        test(`IFC BIM viewer runs each panel action on ${sampleId}`, async ({ page }) => {
+            test.setTimeout(240_000);
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[sampleId];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${sampleId} sample; re-run the seed script`
+            );
+
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const missing = missingFeatures(await featuresEnabled(page), "ALLOWUNSAFEEVAL");
+            test.skip(
+                missing.length > 0,
+                "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
+            );
+
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            });
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+            // Only one viewer handles .ifc/.ifczip; fail if any other viewer opened the file.
+            await pickViewerIfAsked(page, "ThatOpen IFC BIM Viewer");
+
+            // The panel mounts only once the model is parsed and the scene is ready.
+            const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
+            await expect(tablist).toBeVisible({ timeout: 120_000 });
+            const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+
+            /** Polls the canvas until `ok` holds (the renderer draws on its own frame loop). */
+            const expectCanvas = async (
+                what: string,
+                ok: (s: CanvasStats) => boolean
+            ): Promise<CanvasStats> => {
+                let last: CanvasStats | null = null;
+                await expect(async () => {
+                    last = await canvasStats(page, canvas);
+                    expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
+                }).toPass({ timeout: 20_000 });
+                return last!;
+            };
+            const model = await canvasStats(page, canvas);
+
+            // Model tree: Hide All gives the empty scene (grid only); Show All brings the model back.
+            await tablist.getByRole("tab", { name: /Model/ }).click();
+            const tree = page.getByRole("tree", { name: "Model tree" });
+            await expect(tree).toBeVisible();
+            const isolate = page.getByRole("button", { name: /^Isolate .* \(show only this\)$/ });
+            await expect(isolate.first()).toBeVisible();
+            await page.getByRole("button", { name: /Hide All/ }).click();
+            const empty = await expectCanvas(
+                "Hide All",
+                (s) => s.distinctColours < model.distinctColours
+            );
+            const drawsModel = (s: CanvasStats) =>
+                s.distinctColours > empty.distinctColours &&
+                Math.abs(s.foregroundFraction - empty.foregroundFraction) > 0.005;
+            await page.getByRole("button", { name: /Show All/ }).click();
+            await expectCanvas("Show All", drawsModel);
+
+            // Isolate the first category: some of the model, never more colours than all of it.
+            await isolate.first().click();
+            await expectCanvas(
+                "Isolate",
+                (s) =>
+                    s.distinctColours > empty.distinctColours &&
+                    s.distinctColours <= model.distinctColours + 8
+            );
+            await page.getByRole("button", { name: /Show All/ }).click();
+
+            // Select a category from the tree; Properties then shows the element.
+            await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
+            await tablist.getByRole("tab", { name: /Properties/ }).click();
+            await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
+
+            // Tools: camera presets, zoom and fit keep the model on screen.
+            await tablist.getByRole("tab", { name: /Tools/ }).click();
+            for (const view of ["Top", "Front", "Left", "Iso"]) {
+                await page.getByRole("button", { name: view, exact: true }).click();
+                await expectCanvas(`${view} view`, drawsModel);
+            }
+            await page.getByRole("button", { name: /Zoom In/ }).click();
+            await page.getByRole("button", { name: /Zoom Out/ }).click();
+            await page.getByRole("button", { name: /Fit to View/ }).click();
+            await expectCanvas("Fit to View", drawsModel);
+
+            // Section plane: enable, double-click the model, delete every plane, switch off.
+            const box = (await canvas.boundingBox())!;
+            const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.getByRole("button", { name: "Enable Section Plane" }).click();
+            await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
+            await page.mouse.move(centre.x, centre.y);
+            await page.mouse.dblclick(centre.x, centre.y);
+            await page.getByRole("button", { name: "Delete All Planes" }).click();
+            await page.getByRole("button", { name: "Section: ON" }).click();
+
+            // Length: two points on the model; Area: three points, then Finish; then clear both.
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            for (const dx of [-60, 60]) {
+                await page.mouse.move(centre.x + dx, centre.y);
+                await page.mouse.dblclick(centre.x + dx, centre.y);
+            }
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            await page.getByRole("button", { name: "Area", exact: true }).click();
+            for (const [dx, dy] of [
+                [-50, -30],
+                [50, -30],
+                [50, 40],
+            ]) {
+                await page.mouse.move(centre.x + dx, centre.y + dy);
+                await page.mouse.dblclick(centre.x + dx, centre.y + dy);
+            }
+            await page.getByRole("button", { name: /Finish Area/ }).click();
+            await page.getByRole("button", { name: "Clear Measurements" }).click();
+            await expectCanvas("after the tools", drawsModel);
+
+            await page.waitForTimeout(2000);
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, [], fileName);
             const outside = await hosts.thirdParty();
             expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
         });
