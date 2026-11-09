@@ -317,7 +317,11 @@ def _module_overrides():
         sys.modules["handlers.authz"] = authz
         zd = _load("common.zipDownloads", "common/zipDownloads.py")
         setattr(sys.modules["common"], "zipDownloads", zd)
+        # The service also imports the real execution locks module from the package stubbed below:
+        # import it first, so a file run on its own (no earlier import) loads too (#1125 D25).
+        execution_locks = importlib.import_module("common.workflows.executionLocks")
         workflows_pkg = types.ModuleType("common.workflows")
+        workflows_pkg.executionLocks = execution_locks
         sys.modules["common.workflows"] = workflows_pkg
         sp = _load("common.workflows.systemPipelines", "common/workflows/systemPipelines.py")
         workflows_pkg.systemPipelines = sp
