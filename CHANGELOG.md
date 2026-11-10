@@ -330,6 +330,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The data-migration tooling comments give the resource-name SSM parameter prefix with its Region (`/{configName}-{baseStackName}-{region}/resourceNames`), and the agentic development guide's MCP tool tier table drops a stray "Adds" from each row. ([#1149](https://github.com/awslabs/visual-asset-management-system/issues/1149))
 -   **Documentation** The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet, instead of reading as a third note under the Three.js USD bullet, which opens USD without that setting. ([#1214](https://github.com/awslabs/visual-asset-management-system/issues/1214))
 -   **Documentation** The uninstall guide no longer lists the REST API stage access log group among the explicitly named `/aws/vendedlogs/` groups that persist after stack deletion; CDK names that group and deletes it with the stack. ([#1225](https://github.com/awslabs/visual-asset-management-system/pull/1225))
+-   **Web** Search page: on a database's search page the locked **Database** filter names that database instead of reading "All databases"; a Database filter with a selection names it too. ([#1253](https://github.com/awslabs/visual-asset-management-system/issues/1253))
 
 ### Chores
 

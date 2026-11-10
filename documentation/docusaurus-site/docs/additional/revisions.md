@@ -274,6 +274,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **SSM prefix comments and MCP tier table** — The data-migration tooling comments include the Region in the resource-name SSM parameter prefix, and the MCP tool tier table drops a stray "Adds" from each row. (issue #1149)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
+-   **Locked Database filter label** — On a database's search page the locked Database filter names the database it is locked to, instead of reading "All databases". (issue #1253)
 
 **Other changes:**
 
