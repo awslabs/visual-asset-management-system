@@ -37,7 +37,6 @@ from common.workflows import executionOutputs as eo
 from common.workflows import outputPathExtension as ope
 from common.workflows import executionLogCapture as elc
 from common.workflows import executionLocks as el
-from common.workflows import systemPipelines as sp
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
@@ -1152,27 +1151,17 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         values[":er"] = execution_error
     condition = eo.not_terminal_condition(values)
     try:
-        # ALL_OLD returns the row as it stood before this write, which names the run's trigger for the
-        # system-pipeline terminal callback below without a second read.
-        response = main_table.update_item(
+        main_table.update_item(
             Key={"workflowExecutionId": workflow_execution_id,
                  "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
             UpdateExpression=expression,
             ConditionExpression=condition,
             ExpressionAttributeValues=values,
-            ReturnValues="ALL_OLD",
         )
     except Exception as e:
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
-        return
-    # Terminal callback of a system-pipeline run, sent only by the writer that won the terminal guard
-    # (this one, having reached here). Never raises.
-    previous = response.get("Attributes") if isinstance(response, dict) else None
-    sp.notify_terminal_transition(
-        previous, execution_status, stop_date=stop_date, execution_error=execution_error or "",
-        writer=sp.WRITER_END_STATE)
 
 
 def _terminal_status(output_failures):
