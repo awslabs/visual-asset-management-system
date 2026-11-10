@@ -462,16 +462,6 @@ def _drop_ingest_ledger_rows(workflow_execution_id, descriptors, holder=None):
         logger.warning(f"Could not update the run's ingest ledger (non-critical): {e}")
 
 
-def _settle_ingest_ledger(workflow_execution_id, descriptors, landed, holder=None):
-    """After an ingestion response: mark the outputs that landed `ingested` and drop this holder's rows
-    of those that failed, so a later attempt ingests only those again."""
-    landed_keys = {eo.ingest_ledger_sort_key(d) for d in landed}
-    _write_ingest_ledger(workflow_execution_id, landed, eo.INGEST_STATE_INGESTED)
-    _drop_ingest_ledger_rows(
-        workflow_execution_id,
-        [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
-
-
 def _destination_key(descriptor, asset, base_assets_prefix):
     """Where the upload handler writes an output in the asset (mirrors uploadFile.complete_external_upload):
     a file under the asset's location at its relative path, a preview under the previews prefix by
@@ -512,18 +502,20 @@ def _landed_takeovers(claimed, prior_ledger, holder, asset, bucket_name, base_as
     When the destination's current version carries this run's provenance, the output landed; it is
     recorded from that evidence instead of being handed to ingestion again. Outputs with no such
     evidence, and outputs no one held before, are ingested."""
-    landed, to_ingest = [], []
-    for d in claimed:
+    def _check(d):
         row = prior_ledger.get(eo.ingest_ledger_sort_key(d)) or {}
         taken_over = (row.get("ingestState") == eo.INGEST_STATE_MOVING
                       and row.get("ingestHolder") != holder)
         if taken_over and _written_by_execution(
                 bucket_name, _destination_key(d, asset, base_assets_prefix), workflow_execution_id):
             # The holder listed the version it stamped; delete that one too once it is not current.
-            prior_version = row.get("s3VersionId") or ""
-            landed.append({**d, "_priorStagedVersionId": prior_version})
-        else:
-            to_ingest.append(d)
+            return {**d, "_priorStagedVersionId": row.get("s3VersionId") or ""}
+        return None
+
+    # The destination checks are independent HEADs: run them in the stamp step's bounded pool (#1271 D4).
+    checked = _in_s3_pool(_check, claimed)
+    landed = [c for c in checked if c is not None]
+    to_ingest = [d for d, c in zip(claimed, checked) if c is None]
     if landed:
         logger.info(f"{len(landed)} taken-over outputs had already landed; recorded without re-ingesting")
     return landed, to_ingest
@@ -533,11 +525,44 @@ def _finish_landed_takeovers(landed, workflow_execution_id, holder, source_bucke
     """Remove the staged versions of taken-over outputs that already landed, then settle them
     `ingested` (the order the normal path uses, see D2). Returns the descriptors to record."""
     clean = [{k: v for k, v in d.items() if k != "_priorStagedVersionId"} for d in landed]
-    extra = [{**c, "s3VersionId": d["_priorStagedVersionId"]} for c, d in zip(clean, landed)
-             if d.get("_priorStagedVersionId") and d["_priorStagedVersionId"] != c.get("s3VersionId")]
-    _remove_listed_staged_versions(clean + extra, source_bucket)
-    _settle_ingest_ledger(workflow_execution_id, clean, clean, holder=holder)
+    extra = {eo.ingest_ledger_sort_key(c): {**c, "s3VersionId": d["_priorStagedVersionId"]}
+             for c, d in zip(clean, landed)
+             if d.get("_priorStagedVersionId") and d["_priorStagedVersionId"] != c.get("s3VersionId")}
+    _remove_then_settle(workflow_execution_id, clean, clean, holder, source_bucket, extra)
     return clean
+
+
+# Outputs settled per batch: each batch's staged versions are removed, then its rows marked `ingested`,
+# so an attempt killed part-way leaves every finished batch recorded (#1271 D4).
+SETTLE_BATCH_SIZE = 100
+
+
+def _in_s3_pool(fn, items):
+    """map(fn, items) in the bounded S3 worker pool the provenance stamp uses, in order."""
+    items = list(items)
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_S3_WORKERS, len(items))) as executor:
+        return list(executor.map(fn, items))
+
+
+def _remove_then_settle(workflow_execution_id, descriptors, landed, holder, source_bucket,
+                        extra_versions=None):
+    """For the outputs that landed, batch by batch: delete their listed staged versions (plus any
+    `extra_versions` by sort key), then mark them `ingested`. Delete-before-mark holds per output (D2,
+    #1291); an attempt killed mid-way keeps the batches it finished. Finally drop this holder's rows
+    of the outputs that did not land."""
+    extra_versions = extra_versions or {}
+    for i in range(0, len(landed), SETTLE_BATCH_SIZE):
+        batch = landed[i:i + SETTLE_BATCH_SIZE]
+        _remove_listed_staged_versions(
+            batch + [extra_versions[k] for k in (eo.ingest_ledger_sort_key(d) for d in batch)
+                     if k in extra_versions], source_bucket)
+        _write_ingest_ledger(workflow_execution_id, batch, eo.INGEST_STATE_INGESTED)
+    landed_keys = {eo.ingest_ledger_sort_key(d) for d in landed}
+    _drop_ingest_ledger_rows(
+        workflow_execution_id,
+        [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
 
 
 def _remove_listed_staged_versions(descriptors, default_bucket):
@@ -551,15 +576,18 @@ def _remove_listed_staged_versions(descriptors, default_bucket):
     not another key's, not another version of this key. An unversioned bucket lists no id ('' or
     'null' for a version written while versioning was off, which the stamp overwrote in place), and
     nothing is deleted here. Best-effort: a failed delete leaves a staged copy behind, as before."""
-    for d in descriptors:
+    def _delete(d):
         version_id = d.get("s3VersionId") or ""
         key = d.get("s3Key") or ""
         if not key or version_id in ("", "null"):
-            continue
+            return
         try:
             s3c.delete_object(Bucket=d.get("s3Bucket") or default_bucket, Key=key, VersionId=version_id)
         except Exception as e:
             logger.warning(f"Could not remove the staged version of {key} (non-critical): {e}")
+
+    # Independent deletes: the stamp step's bounded pool (#1271 D4).
+    _in_s3_pool(_delete, descriptors)
 
 
 def _already_ingested(descriptor, ledger):
@@ -1275,8 +1303,13 @@ EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
 EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
 
 
+# The log refresh is skipped when less than its budget plus this margin remains: the record is already
+# written, and being killed during an optional refresh would fail the attempt (#1271 D4).
+EXECUTION_LOG_REFRESH_MARGIN_SECONDS = 10
+
+
 def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow_id,
-                           execution_start_date, stored_log):
+                           execution_start_date, stored_log, context=None):
     """After the completion write, re-read the run's log until two full reads agree on its events
     (common.workflows.executionLogCapture), and store that read when it differs from the one the
     completion write stored. Runs after the status is recorded, so the wait never delays the run
@@ -1284,12 +1317,18 @@ def _refresh_execution_log(workflow_execution_id, workflow_database_id, workflow
     log_group_name = _log_group_name_from_arn(workflow_execution_log_group_arn)
     if not log_group_name or not workflow_execution_id:
         return
+    budget = EXECUTION_LOG_SETTLE_BUDGET_SECONDS
+    if context is not None:
+        remaining = _remaining_seconds(context)
+        if remaining < EXECUTION_LOG_SETTLE_BUDGET_SECONDS + EXECUTION_LOG_REFRESH_MARGIN_SECONDS:
+            logger.info(f"Skipping the execution log refresh: {remaining:.0f}s left in this attempt")
+            return
     try:
         text, _stream = elc.capture_settled_execution_log(
             logs_client, log_group_name, workflow_execution_id,
             start_time_ms=elc.log_capture_start_ms(execution_start_date),
             max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
-            deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
+            deadline=time.monotonic() + budget,
             sleep=_settle_sleep,
         )
         if text and text != (stored_log or ""):
@@ -1557,7 +1596,7 @@ def _resolve_output_path_keys(event):
             event[key_name] = er.run_bucket_key(base_prefix, event[key_name])
 
 
-def _process_results_only(event):
+def _process_results_only(event, context=None):
     """End-state processing for a results-only execution (outputLocationType 'none'): no output asset,
     no file/metadata ingestion. Reads the pipeline's results text from the run I/O bucket and records
     only results + logs + completion status against the execution transaction. Used by pipelines that
@@ -1613,7 +1652,7 @@ def _process_results_only(event):
         if workflow_execution_id and end_state_pipeline_execution_id:
             _refresh_execution_log(
                 workflow_execution_id, event.get('workflowDatabaseId', ''), event.get('workflowId', ''),
-                execution_start_date, execution_log)
+                execution_start_date, execution_log, context=context)
     except Exception as e:
         logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
 
@@ -1650,7 +1689,7 @@ def lambda_handler(event, context):
         # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
         # returning a textual response). Handle them before the asset-required validation below.
         if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
-            return _process_results_only(event)
+            return _process_results_only(event, context)
 
         #Input validation
         if not event['databaseId']:
@@ -1887,10 +1926,9 @@ def lambda_handler(event, context):
                                 if result:
                                     # Staged versions go first, while the rows are still this attempt's
                                     # `moving`: a waiting attempt never lists a prefix mid-delete (D2).
-                                    _remove_listed_staged_versions(landed_previews, source_bucket)
-                                    _settle_ingest_ledger(
+                                    _remove_then_settle(
                                         ledger_execution_id, preview_descriptors, landed_previews,
-                                        holder=attempt_holder)
+                                        attempt_holder, source_bucket)
                                 if all_ingested and result:
                                     logger.info("Preview upload completed successfully")
                                 else:
@@ -2012,9 +2050,8 @@ def lambda_handler(event, context):
                             if result:
                                 # Staged versions go first, while the rows are still this attempt's
                                 # `moving`: a waiting attempt never lists a prefix mid-delete (D2).
-                                _remove_listed_staged_versions(landed_files, source_bucket)
-                                _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files,
-                                                      holder=attempt_holder)
+                                _remove_then_settle(ledger_execution_id, file_descriptors, landed_files,
+                                                    attempt_holder, source_bucket)
                             if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:
@@ -2261,7 +2298,8 @@ def lambda_handler(event, context):
                 if workflow_execution_id and end_state_pipeline_execution_id:
                     _refresh_execution_log(
                         workflow_execution_id, event.get('workflowDatabaseId', ''),
-                        event.get('workflowId', ''), execution_start_date, execution_log)
+                        event.get('workflowId', ''), execution_start_date, execution_log,
+                        context=context)
             except Exception as e:
                 # Output recording is non-critical to the upload pipeline; log and continue.
                 logger.exception(f"Error recording execution outputs (non-critical): {e}")
