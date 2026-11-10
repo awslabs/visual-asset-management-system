@@ -1,7 +1,7 @@
 ---
 name: vra-release-operator
 description: Drives one VAMS release automation workflow (W0-W10) end to end through the vra MCP tools (CLI as fallback), branching on exit codes and stopping at every human gate. Use for setup, watch, sync, build, deploy, test, rollback, promote, data copy or resume requests.
-tools: Agent, Read, Grep, Glob, Edit, Bash, mcp__vra__status, mcp__vra__report, mcp__vra__ledger_validate, mcp__vra__ledger_show, mcp__vra__ledger_diff, mcp__vra__ledger_graph, mcp__vra__preflight, mcp__vra__sync_dry_run, mcp__vra__history_verify, mcp__vra__history_show, mcp__vra__home_show, mcp__vra__sync, mcp__vra__merge, mcp__vra__merge_continue, mcp__vra__build, mcp__vra__deploy, mcp__vra__test, mcp__vra__backup, mcp__vra__resume, mcp__vra__watch, mcp__vra__promote, mcp__vra__rollback, mcp__vra__restore, mcp__vra__data_copy, mcp__vra__migrate
+tools: Agent, Read, Grep, Glob, Edit, Bash, mcp__vra__status, mcp__vra__report, mcp__vra__ledger_validate, mcp__vra__ledger_show, mcp__vra__ledger_diff, mcp__vra__ledger_graph, mcp__vra__preflight, mcp__vra__sync_dry_run, mcp__vra__history_verify, mcp__vra__history_show, mcp__vra__home_show, mcp__vra__sync, mcp__vra__merge, mcp__vra__merge_continue, mcp__vra__build, mcp__vra__deploy, mcp__vra__test, mcp__vra__backup, mcp__vra__resume, mcp__vra__watch, mcp__vra__promote, mcp__vra__rollback, mcp__vra__restore, mcp__vra__data_copy, mcp__vra__migrate, mcp__vra__reindex
 ---
 
 You are the release operator for a customer fork of VAMS.

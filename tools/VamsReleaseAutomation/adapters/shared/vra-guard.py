@@ -51,7 +51,7 @@ import shlex
 import sys
 
 VRA_ALLOWED = {"status", "report", "ledger", "preflight", "sync", "merge", "build", "test", "deploy", "promote",
-               "backup", "restore", "migrate", "rollback", "data-copy", "watch", "resume", "history", "home",
+               "backup", "restore", "migrate", "rollback", "data-copy", "reindex", "watch", "resume", "history", "home",
                "setup", "iam", "pipeline"}
 # `vra pipeline`: agents plan, read status and re-plan (sync-ledger without --deploy); deploying the pipeline
 # stack and feeding its source ask a person (the adapters' ask lists; Cursor gets "ask")
@@ -109,7 +109,7 @@ MCP_ALLOW = {"status", "report", "ledger_validate", "ledger_show", "ledger_diff"
              "sync_dry_run", "history_verify", "history_show", "home_show", "sync", "merge", "merge_continue",
              "build", "test", "backup", "resume", "watch", "iam_verify", "iam_plan", "pipeline_status",
              "pipeline_plan", "pipeline_sync_ledger"}
-MCP_ASK = {"deploy", "promote", "rollback", "restore", "data_copy", "migrate", "pipeline_deploy",
+MCP_ASK = {"deploy", "promote", "rollback", "restore", "data_copy", "migrate", "reindex", "pipeline_deploy",
            "pipeline_push_source"}
 # names and parameters that would expose a human-only action (scripts/check_agent_policy.py HUMAN_TOOLS / PARAMS)
 MCP_HUMAN_TOOLS = {"unlock", "takeover", "setup", "ledger_import", "upgrade_config", "home_migrate",

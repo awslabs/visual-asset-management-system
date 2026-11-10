@@ -23,6 +23,7 @@ from vra.runner import workflow
 
 VERSION_RE = re.compile(r'VAMS_VERSION\s*=\s*["\']([^"\']+)["\']')
 MIGRATIONS_DIR = "infra/deploymentDataMigration"
+REINDEXER_BACKEND_DIR = "backend/backend"
 # CDK writes derived files into a cloud assembly when it deploys from it: `.cache/<assetHash>.zip`, the zipped
 # file assets it publishes. CDK re-uses a cached zip without re-checking it, so the cache is purged (not just
 # ignored) before every integrity check; CDK rebuilds it from the hashed asset directories.
@@ -787,6 +788,12 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
                 # roles match the applied IT package; the boundary is really on every role (exit 10 / 20)
                 iam_check = iam.check_assembly(ctx, run, env, out, f"{prefix}build.synth.{tname}", iam_source,
                                                boundary_only=bool(slot))
+                # the effective VAMS config this target was synthesized with: the deploy's reindex decision compares
+                # the search settings of the deployed and the new build (vra.reindex)
+                eff = src / "infra" / "config" / "config.json"
+                if eff.is_file():
+                    (bdir / "effective-config").mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(eff, bdir / "effective-config" / f"{tname}.json")
                 snap = bdir / "overlays" / env
                 if not snap.exists():
                     for rel in applied:
@@ -864,6 +871,14 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
             shutil.rmtree(bdir / "migrations-src", ignore_errors=True)
         except VraError:
             mig.mkdir(parents=True, exist_ok=True)
+        # the backend source `migrations/tools/reindex_utility.py --mode direct` imports (vra reindex --mode direct)
+        rdir = bdir / "reindexer"
+        if rdir.exists():
+            shutil.rmtree(rdir)
+        try:
+            gitops.archive_to(g, info["commit"], rdir, [REINDEXER_BACKEND_DIR])
+        except VraError:
+            shutil.rmtree(rdir, ignore_errors=True)
         targets = {}
         for t in info["targets"]:
             res = run.step_result(f"{prefix}build.synth.{t}") or {}

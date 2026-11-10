@@ -1081,6 +1081,17 @@ def do_deploy(ctx, run, env: str, build_id: str, approval: str | None = None, mo
                 _window("migrations")
                 migrate.do_migrate(ctx, run, env, mig_root, prev_version, manifest["vamsVersion"], prefix=p,
                                    ssm_prefix=ctx.ledger.ssm_prefix(env, base_override), check_buckets=False)
+            old_build = (last or {}).get("build")
+            old_target = (build_mod.target_name(env, last["slot"]) if (last or {}).get("slot") else env) \
+                if last else None
+            from vra import reindex
+            run.step(p + "reindex",
+                     lambda sc: reindex.post_deploy(ctx, run, env, sc, prev_version, manifest["vamsVersion"], build_id,
+                                                    target, old_build, old_target,
+                                                    list(run.state.get("migrationsApplied") or []),
+                                                    base_override if mode == "ab" else None,
+                                                    "the A/B slot copy reindexed the new slot" if ab_copy else None),
+                     "search reindex after the upgrade")
             live = (e.get("ab") or {}).get("slotLiveTest", {}).get(slot) if slot else None
             run.step(p + "smoke", lambda sc: _smoke(ctx, run, env, sc, live, [build_id]), "post-deploy smoke")
             if mode == "ab":

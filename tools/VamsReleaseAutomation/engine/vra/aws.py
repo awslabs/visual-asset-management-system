@@ -217,12 +217,14 @@ class AwsFactory:
         except Exception:  # noqa: BLE001 - an unreadable overlay is reported by validate
             return False
 
-    def client(self, env_name: str, service: str, role: str = "deploy", region: str | None = None):
+    def client(self, env_name: str, service: str, role: str = "deploy", region: str | None = None, config=None):
         sess = self.session(env_name, role)
         kw: dict[str, Any] = {"region_name": region or self.ledger.env(env_name)["region"]}
         if self._fips(env_name):
             from botocore.config import Config
-            kw["config"] = Config(use_fips_endpoint=True)
+            config = Config(use_fips_endpoint=True).merge(config) if config else Config(use_fips_endpoint=True)
+        if config is not None:
+            kw["config"] = config
         return sess.client(service, **kw)
 
     def tools_client(self, service: str, region: str | None = None):

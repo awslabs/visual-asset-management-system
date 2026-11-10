@@ -217,7 +217,7 @@ class FakeAws:
         self.moto = moto
         self.run_id = None
 
-    def client(self, env, service, role="deploy", region=None):
+    def client(self, env, service, role="deploy", region=None, config=None):
         for key in ((env, service, role), (env, service), service):
             if key in self.clients:
                 return self.clients[key]

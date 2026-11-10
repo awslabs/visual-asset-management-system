@@ -45,6 +45,20 @@ transitions:
             with config.app.openSearch.useProvisioned.enabled=false, then re-enable (see migration README).
 # manualSteps = prerequisites a human MUST do; the engine stops before that migration (exit 20) until
 # `vra resume <run-id> --confirm`. Conditional advice belongs in `notes` (shown in the plan, never gates).
+# Search reindex after an upgrade, keyed by the TARGET version (applies whether or not a migration directory
+# exists): an upgrade from F to T passes every entry with F < version <= T. required: vra deploy runs the reindexer
+# after the migrations; recommended: a report note (`vra reindex --env <env>`). coveredBy: a migration step that
+# already reindexes; when it ran in the deploy, the entry is done.
+versions:
+    "2.6.0":
+        reindex: required
+        reason: "the OpenSearch index names rolled to vams-assets-v3 and vams-files-v3"
+        coveredBy: v2.5_to_v2.6
+    "2.7.0":
+        reindex: recommended
+        reason: >-
+            VAMS_ and underscore-prefixed metadata keys are no longer indexed (GitHub issue #606); existing index
+            documents keep them until a reindex
 # Default assumptions for a transition not listed above (newer than this matrix):
 defaults:
     resolvesViaSsm: true

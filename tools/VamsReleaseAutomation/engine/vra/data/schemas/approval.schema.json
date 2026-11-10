@@ -43,6 +43,7 @@
                     "migrate",
                     "emergency",
                     "rollback",
+                    "reindex",
                     "allow-replacements",
                     "accept-drift",
                     "confirm",

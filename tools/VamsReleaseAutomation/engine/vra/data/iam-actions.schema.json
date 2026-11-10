@@ -64,9 +64,10 @@
                             "maintenanceMode",
                             "externalTableKey",
                             "cognitoExport",
-                            "cloudFrontQuota"
+                            "cloudFrontQuota",
+                            "reindexDirect"
                         ],
-                        "description": "simulated only when the env enables the feature (changeSetGate: diffGate changeset; maintenanceMode: writeFreeze backend maintenance-mode, optional for auto; externalTableKey: the overlay sets app.useKmsCmkEncryption.optionalExternalCmkArn, resources use ${ExternalTableKmsKey}; cognitoExport: env.yaml cognitoExport true; cloudFrontQuota: the overlay deploys on CloudFront, app.useCloudFront.enabled in the aws partition, optional without an overlay)"
+                        "description": "simulated only when the env enables the feature (changeSetGate: diffGate changeset; maintenanceMode: writeFreeze backend maintenance-mode, optional for auto; externalTableKey: the overlay sets app.useKmsCmkEncryption.optionalExternalCmkArn, resources use ${ExternalTableKmsKey}; cognitoExport: env.yaml cognitoExport true; cloudFrontQuota: the overlay deploys on CloudFront, app.useCloudFront.enabled in the aws partition, optional without an overlay; reindexDirect: env.yaml reindex.mode direct, resources may use ${SsmRoot}, the SSM prefix without /resourceNames)"
                     },
                     "forEach": {
                         "enum": ["registeredBucket", "registeredBucketKmsKey"],

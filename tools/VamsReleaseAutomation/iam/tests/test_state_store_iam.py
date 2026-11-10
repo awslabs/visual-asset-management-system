@@ -255,7 +255,7 @@ STATE_SIDS = ["ToolsStateStoreRuns", "ToolsStateStoreHistoryRead", "ToolsStateSt
               "ToolsStateStoreLock", "ToolsStateStoreKey"]
 # workflows whose runs check approval records (gated deploys, human:<action> records of the env)
 VERIFYING = {"build", "deploy", "rollback", "restore", "migrate", "data-copy-source", "data-copy-target",
-             "pipeline"}
+             "pipeline", "reindex"}
 
 
 def _sid(m: dict, sid: str) -> dict:

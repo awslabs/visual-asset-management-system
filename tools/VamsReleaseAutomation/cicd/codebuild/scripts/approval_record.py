@@ -76,7 +76,7 @@ def run_ref(provider: str, environ=None) -> str:
 # approval; that includes restore-auth-tables, the scope a restore with --include-auth-tables needs on a gated env.
 COMMENT_SCOPES = ("emergency", "accept-drift", "allow-replacements")
 BASE_SCOPES = ("deploy", "promote")
-OPERATOR_SCOPES = ("restore", "data-copy", "migrate", "rollback", "restore-auth-tables")
+OPERATOR_SCOPES = ("restore", "data-copy", "migrate", "rollback", "reindex", "restore-auth-tables")
 # Human-only actions (engine/vra/human.py HUMAN_ONLY): record subject human:<action>, scope [<action>].
 HUMAN_ACTIONS = ("confirm", "allow-missing-scanners", "writes-stopped", "unlock", "takeover",
                  "abort-workflow-executions", "ledger-import", "upgrade-config-write", "setup-force", "home-migrate",

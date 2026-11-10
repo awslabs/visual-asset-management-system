@@ -300,7 +300,8 @@ def test_guard_mcp_tables_match_the_engine_and_the_claude_settings():
         if name not in guard.MCP_ALLOW | guard.MCP_ASK:
             assert guard.check_mcp("vra", name, "{}") == "ask", name  # a tool added later asks the person
             continue
-        want = "ask" if tier == mcp_server.GATED or name == "deploy" else "allow"
+        # write-tier tools that change a deployed env's data or stacks ask too
+        want = "ask" if tier == mcp_server.GATED or name in ("deploy", "reindex") else "allow"
         assert guard.check_mcp("vra", name, "{}") == want, name
     assert guard.MCP_ALLOW | guard.MCP_ASK <= set(tools), "the guard lists a tool the server does not have"
     pkg = GUARD.parents[2]

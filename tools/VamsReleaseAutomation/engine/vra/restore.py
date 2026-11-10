@@ -452,7 +452,8 @@ def do_restore(ctx, run, env: str, cid: str, approval: str | None = None, prefix
                                                                                           secs, sc),
                                          "wait for VAMS event processing, report derived writes")
     results["writeFreeze"] = fr.history_fields()["writeFreeze"]
-    run.step(f"{prefix}restore.reindex", lambda sc: trigger_reindex(ctx, env), "OpenSearch reindex")
+    run.step(f"{prefix}restore.reindex", lambda sc: trigger_reindex(ctx, env, sc=sc, run=run, what="the restore"),
+             "OpenSearch reindex")
 
     def _cleanup(sc):
         if ctx.dry_run or keep_restored:
@@ -510,25 +511,21 @@ def _bucket_step(ctx, env, cdir, b):
         raise
 
 
-def trigger_reindex(ctx, env: str, role: str = "deploy", clear_indexes: bool = True, base: str | None = None) -> dict:
-    """Invoke the deployed OpenSearch reindexer Lambda (SSM lambdaFunctions/crOsReindexer) asynchronously."""
-    from vra import vams_resources
+def trigger_reindex(ctx, env: str, role: str = "deploy", clear_indexes: bool = True, base: str | None = None,
+                    sc=None, run=None, what: str = "the") -> dict:
+    """Reindex ``env`` and confirm the result (vra.reindex). A restore or data copy does not run ``cdk deploy``, so
+    ``app.openSearch.reindexOnCdkDeploy`` never covers it: the data changed after the last deploy's reindex."""
+    from vra import reindex
     if ctx.dry_run:
         return {"dryRun": True}
-    names = vams_resources.discover(ctx, env, role, base)
-    fn = names["lambdas"].get(vams_resources.REINDEXER_KEY)
-    if not fn:
-        return {"skipped": "no reindexer Lambda published under the SSM prefix"}
-    lam = ctx.aws.client(env, "lambda", role)
-    # same direct-invoke payload the v2.5_to_v2.6 migration sends to crReindexer
-    payload = {"operation": "both", "dry_run": False, "clear_indexes": clear_indexes}
-    try:
-        resp = lam.invoke(FunctionName=fn, InvocationType="Event", Payload=json.dumps(payload).encode())
-    except Exception as exc:  # noqa: BLE001
-        if permissions.is_denied(exc):
-            _wrap(exc, "lambda", env, fn)
-        raise
-    return {"function": fn, "status": resp.get("StatusCode")}
+    mode = reindex.settings(ctx.ledger.env(env))["mode"]
+    if mode == "direct" and sc is not None:
+        cur = ctx.ledger.current_deploy(env) or {}
+        res = reindex.run(ctx, env, sc, mode="direct", clear_indexes=clear_indexes, build_id=cur.get("build"),
+                          base=base, cfg=reindex.deployed_config(ctx, env))
+    else:
+        res = reindex.lambda_reindex(ctx, env, role, clear_indexes, base)
+    return reindex.note_result(run, env, res, what) if run is not None else res
 
 
 @workflow("restore")

@@ -25,7 +25,7 @@ def workflow(name: str):
 def _load_workflows() -> None:
     # import modules for their @workflow registrations
     from vra import (gitops, build, deploy, tests_runner, backup, restore, migrate, datacopy, watch,  # noqa: F401
-                     preflight_cmd, iam)
+                     preflight_cmd, iam, reindex)
 
 
 class Outcome:

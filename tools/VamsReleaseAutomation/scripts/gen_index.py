@@ -82,6 +82,7 @@ DESCRIPTIONS = {
     "engine/vra/backup.py": "Checkpoints",
     "engine/vra/restore.py": "Restore to a checkpoint (parallel temp restores, frozen reload, verification)",
     "engine/vra/datacopy.py": "Data copy between envs, target protection, remapping",
+    "engine/vra/reindex.py": "Search reindex: post-deploy decision, vra reindex, Lambda and direct modes",
     "engine/vra/permissions.py": "Denial classification, IAM simulation, IT requests",
     "engine/vra/approvals.py": "Approval records and separation of duties",
     "engine/vra/report.py": "Reports, metrics, notifications",

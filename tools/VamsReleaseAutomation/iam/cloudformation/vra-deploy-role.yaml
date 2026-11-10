@@ -378,6 +378,10 @@ Resources:
                           - !Sub
                             - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/web/deployedUrl
                             - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          # the OpenSearch index names and endpoint, read by `vra reindex --mode direct`
+                          - !Sub
+                            - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/aos/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
                     - Sid: SimulateOwnRole
                       Effect: Allow
                       Action:

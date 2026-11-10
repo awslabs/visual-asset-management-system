@@ -46,7 +46,7 @@ FORBIDDEN_ARGS = {"--confirm", "--takeover", "--writes-stopped", "--allow-missin
 TOOL_FLAGS = {"--lane", "--ref", "--suites", "--envs", "--env", "--build", "--approval", "--mode", "--run-id", "--from",
               "--to", "--checkpoint", "--source-approval", "--databases", "--lanes", "--no-notify", "--all",
               "--workflow", "--dry-run", "--to-build", "--continue", "--json", "--non-interactive", "--plan",
-              "--offline"}
+              "--offline", "--clear-indexes"}
 FORBIDDEN_COMMANDS = {"unlock", "credential-process", "setup", "mcp"}
 # Subcommands that are human-only even though their group has MCP-safe members.
 FORBIDDEN_SUBCOMMANDS = {("ledger", "import"), ("home", "migrate")}
@@ -264,6 +264,16 @@ def tools(cfg: Config, runner: Callable[[list[str], Config], tuple[int, str, str
         ungated(env, "backup")
         return c("backup", "--env", env)
 
+    def reindex(env: str, mode: str | None = None, clear_indexes: bool = False,
+                approval: str | None = None) -> dict:
+        """Rebuild the env's OpenSearch indexes and confirm the result (mode lambda or direct; gated envs: approval
+        record scoped reindex)."""
+        ungated(env, "reindex")
+        if gated_check(env):
+            need_approval(approval, "reindex")
+        return c("reindex", "--env", env, *_opt("--mode", mode), *(["--clear-indexes"] if clear_indexes else []),
+                 *_opt("--approval", approval))
+
     def resume(run_id: str) -> dict:
         """Continue a blocked or failed run (never --confirm or --takeover: those are human-only)."""
         return c("resume", run_id)
@@ -285,7 +295,7 @@ def tools(cfg: Config, runner: Callable[[list[str], Config], tuple[int, str, str
         return c("pipeline", "sync-ledger")
 
     out += [Tool(f.__name__, WRITE, f, f.__doc__ or "") for f in (
-        sync, merge, merge_continue, build, deploy, test, backup, resume, watch, iam_plan, pipeline_plan,
+        sync, merge, merge_continue, build, deploy, test, backup, reindex, resume, watch, iam_plan, pipeline_plan,
         pipeline_sync_ledger)]
     if not cfg.enable_gated:
         return out

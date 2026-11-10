@@ -1,0 +1,217 @@
+# IAM action manifest: reindex
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+# Approval-gated in envs with requiresApproval (approval scope reindex). `vra deploy` runs the same reindex after an
+# upgrade that needs one (vra.reindex); restore and data copy reindex with their own manifests.
+workflow: reindex
+schemaVersion: 1
+role: deploy
+description: >-
+    Rebuild the VAMS OpenSearch indexes. Lambda mode (reindex.mode lambda, the default) invokes the deployed
+    reindexer synchronously and reads its result. Direct mode runs the bundle's
+    tools/reindex_utility.py --mode direct locally with the reindexer Lambda's own permissions: read the asset and
+    bucket tables, touch the asset file metadata table, list and read the asset buckets, and read the index-name
+    and endpoint parameters.
+statements:
+    - sid: CallerIdentity
+      actions:
+          - sts:GetCallerIdentity
+      resources:
+          - "*"
+      note: Derive partition and account; not resource-scoped.
+
+    - sid: VamsResourceNamesRead
+      actions:
+          - ssm:GetParameter
+          - ssm:GetParameters
+          - ssm:GetParametersByPath
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}/*
+      note: Resolve the reindexer Lambda and, in direct mode, the table names.
+
+    - sid: ReindexInvoke
+      actions:
+          - lambda:InvokeFunction
+          - lambda:GetFunction
+      resources:
+          - arn:${Partition}:lambda:${Region}:${Account}:function:${CoreStackLambda}*
+      note: Lambda mode invokes the VAMS reindexer and waits for its result (RequestResponse).
+
+    - sid: ReindexDirectIndexParams
+      feature: reindexDirect
+      actions:
+          - ssm:GetParameter
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmRoot}/aos/*
+      note: Direct mode reads the asset and file index names and the OpenSearch endpoint.
+
+    - sid: ReindexDirectTables
+      feature: reindexDirect
+      actions:
+          - dynamodb:DescribeTable
+          - dynamodb:Scan
+          - dynamodb:Query
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:BatchWriteItem
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*/index/*
+      note: >-
+          Direct mode reads the asset and bucket tables and touches (writes and deletes) the asset file metadata
+          records that re-trigger indexing, as the reindexer Lambda does.
+
+    - sid: ReindexDirectBucketsRead
+      feature: reindexDirect
+      forEach: registeredBucket
+      actions:
+          - s3:ListBucket
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::${RegisteredBucket}
+          - arn:${Partition}:s3:::${RegisteredBucket}/*
+      note: Direct mode lists each asset bucket and reads object metadata for the file reindex.
+
+    - sid: ReindexDirectKms
+      feature: reindexDirect
+      actions:
+          - kms:Decrypt
+          - kms:Encrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:${Region}:${Account}:key/*
+      condition:
+          StringEquals:
+              kms:CallerAccount: ${Account}
+          StringLike:
+              kms:ViaService:
+                  - dynamodb.*
+                  - s3.*
+                  - ssm.*
+      note: Tables, buckets and parameters are encrypted with the VAMS CMK when useKmsCmkEncryption is enabled.
+
+    - sid: ToolsVerifyApprovalSignature
+      optional: true
+      actions:
+          - kms:Verify
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      note: >-
+          Only when envs/<env>/env.yaml sets approvalSigningKeyArn: every approval record of the env (also
+          human:<action> records) must carry a KMS signature, which vra verifies. Scope the resource to that key ARN;
+          the identity that runs gated actions never needs kms:Sign on it.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

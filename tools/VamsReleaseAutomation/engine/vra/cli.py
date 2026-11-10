@@ -212,6 +212,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--restore-approval")
     _freeze_flags(s)
 
+    s = add("reindex", "rebuild the OpenSearch indexes of an env and confirm the result")
+    s.add_argument("--env", required=True)
+    s.add_argument("--mode", choices=["lambda", "direct"],
+                   help="lambda: invoke the deployed reindexer and wait (15-minute limit); direct: run the bundle's "
+                        "reindex_utility.py locally (no limit). Default: the env's reindex.mode, else lambda")
+    s.add_argument("--clear-indexes", action="store_true", help="delete and recreate the indexes first")
+    s.add_argument("--approval", help="approval record for an approval-gated env (subject reindex:<env>, scope "
+                                      "reindex)")
+
     s = add("data-copy", "copy data between envs (prod -> test)")
     s.add_argument("--from", dest="from_env", required=True)
     s.add_argument("--to", dest="to_env", required=True)
@@ -500,6 +509,9 @@ def dispatch(ctx: Context, ns: argparse.Namespace) -> runner.Outcome:
                                               "restoreApproval": ns.restore_approval,
                                               "writeFreeze": ns.write_freeze, "writesStopped": ns.writes_stopped,
                                               "abortWorkflowExecutions": ns.abort_workflow_executions}, env=ns.env)
+    if c == "reindex":
+        return runner.start(ctx, "reindex", {"env": ns.env, "mode": ns.mode, "clearIndexes": ns.clear_indexes,
+                                             "approval": ns.approval}, env=ns.env)
     if c == "data-copy":
         return runner.start(ctx, "data-copy", {"from": ns.from_env, "to": ns.to_env, "approval": ns.approval,
                                                "sourceApproval": ns.source_approval,

@@ -263,11 +263,14 @@ def placeholders(ctx, env: str, extra: dict | None = None) -> dict[str, str]:
         from vra.iam import LAMBDA_GENERATED_STACK_CHARS
         vals["CoreStackLambda"] = vals["CoreStack"][:LAMBDA_GENERATED_STACK_CHARS]
         vals["SsmPrefix"] = ctx.ledger.ssm_prefix(env)
+        # the parameter root VAMS writes /aos/* (index names, endpoint) under: the prefix without /resourceNames
+        vals["SsmRoot"] = vals["SsmPrefix"].removesuffix("/resourceNames")
         vals["BaseStackName"] = ctx.ledger.stack_suffix(env)
     except Exception:  # noqa: BLE001
         vals.setdefault("CoreStack", "*")
         vals.setdefault("CoreStackLambda", "*")
         vals.setdefault("SsmPrefix", "/*")
+        vals.setdefault("SsmRoot", "/*")
     lt = e.get("liveTest") or {}
     vals["LiveTestSecret"] = (lt.get("auth") or {}).get("secret") or lt.get("credentialsSecret") or "*"
     vals["ExternalTableKmsKey"] = external_table_key(ctx, env) or "*"
@@ -310,6 +313,8 @@ def env_features(ctx, env: str) -> dict[str, str]:
         out["externalTableKey"] = "on"
     if e.get("cognitoExport"):
         out["cognitoExport"] = "on"
+    if (e.get("reindex") or {}).get("mode") == "direct":
+        out["reindexDirect"] = "on"
     cf = cloudfront_feature(ctx, env)
     if cf:
         out["cloudFrontQuota"] = cf

@@ -483,7 +483,8 @@ def copy_slots(ctx, run, env: str, from_base: str, to_base: str, sc) -> dict:
                     lambda key, table: scan_source(ctx, src, table), None, None, f"deploy.{env}.ab-copy.",
                     int(dc.get("batchOperationsThreshold", 10000)), dc.get("batchOperationsRoleArn"),
                     dc.get("stagingBucket"), dc.get("bucketMap"))
-    res["reindex"] = restore.trigger_reindex(ctx, env, "deploy", True, to_base)
+    res["reindex"] = restore.trigger_reindex(ctx, env, "deploy", True, to_base, sc=sc, run=run,
+                                            what="the A/B slot copy")
     return res
 
 
@@ -645,7 +646,8 @@ def do_data_copy(ctx, run, frm: str, to: str, approval: str | None, databases: l
                 run.step("data-copy.kms-retire", _retire, "retire KMS grant")
             except Exception as exc:  # noqa: BLE001
                 run.state.setdefault("notes", []).append(f"retire KMS grant {grant['grantId']} manually: {exc}")
-        run.step("data-copy.reindex", lambda sc: restore.trigger_reindex(ctx, to, "dataCopy"), "OpenSearch reindex")
+        run.step("data-copy.reindex", lambda sc: restore.trigger_reindex(ctx, to, "dataCopy", sc=sc, run=run,
+                                                                         what="the data copy"), "OpenSearch reindex")
 
         def _audit(sc):
             rec = {"action": "data-copy", "from": frm, "to": to, "runId": run.run_id, "result": "SUCCEEDED",

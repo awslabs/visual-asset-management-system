@@ -778,7 +778,7 @@ def vra_roles(ctx, env: str, s: dict) -> list[dict]:
                                 "Resource": st["resources"], "workflow": wf, "optional": st["optional"]})
         return out
 
-    deploy_wfs = ["deploy", "backup", "migrate", "test-live", "preflight", "rollback", "restore"]
+    deploy_wfs = ["deploy", "backup", "migrate", "test-live", "preflight", "rollback", "restore", "reindex"]
     xp = execution_policy_parameters(e, env, s)
     deploy_notes = ["CloudFormation runs as the CDK execution role; use iam/cloudformation/vra-cdk-execution-"
                     "policy.yaml as its policy (RequiredPermissionsBoundaryArn = the env's boundary in boundary "
