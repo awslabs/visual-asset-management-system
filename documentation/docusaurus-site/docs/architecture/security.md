@@ -744,7 +744,7 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 | FIPS endpoints                            | Not enforced; `useFips` adds only the AWS KMS FIPS interface VPC endpoint                                                      |
 | Vector search off by default              | `vectorSearch.enabled` is backfilled to `false`; enabling it is supported after the models are enabled in both linked accounts |
 
-The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search, so `vectorSearch.enabled` must be `false` there.
+The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search: configuration validation accepts `vectorSearch.enabled` only in the commercial and AWS GovCloud (US) partitions, so it must be `false` there.
 
 When `govCloud.il6Compliant = true`:
 

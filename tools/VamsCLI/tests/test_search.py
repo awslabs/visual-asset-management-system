@@ -1460,7 +1460,7 @@ class TestSearchNlpCommand:
                     'bound.') in result.output
 
     def test_a_non_window_answer_is_shown_as_a_lower_bound(self, cli_runner, search_command_mocks):
-        """D75: the route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
+        """The route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
         whether or not a window filled, so the CLI shows `N+` without any truncated warning."""
         with search_command_mocks as mocks:
             approximate = json.loads(json.dumps(_NLP_RESULT))

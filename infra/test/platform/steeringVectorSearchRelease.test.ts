@@ -349,7 +349,7 @@ describe("Kiro steering mirrors", () => {
             expect(catalog).toContain('"' + id + '"');
     });
 
-    test("WEB_FRONTEND.md and web/CLAUDE.md both place the rare search warnings in the page, not a toast (D77)", () => {
+    test("WEB_FRONTEND.md and web/CLAUDE.md both place the rare search warnings in the page, not a toast", () => {
         const claude = readRepo(path.join("web", "CLAUDE.md"));
         const kiro = readRepo(path.join(".kiro", "steering", "WEB_FRONTEND.md"));
         for (const text of [claude, kiro]) {

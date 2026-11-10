@@ -170,7 +170,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 -   Dispatch on `ApiRoute.matches(path)` from `common/apiRoutes.py`, never `path.endswith(...)`.
 -   Two-tier auth: `enforceAPI` (Tier 1) in `lambda_handler`, then `casbin_enforcer.enforce(event, item)` (Tier 2) in method handlers with `item['object__type']` set first.
 -   Error handling: catch `ValidationError`, `VAMSGeneralErrorResponse`, generic `Exception`
--   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`
+-   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`, `service_unavailable()` (503 when a dependency cannot answer right now; generic try-again message)
 -   Never echo request input or internal details in client error messages — log specifics, return generic messages.
 
 ### Step 4: Create Pydantic Models

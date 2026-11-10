@@ -22,7 +22,7 @@ When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the followin
 -   Amazon Cognito SAML and OIDC federation are not supported — both use the Amazon Cognito hosted UI. Disable `useCognito.useSaml` and `useCognito.useOidc`, and use the external OAuth identity provider option for federated sign-in.
 -   Next-generation Amazon OpenSearch Serverless collections are not supported. Set `app.openSearch.useServerless.nextGen` to `false`.
 -   Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set `app.openSearch.useServerless.enabled` to `false` and use `app.openSearch.useProvisioned` there.
--   DynamoDB vector search is not available in the AWS European Sovereign Cloud. Set `app.vectorSearch.enabled` to `false` there. In AWS GovCloud (US) it defaults to `false` and is supported once the Amazon Bedrock models are enabled in both linked accounts.
+-   DynamoDB vector search is not available in the AWS European Sovereign Cloud, and configuration validation accepts `app.vectorSearch.enabled` only in the commercial and AWS GovCloud (US) partitions. Set it to `false` there. In AWS GovCloud (US) it defaults to `false` and is supported once the Amazon Bedrock models are enabled in both linked accounts.
 -   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
 
 For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).

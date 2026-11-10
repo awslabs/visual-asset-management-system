@@ -336,7 +336,7 @@ class TestModelKeyRefusal:
         assert common.model_key_refusal(config) is None
 
     @pytest.mark.parametrize("config", [
-        # D45: a vocabulary category whose name ends in "Model ID" is operator data, at the top level or in an
+        # A vocabulary category whose name ends in "Model ID" is operator data, at the top level or in an
         # override.
         {"classificationVocabulary": {"categories": {"Product Model ID": {"description": "x", "subcategories": []}}}},
         {"overrides": [{"classificationVocabulary": {"categories": {"modelId": {"subcategories": ["Model ID"]}}}}]},

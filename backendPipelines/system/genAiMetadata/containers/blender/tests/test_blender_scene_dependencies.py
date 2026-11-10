@@ -430,7 +430,7 @@ class _PackageCheckBlender(FakeBlender):
 
 @pytest.mark.unit
 def test_a_package_reference_the_walk_fetched_is_not_also_missing(monkeypatch, tmp_path):
-    """UAT D62: station.usdz's root layer references ../parts/station_bolt.usda outside the package. The
+    """station.usdz's root layer references ../parts/station_bolt.usda outside the package. The
     walk fetches it (the package's folder is usdz/, so the file is parts/station_bolt.usda); OpenUSD
     anchors the reference inside the package and reports it unresolved. The report names it once, as
     fetched but not loaded by the composed stage, and a reference the asset does not hold as missing

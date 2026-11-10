@@ -155,7 +155,7 @@ def test_search_nlp_forwards_every_parameter_and_reattaches_the_bounds(mock_clie
 
 
 def test_search_nlp_reports_a_non_window_answer_as_a_lower_bound(mock_client):
-    """D75: the route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
+    """The route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
     whether or not a window filled; the tool hands the agent the lower bound in all three fields."""
     raw = {"hits": {"total": {"value": 2, "relation": "gte"},
                     "hits": [{"_id": "db1#a1#/x.glb#v1", "_score": 0.9, "_source": {"str_key": "/x.glb"}},

@@ -566,7 +566,7 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         expect(Object.keys(lambdaOnly.findResources("AWS::Batch::JobDefinition"))).toHaveLength(0);
     });
 
-    test("the Fargate render job submits by the revision-less job definition ARN (D54)", () => {
+    test("the Fargate render job submits by the revision-less job definition ARN", () => {
         // The dependency-overflow path reaches FargateRenderJob after the Blender Lambda task, so a run can
         // outlast a deploy that replaced the job definition; the revisioned ARN (its Ref) would then name a
         // deregistered revision (#1033). By name, Batch runs the latest ACTIVE revision.

@@ -794,9 +794,11 @@ Before v2.6.7, AWS Lambda recursive loop detection could stop the bucket-sync La
 :::info[What this release changes for an existing deployment]
 v2.7 retires two built-in metadata pipelines in favour of one system pipeline, adds an optional
 DynamoDB-backed natural-language search over files, and formalises system-owned pipelines and workflows
-(`isSystem`). An upgrading `config.json` receives the new configuration sections **disabled**, so nothing
-turns on by itself; enabling the system pipeline and vector search is the configuration edit in step 2
-below. The features themselves are described on the vector search concept page (`concepts/vector-search`),
+(`isSystem`). A `config.json` with neither new section deploys with both features off. An absent
+`app.vectorSearch` follows the system pipeline: it resolves to enabled only when
+`app.pipelines.useSystemGenAiMetadata` is enabled, its upload trigger is armed and its registration is
+not turned off, outside AWS GovCloud (US) and the AWS European Sovereign Cloud. Enabling the system
+pipeline and vector search is the configuration edit in step 2 below. The features themselves are described on the vector search concept page (`concepts/vector-search`),
 the system pipelines page (`pipelines/system-pipelines`), and the system GenAI metadata pipeline page
 (`pipelines/system-genai-metadata`).
 :::
@@ -825,7 +827,7 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 
     The `systemPipelineRetirement` step in step 7 repeats this check after the deploy for anything that slipped through.
 
-2.  Edit `infra/config/config.json`: if the `app.pipelines.useGenAiMetadata3dLabeling` or `app.pipelines.useConversionCadMeshMetadataExtraction` block is enabled, set its `enabled` to `false` or delete the block (a disabled block is ignored), and add the `app.vectorSearch` and `app.pipelines.useSystemGenAiMetadata` sections. Both are backfilled **disabled** when absent (with a `cdk synth` warning in the commercial partition), so set `enabled: true` on both to turn the features on. Vector search requires the system pipeline with `autoRegisterWithVAMS` and `autoRegisterAutoTriggerOnFileUpload` both `true`. In AWS GovCloud (US), request Amazon Bedrock access to the analysis and embedding models first; in the AWS European Sovereign Cloud vector search is unavailable. See [Configuration reference](configuration-reference.md).
+2.  Edit `infra/config/config.json`: if the `app.pipelines.useGenAiMetadata3dLabeling` or `app.pipelines.useConversionCadMeshMetadataExtraction` block is enabled, set its `enabled` to `false` or delete the block (a disabled block is ignored), and add the `app.vectorSearch` and `app.pipelines.useSystemGenAiMetadata` sections. An absent `app.pipelines.useSystemGenAiMetadata` resolves disabled. An absent `app.vectorSearch`, or one without `enabled`, resolves to enabled only when the system pipeline is enabled with `autoRegisterAutoTriggerOnFileUpload: true` and `autoRegisterWithVAMS` not `false`, outside AWS GovCloud (US) and the AWS European Sovereign Cloud; otherwise it resolves disabled, with a `cdk synth` warning in the commercial partition. Adding only the pipeline block with its upload trigger armed therefore turns vector search on (a vector index, its queues, and an embedding call for every uploaded file); to run the pipeline without vector search, add `"vectorSearch": {"enabled": false}`. Set `enabled: true` on both sections to turn both features on. Vector search requires the system pipeline with `autoRegisterWithVAMS` and `autoRegisterAutoTriggerOnFileUpload` both `true`, and a pipeline that calls Amazon Bedrock requires a guardrail (`bedrockGuardrail.create.enabled`, or an operator-owned `guardrailIdentifier`). In AWS GovCloud (US), request Amazon Bedrock access to the analysis and embedding models first; outside the commercial and AWS GovCloud (US) partitions configuration validation refuses vector search. See [Configuration reference](configuration-reference.md).
 
 3.  Deploy the v2.7 CDK stack:
 

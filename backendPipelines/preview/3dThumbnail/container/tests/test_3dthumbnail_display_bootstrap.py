@@ -190,7 +190,7 @@ def _refuse_start(calls):
 class TestAServerAnotherProcessRuns:
     def test_the_entrypoint_server_is_reused_and_its_lock_and_socket_stay(self, x_dirs, no_server):
         """The Fargate render job: the image's ENTRYPOINT already serves :99. The render reuses it; removing
-        its lock and socket and starting a second Xvfb on :99 makes that one exit 1 (D63)."""
+        its lock and socket and starting a second Xvfb on :99 makes that one exit 1."""
         sock = display.socket_path(":99", x_dirs["socket_dir"])
         server = _Server(sock)
         _write_lock(x_dirs["lock_dir"], ":99", os.getpid())

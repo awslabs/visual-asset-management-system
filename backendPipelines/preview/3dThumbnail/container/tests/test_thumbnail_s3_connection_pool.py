@@ -2,7 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """preview/3dThumbnail container: every S3 client pools as many connections as one transfer runs
-requests at once (D66).
+requests at once.
 
 A download runs up to four ranged GETs per CPU, at most 32 (``download_transfer_config``). On botocore's
 default pool of 10 connections, urllib3 discards the connection of each concurrent request beyond the pool

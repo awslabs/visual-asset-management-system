@@ -661,7 +661,7 @@ class TestDependencies:
         assert mc.dependencies_fact(_dependency_report(fetched=0)) is None
 
     def test_a_fetched_file_the_composed_stage_does_not_load_is_its_own_state(self):
-        """UAT D62: a .usdz package's reference to a file outside the package is fetched, and OpenUSD does not
+        """A .usdz package's reference to a file outside the package is fetched, and OpenUSD does not
         compose it. The attribute lists it under notComposed, never under missing, and the fact line does not
         count it as loaded."""
         report = _dependency_report(fetched=1)

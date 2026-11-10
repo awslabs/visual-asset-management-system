@@ -60,7 +60,7 @@ The root `backend/conftest.py` performs critical setup before every test:
 
 1.  **`sys.path` manipulation** -- adds `backend/`, `backend/backend/`, and `tests/mocks/` to Python path so handlers can import their normal module paths.
 2.  **Environment variables** -- seeds test values for all required env vars (table names, bucket names, `VAMS_RESOURCE_PARAM_PREFIX`, etc.). These act as break-glass overrides so `get_table_name(ResourceKeys.*)` returns the test names without an SSM call.
-3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below).
+3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below), and loads a few pure-stdlib `common` modules by path early so they are real even though `common` is mocked. `common.vectorsearch.fileClassIntent` is one: `models/vectorsearch` reads its class ids at module level, and the model test modules import that model when tests are collected.
 4.  **Autouse fixture `setup_mock_imports()`** -- runs before every test to re-establish the mock module hierarchy.
 
 ## Mocks Directory
