@@ -117,7 +117,7 @@ DESCRIPTIONS = {
         "roles that use the runtime per-asset SNS topics are granted `AssetTopic*`, not the core stack "
         "pattern",
     "engine/tests/test_cloudfront_quota.py":
-        " (0.5.1): the CloudFront quota check before `cdk deploy`; the prod01 full cache-policy quota case",
+        "The CloudFront quota check before `cdk deploy` (0.5.1); the full cache-policy quota case on a prod install",
     "engine/tests/fixtures/asset_topic_role_sns_statements.json":
         "SNS statements of the 7 AssetTopic roles from the live test prod-4 IAM report",
     "engine/tests/test_core_patches.py": "Ledger core patches; the GitHub issue #431 and #1210 patches on real VAMS v2.6.6 / development input",
