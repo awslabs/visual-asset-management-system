@@ -500,7 +500,8 @@ const ModernSearchContainer: React.FC<
         // Drop any search still running, and show no count until the reloaded answer arrives.
         startSearch();
         setAnsweredMode(null);
-        searchState.clearSearch();
+        // A database route's locked database is the page's scope, not a filter: it stays.
+        searchState.clearSearch(databaseLocked ? ["str_databaseid"] : []);
         setNlpResult(null);
         // Don't reset recordType - preserve the current search mode (asset/file)
         setMetadataSearchMode("both");
@@ -864,7 +865,7 @@ const ModernSearchContainer: React.FC<
                 loading={searchState.loading}
                 resultCount={hasAnswer ? totalResults : undefined}
                 resultCountIsLowerBound={hasAnswer && isTotalLowerBound(displayedResult)}
-                hasActiveFilters={searchState.hasActiveFilters()}
+                hasActiveFilters={searchState.hasActiveFilters({ databaseLocked })}
                 title={
                     embedded?.title ||
                     (databaseId
