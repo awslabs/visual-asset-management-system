@@ -1404,6 +1404,8 @@ The boundary ARN must be an IAM managed policy ARN in the partition you deploy t
 
 Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
+The large object copy engine is invoked through resource-based permissions on its function (`largeObjectCopy`), which name the calling roles: the workflow output step, the workflow error handler, the execution service and the engine itself. IAM checks such a same-account call against the calling role's permissions boundary, so a boundary must allow `lambda:InvokeFunction` (on the copy engine function, or on the deployment's functions). These grants are not statements in the callers' role policies, so they do not appear in the IAM policy report (`iam-policy-report.txt` / `iam-policy-report.json`); add them to the boundary yourself.
+
 :::warning[Role name length limit]
 The total IAM role name character count limit is 64 characters. Long prefixes may affect role name uniqueness and cause deployment failures. Prefixes of 8 characters or fewer are recommended.
 :::

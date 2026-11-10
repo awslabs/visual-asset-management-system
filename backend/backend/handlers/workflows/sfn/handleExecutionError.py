@@ -284,8 +284,10 @@ def _cancel_output_copies(execution_id):
     one message per copy that could not be stopped or cleaned up. Never raises."""
     try:
         table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        # The deploy window's AccessDenied and throttles are waited out (#1123 L1).
         return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id,
-                                              lambda_client, loc.engine_function_name())
+                                              lambda_client, loc.engine_function_name(),
+                                              max_wait_seconds=loc.ENGINE_CALL_DEPLOY_WAIT_SECONDS)
     except Exception as e:
         # Best-effort like every step here; a run with no large outputs has nothing to cancel.
         logger.warning(f"Could not cancel the output copies of execution {execution_id} (continuing): {e}")

@@ -230,9 +230,118 @@ ENGINE_CALL_DEPLOY_WAIT_SECONDS = 120
 ENGINE_CALL_DEPLOY_DELAYS = (5, 10, 15, 20, 30, 40)
 
 
+# Throttling and the other transient refusals a busy account answers with (Lambda concurrency used
+# up, a function still updating, a service-side fault, a throttled table or state machine call).
+# A throttle slows a copy rather than failing it, so callers wait for capacity (TRANSIENT_DELAYS).
+TRANSIENT_ERROR_CODES = frozenset({
+    "TooManyRequestsException", "ThrottlingException", "Throttling", "ThrottledException",
+    "EC2ThrottledException", "RequestLimitExceeded", "RequestThrottled", "SlowDown",
+    "ProvisionedThroughputExceededException", "ResourceConflictException", "ServiceException",
+    "ServiceUnavailable", "ServiceUnavailableException",
+})
+# The refusal of a call whose grant the deployment is still applying (L1: each caller's role loses
+# its old grant a few seconds before the new one arrives).
+ACCESS_DENIED_CODES = frozenset({"AccessDeniedException", "AccessDenied"})
+# Jittered exponential backoff for a transient refusal: up to this many seconds per wait.
+TRANSIENT_BASE_DELAY_SECONDS = 1
+TRANSIENT_MAX_DELAY_SECONDS = 30
+# Time kept back from a caller's remaining invocation time, so a wait never runs into its timeout.
+INVOCATION_SAFETY_MARGIN_MS = 60_000
+# Deploy-window bound of a caller with no copy engine routing (uploadFile, the queue consumer, the
+# error handler, the abort route): the same 2 minutes, or less where the caller answers an API call.
+API_CALLER_WAIT_SECONDS = 15
+
+
 class EngineCallFailed(Exception):
     """The copy engine could not do an operation the workflow output step asked for. Raised to the
     output step, which fails like any failed write of its own (the run is not reported done)."""
+
+
+class LargeObjectCopyEngineBusy(Exception):
+    """The copy engine (or a service it relies on) was still throttling when the caller ran out of
+    time. Not a failure: the workflow definition retries the output step states on this error name
+    (workflowAslBuilder ENGINE_BUSY_RETRIER), so a throttle slows the run but never ends it FAILED
+    while its copies are still alive."""
+
+
+def error_code(error):
+    """The AWS error code of a ClientError ("" for any other exception)."""
+    response = getattr(error, "response", None) or {}
+    return (response.get("Error") or {}).get("Code", "") or ""
+
+
+def is_transient(error):
+    """True for a throttle or another transient refusal (TRANSIENT_ERROR_CODES, or HTTP 429)."""
+    response = getattr(error, "response", None) or {}
+    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    return error_code(error) in TRANSIENT_ERROR_CODES or status == 429
+
+
+def is_access_denied(error):
+    return error_code(error) in ACCESS_DENIED_CODES
+
+
+class _Budget:
+    """The waiting a caller may still do: at most ``max_wait_seconds`` in total, and never past its
+    remaining invocation time minus INVOCATION_SAFETY_MARGIN_MS."""
+
+    def __init__(self, max_wait_seconds, remaining_ms=None, sleep=None, rng=None):
+        import random
+        import time
+        self.max_wait = max(0, max_wait_seconds or 0)
+        self.remaining_ms = remaining_ms
+        self.sleep = sleep or time.sleep
+        self.rng = rng or random.random
+        self.waited = 0.0
+
+    def allows(self, delay):
+        if self.waited + delay > self.max_wait:
+            return False
+        if self.remaining_ms is not None and self.remaining_ms() - INVOCATION_SAFETY_MARGIN_MS < delay * 1000:
+            return False
+        return True
+
+    def wait(self, delay, reason):
+        logger.warning(f"Waiting {delay:.1f} s before trying again: {reason}")
+        self.sleep(delay)
+        self.waited += delay
+
+
+def transient_delay(attempt, rng):
+    """Full-jitter exponential backoff: uniform in (0, min(cap, base * 2 ** attempt)]."""
+    ceiling = min(TRANSIENT_MAX_DELAY_SECONDS, TRANSIENT_BASE_DELAY_SECONDS * (2 ** attempt))
+    return max(0.1, ceiling * rng())
+
+
+def call_with_transient_retry(call, what, max_wait_seconds, remaining_ms=None, sleep=None, rng=None,
+                              access_denied_wait_seconds=None, busy_error=None):
+    """Run ``call`` (an idempotent AWS call), waiting out throttles and the deploy window.
+
+    A transient refusal (is_transient) is retried with jittered exponential backoff while the budget
+    allows; AccessDenied is retried the same way for at most ``access_denied_wait_seconds`` (default:
+    the whole budget). When the budget is spent the last error is raised, or ``busy_error`` (an
+    exception class) for a transient one, so the caller can tell "still busy" from a real failure.
+    Any other error is raised at once."""
+    budget = _Budget(max_wait_seconds, remaining_ms, sleep, rng)
+    denied_limit = max_wait_seconds if access_denied_wait_seconds is None else access_denied_wait_seconds
+    attempt = 0
+    while True:
+        try:
+            return call()
+        except ClientError as e:
+            transient = is_transient(e)
+            denied = is_access_denied(e)
+            if not (transient or denied):
+                raise
+            delay = transient_delay(attempt, budget.rng)
+            if denied and budget.waited + delay > denied_limit:
+                raise
+            if not budget.allows(delay):
+                if transient and busy_error is not None:
+                    raise busy_error(f"{what} was still throttled ({error_code(e) or 429})") from e
+                raise
+            budget.wait(delay, f"{what} was refused ({error_code(e) or 429})")
+            attempt += 1
 
 
 def jsonable(value):
@@ -249,12 +358,26 @@ def jsonable(value):
     return value
 
 
-def call_engine(lambda_client, function_name, operation, sleep=None, remaining_ms=None, **fields):
+def _engine_error_type(raw):
+    try:
+        return (json.loads(raw or b"{}") or {}).get("errorType", "") or ""
+    except (ValueError, AttributeError):
+        return ""
+
+
+def call_engine(lambda_client, function_name, operation, sleep=None, remaining_ms=None, rng=None,
+                **fields):
     """Invoke the copy engine synchronously for one output-step operation and return its answer.
 
     ``function_name`` is the engine's name, or a callable returning it ("" while it cannot be read).
-    Raises EngineCallFailed when there is no engine, the engine raised, or the call was refused;
-    only the two deployment-window conditions (AccessDenied, a name not readable yet) are retried."""
+    - A throttle (the engine's concurrency used up, or a transient refusal; also an engine error whose
+      type is one, such as a throttled table call inside it) is retried with jittered exponential
+      backoff for as long as the invocation's remaining time allows (minus a safety margin). When
+      the time runs out it raises LargeObjectCopyEngineBusy, which the workflow definition retries.
+    - The deploy-window conditions (AccessDenied, a name not readable yet) are retried for at most
+      ENGINE_CALL_DEPLOY_WAIT_SECONDS.
+    - Anything else raises EngineCallFailed at once (the run is not reported done)."""
+    import random
     import time
     if operation not in OUTPUT_STEP_OPERATIONS:
         raise ValueError(f"Unknown output step operation {operation}")
@@ -262,9 +385,13 @@ def call_engine(lambda_client, function_name, operation, sleep=None, remaining_m
         raise EngineCallFailed("The copy engine function is not known to this function")
     resolve = function_name if callable(function_name) else (lambda: function_name)
     sleep = sleep or time.sleep
+    rng = rng or random.random
     payload = json.dumps({"action": ACTION_OUTPUT_STEP, "operation": operation, **fields}, default=str)
     waited = 0
     delays = list(ENGINE_CALL_DEPLOY_DELAYS)
+    # Throttle waits: bounded only by the invocation's remaining time (and 14 minutes without one).
+    throttle = _Budget(14 * 60, remaining_ms, sleep, rng)
+    throttle_attempt = 0
 
     def _wait(reason):
         nonlocal waited
@@ -279,6 +406,16 @@ def call_engine(lambda_client, function_name, operation, sleep=None, remaining_m
         waited += delay
         return True
 
+    def _wait_throttled(reason):
+        nonlocal throttle_attempt
+        delay = transient_delay(throttle_attempt, rng)
+        if not throttle.allows(delay):
+            raise LargeObjectCopyEngineBusy(
+                f"The copy engine was still busy for the {operation} call ({reason}); the workflow "
+                f"retries this step")
+        throttle.wait(delay, f"the copy engine is busy for the {operation} call ({reason})")
+        throttle_attempt += 1
+
     while True:
         name = resolve() or ""
         if not name:
@@ -288,21 +425,28 @@ def call_engine(lambda_client, function_name, operation, sleep=None, remaining_m
         try:
             response = lambda_client.invoke(FunctionName=name, InvocationType="RequestResponse",
                                             Payload=payload)
-            break
         except ClientError as e:
-            code = e.response.get("Error", {}).get("Code", "")
+            code = error_code(e)
+            if is_transient(e):
+                _wait_throttled(code or "429")
+                continue
             if code == "AccessDeniedException" and _wait("the engine refused the call"):
                 continue
             raise EngineCallFailed(f"The copy engine refused the {operation} call ({code})") from e
-    body = response.get("Payload")
-    raw = body.read() if hasattr(body, "read") else (body or b"")
-    if response.get("FunctionError"):
-        logger.error(f"The copy engine failed the {operation} call: {raw[:500]!r}")
-        raise EngineCallFailed(f"The copy engine failed the {operation} call")
-    try:
-        return json.loads(raw or b"{}") or {}
-    except ValueError as e:
-        raise EngineCallFailed(f"The copy engine answered the {operation} call unreadably") from e
+        body = response.get("Payload")
+        raw = body.read() if hasattr(body, "read") else (body or b"")
+        if response.get("FunctionError"):
+            error_type = _engine_error_type(raw)
+            if error_type in TRANSIENT_ERROR_CODES:
+                # The engine ran but a service it called was still throttling after its own retries.
+                _wait_throttled(error_type)
+                continue
+            logger.error(f"The copy engine failed the {operation} call: {raw[:500]!r}")
+            raise EngineCallFailed(f"The copy engine failed the {operation} call")
+        try:
+            return json.loads(raw or b"{}") or {}
+        except ValueError as e:
+            raise EngineCallFailed(f"The copy engine answered the {operation} call unreadably") from e
 
 
 def state_machine_arn(environ=None):
@@ -470,10 +614,20 @@ def build_job(kind, source, dest, metadata, content_headers, database_id, asset_
     }
 
 
-def start_copy_job(table, sfn_client, machine_arn, job):
+def start_copy_job(table, sfn_client, machine_arn, job, max_wait_seconds=0, remaining_ms=None,
+                   sleep=None):
     """Record the job row (QUEUED) and start its copy execution. Idempotent: a job already recorded
     or an execution already started with the job's name is not started twice. Returns the
-    execution ARN. Raises on any other failure so the caller fails the file."""
+    execution ARN. Raises on any other failure so the caller fails the file.
+
+    With ``max_wait_seconds`` each call waits out a throttle or the deploy window's AccessDenied
+    (call_with_transient_retry) for at most that long in total, within ``remaining_ms``."""
+
+    def _retried(call, what):
+        if not max_wait_seconds:
+            return call()
+        return call_with_transient_retry(call, what, max_wait_seconds, remaining_ms, sleep)
+
     if not machine_arn:
         raise RuntimeError("The large object copy state machine is not configured")
     row = {
@@ -500,26 +654,28 @@ def start_copy_job(table, sfn_client, machine_arn, job):
     if job.get("batchId"):
         row["batchId"] = job["batchId"]
     try:
-        table.put_item(Item=row, ConditionExpression="attribute_not_exists(jobId)")
+        _retried(lambda: table.put_item(Item=row, ConditionExpression="attribute_not_exists(jobId)"),
+                 "Recording the copy job")
     except ClientError as e:
         if not _is_condition_failure(e):
             raise
         logger.info(f"Copy job {job['jobId']} is already recorded; not recording it again")
     name = execution_name_for(job["jobId"])
     try:
-        response = sfn_client.start_execution(
-            stateMachineArn=machine_arn, name=name, input=json.dumps({"job": job}))
+        response = _retried(lambda: sfn_client.start_execution(
+            stateMachineArn=machine_arn, name=name, input=json.dumps({"job": job})),
+            "Starting the copy execution")
         execution_arn = response.get("executionArn", "")
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") != "ExecutionAlreadyExists":
             raise
         execution_arn = machine_arn.replace(":stateMachine:", ":execution:") + ":" + name
         logger.info(f"Copy job {job['jobId']} already has an execution; not starting another")
-    table.update_item(
+    _retried(lambda: table.update_item(
         Key={"jobId": job["jobId"]},
         UpdateExpression="SET executionArn = :a",
         ExpressionAttributeValues={":a": execution_arn},
-    )
+    ), "Recording the copy execution")
     return execution_arn
 
 
@@ -888,7 +1044,8 @@ def batch_outcomes(table, batch_id, workflow_execution_id):
 
 
 def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_id,
-                               lambda_client=None, engine_function=""):
+                               lambda_client=None, engine_function="", max_wait_seconds=0,
+                               remaining_ms=None, sleep=None):
     """Stop every unfinished copy job of a workflow execution and abort its multipart upload.
 
     Used by the abort route, the error handler, the output step (a run that ended while it ran) and
@@ -912,8 +1069,17 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
     aborts it itself."""
     warnings = []
     handoff = []
+
+    def _retried(call, what):
+        # With max_wait_seconds a throttle or the deploy window's AccessDenied is waited out (the
+        # stopper's own copy grants may still be deploying; L1).
+        if not max_wait_seconds:
+            return call()
+        return call_with_transient_retry(call, what, max_wait_seconds, remaining_ms, sleep)
+
     try:
-        jobs = jobs_for_execution(table, workflow_execution_id)
+        jobs = _retried(lambda: jobs_for_execution(table, workflow_execution_id),
+                        "Reading the run's copy jobs")
     except Exception as e:
         logger.exception(f"Could not read the copy jobs of execution {workflow_execution_id}: {e}")
         return ["The output copy jobs of this execution could not be read; any running copy "
@@ -940,8 +1106,9 @@ def cancel_execution_copy_jobs(table, sfn_client, s3_client, workflow_execution_
         stopped = False
         if execution_arn:
             try:
-                sfn_client.stop_execution(executionArn=execution_arn, error=STOP_ERROR_CANCELLED,
-                                          cause="The workflow execution ended.")
+                _retried(lambda: sfn_client.stop_execution(
+                    executionArn=execution_arn, error=STOP_ERROR_CANCELLED,
+                    cause="The workflow execution ended."), "Stopping a copy execution")
                 stopped = True
             except ClientError as e:
                 if e.response.get("Error", {}).get("Code") not in ("ExecutionDoesNotExist",):
@@ -1209,6 +1376,13 @@ def _cancel_found_landed(table, s3_client, job_id):
         logger.info(f"Copy job {job_id} had landed its file before the cancel; kept as succeeded")
         return True
     except Exception as e:
+        if error_code(e) in ("403", "AccessDenied", "Forbidden"):
+            # Expected for the abort route and the error handler: they hold only
+            # AbortMultipartUpload on the asset buckets, so the copy engine's reconcile of this stop
+            # decides whether the file landed.
+            logger.info(f"Copy job {job_id}: this function cannot read the asset object, so the copy "
+                        f"engine decides whether the file landed")
+            return None
         logger.warning(f"Could not check whether copy job {job_id} had landed its file: {e}")
         return None
 

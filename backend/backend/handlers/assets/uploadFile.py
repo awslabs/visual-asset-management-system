@@ -1287,7 +1287,10 @@ def start_output_copy_job(file_info: dict, head_response: dict, change_metadata:
         batch_id=batch_id,
         delete_source_on_success=True,
     )
-    loc.start_copy_job(copy_jobs_table(), sfn_client, loc.state_machine_arn(), job)
+    # A throttle or the deploy window's AccessDenied is waited out briefly (the caller is an API
+    # completion or the output step's cross-call; #1123 L1).
+    loc.start_copy_job(copy_jobs_table(), sfn_client, loc.state_machine_arn(), job,
+                       max_wait_seconds=loc.API_CALLER_WAIT_SECONDS)
     return job["jobId"]
 
 def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:

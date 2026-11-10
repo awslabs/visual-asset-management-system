@@ -65,6 +65,21 @@ THROTTLE_RETRIER = {
     "JitterStrategy": "FULL",
 }
 
+# The output step states (process-output, the ingestion wait, finalize) raise
+# LargeObjectCopyEngineBusy (common.largeObjectCopy) when the copy engine was still throttled after
+# the invocation's own waiting. That is not a failure: the state is retried, so a throttle slows the
+# run and never ends it FAILED while its copies are alive. Bounded; the wait state's own timeout
+# (the maximum output-ingestion wait) is unchanged, and an exhausted retry goes to the usual Catch.
+ENGINE_BUSY_ERROR = "LargeObjectCopyEngineBusy"
+ENGINE_BUSY_RETRIER = {
+    "ErrorEquals": [ENGINE_BUSY_ERROR],
+    "IntervalSeconds": 30,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 8,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
 # Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
 # argument: the single quote closes the intrinsic's string literal, the braces are its
 # placeholder syntax, and the backslash is its escape character. A name carrying any of them
@@ -453,7 +468,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         catch_config=po_catch_config,
         partition=aws_partition
     )
-    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), po_retry_config]
+    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER), po_retry_config]
 
     # Add the single process_output state to the states list
     states.append((process_output_state_id, process_output_state))
@@ -522,7 +537,8 @@ def _output_ingestion_states(process_output_state_id, process_workflow_output_fu
         partition=aws_partition,
     )
     for state in (await_state, finalize_state):
-        state["Retry"] = [dict(THROTTLE_RETRIER)] + list(state.get("Retry") or [])
+        state["Retry"] = ([dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER)]
+                          + list(state.get("Retry") or []))
     finalize_state["Next"] = WORKFLOW_SUCCEEDED_STATE_ID
     await_state["Next"] = FINALIZE_OUTPUTS_STATE_ID
     return {
