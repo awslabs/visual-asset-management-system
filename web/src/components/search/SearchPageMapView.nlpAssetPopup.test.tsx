@@ -136,7 +136,7 @@ describe("Map view popup for a natural-language asset hit (D83)", () => {
         ["MD_ location as an object only", { MD_: { location: { lat: 38.9, long: -77.0 } } }],
         ["MD_ lat and lon only", { MD_: { lat: "38.9", lon: "-77.0" } }],
     ])("plots %s and opens a popup with no metadata list and no empty row", (_, location) => {
-        const { container } = renderMap([nlpAssetHit("a1", location)]);
+        renderMap([nlpAssetHit("a1", location)]);
         expect(screen.getByText(/1 of 1\+ result/)).toBeInTheDocument();
         const marker = screen.getByTestId("marker");
         expect(Number(marker.getAttribute("data-lat"))).toBeCloseTo(38.9);
