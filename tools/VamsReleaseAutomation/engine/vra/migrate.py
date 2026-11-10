@@ -88,18 +88,86 @@ def chain(transitions: list[dict], frm: str, to: str) -> list[dict]:
     raise NeedsHuman(f"no migration chain from {a} to {b}; available: {[t['id'] for t in transitions]}")
 
 
+def _vt(v: str) -> tuple[int, ...]:
+    return util.version_tuple(v)
+
+
+def crossed(transitions: list[dict], frm: str, to: str) -> list[dict]:
+    """Transitions a downgrade from ``frm`` to ``to`` would undo: those that lie between the two minors."""
+    lo, hi = _vt(util.minor(to)), _vt(util.minor(frm))
+    return sorted((t for t in transitions if _vt(t["from"]) >= lo and _vt(t["to"]) <= hi),
+                  key=lambda t: _vt(t["from"]))
+
+
+def restore_point(ctx, env: str, ids: list[str]) -> dict | None:
+    """The checkpoint taken before the latest recorded deploy that applied any of ``ids`` (its pre-deploy
+    checkpoint; an env migrated, restored and migrated again needs the newer one), with that deploy's build and run.
+    A standalone ``vra migrate`` record carries no checkpoint: it is named only when no applying deploy has one.
+    None when the history shows no run that applied them."""
+    want = set(ids)
+    # a deploy that migrated and then failed counts: its data is migrated all the same
+    hits = [rec for rec in ctx.ledger.history(env) if rec.get("result") in ("SUCCEEDED", "FAILED")
+            and want & set(rec.get("migrationsApplied") or rec.get("applied") or [])]
+    if not hits:
+        return None
+    rec = next((r for r in reversed(hits) if r.get("checkpoint")), hits[-1])
+    return {"checkpoint": rec.get("checkpoint"), "build": rec.get("build"), "runId": rec.get("runId"),
+            "action": rec.get("action"), "ts": rec.get("ts")}
+
+
+def downgrade_refusal(ctx, env: str, steps: list[dict], frm: str, to: str, how: str) -> NeedsHuman:
+    ids = [s["id"] for s in steps]
+    rp = restore_point(ctx, env, ids)
+    where = (f"restore checkpoint {rp['checkpoint']} (taken before {rp['action']} {rp.get('build') or rp.get('runId')} "
+             f"applied them)" if rp and rp.get("checkpoint") else
+             "restore a checkpoint taken before those migrations ran (the history names none)")
+    return NeedsHuman(f"downgrade {frm} -> {to} crosses data migrations {', '.join(ids)}: the older code cannot read "
+                      f"migrated data. {where}, for example `vra rollback --env {env} --to-build <build> "
+                      f"--restore-checkpoint <checkpoint>`; {how}",
+                      {"downgrade": {"from": frm, "to": to}, "crossed": ids,
+                       "checkpoint": (rp or {}).get("checkpoint"), "restorePoint": rp})
+
+
 def plan(ctx, env: str, migrations_root: Path, frm: str | None, to: str) -> dict:
+    """The migrations a move from ``frm`` to ``to`` runs.
+
+    Upgrade: chain the transitions up to the highest target at or below ``to`` (shortest path), then allow the rest
+    of the range when no transition starts inside it (a release without data changes, e.g. 2.6 -> 2.7). A
+    transition that starts inside the rest is a real gap and stops (exit 20).
+    Downgrade: allowed within a minor, or across minors with no transition between them; a downgrade that crosses a
+    transition stops (exit 20), naming them and the checkpoint to restore.
+    """
     if not frm:
         return {"from": None, "to": to, "steps": [], "note": "fresh install (no recorded version); no migrations"}
     ts = discover(migrations_root)
-    try:
-        steps = chain(ts, frm, to)
-    except NeedsHuman:
-        # allow gaps when there is simply no migration directory for the newer minors
-        if not any(util.version_tuple(t["from"]) >= util.version_tuple(util.minor(frm)) for t in ts):
-            steps = []
-        else:
-            raise
+    a, b = util.minor(frm), util.minor(to)
+    if _vt(a) > _vt(b):
+        back = crossed(ts, frm, to)
+        if back:
+            raise downgrade_refusal(ctx, env, back, frm, to, "a deploy never runs the old code over migrated data")
+        return {"from": frm, "to": to, "steps": [], "requiresAB": False, "manualSteps": [], "skipped": [],
+                "downgrade": True, "note": f"downgrade {a} -> {b} crosses no data migration"}
+    steps = []
+    if _vt(a) < _vt(b):
+        graph: dict[str, list[dict]] = {}
+        for t in ts:
+            if _vt(t["to"]) <= _vt(b):
+                graph.setdefault(t["from"], []).append(t)
+        best: dict[str, list[dict]] = {a: []}
+        q = deque([a])
+        while q:
+            cur = q.popleft()
+            for t in sorted(graph.get(cur, []), key=lambda t: _vt(t["to"])):
+                if t["to"] not in best:
+                    best[t["to"]] = best[cur] + [t]
+                    q.append(t["to"])
+        reached = max(best, key=_vt)
+        gap = [t for t in ts if _vt(reached) <= _vt(t["from"]) < _vt(b)]
+        if gap:
+            raise NeedsHuman(f"no migration chain from {a} to {b}: the chain reaches {reached}, but "
+                             f"{', '.join(t['id'] for t in gap)} starts in the rest of the range; available: "
+                             f"{[t['id'] for t in ts]}", {"reached": reached, "gap": [t["id"] for t in gap]})
+        steps = best[reached]
     skip = set((ctx.ledger.env(env).get("migrations") or {}).get("skip", []))
     steps = [s for s in steps if s["id"] not in skip]
     return {"from": frm, "to": to, "steps": steps, "requiresAB": any(s["requiresAB"] for s in steps),

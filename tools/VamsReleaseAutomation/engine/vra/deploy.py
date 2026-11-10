@@ -1154,7 +1154,11 @@ def _on_failure(ctx, run, env, manifest, exc: VraError, gate, ckpt, origin, p) -
     e = ctx.ledger.env(env)
     ctx.ledger.append_history(env, {"action": "deploy", "build": manifest["buildId"], "result": "FAILED",
                                     "runId": run.run_id, "error": exc.message[:500], "mode": gate["mode"],
-                                    "slot": gate.get("slot")}, dry_run=ctx.dry_run)
+                                    "slot": gate.get("slot"), "vamsVersion": manifest.get("vamsVersion"),
+                                    "checkpoint": (ckpt or {}).get("id"),
+                                    # the data is migrated even though the deploy failed (a rollback reads this)
+                                    "migrationsApplied": list(run.state.get("migrationsApplied") or [])},
+                              dry_run=ctx.dry_run)
     is_test = isinstance(exc, TestsFailed)
     if gate["mode"] == "ab":
         # live traffic never left the active slot; the new slot is left for inspection
@@ -1180,6 +1184,58 @@ def _on_failure(ctx, run, env, manifest, exc: VraError, gate, ckpt, origin, p) -
 
 
 # ===================================================================== rollback
+def migrations_since_good(ctx, env: str) -> list[str]:
+    """Migrations recorded after the env's last good deploy: a deploy that migrated the data and then failed
+    (rollbackPolicy ask leaves it running), or a standalone ``vra migrate``. The data is migrated even though the
+    last good deploy is older."""
+    hist = ctx.ledger.history(env)
+    good = ctx.ledger.last_good_deploy(env)
+    start = 0
+    if good:
+        idx = [i for i, h in enumerate(hist) if h is good or (h.get("runId"), h.get("build"), h.get("action")) ==
+               (good.get("runId"), good.get("build"), good.get("action"))]
+        start = idx[-1] + 1 if idx else 0
+    out: list[str] = []
+    for h in hist[start:]:
+        for m in h.get("migrationsApplied") or h.get("applied") or []:
+            if m not in out:
+                out.append(m)
+    return out
+
+
+def rollback_downgrade_check(ctx, env: str, target_manifest: dict, leaving: str | None) -> dict:
+    """A rollback to a build of an older VAMS minor must not run old code over data migrated past it: compare the
+    target build's version with the deployed one and stop (exit 20) when a migration lies between them and no
+    ``--restore-checkpoint`` was given. Migrations applied after the last good deploy (a failed deploy left on the
+    env) count too. The transitions come from the deployed (newer) bundle, else the target's."""
+    cur = ctx.ledger.current_deploy(env) or {}
+    frm, to = cur.get("vamsVersion"), target_manifest.get("vamsVersion")
+    if not to:
+        return {"from": frm, "to": to, "downgrade": False, "note": "the target bundle names no VAMS version"}
+    roots = [build_mod.build_dir(ctx, b) / "migrations" for b in (leaving, cur.get("build"),
+                                                                 target_manifest.get("buildId")) if b]
+    ts = next((migrate.discover(r) for r in roots if r.is_dir() and migrate.discover(r)), [])
+    back: list[dict] = []
+    if frm and util.version_tuple(util.minor(frm)) > util.version_tuple(util.minor(to)):
+        back = migrate.crossed(ts, frm, to)
+    since = migrations_since_good(ctx, env)
+    by_id = {t["id"]: t for t in ts}
+    for mid in since:
+        t = by_id.get(mid) or {"id": mid, "from": None, "to": None}
+        # a transition whose target minor is above the rollback target's: the old code cannot read its data
+        if t["to"] is None or util.version_tuple(t["to"]) > util.version_tuple(util.minor(to)):
+            if all(b["id"] != mid for b in back):
+                back.append(t)
+    if back:
+        seen = [v for v in [frm] + [h.get("vamsVersion") or h.get("to") for h in ctx.ledger.history(env)
+                                    if set(h.get("migrationsApplied") or h.get("applied") or []) & set(since)] if v]
+        newest = max(seen, key=util.version_tuple) if seen else "the migrated data"
+        raise migrate.downgrade_refusal(ctx, env, back, newest, to,
+                                        "pass --restore-checkpoint to roll the data back with the code")
+    down = bool(frm) and util.version_tuple(util.minor(frm)) > util.version_tuple(util.minor(to))
+    return {"from": frm, "to": to, "downgrade": down, "crossed": [], "migrationsSinceGood": since}
+
+
 def perform_rollback(ctx, run, env: str, to_build: str | None = None, exclude_build: str | None = None,
                      restore_checkpoint: str | None = None, prefix: str = "", skip_gate: bool = False,
                      approval: str | None = None, approval_fields: dict | None = None,
@@ -1214,6 +1270,9 @@ def perform_rollback(ctx, run, env: str, to_build: str | None = None, exclude_bu
         target = build_mod.target_name(env, prev.get("slot")) if prev.get("slot") else env
         build_mod.verify_bundle(ctx, m, target)
         build_mod.verify_release_tag(ctx, m)
+        if not restore_checkpoint:
+            run.step(prefix + "downgrade-check", lambda sc: rollback_downgrade_check(ctx, env, m, leaving),
+                     "migrated data and the rollback target")
         def _quota(sc):
             # advisory, never blocks a rollback: there is no diff, so the bundle's roles are the worst case (a
             # rollback across a boundary/prefix switch replaces all of them)
