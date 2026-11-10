@@ -14,7 +14,7 @@
  *    of that condition, not a grant on its own, so a statement WITHOUT the condition is the defect.
  *  - Workflow role invoke targets (`invokeTargets`): exact ARNs are added verbatim per service beside the
  *    unchanged same-account name patterns, and no per-account wildcard appears.
- *  - Execution log read grant (`app.pipelines.executionLogReadPrefixes`): the executionService read scope
+ *  - Execution log read grant (`app.pipelines.executionLogReadPrefixes`): the executionLogs read scope
  *    is the two VAMS-own groups plus the configured list, and nothing else.
  *  - SSM integration surface: the bus ARN, event source prefix, workflow role ARN and import function
  *    name are published under `resourceNames/`.
@@ -251,18 +251,17 @@ describe("workflow role invoke targets", () => {
 });
 
 /* ------------------------------------------------------------------------------------------------ *
- * Enabler 8 — executionService log read allow-list
+ * Enabler 8 — execution logs view (executionLogs) log read allow-list
  * ------------------------------------------------------------------------------------------------ */
 
-describe("executionService log read grant", () => {
+describe("executionLogs log read grant", () => {
     const LOGS_ACTIONS = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"];
 
     /** Log-group resource entries with their `:*` stream suffix stripped and de-duplicated. */
     const logGroups = (s: SynthResult): string[] => {
-        const entries = resourcesFor(
-            lambdaRoleStatements(s, "executionService"),
-            LOGS_ACTIONS[0]
-        ).map((r) => r.replace(/:\*$/, ""));
+        const entries = resourcesFor(lambdaRoleStatements(s, "executionLogs"), LOGS_ACTIONS[0]).map(
+            (r) => r.replace(/:\*$/, "")
+        );
         return Array.from(new Set(entries));
     };
 
@@ -286,7 +285,7 @@ describe("executionService log read grant", () => {
     });
 
     test.each(ALL_TEMPLATES)("%s grants every log action the same group set", (name) => {
-        const statements = lambdaRoleStatements(synth(name), "executionService");
+        const statements = lambdaRoleStatements(synth(name), "executionLogs");
         const sets = LOGS_ACTIONS.map((action) =>
             resourcesFor(statements, action)
                 .filter((r) => r.includes(":log-group:"))
@@ -299,13 +298,13 @@ describe("executionService log read grant", () => {
 
     test.each(ALL_TEMPLATES)("%s with an extra prefix reads it, with and without :*", (name) => {
         const s = bridgeSynth(name);
-        const entries = resourcesFor(lambdaRoleStatements(s, "executionService"), LOGS_ACTIONS[0]);
+        const entries = resourcesFor(lambdaRoleStatements(s, "executionLogs"), LOGS_ACTIONS[0]);
         const extra = `arn:${s.partition}:logs:${s.region}:123456789012:log-group:${EXTRA_LOG_PREFIX}`;
         expect(entries).toContain(extra);
         expect(entries).toContain(`${extra}:*`);
         // The shipped template does not read it, so the grant really is config-driven.
         expect(
-            resourcesFor(lambdaRoleStatements(synth(name), "executionService"), LOGS_ACTIONS[0])
+            resourcesFor(lambdaRoleStatements(synth(name), "executionLogs"), LOGS_ACTIONS[0])
         ).not.toContain(extra);
     });
 });

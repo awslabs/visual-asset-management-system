@@ -4,9 +4,10 @@
  */
 
 /**
- * The execution service, the permanent-delete function and the execute handler each hold exactly the
- * DynamoDB calls their code makes, in every shipped config template, and the routes reach the function
- * whose role holds them.
+ * The four execution service functions (the service, details, logs and permanent-delete route sets)
+ * and the execute handler each hold exactly the DynamoDB calls their code makes, in every shipped config
+ * template, all of it inline (no customer managed policy), and each route reaches the function whose
+ * role holds its calls.
  *
  * The expected lists are the ones the backend records each handler's calls against
  * (backend/tests/handlers/workflows/test_execution_service_route_split.py and
@@ -19,9 +20,10 @@
 
 import {
     EXECUTION_SERVICE_ROUTES_ENV,
+    EXECUTION_SERVICE_ROUTE_SET_DETAILS,
+    EXECUTION_SERVICE_ROUTE_SET_LOGS,
     EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE,
     EXECUTION_SERVICE_ROUTE_SET_SERVICE,
-    EXECUTION_SERVICE_TABLE_READ_POLICY_ID,
 } from "../../lib/lambdaBuilder/workflowFunctions";
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
 import { inlinePolicies, managedPolicies, nestedTemplateKeyFor } from "../support/iamPolicySize";
@@ -65,45 +67,56 @@ const expand = (grants: Record<string, string[]>): string[] =>
         .flatMap(([table, actions]) => actions.map((action) => `${table} ${action}`))
         .sort();
 
-/** backend: test_execution_service_route_split.py (EXECUTION_SERVICE_WRITES and the read paths). */
-const EXECUTION_SERVICE_READ_TABLES = [
-    "asset",
-    "main",
-    "inputs",
-    "configuration",
-    "pipelineExecutions",
-    "pipelineInputMetadata",
-    "pipelineInputConfiguration",
-    "pipelineOutputFiles",
-    "pipelineOutputMetadata",
-    "pipelineOutputResults",
-    "pipelineLogs",
-    "workflow",
-    "pipeline",
-    "fileVersionHistory",
-];
-const EXECUTION_SERVICE_READ_INDEXES = [
-    "main/index/WorkflowExecutionsByWorkflowGSI",
-    "main/index/WorkflowExecutionsByGroupGSI",
-    "main/index/WorkflowExecutionsByDateGSI",
-    "inputs/index/WorkflowExecInputsByAssetGSI",
-    "configuration/index/WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
-    "pipelineExecutions/index/PipelineExecByWorkflowExecGSI",
-    "fileVersionHistory/index/WorkflowExecutionIdIndex",
-];
-const EXECUTION_SERVICE_GRANTS = expand({
-    ...Object.fromEntries(
-        [...EXECUTION_SERVICE_READ_TABLES, ...EXECUTION_SERVICE_READ_INDEXES].map((t) => [
-            t,
-            ["BatchGetItem", "GetItem", "Query"],
-        ])
-    ),
-    main: ["BatchGetItem", "GetItem", "Query", "UpdateItem"],
-    pipelineExecutions: ["BatchGetItem", "GetItem", "Query", "UpdateItem"],
-    // The lock release, in the role's lock policy.
+/** backend: test_execution_service_route_split.py (AUTHORIZATION_READS). */
+const AUTHORIZATION_READS: Record<string, string[]> = {
+    main: ["Query"],
+    inputs: ["Query"],
+    configuration: ["GetItem"],
+    asset: ["BatchGetItem", "Query"],
+    workflow: ["GetItem"],
+};
+/** The lock release, in the role's lock policy (the service and details route sets). */
+const LOCK_RELEASE: Record<string, string[]> = {
     locks: ["DeleteItem"],
     "locks/index/WorkflowExecutionLocksByHolderGSI": ["Query"],
-});
+};
+
+/** backend: test_execution_service_route_split.py (ROUTE_SET_CALLS). */
+const ROUTE_SET_GRANTS: Record<string, string[]> = {
+    executionService: expand({
+        ...AUTHORIZATION_READS,
+        ...LOCK_RELEASE,
+        main: ["Query", "UpdateItem"],
+        "main/index/WorkflowExecutionsByWorkflowGSI": ["Query"],
+        "main/index/WorkflowExecutionsByGroupGSI": ["Query"],
+        "main/index/WorkflowExecutionsByDateGSI": ["Query"],
+        "inputs/index/WorkflowExecInputsByAssetGSI": ["Query"],
+        "configuration/index/WorkflowExecConfigByOutputAssetGSI": ["Query"], // pragma: allowlist secret
+        pipelineExecutions: ["UpdateItem"],
+        "pipelineExecutions/index/PipelineExecByWorkflowExecGSI": ["Query"],
+        pipeline: ["GetItem"],
+        pipelineInputConfiguration: ["Query"],
+    }),
+    executionDetails: expand({
+        ...AUTHORIZATION_READS,
+        ...LOCK_RELEASE,
+        main: ["Query", "UpdateItem"],
+        pipelineExecutions: ["UpdateItem"],
+        "pipelineExecutions/index/PipelineExecByWorkflowExecGSI": ["Query"],
+        pipeline: ["BatchGetItem", "GetItem"],
+        pipelineInputConfiguration: ["Query"],
+        pipelineInputMetadata: ["Query"],
+        pipelineOutputFiles: ["Query"],
+        pipelineOutputMetadata: ["BatchGetItem", "Query"],
+        pipelineOutputResults: ["Query"],
+        "fileVersionHistory/index/WorkflowExecutionIdIndex": ["Query"],
+    }),
+    executionLogs: expand({
+        ...AUTHORIZATION_READS,
+        "pipelineExecutions/index/PipelineExecByWorkflowExecGSI": ["Query"],
+        pipelineLogs: ["Query"],
+    }),
+};
 
 /** backend: test_execution_service_route_split.py (PERMANENT_DELETE_CALLS). */
 const PERMANENT_DELETE_GRANTS = expand({
@@ -224,17 +237,78 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         }
     });
 
-    test("the execution service holds exactly the calls its routes make", () => {
-        const grants = withoutShared(
-            dynamoGrants(synth, stack, roleId(synth, stack, "executionService"))
-        );
-        expect(grants).toEqual(EXECUTION_SERVICE_GRANTS);
-    });
+    test.each(Object.keys(ROUTE_SET_GRANTS))(
+        "%s holds exactly the calls its routes make",
+        (construct) => {
+            const grants = withoutShared(
+                dynamoGrants(synth, stack, roleId(synth, stack, construct))
+            );
+            expect(grants).toEqual(ROUTE_SET_GRANTS[construct]);
+        }
+    );
 
-    test("the execution service can delete or put no execution row", () => {
-        const grants = dynamoGrants(synth, stack, roleId(synth, stack, "executionService"));
-        expect(grants.filter((g) => /(PutItem|BatchWriteItem)$/.test(g))).toEqual([]);
-        expect(grants.filter((g) => / DeleteItem$/.test(g))).toEqual(["locks DeleteItem"]);
+    test.each(Object.keys(ROUTE_SET_GRANTS))(
+        "%s can delete or put no execution row",
+        (construct) => {
+            const grants = dynamoGrants(synth, stack, roleId(synth, stack, construct));
+            expect(grants.filter((g) => /(PutItem|BatchWriteItem)$/.test(g))).toEqual([]);
+            expect(grants.filter((g) => / DeleteItem$/.test(g) && !g.startsWith("locks "))).toEqual(
+                []
+            );
+        }
+    );
+
+    test.each(Object.keys(ROUTE_SET_GRANTS))(
+        "%s carries its grants inline, with no managed policy",
+        (construct) => {
+            const role = roleId(synth, stack, construct);
+            expect(managedPolicies(synth, role, stack)).toEqual([]);
+            // The role names only the AWS managed Lambda execution policies.
+            const roleResource = synth.ofType("AWS::IAM::Role").find((r) => r.logicalId === role)!;
+            const named = ((roleResource.properties.ManagedPolicyArns ?? []) as any[]).map((arn) =>
+                JSON.stringify(arn)
+            );
+            expect(named.length).toBeGreaterThan(0);
+            for (const arn of named) {
+                expect(arn).toMatch(/:iam::aws:policy\/service-role\/AWSLambda/);
+            }
+        }
+    );
+
+    test("only the abort holds the stop calls and only the re-run invokes the launch", () => {
+        const actionsOf = (construct: string) =>
+            inlinePolicies(synth, roleId(synth, stack, construct), stack)
+                .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
+                .flatMap((st) => ([] as string[]).concat(st.Action ?? []));
+        const stops = (construct: string) =>
+            actionsOf(construct).filter((a) =>
+                /^(states:StopExecution|batch:TerminateJob|sagemaker:Stop.*|deadline:UpdateJob|lambda:InvokeFunction)$/.test(
+                    a
+                )
+            );
+        expect(stops("executionService")).toEqual(
+            expect.arrayContaining([
+                "states:StopExecution",
+                "batch:TerminateJob",
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "lambda:InvokeFunction",
+            ])
+        );
+        expect(stops("executionDetails")).toEqual([]);
+        expect(stops("executionLogs")).toEqual([]);
+        // The full log-read scope is on the logs function only; the reconciling reads capture from the
+        // shared workflow log group and the config-name groups.
+        const logReads = (construct: string) =>
+            inlinePolicies(synth, roleId(synth, stack, construct), stack)
+                .flatMap(([, doc]) => (doc?.Statement ?? []) as any[])
+                .filter((st) =>
+                    ([] as string[]).concat(st.Action ?? []).includes("logs:FilterLogEvents")
+                )
+                .flatMap((st) => ([] as any[]).concat(st.Resource ?? []));
+        expect(logReads("executionService")).toHaveLength(4);
+        expect(logReads("executionDetails")).toHaveLength(4);
+        expect(logReads("executionLogs").length).toBeGreaterThan(4);
     });
 
     test("the permanent-delete function holds exactly the calls its route makes", () => {
@@ -265,80 +339,72 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
         expect(grants).toEqual(EXECUTE_WORKFLOW_GRANTS);
     });
 
-    test("the execution service's table reads are in its managed policy, which its function waits for", () => {
-        const role = roleId(synth, stack, "executionService");
-        const managed = managedPolicies(synth, role, stack);
-        expect(managed.map(([id]) => id)).toEqual([
-            expect.stringMatching(
-                new RegExp(`^executionService${EXECUTION_SERVICE_TABLE_READ_POLICY_ID}`)
-            ),
-        ]);
-        const fn = functionOf(synth, stack, "executionService");
-        expect(fn.raw.DependsOn).toEqual(expect.arrayContaining([managed[0][0]]));
-        // The role names the policy, so the role (and the default policy that names the role) is
-        // updated only once the policy exists.
-        const roleResource = synth.ofType("AWS::IAM::Role").find((r) => r.logicalId === role)!;
-        expect(JSON.stringify(roleResource.properties.ManagedPolicyArns)).toContain(managed[0][0]);
-    });
-
     test("each function is told the routes it serves", () => {
-        expect(
-            functionOf(synth, stack, "executionService").properties.Environment.Variables[
-                EXECUTION_SERVICE_ROUTES_ENV
-            ]
-        ).toBe(EXECUTION_SERVICE_ROUTE_SET_SERVICE);
-        const permanentDelete = functionOf(synth, stack, "executionPermanentDelete");
-        expect(permanentDelete.properties.Environment.Variables[EXECUTION_SERVICE_ROUTES_ENV]).toBe(
-            EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE
-        );
-        expect(permanentDelete.properties.Handler).toBe(
-            "handlers.workflows.executionService.lambda_handler"
-        );
+        const routeSets: [string, string][] = [
+            ["executionService", EXECUTION_SERVICE_ROUTE_SET_SERVICE],
+            ["executionDetails", EXECUTION_SERVICE_ROUTE_SET_DETAILS],
+            ["executionLogs", EXECUTION_SERVICE_ROUTE_SET_LOGS],
+            ["executionPermanentDelete", EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE],
+        ];
+        for (const [construct, routeSet] of routeSets) {
+            const fn = functionOf(synth, stack, construct);
+            expect([
+                construct,
+                fn.properties.Environment.Variables[EXECUTION_SERVICE_ROUTES_ENV],
+            ]).toEqual([construct, routeSet]);
+            expect(fn.properties.Handler).toBe(
+                "handlers.workflows.executionService.lambda_handler"
+            );
+        }
     });
 
-    test("permanent delete reaches the permanent-delete function and every other execution route the service", () => {
+    test("each execution route reaches the function whose role holds its calls", () => {
         const paths = synth.ofType("AWS::ApiGateway::RestApi")[0].properties.Body.paths;
         const target = (path: string, method: string) => {
             const uri = JSON.stringify(
                 paths[path]?.[method]?.["x-amazon-apigateway-integration"]?.uri
             );
-            return /ApiBuilder2executionPermanentDelete[0-9A-F]{8}Arn/.test(uri)
-                ? "executionPermanentDelete"
-                : /ApiBuilder2executionService[0-9A-F]{8}Arn/.test(uri)
-                ? "executionService"
-                : uri;
+            const match =
+                /ApiBuilder2(execution(?:Service|Details|Logs|PermanentDelete))[0-9A-F]{8}Arn/.exec(
+                    uri
+                );
+            return match ? match[1] : uri;
         };
-        const serviceRoutes: [string, string][] = [
-            ["/database/{databaseId}/assets/{assetId}/workflows/executions", "get"],
-            ["/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}", "get"],
-            ["/workflows/executions", "get"],
-            ["/workflows/executions/{executionId}", "delete"],
-            ["/workflows/executions/{executionId}/details", "get"],
-            ["/workflows/executions/{executionId}/details/metadata", "get"],
-            ["/workflows/executions/{executionId}/details/files", "get"],
-            ["/workflows/executions/{executionId}/details/results", "get"],
-            ["/workflows/executions/{executionId}/logs", "get"],
-            ["/workflows/executions/{executionId}/rerun", "post"],
-        ];
-        for (const [path, method] of serviceRoutes) {
-            expect([path, method, target(path, method)]).toEqual([
-                path,
-                method,
+        const routes: [string, string, string][] = [
+            [
+                "/database/{databaseId}/assets/{assetId}/workflows/executions",
+                "get",
                 "executionService",
-            ]);
+            ],
+            [
+                "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
+                "get",
+                "executionService",
+            ],
+            ["/workflows/executions", "get", "executionService"],
+            ["/workflows/executions/{executionId}", "delete", "executionService"],
+            ["/workflows/executions/{executionId}/rerun", "post", "executionService"],
+            ["/workflows/executions/{executionId}/details", "get", "executionDetails"],
+            ["/workflows/executions/{executionId}/details/metadata", "get", "executionDetails"],
+            ["/workflows/executions/{executionId}/details/files", "get", "executionDetails"],
+            ["/workflows/executions/{executionId}/details/results", "get", "executionDetails"],
+            ["/workflows/executions/{executionId}/logs", "get", "executionLogs"],
+            ["/workflows/executions/{executionId}/permanent", "delete", "executionPermanentDelete"],
+        ];
+        for (const [path, method, construct] of routes) {
+            expect([path, method, target(path, method)]).toEqual([path, method, construct]);
         }
-        expect(target("/workflows/executions/{executionId}/permanent", "delete")).toBe(
-            "executionPermanentDelete"
-        );
-        // API Gateway may invoke the new function.
-        expect(
-            synth
-                .ofType("AWS::Lambda::Permission")
-                .filter((p) =>
-                    /ApiBuilder2executionPermanentDelete[0-9A-F]{8}Arn/.test(
-                        JSON.stringify(p.properties.FunctionName)
+        // API Gateway may invoke each function.
+        for (const construct of ["executionDetails", "executionLogs", "executionPermanentDelete"]) {
+            expect(
+                synth
+                    .ofType("AWS::Lambda::Permission")
+                    .filter((p) =>
+                        new RegExp(`ApiBuilder2${construct}[0-9A-F]{8}Arn`).test(
+                            JSON.stringify(p.properties.FunctionName)
+                        )
                     )
-                )
-        ).toHaveLength(1);
+            ).toHaveLength(1);
+        }
     });
 });

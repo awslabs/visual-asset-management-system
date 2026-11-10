@@ -65,14 +65,18 @@ from models.executions import (
 
 logger = safeLogger(service="ExecutionService")
 
-# This module is deployed as two functions with different roles: the execution service, which serves
-# every route but permanent delete, and the permanent-delete function, which serves only that route and
-# is the only one granted to delete execution rows. EXECUTION_SERVICE_ROUTES names the set a function
-# serves; a route outside it answers 404 before any read. Unset serves every route (unit tests, local
-# runs); any other value serves none.
+# This module is deployed as four functions, each on a role holding only the calls its routes make:
+# the execution service (the asset and global lists, abort, abort by group and re-run), the details
+# function (the details view and its paged metadata, files and results), the logs function (the logs
+# view) and the permanent-delete function, the only one granted to delete execution rows.
+# EXECUTION_SERVICE_ROUTES names the set a function serves; a route outside it answers 404 before any
+# read. Unset serves every route (unit tests, local runs); any other value serves none.
 EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES"
 ROUTE_SET_SERVICE = "service"
+ROUTE_SET_DETAILS = "details"
+ROUTE_SET_LOGS = "logs"
 ROUTE_SET_PERMANENT_DELETE = "permanentDelete"
+ROUTE_SETS = (ROUTE_SET_SERVICE, ROUTE_SET_DETAILS, ROUTE_SET_LOGS, ROUTE_SET_PERMANENT_DELETE)
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
@@ -6555,20 +6559,30 @@ def handle_permanent_delete_request(event):
     return permanent_delete_execution(event, execution_id)
 
 
+def _route_set_of(event):
+    """The route set the request's route belongs to (see EXECUTION_SERVICE_ROUTES_ENV)."""
+    http = (event.get("requestContext") or {}).get("http") or {}
+    method, path = http.get("method"), http.get("path", "")
+    if method == "DELETE" and API_WORKFLOW_EXECUTION_PERMANENT.matches(path):
+        return ROUTE_SET_PERMANENT_DELETE
+    if method == "GET" and any(route.matches(path) for route in (
+            API_WORKFLOW_EXECUTION_DETAILS, API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+            API_WORKFLOW_EXECUTION_DETAILS_FILES, API_WORKFLOW_EXECUTION_DETAILS_RESULTS)):
+        return ROUTE_SET_DETAILS
+    if method == "GET" and API_WORKFLOW_EXECUTION_LOGS.matches(path):
+        return ROUTE_SET_LOGS
+    return ROUTE_SET_SERVICE
+
+
 def _route_served_here(event):
     """Whether this function's EXECUTION_SERVICE_ROUTES set includes the request's route."""
     route_set = os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "")
     if not route_set:
         return True
-    http = (event.get("requestContext") or {}).get("http") or {}
-    is_permanent_delete = (http.get("method") == "DELETE"
-                           and API_WORKFLOW_EXECUTION_PERMANENT.matches(http.get("path", "")))
-    if route_set == ROUTE_SET_SERVICE:
-        return not is_permanent_delete
-    if route_set == ROUTE_SET_PERMANENT_DELETE:
-        return is_permanent_delete
-    logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
-    return False
+    if route_set not in ROUTE_SETS:
+        logger.error(f"Unknown {EXECUTION_SERVICE_ROUTES_ENV} value {route_set!r}; serving no route")
+        return False
+    return _route_set_of(event) == route_set
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:

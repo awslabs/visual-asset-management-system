@@ -381,11 +381,12 @@ export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
     );
 }
 
-// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
-// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
-// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
-// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
-// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+// CloudWatch log-group name patterns the executionLogs Lambda (the execution logs view) may read
+// registered sub-process logs from when app.pipelines.executionLogReadPrefixes is absent. Each entry is
+// used verbatim as an IAM log-group resource name (a trailing `*` is a prefix match; none is an exact
+// group). IAM matching is case-sensitive, so both state-machine casings the pipeline constructs use are
+// listed. The shared workflow log group and the config-name pattern are granted by the builder
+// regardless of this list.
 export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
     "/aws/vendedlogs/VAMSStateMachine-*",
     "/aws/vendedlogs/VAMSstateMachine-*",
@@ -1346,7 +1347,8 @@ export function getConfig(app: cdk.App): Config {
         config.env.account
     );
 
-    // Log-group name patterns the executionService Lambda may read registered sub-process logs from.
+    // Log-group name patterns the executionLogs Lambda (the execution logs view) may read registered
+    // sub-process logs from.
     // Used verbatim as IAM resource names, so the list is an allow-list and `*`, `/` and anything
     // outside `/aws/` are rejected.
     if (config.app.pipelines.executionLogReadPrefixes == undefined) {
@@ -4243,7 +4245,7 @@ const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 
 /**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
- * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
+ * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionLogs
  * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
  */
 export function validateExecutionLogReadPrefixes(prefixes: string[]): void {

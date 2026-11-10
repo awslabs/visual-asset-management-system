@@ -4,7 +4,7 @@
  */
 
 /**
- * The concurrency lock table reaches exactly the four handlers that take or release its rows, with
+ * The concurrency lock table reaches exactly the five handlers that take or release its rows, with
  * exactly the DynamoDB actions the lock code issues, in every shipped config template.
  *
  * The table lives in the storage nested stack while the handlers live in the API stack, so a statement's
@@ -24,11 +24,13 @@ const LOCK_TABLE = /WorkflowExecutionLocksStorageTable/;
 const EXPECTED: Record<string, string[]> = {
     // Takes the locks (conditional PutItem) and rolls them back on a conflict or a failed launch.
     executeWorkflowServiceRole: ["dynamodb:DeleteItem", "dynamodb:PutItem"],
-    // Release only (the end-state step, the error handler, and abort / reconcile on read): list the
-    // execution's rows through the holder index and delete them.
+    // Release only (the end-state step, the error handler, abort and the reconcile on a list read, and
+    // the reconcile on a details read): list the execution's rows through the holder index and delete
+    // them.
     processWorkflowExecutionOutputServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
     handleExecutionErrorServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
     executionServiceServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
+    executionDetailsServiceRole: ["dynamodb:DeleteItem", "dynamodb:Query"],
 };
 const HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
@@ -90,7 +92,7 @@ describe.each(ALL_TEMPLATES)(
             ).toHaveLength(1);
         });
 
-        test("exactly the four lock handlers hold a grant on the table, with exactly the lock actions", () => {
+        test("exactly the five lock handlers hold a grant on the table, with exactly the lock actions", () => {
             const grants = lockGrants(synth);
             const byPrefix: Record<string, string[]> = {};
             for (const [roleId, actions] of grants) {
@@ -119,7 +121,7 @@ describe.each(ALL_TEMPLATES)(
                     }
                 }
             }
-            expect(rolesQueryingTheIndex.size).toBe(3);
+            expect(rolesQueryingTheIndex.size).toBe(4);
         });
 
         test("PutItem and DeleteItem reach the lock table itself, never an index", () => {

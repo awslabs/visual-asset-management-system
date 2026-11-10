@@ -85,10 +85,11 @@ backend/
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
 │   │   │                                           #   workflowService (CRUD), executeWorkflow
 │   │   │                                           #   (asset-less multi-file execute), executionService
-│   │   │                                           #   (list/abort/details/logs/rerun/permanent; two
-│   │   │                                           #   functions: EXECUTION_SERVICE_ROUTES=service
-│   │   │                                           #   serves all but permanent delete, =permanentDelete
-│   │   │                                           #   only that route, on the one role that deletes rows),
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent; four
+│   │   │                                           #   functions, EXECUTION_SERVICE_ROUTES: service =
+│   │   │                                           #   lists/abort/rerun, details = details + its pages,
+│   │   │                                           #   logs = logs, permanentDelete = that route on the
+│   │   │                                           #   one role that deletes rows; other routes 404),
 │   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
 │   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,

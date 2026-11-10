@@ -36,7 +36,11 @@ jest.setTimeout(900_000);
 
 /** 90% of the IAM limit. */
 const INLINE_POLICY_BUDGET = 9216;
-/** 90% of IAM's per-managed-policy limit, for the customer managed policies these roles carry. */
+/**
+ * 90% of IAM's per-managed-policy limit, for a managed policy still on one of these roles. VAMS creates
+ * none (noCustomerManagedPolicies.test.ts); the one left is CDK's overflow policy on the asset service
+ * role, named there in KNOWN.
+ */
 const MANAGED_POLICY_BUDGET = 5530;
 
 interface Cell {
