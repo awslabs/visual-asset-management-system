@@ -41,7 +41,11 @@ Ensure the CLI is available and authenticated **for the current user/session**.
       (recommended). Ask the user to provide a scoped **user** API key.
     - **Interactive login** (Cognito username/password) as a fallback.
     - **Optional bootstrap**: on request, walk the user through creating a
-      profile and a new user API key, then registering it.
+      profile and a new user API key, then registering it. A profile signed in
+      with a temporary session key (an API key whose name starts with the
+      reserved prefix `temporary-session-`, minted by a VAMS component for one
+      session) cannot create or update API keys (`403`), and no key name may
+      start with that prefix (`400`); ask the user for a key instead.
 4. Never echo, log, or persist API keys or tokens — treat them as secrets. Your
    effective permissions are exactly the authenticated user's VAMS permissions.
 
@@ -103,6 +107,8 @@ query state. Do **not** run commands in any mutating category:
 -   **Delete** / **archive** / **unarchive**
 -   **Edit / modify / update** (assets, metadata, tags, roles, configuration)
 -   **Execute** (workflows, pipelines, jobs)
+-   **Start / stop / deactivate / kill / submit** (compute of any add-on, such as
+    desktops, instances and jobs)
 -   **Upload** or otherwise transfer data into VAMS
 
 When you discover commands via `--help`, classify each by intent using the verbs
@@ -446,6 +452,9 @@ errors, so plan around them rather than discovering them by failure.
     pair _(database ID, asset ID)_. Carry both together through every step.
 -   Search results are the fastest way to obtain both IDs at once; prefer search
     over listing every database when the user names an asset.
+-   Some resources are created under a caller-generated ID and receive their
+    service ID asynchronously. Never fabricate the service ID — read the created
+    resource back to learn it, and pass the ID each command's `--help` asks for.
 
 **Creation order**
 
@@ -457,6 +466,11 @@ errors, so plan around them rather than discovering them by failure.
    captures the files present at that moment.
 5. Metadata, tags, and asset links attach to entities that already exist; create
    the entities first.
+6. A resource created asynchronously is not ready when the create command
+   returns: poll its `get` until it reports ready before acting on it.
+   Connection URLs and passwords a command prints are credentials: request them
+   only when the user asks, treat them as secrets, and never repeat the value.
+   Creating or starting compute is billed (see _Cost and confirmation_).
 
 **Deletion / archive order**
 

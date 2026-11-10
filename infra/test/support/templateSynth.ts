@@ -41,6 +41,7 @@
 
 import * as cdk from "aws-cdk-lib";
 import * as cxapi from "aws-cdk-lib/cx-api";
+import { AwsSolutionsChecks } from "cdk-nag";
 import * as fs from "fs";
 import * as path from "path";
 import * as Config from "../../config/config";
@@ -99,7 +100,11 @@ export class SynthResult {
         readonly region: string,
         readonly templates: Record<string, any>,
         readonly resources: Resource[],
-        readonly warnings: SynthWarning[] = []
+        readonly warnings: SynthWarning[] = [],
+        /** Error-level annotations; CDK Nag findings arrive here when the synth ran with `nag`. */
+        readonly errors: SynthWarning[] = [],
+        /** Info-level annotations; CDK Nag logs each suppressed finding here under `nag`. */
+        readonly infos: SynthWarning[] = []
     ) {}
 
     ofType(type: string): Resource[] {
@@ -325,13 +330,13 @@ const cache = new Map<string, SynthResult>();
  *
  * Two caches sit in front of the synth.
  *
- * - In memory, per test file, keyed by (template, mutation key, WAF ARNs). Pass `mutateKey` when using
- *   `mutate`, or the cache will return a result built with different settings — a silent way to assert
- *   against the wrong template.
+ * - In memory, per test file, keyed by (template, mutation key, Nag flag, WAF ARNs). Pass `mutateKey`
+ *   when using `mutate`, or the cache will return a result built with different settings — a silent
+ *   way to assert against the wrong template.
  * - On disk, per `jest` run, shared by every worker (`synthCache.ts`), keyed by a hash of the template
- *   name, the WAF ARNs and the FULL configuration after `mutate` has run. Two files asking for the same
- *   configuration share one synth whatever their `mutateKey`; a file whose `mutate` changes anything
- *   gets its own.
+ *   name, the Nag flag, the WAF ARNs and the FULL configuration after `mutate` has run. Two files asking
+ *   for the same configuration share one synth whatever their `mutateKey`; a file whose `mutate`
+ *   changes anything gets its own.
  *
  * The disk key covers the configuration only. A synth also reads the source tree (fixed for the run)
  * and process-local state. A file that mocks any `fs` function never shares (`fsIsMocked()`, detected
@@ -339,6 +344,9 @@ const cache = new Map<string, SynthResult>();
  * genuinely fresh synth in this process, MUST pass `sharedCache: false`. A configuration that is not
  * plain JSON data (a function, a class instance) is never shared. Run the suite with
  * `VAMS_SYNTH_CACHE=verify` after adding such state to prove every hit equals a fresh synth.
+ *
+ * `nag` applies the AwsSolutions rule pack to the app before synthesis, the way `bin/infra.ts` does
+ * when `enableCdkNag` is on; the findings land in `SynthResult.errors` rather than failing the synth.
  *
  * `wafArns` hands the core stack a regional and a CloudFront web ACL ARN, the way `bin/infra.ts` does
  * when the WAF stacks exist. Without it both are empty, as in a deployment with no WAF stacks.
@@ -348,6 +356,7 @@ export function synthTemplate(
     opts: {
         mutate?: (c: any) => void;
         mutateKey?: string;
+        nag?: boolean;
         wafArns?: { regional: string; cloudfront: string };
         /** false: never read or write the per-run disk cache for this call. */
         sharedCache?: boolean;
@@ -360,8 +369,8 @@ export function synthTemplate(
     } = {}
 ): SynthResult {
     const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}${
-        opts.wafArns ? `::waf:${opts.wafArns.regional}:${opts.wafArns.cloudfront}` : ""
-    }`;
+        opts.nag ? "::nag" : ""
+    }${opts.wafArns ? `::waf:${opts.wafArns.regional}:${opts.wafArns.cloudfront}` : ""}`;
     if (opts.mutate && !opts.mutateKey) {
         throw new Error(
             "synthTemplate(): pass mutateKey alongside mutate, or two different mutations share a " +
@@ -377,14 +386,20 @@ export function synthTemplate(
     const canonical =
         opts.sharedCache === false || fsIsMocked()
             ? undefined
-            : canonicalJson({ name, wafArns: opts.wafArns ?? null, config, context: opts.context });
+            : canonicalJson({
+                  name,
+                  wafArns: opts.wafArns ?? null,
+                  config,
+                  context: opts.context,
+                  ...(opts.nag ? { nag: true } : {}),
+              });
 
     // The first synth uses the configuration the key was computed from; a verify-mode re-synth builds
     // its own, so a synth that writes into its config cannot leak into the comparison.
     const produce = (): SynthResult => {
         const c = config ?? buildTemplateConfig(name, opts.mutate);
         config = undefined;
-        return synthFresh(name, c, opts.wafArns, opts.context);
+        return synthFresh(name, c, opts.wafArns, opts.context, opts.nag);
     };
 
     let result: SynthResult;
@@ -395,7 +410,13 @@ export function synthTemplate(
         result = sharedSynth(
             synthCacheKey(canonical),
             produce,
-            (r) => JSON.stringify({ templates: r.templates, warnings: r.warnings }),
+            (r) =>
+                JSON.stringify({
+                    templates: r.templates,
+                    warnings: r.warnings,
+                    errors: r.errors,
+                    infos: r.infos,
+                }),
             (text) => {
                 const payload = JSON.parse(text);
                 const t = TARGET[name];
@@ -404,8 +425,10 @@ export function synthTemplate(
                     t.partition,
                     t.region,
                     payload.templates,
-                    resourcesOf(payload.templates),
-                    payload.warnings
+                    templateResources(payload.templates),
+                    payload.warnings,
+                    payload.errors,
+                    payload.infos
                 );
             },
             comparableSynth
@@ -455,7 +478,7 @@ export function fsIsMocked(): boolean {
 }
 
 /** Every resource of every template, in template order then logical-id order. */
-function resourcesOf(templates: Record<string, any>): Resource[] {
+function templateResources(templates: Record<string, any>): Resource[] {
     const resources: Resource[] = [];
     for (const [stackKey, tpl] of Object.entries<any>(templates)) {
         for (const [logicalId, raw] of Object.entries<any>(tpl.Resources ?? {})) {
@@ -476,7 +499,8 @@ function synthFresh(
     name: TemplateName,
     config: Config.Config,
     wafArns: { regional: string; cloudfront: string } | undefined,
-    context?: Record<string, unknown>
+    context?: Record<string, unknown>,
+    nag?: boolean
 ): SynthResult {
     stubDockerBundling();
     stubSplatToolboxSourceSync();
@@ -532,6 +556,12 @@ function synthFresh(
         stack.addStackDependency(apiOriginVerifyStack);
     }
 
+    if (nag) {
+        cdk.Aspects.of(app).add(
+            new AwsSolutionsChecks({ verbose: true, logIgnores: true, reports: false })
+        );
+    }
+
     const asm = app.synth();
     const templates: Record<string, any> = {};
     for (const file of fs.readdirSync(asm.directory)) {
@@ -539,7 +569,7 @@ function synthFresh(
         const stackKey = file.replace(/\.template\.json$/, "");
         templates[stackKey] = JSON.parse(fs.readFileSync(path.join(asm.directory, file), "utf8"));
     }
-    const resources = resourcesOf(templates);
+    const resources = templateResources(templates);
 
     if (resources.length === 0) {
         // A zero-resource result would satisfy every negative assertion in the suite.
@@ -555,11 +585,15 @@ function synthFresh(
     // own — so collecting from `asm.stacks` covers the whole app. These are what `cdk synth` and
     // `cdk deploy` print as "[Warning at /path]", and they appear in no *.template.json, so a check
     // that greps the templates cannot see them.
-    const warnings: SynthWarning[] = asm.stacks.flatMap((artifact) =>
-        artifact.messages
-            .filter((m) => m.level === cxapi.SynthesisMessageLevel.WARNING)
-            .map((m) => ({ path: m.id, message: String(m.entry.data) }))
-    );
+    const messagesAt = (level: cxapi.SynthesisMessageLevel): SynthWarning[] =>
+        asm.stacks.flatMap((artifact) =>
+            artifact.messages
+                .filter((m) => m.level === level)
+                .map((m) => ({ path: m.id, message: String(m.entry.data) }))
+        );
+    const warnings = messagesAt(cxapi.SynthesisMessageLevel.WARNING);
+    const errors = messagesAt(cxapi.SynthesisMessageLevel.ERROR);
+    const infos = messagesAt(cxapi.SynthesisMessageLevel.INFO);
 
     // Remove the on-disk assembly now that templates, resources and warnings are all in memory.
     // A T1 assembly is ~166 MB and one jest run performs a dozen synths, so waiting for the
@@ -575,7 +609,16 @@ function synthFresh(
         /* leaves a temp directory behind; never a test failure */
     }
 
-    return new SynthResult(name, t.partition, t.region, templates, resources, warnings);
+    return new SynthResult(
+        name,
+        t.partition,
+        t.region,
+        templates,
+        resources,
+        warnings,
+        errors,
+        infos
+    );
 }
 
 /** All three shipped templates. Used by anything asserting a partition-wide property. */
@@ -626,6 +669,133 @@ export function expectAbsent(
         );
     }
     expect(found).toEqual([]);
+}
+
+/** The `Handler` string of a Lambda resource. */
+export const handlerOf = (r: Resource): string => SynthResult.flatten(r.properties.Handler);
+
+/** The one Lambda whose handler is `handler`; fails when there are none or several. */
+export function lambdaByHandler(s: SynthResult, handler: string): Resource {
+    const found = s.where("AWS::Lambda::Function", (r) => handlerOf(r) === handler);
+    expect(found).toHaveLength(1);
+    return found[0];
+}
+
+/** Actions of one IAM statement, normalised to an array of strings. */
+export const actionsOf = (statement: any): string[] =>
+    ([] as unknown[]).concat(statement.Action ?? []).map(String);
+
+/** Resources of one IAM statement, each flattened to a string. */
+export const resourcesOf = (statement: any): string[] =>
+    ([] as unknown[]).concat(statement.Resource ?? []).map((r) => SynthResult.flatten(r));
+
+/** Logical id of the role a Lambda (`Role`) or CodeBuild project (`ServiceRole`) runs as. */
+export function roleIdOf(resource: Resource, property = "Role"): string {
+    const role = resource.properties[property];
+    expect(role?.["Fn::GetAtt"]?.[1]).toBe("Arn");
+    return role["Fn::GetAtt"][0];
+}
+
+/** Inline and managed policies in `stack` attached to one role. */
+export function policiesAttachedTo(s: SynthResult, roleId: string, stack: string): Resource[] {
+    const attached = (r: Resource) =>
+        r.stack === stack &&
+        ((r.properties.Roles ?? []) as any[]).some((ref) => ref?.Ref === roleId);
+    return [
+        ...s.where("AWS::IAM::Policy", attached),
+        ...s.where("AWS::IAM::ManagedPolicy", attached),
+    ];
+}
+
+/**
+ * Every IAM statement attached to the function's execution role, from all three places CDK can put
+ * one: inline `AWS::IAM::Policy`, the `AWS::IAM::ManagedPolicy` overflow, and role-level policies.
+ */
+export function statementsOf(s: SynthResult, fn: Resource): any[] {
+    const roleId = roleIdOf(fn);
+    const out: any[] = policiesAttachedTo(s, roleId, fn.stack).flatMap(
+        (p) => (p.properties.PolicyDocument?.Statement ?? []) as any[]
+    );
+    const role = s
+        .ofType("AWS::IAM::Role")
+        .find((r) => r.stack === fn.stack && r.logicalId === roleId);
+    for (const p of role?.properties.Policies ?? []) {
+        out.push(...(p.PolicyDocument?.Statement ?? []));
+    }
+    return out;
+}
+
+/** Method+path pairs the synthesized REST API exposes, excluding the CORS preflight MOCKs. */
+export function restApiPairs(s: SynthResult): Set<string> {
+    const apis = s.ofType("AWS::ApiGateway::RestApi");
+    expect(apis).toHaveLength(1);
+    const body = apis[0].properties.Body;
+    expect(body?.paths).toBeDefined();
+    const pairs = new Set<string>();
+    for (const [routePath, ops] of Object.entries<any>(body.paths)) {
+        for (const method of Object.keys(ops)) {
+            // OPTIONS is the unauthenticated CORS MOCK the spec builder adds per path; it is not a
+            // backend route and apiRoutes.py correctly does not declare it.
+            if (method.toLowerCase() === "options") continue;
+            pairs.add(`${method.toUpperCase()} ${routePath}`);
+        }
+    }
+    return pairs;
+}
+
+/**
+ * The resource a property value in `fromStack` refers to.
+ *
+ * A resource in another nested stack is referenced through a parameter of this template, which the
+ * parent stack feeds from a nested-stack output — itself fed from the next level down for a resource
+ * under AddonBuilder. Two levels of nesting push the parameter's NAME past CloudFormation's limit and
+ * CDK truncates it to a hash that no longer carries the construct id, so a name match cannot identify
+ * the resource. Following parameter -> parent Parameters -> nested Output value until a `Fn::GetAtt
+ * [<resource>, Arn]` or a `Ref` to a resource of the current template appears resolves the value to
+ * the resource itself.
+ */
+export function resolveReference(
+    s: SynthResult,
+    fromStack: string,
+    reference: unknown
+): Resource | undefined {
+    let stack = fromStack;
+    let value: any = reference;
+    const resource = (logicalId: string) =>
+        s.resources.find((r) => r.stack === stack && r.logicalId === logicalId);
+    for (let hops = 0; hops < 8; hops++) {
+        if (value?.["Fn::GetAtt"]) {
+            const [logicalId, attribute] = value["Fn::GetAtt"] as [string, string];
+            if (attribute === "Arn") return resource(logicalId);
+            // `Outputs.<name>` of a nested stack; output names embed the construct path, so exactly one
+            // template carries each.
+            const outputName = attribute.replace(/^Outputs\./, "");
+            const nested = Object.entries<any>(s.templates).find(
+                ([, tpl]) => tpl.Outputs?.[outputName]
+            );
+            if (!nested) return undefined;
+            [stack, value] = [nested[0], nested[1].Outputs[outputName].Value];
+            continue;
+        }
+        if (value?.Ref) {
+            const ref: string = value.Ref;
+            if (s.templates[stack]?.Resources?.[ref]) return resource(ref);
+            // A parameter of this template: the parent's AWS::CloudFormation::Stack resource sets it.
+            const parent = s
+                .ofType("AWS::CloudFormation::Stack")
+                .find((r) => r.properties.Parameters?.[ref] !== undefined);
+            if (!parent) return undefined;
+            [stack, value] = [parent.stack, parent.properties.Parameters[ref]];
+            continue;
+        }
+        return undefined;
+    }
+    return undefined;
+}
+
+/** The Lambda an `AWS::Lambda::Permission` names, resolved across nested stacks. */
+export function invokedFunction(s: SynthResult, permission: Resource): Resource | undefined {
+    return resolveReference(s, permission.stack, permission.properties.FunctionName);
 }
 
 /** The restricted partitions, as a convenience for `test.each`. */

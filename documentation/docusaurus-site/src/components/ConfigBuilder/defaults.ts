@@ -23,6 +23,7 @@
 
 import type { ConfigShape, Profile } from "./types";
 import { cloneConfig } from "./pathUtils";
+import { ADDON_DEFAULTS } from "./addon";
 
 /** Cosmos model trees are identical across both profiles — share one literal. */
 const COSMOS_DEFAULT = {
@@ -425,6 +426,7 @@ const COMMERCIAL: ConfigShape = {
                 clientId: "",
                 clientSecret: "",
             },
+            ...ADDON_DEFAULTS,
         },
         authProvider: {
             presignedUrlTimeoutSeconds: 86400,

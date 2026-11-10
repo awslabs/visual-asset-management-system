@@ -92,6 +92,9 @@ DELIBERATE_DEPARTURES = {
     ("handlers/workflows/sfn/deadlineCloudJobCallback.py", "events_retry_config"),
     # An advisory trigger-save lookup, bounded so an unreachable table cannot hold the save open.
     ("handlers/workflows/workflowTriggerService.py", "lookup_retry_config"),
+    # The architecture lookups of an AMI recipe save fail open, bounded so an unreachable endpoint
+    # cannot hold the save past the API's deadline.
+    ("handlers/addon/edh/common/edhImageBuilder.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.
     ("handlers/workflows/sfn/workflowTriggerDispatch.py", "invoke_config"),
     # The same executeWorkflowV2 Invoke, issued per reindex launch message.
@@ -102,6 +105,15 @@ DELIBERATE_DEPARTURES = {
     # The natural-language search's query embedding: bounded connect/read timeouts over three attempts,
     # so a hung Amazon Bedrock call fails inside the API Gateway integration timeout and answers 503.
     ("handlers/osVectorSearch/vectorSearchService.py", "BEDROCK_QUERY_CONFIG"),
+    # One apiKeyService Invoke per EDH session key: a retried create would mint a second key that no
+    # session row names, so the single attempt is bounded by its own timeouts instead.
+    ("handlers/addon/edh/common/edhSessionBootstrap.py", "cross_call_config"),
+    # The EDH client's fire-and-forget Invoke of the root key sync runs inside the caller's EDH budget;
+    # one short attempt, since a lost request is made again on the next rejected credential.
+    ("handlers/addon/edh/common/edhRootKeySyncTrigger.py", "_LAMBDA_CLIENT_CONFIG"),
+    # The root key sync's clients: bounded timeouts and two attempts, so every run logs its outcome inside
+    # the function's timeout instead of hanging on one unreachable endpoint until Lambda stops it.
+    ("handlers/addon/edh/edhRootKeySync.py", "sync_client_config"),
     # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
     # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
     ("handlers/config/configService.py", "geo_lookup_config"),

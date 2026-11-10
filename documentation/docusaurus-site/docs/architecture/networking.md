@@ -304,6 +304,8 @@ These non-pipeline endpoints are created based on the deployment configuration:
 When a VPC is imported with `useGlobalVpc.addVpcEndpoints: false`, VAMS creates none of the endpoints above. A deployment whose in-VPC Lambda functions call Amazon Bedrock — the SYSTEM GenAI metadata pipeline under `useForAllLambdas`, or natural-language search with in-VPC search functions — needs an operator-managed `bedrock-runtime` interface endpoint, and its route to Amazon DynamoDB (the gateway endpoint or an equivalent) must reach the DynamoDB vector search hostnames that `SearchVectors` uses.
 :::
 
+An enabled add-on can add interface endpoints, and security groups for its own functions, to the VPC; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)).
+
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 
 :::info[ALB Amazon S3 interface endpoint]

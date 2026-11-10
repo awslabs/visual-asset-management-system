@@ -14,6 +14,7 @@ import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
 import { searchLambdasInVpc } from "../../helper/searchPlacement";
+import { addonInterfaceEndpoints } from "../addon/addonVpcEndpoints";
 
 export interface VPCBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -888,6 +889,20 @@ export class VPCBuilderNestedStack extends NestedStack {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            //Add-on Required Endpoints (an endpoint a block above already created is not repeated)
+            for (const endpoint of addonInterfaceEndpoints(props.config)) {
+                if (this.node.tryFindChild(endpoint.id)) {
+                    continue;
+                }
+                new ec2.InterfaceVpcEndpoint(this, endpoint.id, {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: endpoint.service,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

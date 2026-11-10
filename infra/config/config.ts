@@ -14,6 +14,13 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import type { ConfigAddonLane } from "./addon/addonConfig";
+import {
+    addonVpcRequiringFeatures,
+    applyAddonConfigDefaults,
+    validateAddonConfig,
+    warnAddonCodeBuildPartition,
+} from "./addon/addonConfig";
 import {
     CONFIG_FILE_CONTEXT_KEY,
     DEFAULT_CONFIG_FILE_NAME,
@@ -58,28 +65,6 @@ export const STACK_ORIGIN_VERIFY_DESCRIPTION =
     VAMS_VERSION +
     ") API origin verification secret for the Visual Asset Management Systems";
 
-/**
- * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
- * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
- * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
- * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
- *
- * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
- * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
- * this catches the unambiguous case and the licence still has to be read.
- *
- * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
- * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
- * neither the European Union nor the United Kingdom, so it is named as the exception.
- */
-export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
-    const name = region ?? "";
-    const switzerland = ["eu-central-2"];
-    const southKorea = ["ap-northeast-2"];
-    if (switzerland.includes(name)) return false;
-    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
-}
-
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
@@ -92,8 +77,8 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // Fixed REST API deployment stage name. This is intentionally NOT a per-deployment config
 // option: the value is also baked into the VamsCLI endpoint constants and the web app's
 // /api/* fronting, so it must stay constant across the stack and clients. The web
-// distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
-// base URLs remain /api/*.
+// distribution (CloudFront originPath / ALB redirect) maps the web URL's /api/* paths onto
+// this stage; clients call every other route on the stage-inclusive invoke URL.
 export const API_GATEWAY_STAGE_NAME = "api";
 
 // The routes registered under the stage's own `/api/` prefix: the anonymous bootstrap routes. The
@@ -154,34 +139,10 @@ export const SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS = 20000000;
 
 // Inference settings of the system GenAI metadata pipeline's analysis requests. The defaults are the
 // values those requests have always carried; a null temperature leaves the parameter out of the
-// request, for models that reject it.
+// request, for models that reject it. The bounds getConfig() holds maxTokens to are in the checks
+// section (SYSTEM_GENAI_MIN_MAX_TOKENS, SYSTEM_GENAI_MAX_MAX_TOKENS).
 export const SYSTEM_GENAI_DEFAULT_MAX_TOKENS = 2048;
-export const SYSTEM_GENAI_MIN_MAX_TOKENS = 256;
-export const SYSTEM_GENAI_MAX_MAX_TOKENS = 8192;
 export const SYSTEM_GENAI_DEFAULT_TEMPERATURE = 0.2;
-
-/** One embedding model family the backend's embedding adapter serves. */
-export interface EmbeddingModelFamily {
-    family: string;
-    displayName: string;
-    exampleModelId: string;
-    modelIdPattern: string;
-    dimensions: number[];
-    maxInputChars: number;
-}
-
-/**
- * The embedding model families, read from the table the adapter itself reads at import
- * (`backend/backend/common/vectorsearch/embeddingModels.json`), so a model or width it cannot embed
- * is refused at synthesis rather than at the first embedding call. In table order.
- */
-export const EMBEDDING_MODEL_FAMILIES: readonly EmbeddingModelFamily[] =
-    embeddingModelTable.families;
-
-/** The family of an embedding model id: the first whose pattern matches, as the adapter decides it. */
-export function embeddingModelFamily(modelId: string): EmbeddingModelFamily | undefined {
-    return EMBEDDING_MODEL_FAMILIES.find((entry) => new RegExp(entry.modelIdPattern).test(modelId));
-}
 
 /**
  * The geographic prefixes of Amazon Bedrock's system-defined cross-Region inference profiles, and the
@@ -208,6 +169,197 @@ export const BEDROCK_INFERENCE_PROFILE_PREFIX = new RegExp(
     `^(${Object.keys(BEDROCK_INFERENCE_PROFILE_PREFIXES).join("|")})\\.`
 );
 
+// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
+// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
+// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
+// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
+// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
+    "/aws/vendedlogs/VAMSStateMachine-*",
+    "/aws/vendedlogs/VAMSstateMachine-*",
+    "/aws/vendedlogs/Pipelines/*",
+    "/aws/batch/job",
+    "/aws/sagemaker/TrainingJobs",
+];
+
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold (assertVideoSopBomCapsFitVolume). The per-run
+// count and duration caps are deployment configuration (app.pipelines.useGenAiVideoSopBom.limits).
+// The key-frame ceiling bounds the MAX_KEY_FRAMES template tag. The pipeline's constructs read all
+// four: the volume size into the job definition, the caps into its Lambda environments.
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+
+// The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
+// and they must nest so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   longest run useEks.jobTimeout allows  <=  state machine timeout  <  bundle taskTimeout
+//
+// `useEks.jobTimeout` is the Kubernetes job's activeDeadlineSeconds and sets the poll ceiling; the run
+// around the job adds ConstructPipeline, RunJob, the poll's margin and CheckJob calls, and PipelineEnd
+// (rapidPipelineEksWorstCaseRunSeconds). The bundle's taskTimeout, declared in
+// backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json, is how long the parent workflow's
+// pipeline task waits for the callback. That task starts before the state machine does (vamsExecute
+// and openPipeline run first, five minutes each at most), so the taskTimeout is 30 minutes longer than
+// the state machine timeout. An execution-level States.Timeout bypasses every Catch, so PipelineEnd
+// does not run and the parent is released by its own taskTimeout.
+//
+// The construct reads the state machine timeout, the ConstructPipeline timeout, the poll interval and
+// the poll ceiling from here. RunJob's timeout (the consolidated handler's 15 minutes plus one minute)
+// and PipelineEnd's are set in the construct, so the values below are the budget getConfig() counts
+// for them, and infra/test/pipelines/eksTimeoutHeadroom.test.ts fails if the emitted states exceed it.
+// The maximum and the CheckJob allowance are read only by getConfig(); the bundle taskTimeout is what
+// the tests compare pipeline.json and the state machine timeout with.
+export const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+export const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 23400;
+export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+
+// The auxiliary-bucket prefix where the ModelOps constructPipeline copies a non-current input
+// version for the handler (STAGED_INPUT_PREFIX in backendPipelines/multi/modelOps/lambda). Its
+// pipelineEnd deletes the copy; the bucket's lifecycle rule for the prefix expires what a crashed
+// run leaves.
+export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
+// The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
+// pod's own failure rather than a poll timeout.
+export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+// CheckJob's own run time per poll attempt, as an average over the run. A CHECK_JOB invocation builds
+// a Kubernetes client and reads the job's status, plus a pod listing once the job has run two hours: a
+// handful of in-Region API requests. Three seconds is the largest whole second at which the maximum
+// job timeout fits the state machine timeout, and budgets 4341 s for the 1447 calls a run at the
+// maximum makes. The CheckJob task timeout is not used as the bound: a call that reaches it ends the
+// run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
+export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
+// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
+// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
+// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
+// minutes longer than the state machine timeout, because the parent's task starts before the state
+// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
+// execution, and vamsExecute's five-minute timeout bounds both.
+//
+// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
+// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
+// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
+// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
+// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
+// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
+// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
+// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
+// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
+// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
+// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
+// whether or not the stop succeeds.
+//
+// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
+// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
+// timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
+export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
+export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
+
+// ============================================================================================
+// Constants used only to check configuration
+//
+// Nothing here reaches synthesized infrastructure. Each one exists so getConfig() can reject a bad
+// configuration at synth, where the error names the offending field, rather than letting the
+// deployment fail partway through and roll back.
+// ============================================================================================
+
+// VAMS' own ceiling on the REST API integration timeout, matching the practical upper bound for a
+// synchronous request/response API. Compared against, never assigned.
+export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
+
+// The shapes Amazon Bedrock gives a guardrail id (the 12-character `guardrailId` of CreateGuardrail, not
+// an ARN or a name) and a guardrail version (`DRAFT` or a published version number). The IAM grant
+// composes the guardrail ARN from the id, so any other shape is a malformed resource.
+export const SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN = /^[a-z0-9]{12}$/;
+export const SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN = /^(DRAFT|[1-9][0-9]{0,7})$/;
+
+// The strengths Amazon Bedrock Guardrails accepts for a content filter's input side, and the three
+// sensitive-information treatments the created guardrail offers. Each is the closed set the CDK
+// guardrail definition renders from, so a value outside it is rejected at synth.
+export const SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS = ["LOW", "MEDIUM", "HIGH"] as const;
+export const SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"] as const;
+
+/**
+ * Region names accepted for an external bucket's bucketRegion: a partition prefix
+ * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
+ * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
+ * without pinning the list of Regions, which grows.
+ */
+export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
+// Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
+// (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
+// the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
+// has been confirmed.
+export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+
+// A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
+// Gateway does not accept uppercase letters in a custom domain name.
+export const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// An ACM certificate ARN, with the partition and Region captured.
+export const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+
+// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
+// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
+export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+
+// Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
+// than letting CreateUser fail mid-deploy and roll the core stack back.
+export const COGNITO_USERNAME_MAX_LENGTH = 128;
+
+// DynamoDB vector index bounds: the widest vector the service stores, and the range AWS Lambda accepts
+// for an SQS event-source MaximumConcurrency. Compared against, never assigned.
+export const VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS = 4096;
+export const VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY = 2;
+export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
+// The partitions vector search may be enabled in: DynamoDB vector search and the Amazon Bedrock embedding
+// models are offered in both. Any other partition is refused in getConfig() until its support is verified.
+export const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
+
+// The range getConfig() accepts for the system GenAI metadata pipeline's maxTokens. Compared
+// against, never assigned.
+export const SYSTEM_GENAI_MIN_MAX_TOKENS = 256;
+export const SYSTEM_GENAI_MAX_MAX_TOKENS = 8192;
+
+/**
+ * The embedding model families, read from the table the adapter itself reads at import
+ * (`backend/backend/common/vectorsearch/embeddingModels.json`), so a model or width it cannot embed
+ * is refused at synthesis rather than at the first embedding call. In table order.
+ */
+export const EMBEDDING_MODEL_FAMILIES: readonly EmbeddingModelFamily[] =
+    embeddingModelTable.families;
+
 /**
  * A foundation-model id (`provider.model[:version[:variant]]`), with or without a profile prefix: lower
  * case letters, digits, `.`, `-` and `_`. Anything else, an ARN included, is refused, because the id is
@@ -216,6 +368,7 @@ export const BEDROCK_INFERENCE_PROFILE_PREFIX = new RegExp(
 export const BEDROCK_MODEL_ID_PATTERN = /^[a-z0-9-]+\.[a-z0-9][a-z0-9._-]*(:[a-z0-9]+)*$/;
 export const BEDROCK_MODEL_ID_MAX_LENGTH = 128;
 
+// How validateSystemGenAiModelId's messages name a partition and its accounts.
 const PARTITION_LABELS: Record<string, string> = {
     aws: "commercial partition",
     "aws-us-gov": "AWS GovCloud (US) partition",
@@ -226,6 +379,135 @@ const PARTITION_ACCOUNT_LABELS: Record<string, string> = {
     "aws-us-gov": "GovCloud",
     "aws-eusc": "European Sovereign Cloud",
 };
+
+// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
+// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
+// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
+// getConfig() warns about it at synthesis. Compared against, never assigned.
+export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
+
+// The taskTimeout the Video SOP/BOM Extraction pipeline's vamsSchema declares
+// (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json). The parent workflow waits this long
+// for the pipeline's task-token callback.
+export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
+
+// The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
+// tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
+// large tier.
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+};
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size.
+export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+// GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
+// on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
+// smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this
+// table is not rejected — it is reported as unverified, because a new accelerated family should not
+// be blocked by a table that has not caught up with it.
+export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
+    "g4dn.xlarge": 1,
+    "g4dn.2xlarge": 1,
+    "g4dn.4xlarge": 1,
+    "g4dn.8xlarge": 1,
+    "g4dn.16xlarge": 1,
+    "g4dn.12xlarge": 4,
+    "g4dn.metal": 8,
+    "g5.xlarge": 1,
+    "g5.2xlarge": 1,
+    "g5.4xlarge": 1,
+    "g5.8xlarge": 1,
+    "g5.16xlarge": 1,
+    "g5.12xlarge": 4,
+    "g5.24xlarge": 4,
+    "g5.48xlarge": 8,
+    "g6.xlarge": 1,
+    "g6.2xlarge": 1,
+    "g6.4xlarge": 1,
+    "g6.8xlarge": 1,
+    "g6.16xlarge": 1,
+    "g6.12xlarge": 4,
+    "g6.24xlarge": 4,
+    "g6.48xlarge": 8,
+    "g6e.xlarge": 1,
+    "g6e.2xlarge": 1,
+    "g6e.4xlarge": 1,
+    "g6e.8xlarge": 1,
+    "g6e.16xlarge": 1,
+    "g6e.12xlarge": 4,
+    "g6e.24xlarge": 4,
+    "g6e.48xlarge": 8,
+    "p3.2xlarge": 1,
+    "p3.8xlarge": 4,
+    "p3.16xlarge": 8,
+    "p3dn.24xlarge": 8,
+    "p4d.24xlarge": 8,
+    "p4de.24xlarge": 8,
+    "p5.48xlarge": 8,
+    "p5e.48xlarge": 8,
+    "p5en.48xlarge": 8,
+};
+
+/** Strings a CDK context value or environment variable may use to mean true. */
+const TRUTHY_STRINGS = ["true", "1", "yes", "on"];
+/** Strings that mean false. Listed rather than inferred, so anything else can be reported. */
+const FALSY_STRINGS = ["false", "0", "no", "off", ""];
+
+// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
+// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
+// account) is rejected separately.
+const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
+
+// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
+// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
+// `/aws/`, so the grant can never widen to the whole vended-log namespace.
+const EXECUTION_LOG_READ_PREFIX_PATTERN =
+    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
+// CloudWatch Logs caps a log-group name at 512 characters.
+const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+// An IAM managed policy ARN, with the partition captured: an account id (customer managed) or `aws`
+// (AWS managed), an optional path, and the policy name.
+export const IAM_MANAGED_POLICY_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
+
+/** One embedding model family the backend's embedding adapter serves. */
+export interface EmbeddingModelFamily {
+    family: string;
+    displayName: string;
+    exampleModelId: string;
+    modelIdPattern: string;
+    dimensions: number[];
+    maxInputChars: number;
+}
+
+// The guardrail settings' value types, from the closed sets in the checks section.
+export type SystemGenAiGuardrailPromptAttackStrength =
+    (typeof SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS)[number];
+export type SystemGenAiGuardrailPiiFilter = (typeof SYSTEM_GENAI_GUARDRAIL_PII_FILTERS)[number];
+
+/** The family of an embedding model id: the first whose pattern matches, as the adapter decides it. */
+export function embeddingModelFamily(modelId: string): EmbeddingModelFamily | undefined {
+    return EMBEDDING_MODEL_FAMILIES.find((entry) => new RegExp(entry.modelIdPattern).test(modelId));
+}
 
 /**
  * Refuses a Bedrock model id of the system GenAI metadata pipeline that VAMS cannot call or grant: an
@@ -304,49 +586,27 @@ export function deriveVectorIndexName(
     return `vec-${slugModelId(embeddingModelId)}-${embeddingDimensions}`;
 }
 
-// The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
-// and they must nest so that the parent workflow is still waiting when the run reports its outcome:
-//
-//   longest run useEks.jobTimeout allows  <=  state machine timeout  <  bundle taskTimeout
-//
-// `useEks.jobTimeout` is the Kubernetes job's activeDeadlineSeconds and sets the poll ceiling; the run
-// around the job adds ConstructPipeline, RunJob, the poll's margin and CheckJob calls, and PipelineEnd
-// (rapidPipelineEksWorstCaseRunSeconds). The bundle's taskTimeout, declared in
-// backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json, is how long the parent workflow's
-// pipeline task waits for the callback. That task starts before the state machine does (vamsExecute
-// and openPipeline run first, five minutes each at most), so the taskTimeout is 30 minutes longer than
-// the state machine timeout. An execution-level States.Timeout bypasses every Catch, so PipelineEnd
-// does not run and the parent is released by its own taskTimeout.
-//
-// The construct reads the state machine timeout, the ConstructPipeline timeout, the poll interval and
-// the poll ceiling from here. RunJob's timeout (the consolidated handler's 15 minutes plus one minute)
-// and PipelineEnd's are set in the construct, so the values below are the budget getConfig() counts
-// for them, and infra/test/pipelines/eksTimeoutHeadroom.test.ts fails if the emitted states exceed it.
-// The maximum and the CheckJob allowance are read only by getConfig(); the bundle taskTimeout is what
-// the tests compare pipeline.json and the state machine timeout with.
-export const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
-export const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
-export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 23400;
-export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
-export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
-export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
-export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
-
-// The auxiliary-bucket prefix where the ModelOps constructPipeline copies a non-current input
-// version for the handler (STAGED_INPUT_PREFIX in backendPipelines/multi/modelOps/lambda). Its
-// pipelineEnd deletes the copy; the bucket's lifecycle rule for the prefix expires what a crashed
-// run leaves.
-export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
-// The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
-// pod's own failure rather than a poll timeout.
-export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
-// CheckJob's own run time per poll attempt, as an average over the run. A CHECK_JOB invocation builds
-// a Kubernetes client and reads the job's status, plus a pod listing once the job has run two hours: a
-// handful of in-Region API requests. Three seconds is the largest whole second at which the maximum
-// job timeout fits the state machine timeout, and budgets 4341 s for the 1447 calls a run at the
-// maximum makes. The CheckJob task timeout is not used as the bound: a call that reaches it ends the
-// run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
-export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+/**
+ * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
+ * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
+ * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
+ * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
+ *
+ * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
+ * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
+ * this catches the unambiguous case and the licence still has to be read.
+ *
+ * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
+ * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
+ * neither the European Union nor the United Kingdom, so it is named as the exception.
+ */
+export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
+    const name = region ?? "";
+    const switzerland = ["eu-central-2"];
+    const southKorea = ["ap-northeast-2"];
+    if (switzerland.includes(name)) return false;
+    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
+}
 
 /** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
 export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
@@ -371,128 +631,6 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
         RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
     );
 }
-
-// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
-// same way, so that the parent workflow is still waiting when the run reports its outcome:
-//
-//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
-//
-// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
-// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
-// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
-// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
-// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
-// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
-// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
-// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
-// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
-// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
-// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
-// minutes longer than the state machine timeout, because the parent's task starts before the state
-// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
-// execution, and vamsExecute's five-minute timeout bounds both.
-//
-// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
-// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
-// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
-// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
-// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
-// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
-// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
-// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
-// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
-// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
-// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
-// whether or not the stop succeeds.
-//
-// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
-// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
-// timeout with.
-export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
-export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
-export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
-export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
-export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
-export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
-export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
-export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
-
-// ============================================================================================
-// Constants used only to check configuration
-//
-// Nothing here reaches synthesized infrastructure. Each one exists so getConfig() can reject a bad
-// configuration at synth, where the error names the offending field, rather than letting the
-// deployment fail partway through and roll back.
-// ============================================================================================
-
-// VAMS' own ceiling on the REST API integration timeout, matching the practical upper bound for a
-// synchronous request/response API. Compared against, never assigned.
-export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
-
-// The shapes Amazon Bedrock gives a guardrail id (the 12-character `guardrailId` of CreateGuardrail, not
-// an ARN or a name) and a guardrail version (`DRAFT` or a published version number). The IAM grant
-// composes the guardrail ARN from the id, so any other shape is a malformed resource.
-export const SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN = /^[a-z0-9]{12}$/;
-export const SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN = /^(DRAFT|[1-9][0-9]{0,7})$/;
-
-// The strengths Amazon Bedrock Guardrails accepts for a content filter's input side, and the three
-// sensitive-information treatments the created guardrail offers. Each is the closed set the CDK
-// guardrail definition renders from, so a value outside it is rejected at synth.
-export const SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS = ["LOW", "MEDIUM", "HIGH"] as const;
-export type SystemGenAiGuardrailPromptAttackStrength =
-    (typeof SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS)[number];
-export const SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"] as const;
-export type SystemGenAiGuardrailPiiFilter = (typeof SYSTEM_GENAI_GUARDRAIL_PII_FILTERS)[number];
-
-// Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
-// (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
-// the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
-// has been confirmed.
-export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
-
-// A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
-// Gateway does not accept uppercase letters in a custom domain name.
-export const API_CUSTOM_DOMAIN_HOST_PATTERN =
-    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-
-// An ACM certificate ARN, with the partition and Region captured.
-export const ACM_CERTIFICATE_ARN_PATTERN =
-    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
-
-// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
-// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
-export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
-
-// Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
-// than letting CreateUser fail mid-deploy and roll the core stack back.
-export const COGNITO_USERNAME_MAX_LENGTH = 128;
-
-// DynamoDB vector index bounds: the widest vector the service stores, and the range AWS Lambda accepts
-// for an SQS event-source MaximumConcurrency. Compared against, never assigned.
-export const VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS = 4096;
-export const VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY = 2;
-export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
-// The partitions vector search may be enabled in: DynamoDB vector search and the Amazon Bedrock embedding
-// models are offered in both. Any other partition is refused in getConfig() until its support is verified.
-export const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
-// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
-// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
-// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
-// getConfig() warns about it at synthesis. Compared against, never assigned.
-export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
-
-// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
-// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
-// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
-// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
-// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
-// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
-// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
-export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
-export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
-export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
-export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
-export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
 
 /**
  * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
@@ -528,33 +666,6 @@ export function assertVideoSopBomCapsFitVolume(
     }
 }
 
-// The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
-// tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
-// large tier.
-export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
-    standard: { vcpu: 4, memoryGiB: 16 },
-    large: { vcpu: 16, memoryGiB: 120 },
-} as const;
-export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
-
-/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
-const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
-    const values: number[] = [];
-    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
-    return values;
-};
-
-// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size.
-export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
-    [0.25, [512, 1024, 2048]],
-    [0.5, mibRange(1, 4, 1)],
-    [1, mibRange(2, 8, 1)],
-    [2, mibRange(4, 16, 1)],
-    [4, mibRange(8, 30, 1)],
-    [8, mibRange(16, 60, 4)],
-    [16, mibRange(32, 120, 8)],
-]);
-
 /** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
 export function fargateMemoryMiB(memoryGiB: number): number {
     return Math.round(memoryGiB * 1024);
@@ -569,72 +680,6 @@ export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
         (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
     );
 }
-
-// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
-// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
-// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
-// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
-// workflow log group and the config-name pattern are granted by the builder regardless of this list.
-export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
-    "/aws/vendedlogs/VAMSStateMachine-*",
-    "/aws/vendedlogs/VAMSstateMachine-*",
-    "/aws/vendedlogs/Pipelines/*",
-    "/aws/batch/job",
-    "/aws/sagemaker/TrainingJobs",
-];
-
-// GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
-// on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
-// smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this
-// table is not rejected — it is reported as unverified, because a new accelerated family should not
-// be blocked by a table that has not caught up with it.
-export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
-    "g4dn.xlarge": 1,
-    "g4dn.2xlarge": 1,
-    "g4dn.4xlarge": 1,
-    "g4dn.8xlarge": 1,
-    "g4dn.16xlarge": 1,
-    "g4dn.12xlarge": 4,
-    "g4dn.metal": 8,
-    "g5.xlarge": 1,
-    "g5.2xlarge": 1,
-    "g5.4xlarge": 1,
-    "g5.8xlarge": 1,
-    "g5.16xlarge": 1,
-    "g5.12xlarge": 4,
-    "g5.24xlarge": 4,
-    "g5.48xlarge": 8,
-    "g6.xlarge": 1,
-    "g6.2xlarge": 1,
-    "g6.4xlarge": 1,
-    "g6.8xlarge": 1,
-    "g6.16xlarge": 1,
-    "g6.12xlarge": 4,
-    "g6.24xlarge": 4,
-    "g6.48xlarge": 8,
-    "g6e.xlarge": 1,
-    "g6e.2xlarge": 1,
-    "g6e.4xlarge": 1,
-    "g6e.8xlarge": 1,
-    "g6e.16xlarge": 1,
-    "g6e.12xlarge": 4,
-    "g6e.24xlarge": 4,
-    "g6e.48xlarge": 8,
-    "p3.2xlarge": 1,
-    "p3.8xlarge": 4,
-    "p3.16xlarge": 8,
-    "p3dn.24xlarge": 8,
-    "p4d.24xlarge": 8,
-    "p4de.24xlarge": 8,
-    "p5.48xlarge": 8,
-    "p5e.48xlarge": 8,
-    "p5en.48xlarge": 8,
-};
-
-/** Strings a CDK context value or environment variable may use to mean true. */
-const TRUTHY_STRINGS = ["true", "1", "yes", "on"];
-/** Strings that mean false. Listed rather than inferred, so anything else can be reported. */
-const FALSY_STRINGS = ["false", "0", "no", "off", ""];
 
 /**
  * Interprets one boolean-ish configuration value.
@@ -923,11 +968,6 @@ function validateWafPolicy(policy: any) {
         );
     }
 }
-
-// An IAM managed policy ARN, with the partition captured: an account id (customer managed) or `aws`
-// (AWS managed), an optional path, and the policy name.
-export const IAM_MANAGED_POLICY_ARN_PATTERN =
-    /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
 
 /**
  * Requires `environments.aws.PermissionBoundaryArn` in infra/cdk.json, when set, to be an IAM managed
@@ -1870,6 +1910,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
+    applyAddonConfigDefaults(config);
+
     if (config.app.authProvider.useCognito.useOidc == undefined) {
         config.app.authProvider.useCognito.useOidc = false;
     }
@@ -2449,6 +2491,7 @@ export function getConfig(app: cdk.App): Config {
                     "repository instead."
             );
         }
+        warnAddonCodeBuildPartition(config, resolvedPartition);
     }
 
     //The AWS European Sovereign Cloud offers FIPS endpoints for only four services (AWS KMS,
@@ -2572,6 +2615,7 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiCadStepAgent");
+    vpcRequiringFeatures.push(...addonVpcRequiringFeatures(config));
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -4633,6 +4677,8 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    validateAddonConfig(config);
+
     return config;
 }
 
@@ -4765,11 +4811,6 @@ export function validatePresignedUrlRestrictions(
         }
     }
 }
-
-// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
-// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
-// account) is rejected separately.
-const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
 
 /**
  * Validates app.pipelines.externalPipelineBridges. Each entry names a 12-digit account, a role ARN
@@ -4910,14 +4951,6 @@ export function validateExternalPipelineBridges(
         });
     });
 }
-
-// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
-// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
-// `/aws/`, so the grant can never widen to the whole vended-log namespace.
-const EXECUTION_LOG_READ_PREFIX_PATTERN =
-    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
-// CloudWatch Logs caps a log-group name at 512 characters.
-const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 
 /**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
@@ -5144,14 +5177,6 @@ export interface ConfigPublicAssetS3Buckets {
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
 }
-
-/**
- * Region names accepted for an external bucket's bucketRegion: a partition prefix
- * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
- * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
- * without pinning the list of Regions, which grows.
- */
-export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
 /**
  * External asset bucket entries whose bucketRegion is set and differs from the
@@ -5632,7 +5657,7 @@ export interface ConfigPublic {
                 clientId: string;
                 clientSecret: string;
             };
-        };
+        } & ConfigAddonLane;
         authProvider: {
             presignedUrlTimeoutSeconds: number;
             authorizerOptions: {

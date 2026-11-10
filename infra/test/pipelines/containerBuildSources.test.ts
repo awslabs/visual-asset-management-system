@@ -39,7 +39,15 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const PIPELINES_DIR = path.join(__dirname, "..", "..", "..", "backendPipelines");
+const REPO_ROOT = path.join(__dirname, "..", "..", "..");
+const PIPELINES_DIR = path.join(REPO_ROOT, "backendPipelines");
+/** Add-on build sources shipped with the repository, scanned with the pipeline buildspecs. */
+const ADDONS_DIR = path.join(REPO_ROOT, "backendAddons");
+
+/** Every buildspec.yml under both build-source roots. */
+function allBuildspecs(): string[] {
+    return [...buildspecs(PIPELINES_DIR), ...buildspecs(ADDONS_DIR)];
+}
 const COORD_DOCKERFILE = path.join(
     PIPELINES_DIR,
     "conversion",
@@ -48,7 +56,7 @@ const COORD_DOCKERFILE = path.join(
     "Dockerfile"
 );
 
-/** Every buildspec.yml under backendPipelines/, recursively. */
+/** Every buildspec.yml under `dir`, recursively. */
 function buildspecs(dir: string): string[] {
     const out: string[] = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -69,7 +77,7 @@ const COMPOSED_HOST = /--password-stdin\s+\S*dkr\.ecr\.\S*amazonaws\.(com|com\.c
 const DERIVED_HOST = "--password-stdin ${ECR_REPO_URI%%/*}";
 
 describe("container buildspecs are partition-portable", () => {
-    const files = buildspecs(PIPELINES_DIR);
+    const files = allBuildspecs();
 
     it("finds the buildspecs to scan", () => {
         // Control. An empty list would make both assertions below pass while checking nothing, which is
@@ -101,7 +109,7 @@ describe("container buildspecs are partition-portable", () => {
             for (const line of fs.readFileSync(file, "utf-8").split(/\r?\n/)) {
                 if (/^\s*#/.test(line)) continue;
                 if (COMPOSED_HOST.test(line)) {
-                    offenders.push(path.relative(PIPELINES_DIR, file));
+                    offenders.push(path.relative(REPO_ROOT, file));
                 }
             }
         }
@@ -115,7 +123,7 @@ describe("container buildspecs are partition-portable", () => {
         for (const file of files) {
             const text = fs.readFileSync(file, "utf-8");
             if (!/get-login-password/.test(text)) continue;
-            if (!text.includes(DERIVED_HOST)) missing.push(path.relative(PIPELINES_DIR, file));
+            if (!text.includes(DERIVED_HOST)) missing.push(path.relative(REPO_ROOT, file));
         }
         expect(missing).toEqual([]);
     });
@@ -129,8 +137,7 @@ describe("container buildspecs are partition-portable", () => {
             const text = fs.readFileSync(file, "utf-8");
             if (!text.includes(DERIVED_HOST)) continue;
             const uses = (text.match(/ECR_REPO_URI/g) || []).length;
-            if (uses < 2)
-                unsupplied.push(`${path.relative(PIPELINES_DIR, file)} (${uses} reference)`);
+            if (uses < 2) unsupplied.push(`${path.relative(REPO_ROOT, file)} (${uses} reference)`);
         }
         expect(unsupplied).toEqual([]);
     });
@@ -140,7 +147,7 @@ describe("container buildspecs are partition-portable", () => {
 const DEFAULTED_IMAGE_TAG = /^\s*IMAGE_TAG:\s*\S/m;
 
 describe("container buildspecs push an immutable tag", () => {
-    const files = buildspecs(PIPELINES_DIR);
+    const files = allBuildspecs();
 
     it("finds the buildspecs to scan", () => {
         // Control, as above: an empty list passes every assertion in this block.
@@ -168,7 +175,7 @@ describe("container buildspecs push an immutable tag", () => {
         // definition names a content hash, and every execution fails with CannotPullContainerError.
         const offenders = files
             .filter((file) => DEFAULTED_IMAGE_TAG.test(fs.readFileSync(file, "utf-8")))
-            .map((file) => path.relative(PIPELINES_DIR, file));
+            .map((file) => path.relative(REPO_ROOT, file));
         expect(offenders).toEqual([]);
     });
 
@@ -178,7 +185,7 @@ describe("container buildspecs push an immutable tag", () => {
         // the reference format rather than about the missing variable.
         const missing = files
             .filter((file) => !fs.readFileSync(file, "utf-8").includes('test -n "${IMAGE_TAG}"'))
-            .map((file) => path.relative(PIPELINES_DIR, file));
+            .map((file) => path.relative(REPO_ROOT, file));
         expect(missing).toEqual([]);
     });
 
@@ -190,7 +197,7 @@ describe("container buildspecs push an immutable tag", () => {
         const offenders: string[] = [];
         for (const file of files) {
             const text = fs.readFileSync(file, "utf-8");
-            const relative = path.relative(PIPELINES_DIR, file);
+            const relative = path.relative(REPO_ROOT, file);
             if (!text.includes("docker push ${IMAGE_URI}"))
                 offenders.push(`${relative}: no immutable push`);
             if (!text.includes("docker push ${CACHE_URI}"))

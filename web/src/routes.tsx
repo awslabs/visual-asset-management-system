@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { checkWebRoutesAllowed } from "./services/webRoutesCheck";
+import { checkWebRoutesAllowed, WebRouteCheck } from "./services/webRoutesCheck";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
@@ -20,6 +20,7 @@ import { appLayoutLabels } from "./common/helpers/labels";
 import { addonRouteTable } from "./addons/addonRoutes";
 import { customRouteTable } from "./custom/customRoutes";
 import { isChunkLoadError, lazyWithRetry, reloadPage } from "./utils/chunkLoadRecovery";
+import { useFeaturesEnabled } from "./context/RuntimeConfigContext";
 
 const Databases = lazyWithRetry(() => import("./pages/Databases"));
 const SearchPage = lazyWithRetry(() => import("./pages/search/SearchPage"));
@@ -53,6 +54,12 @@ export interface RouteOption {
     path: string;
     Page: React.FC;
     active: string;
+    /**
+     * Feature switches that must all be enabled for the route to exist on this deployment, as an
+     * add-on page carries them (addons/addonRoutes.tsx). Without them the route is not mounted, not
+     * sent to the web-route check and not offered in the constraint editor.
+     */
+    featuresEnabledRestriction?: string[];
 }
 
 const coreRouteTable: RouteOption[] = [
@@ -230,6 +237,20 @@ export const routeTable: RouteOption[] = [
     ...customRouteTable,
 ];
 
+/**
+ * The routes of `routeTable` that exist on a deployment with these feature switches (the
+ * `featuresEnabled` list of /api/secure-config): every route whose `featuresEnabledRestriction` the
+ * deployment meets. The switches only decide which pages exist; whether a user may open one is still
+ * the web-route check's answer.
+ */
+export function routeTableFor(enabledFeatures: string[], routes: RouteOption[] = routeTable) {
+    return routes.filter((route) =>
+        (route.featuresEnabledRestriction ?? []).every((feature) =>
+            enabledFeatures.includes(feature)
+        )
+    );
+}
+
 interface AppRoutesProps {
     navigationOpen: boolean;
     setNavigationOpen: (open: boolean) => void;
@@ -375,6 +396,13 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     const location = useLocation();
     const navigate = useNavigate();
 
+    // The pages this deployment has. The switches can arrive after the first render (the secure
+    // config lands after sign-in), so the table, and the check below, follow them.
+    const featuresEnabled = useFeaturesEnabled();
+    const featuresKey = featuresEnabled.join(",");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const activeRouteTable = useMemo(() => routeTableFor(featuresEnabled), [featuresKey]);
+
     const [loading, setLoading] = useState(true);
     const [checkAttempt, setCheckAttempt] = useState(0);
     const [routesCheckFailed, setRoutesCheckFailed] = useState(false);
@@ -406,16 +434,22 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
     }, [location, navigate]);
 
-    const allAllowedRoutes: string[] = [];
     const [allowedRoutes, setAllowedRoutes] = useState<string[]>(
         routeTable.map((route) => {
             return route.path;
         })
     );
+    // The paths the last completed check covered. A page mounted after it (its switch arrived
+    // later) shows the spinner until the check that includes it answers.
+    const [checkedPaths, setCheckedPaths] = useState<string[] | null>(null);
 
     useEffect(() => {
-        const allRoutes = [];
-        for (const route of routeTable) {
+        // Only the answer to the latest check is used. The check runs again when the switches
+        // change or on Retry, and an earlier check can answer after a later one: its route set is
+        // out of date, so its success or failure is dropped.
+        let superseded = false;
+        const allRoutes: WebRouteCheck[] = [];
+        for (const route of activeRouteTable) {
             if (route.path) {
                 allRoutes.push({
                     method: "GET",
@@ -427,18 +461,22 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
-                    for (const allowedRoute of allowed) {
-                        allAllowedRoutes.push(allowedRoute.route__path);
-                    }
+                    if (superseded) return;
+                    const allAllowedRoutes = allowed.map(
+                        (allowedRoute) => allowedRoute.route__path
+                    );
 
                     //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
                     if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
                     if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
 
                     setAllowedRoutes(allAllowedRoutes);
+                    setCheckedPaths(allRoutes.map((route) => route.route__path));
+                    setRoutesCheckFailed(false);
                     setLoading(false);
                 })
                 .catch((error) => {
+                    if (superseded) return;
                     console.error(error);
                     // Access is unknown: "/" renders, and every other route shows the
                     // could-not-check panel with Retry.
@@ -446,7 +484,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                     setLoading(false);
                 });
         } catch (e) {}
-    }, [checkAttempt]);
+        return () => {
+            superseded = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [checkAttempt, featuresKey]);
 
     const buildRoute = (routeOptions: RouteOption, i = 0) => {
         const { path, active, Page } = routeOptions;
@@ -461,7 +503,10 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                         footerSelector="#appFooter"
                         disableContentPaddings={navigationOpen}
                         content={
-                            loading ? (
+                            loading ||
+                            (!routesCheckFailed &&
+                                checkedPaths !== null &&
+                                !checkedPaths.includes(path)) ? (
                                 <CenterSpinner />
                             ) : routesCheckFailed && path !== "/" ? (
                                 <RoutesCheckFailedPanel
@@ -504,7 +549,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         );
     };
 
-    // Every route is mounted, so a URL the role does not allow reaches the no-access panel and an
-    // unknown URL the not-found panel.
-    return <Routes>{routeTable.map(buildRoute)}</Routes>;
+    // Every route this deployment has is mounted, so a URL the role does not allow reaches the
+    // no-access panel, and an unknown URL, or the page of an add-on the deployment does not run, the
+    // not-found panel.
+    return <Routes>{activeRouteTable.map(buildRoute)}</Routes>;
 };

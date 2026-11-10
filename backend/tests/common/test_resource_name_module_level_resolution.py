@@ -225,6 +225,7 @@ RESOLVER_NAMES = frozenset({"get_table_name", "get_bucket_name", "get_log_group_
 RESOLVER_EXEMPT_FUNCTIONS = {
     "customLogging/auditLogging.py": {"_resolve_audit_log_group"},
     "common/dynamodb.py": {"_asset_table_resource"},
+    "handlers/addon/edh/common/edhAmiRecipeStore.py": {"_table"},
 }
 
 

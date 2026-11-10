@@ -23,6 +23,7 @@ import { SearchBuilderNestedStack } from "./nestedStacks/searchAndIndexing/searc
 import { StaticWebBuilderNestedStack } from "./nestedStacks/staticWebApp/staticWebBuilder-nestedStack";
 import * as Config from "../config/config";
 import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
+import { ADDON_FEATURES_ENABLED_ENV } from "../common/addonAppFeatures";
 import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
@@ -328,11 +329,31 @@ export class CoreVAMSStack extends cdk.Stack {
                 isolatedSubnets: this.subnetsIsolated,
                 privateSubnets: this.subnetsPrivate,
                 registry: apiRouteRegistry,
+                // The API key service built in ApiBuilder; an add-on that mints temporary session
+                // keys invokes it.
+                apiKeyServiceFunction: apiBuilderNestedStack.apiKeyServiceFunction,
             });
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            // An add-on stack that invokes the API key service Lambda built in ApiBuilder deploys after
+            // it. RestApi already depends on both, so the order stays ApiBuilder -> AddonBuilder ->
+            // RestApi. With no such add-on enabled, AddonBuilder keeps its two dependencies above.
+            if (addonBuilderNestedStack.usesApiKeyService) {
+                addonBuilderNestedStack.addStackDependency(apiBuilderNestedStack);
+            }
 
             this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
+
+            // The Lambdas that list API routes and permission object types (the constraint editor's
+            // lists and the allowed-route checks) leave out the entries of an add-on this deployment
+            // does not build. The value is a plain string, so it adds no cross-stack reference.
+            const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
+            for (const listingFunction of [
+                ...apiBuilderNestedStack.addonFeatureListingFunctions,
+                ...apiBuilder2NestedStack.addonFeatureListingFunctions,
+            ]) {
+                listingFunction.addEnvironment(ADDON_FEATURES_ENABLED_ENV, addonFeaturesEnabled);
+            }
 
             ///Fork extension point (Nested Stack; resources defined in custom/customResources.ts)
             const customBuilderNestedStack = new CustomBuilderNestedStack(this, "CustomBuilder", {

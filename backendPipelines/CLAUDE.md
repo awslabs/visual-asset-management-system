@@ -593,7 +593,8 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. It excludes `addon/*` for the same reason: the
+    add-on stacks upload their own trees there. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,

@@ -675,6 +675,38 @@ The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-l
 
 The model weights for each enabled model are downloaded from HuggingFace using the configured access token. Accept each model's license on HuggingFace before deployment.
 
+### EDH Workstations Add-on
+
+The EDH Workstations add-on integrates with [EDH](https://github.com/awslabs/engineering-development-hub)
+(Apache-2.0), an external platform the operator deploys and manages separately; VAMS ships no EDH
+code. EDH, not VAMS, installs Amazon DCV, the desktop environment and the NVIDIA GPU driver when a
+desktop first boots. The shipped AMI recipes under `backendAddons/edh/amiRecipes/` fetch their
+build-time components rather than redistributing them: operating system packages and updates
+(`dnf`, `apt` and Windows Update), the AWS CLI v2 from its AWS-published installer, and the Python
+dependencies of the VAMS CLI from PyPI, each under its own license terms.
+
+The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and installs NVIDIA Isaac
+Sim at image build time. No NVIDIA software is redistributed with VAMS; the build fetches the archive
+from NVIDIA's published download URL, which the recipe exposes as a parameter.
+
+| Component            | Version                      | License            | Usage                                                                                           |
+| -------------------- | ---------------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| NVIDIA Isaac Sim     | 6.2.0                        | NVIDIA Proprietary | Simulation application installed into the workstation image (NVIDIA Software License Agreement) |
+| NVIDIA Omniverse Kit | bundled with Isaac Sim 6.2.0 | NVIDIA Proprietary | Application framework Isaac Sim and the VAMS connector extension run on                         |
+
+Operators accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license)
+by building this recipe; the build answers NVIDIA's first-run licence and telemetry prompts
+non-interactively, which is a record of that acceptance, not a substitute for it.
+
+The root key sync's Lambda layer (`backendAddons/edh/rootKeySync/lambdaLayer/`) installs these Python
+packages from PyPI when the layer is built:
+
+| Name         | Version | License                    |
+| :----------- | :------ | :------------------------- |
+| cryptography | 50.0.1  | Apache-2.0 OR BSD-3-Clause |
+| cffi         | 2.0.0   | MIT                        |
+| pycparser    | 2.22    | BSD-3-Clause               |
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - BACKEND PIPELINES (AWS MARKETPLACE)

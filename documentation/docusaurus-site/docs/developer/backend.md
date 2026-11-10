@@ -238,7 +238,7 @@ if not casbin_enforcer.enforce(item, "GET"):
 Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
-You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow` and `metadataSchema`, plus any type a deployment registers as an extension object type (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
+You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow` and `metadataSchema`, plus any type a deployment registers as an extension object type in `common/addonConstants.py` or `custom/customConstants.py` (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
 :::
 
 ### Key Authorization Concepts
@@ -246,7 +246,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
 -   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
--   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
+-   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, MFA status, and how the caller authenticated: `authMethod` (`AUTH_METHOD_API_KEY`, `"apiKey"`, for an API key, otherwise `AUTH_METHOD_JWT`, `"jwt"`) and `apiKeyId` (the key's ID for an API-key caller, otherwise `None`). A handler that issues a credential compares `authMethod` with `AUTH_METHOD_API_KEY` from `handlers.auth`, never a bare string, to refuse a caller that authenticated with an API key
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
 
 ## Pydantic v1 Model Patterns
