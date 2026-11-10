@@ -144,7 +144,7 @@ def test_agents_are_refused_every_human_only_action(argv, action, ledger, monkey
 def test_human_only_needs_a_terminal_or_an_approval_record(ctx, ledger, monkeypatch):
     monkeypatch.setattr(human, "_typed_confirmation_blocker", lambda: None)   # a person at their own terminal
     # no terminal, no approval: refused
-    with pytest.raises(errors.NeedsHuman, match="needs --approval"):
+    with pytest.raises(errors.NeedsHuman, match="needs --human-approval naming a record"):
         human.require(ctx, "unlock", "dev", tty=False)
     # at a terminal: the person types the word
     assert human.require(ctx, "unlock", "dev", tty=True, ask=lambda q: "dev")["how"] == "tty"

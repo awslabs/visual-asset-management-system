@@ -373,7 +373,7 @@ def test_first_deploy_is_refused_for_an_agent_and_needs_a_person(repos, tmp_path
     with pytest.raises(errors.NeedsHuman, match="human-only and an agent cannot run it"):
         pipeline.deploy(ctx, rec["planId"])
     monkeypatch.delenv("VRA_AGENT")
-    with pytest.raises(errors.NeedsHuman, match="needs --approval"):  # no terminal, no approval record
+    with pytest.raises(errors.NeedsHuman, match="needs --human-approval naming a record"):  # no terminal, no approval record
         pipeline.deploy(ctx, rec["planId"])
     assert not any(a[:3] == ["npx", "cdk", "deploy"] for a in state.get("cdk", []))
     from vra import human

@@ -155,9 +155,9 @@ def require(ctx, action: str, env: str | None = None, approval: str | None = Non
         # approval record (approvers, separation of duties, single use) authorizes the action then
         tty = False
         if not approval:
-            raise NeedsHuman(f"{why}; a typed confirmation is not accepted here ({blocker}). Pass --approval naming a "
-                             f"record with subject human:{action} and scope [{action}]", {"humanOnly": action,
-                                                                                         "why": blocker})
+            raise NeedsHuman(f"{why}; a typed confirmation is not accepted here ({blocker}). Pass --human-approval "
+                             f"naming a record with subject human:{action} and scope [{action}]",
+                             {"humanOnly": action, "why": blocker})
     if tty:
         word = env or action
         answer = (ask or _default_ask)(f"{why}. Type '{word}' to confirm: ")
@@ -165,8 +165,8 @@ def require(ctx, action: str, env: str | None = None, approval: str | None = Non
             raise NeedsHuman(f"{action} not confirmed", {"humanOnly": action})
         return {"action": action, "by": getattr(ctx, "initiator", None), "how": "tty"}
     if not approval or not env:
-        raise NeedsHuman(f"{why}; without an interactive terminal it needs --approval naming a record with subject "
-                         f"human:{action} and scope [{action}]" + ("" if env else " (and an env)"),
+        raise NeedsHuman(f"{why}; without an interactive terminal it needs --human-approval naming a record with "
+                         f"subject human:{action} and scope [{action}]" + ("" if env else " (and an env)"),
                          {"humanOnly": action})
     from vra import approvals, util
     rec = approvals.check(ctx, env, f"human:{action}", action, approval, force_required=True)
