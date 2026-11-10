@@ -17,6 +17,9 @@ from ..utils.exceptions import (
 from ..utils.features import is_feature_enabled
 from ..constants import FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH
 
+# Shown under a keyword search 503 (OpenSearch enabled but unreachable for now).
+_KEYWORD_SEARCH_RETRY_HINT = "Retry in a moment; if it keeps failing, contact your administrator."
+
 # Bounds of the POST /search/nlp request model (backend/backend/models/vectorsearch.py:
 # MAX_QUERY_LENGTH, MAX_DATABASE_IDS, MAX_SIZE), applied before the request is sent.
 NLP_MAX_QUERY_LENGTH = 1000
@@ -657,6 +660,16 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         # second, narrower hint follows it.
         output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
+    except SearchUnavailableError as e:
+        # A 503 from the keyword search route: OpenSearch is enabled but could not answer now. The
+        # server's message says so; the request itself was valid.
+        output_error(
+            e,
+            json_output,
+            error_type="Search Unavailable",
+            helpful_message=_KEYWORD_SEARCH_RETRY_HINT
+        )
+        raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
             e,
@@ -817,6 +830,16 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         # second, narrower hint follows it.
         output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
+    except SearchUnavailableError as e:
+        # A 503 from the keyword search route: OpenSearch is enabled but could not answer now. The
+        # server's message says so; the request itself was valid.
+        output_error(
+            e,
+            json_output,
+            error_type="Search Unavailable",
+            helpful_message=_KEYWORD_SEARCH_RETRY_HINT
+        )
+        raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
             e,
@@ -974,6 +997,16 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         # The refusal itself names what to use instead (search nlp where vector search is on), so no
         # second, narrower hint follows it.
         output_error(e, json_output, error_type="Search Disabled")
+        raise click.ClickException(str(e))
+    except SearchUnavailableError as e:
+        # A 503 from the keyword search route: OpenSearch is enabled but could not answer now. The
+        # server's message says so; the request itself was valid.
+        output_error(
+            e,
+            json_output,
+            error_type="Search Unavailable",
+            helpful_message=_KEYWORD_SEARCH_RETRY_HINT
+        )
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
