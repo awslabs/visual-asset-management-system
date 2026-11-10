@@ -103,6 +103,11 @@ describe("viewer sample manifest", () => {
             expect(Number.isInteger(s.expect.minDistinctColours)).toBe(true);
             expect(s.expect.minDistinctColours).toBeGreaterThanOrEqual(2);
         }
+        if (s.expect?.vertexCount !== undefined) {
+            // The count the viewer's info box must report (#1257).
+            expect(Number.isInteger(s.expect.vertexCount)).toBe(true);
+            expect(s.expect.vertexCount).toBeGreaterThan(0);
+        }
         if ("requiresFeature" in s) {
             const required = [].concat(s.requiresFeature);
             required.forEach((f) => expect(typeof f).toBe("string"));
