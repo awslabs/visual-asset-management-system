@@ -382,6 +382,21 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         expect(sendResources).toContain(launchQueueId);
     });
 
+    test("the indexer addresses its queue's DLQ and may send to it: a rule past the continuation cap is parked there", () => {
+        const [, indexer] = functionByHandler(template, "vectorIndexer");
+        const [dlqId] = byPrefix(template, "AWS::SQS::Queue", "VectorIndexingVectorIndexerDLQ")[0];
+        expect(indexer.Properties.Environment.Variables.VECTOR_INDEXER_DLQ_URL).toEqual({
+            Ref: dlqId,
+        });
+        const send = statementsForFunction(template, indexer).filter((s) =>
+            JSON.stringify(s.Action).includes("sqs:SendMessage")
+        );
+        expect(send.length).toBeGreaterThan(0);
+        expect(JSON.stringify(send.map((s) => s.Resource))).toContain(dlqId);
+        // The DLQ is the source queue's redrive target, so a redrive returns a parked rule to the indexer.
+        expect(JSON.stringify(indexerQueue.Properties.RedrivePolicy)).toContain(dlqId);
+    });
+
     test("the reindexer's asynchronous self-invocations have an on-failure destination: its CMK-encrypted DLQ, with no retry", () => {
         const [reindexerId] = functionByHandler(template, "vectorReindexer");
         const [, dlq] = byPrefix(

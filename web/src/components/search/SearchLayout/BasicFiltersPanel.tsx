@@ -13,6 +13,8 @@ import Input from "@cloudscape-design/components/input";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
+import { selectedValues as filterValues } from "../hooks/searchRequestBuilders";
+import { lockedDatabasePlaceholder } from "./lockedDatabase";
 
 /** Sort dropdown options case-insensitively by label so users get a predictable list. */
 const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: T[]): T[] =>
@@ -197,13 +199,12 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         return sortOptionsByLabel(currentOptions);
     })();
 
-    // Get selected options for each filter
-    const selectedDatabases = filters.str_databaseid?.values
-        ? filters.str_databaseid.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
+    // Get selected options for each filter. A database route locks the filter with `value` only, so the
+    // locked control shows that database rather than its "All databases" placeholder.
+    const selectedDatabases = filterValues(filters.str_databaseid).map((val) => ({
+        label: val,
+        value: val,
+    }));
 
     const selectedAssetTypes = filters.str_assettype?.values
         ? filters.str_assettype.values.map((val) => ({
@@ -289,7 +290,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }
                         }}
                         options={databaseOptions}
-                        placeholder={`All ${Synonyms.databases}`}
+                        // Locked: the control names the database it is locked to.
+                        placeholder={lockedDatabasePlaceholder(databaseLocked, selectedDatabases)}
+                        hideTokens={databaseLocked}
                         disabled={databaseLocked}
                         readOnly={loading}
                         filteringType="auto"

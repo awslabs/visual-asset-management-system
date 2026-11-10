@@ -66,9 +66,36 @@ export function applyVectorLambdaSecurity(
 const backendCode = () => lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`));
 
 /**
+ * Recursive-loop setting for the two vector functions that continue their own work.
+ *
+ * The vector reindexer continues a run by invoking itself asynchronously every time fewer than 90 s of its
+ * 15-minute window remain; the vector indexer continues an asset- or file-wide rule by sending a
+ * `vector.indexer.continue` message to the queue it consumes. AWS Lambda's recursive-loop detection counts
+ * both chains (Lambda to Lambda, and Lambda to SQS to the same Lambda) and stops them after about 16 hops,
+ * sending the event to the on-failure destination or the queue's DLQ, so a long reindex run (a large
+ * enumeration or clear, the v2.6-to-v2.7 vector backfill) or a rule over a large item collection would
+ * stop part-way. ALLOW turns the detection off for these two functions only; each handler bounds its chain
+ * itself (`MAX_RUN_INVOCATIONS` in `vectorReindexer.py`, `MAX_CONTINUATION_HOPS` in `vectorIndexer.py`)
+ * and sends what resumes the work to its DLQ when the chain reaches the cap.
+ *
+ * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the AWS
+ * European Sovereign Cloud (`aws-eusc`), as for the bucket-sync function in `indexingFunctions.ts`. The AWS
+ * GovCloud (US) user guide lists it as not available, so `aws-us-gov` and any other partition omit the
+ * property and the function template stays unchanged there.
+ */
+export function vectorSelfContinuationRecursiveLoop(
+    config: Config.Config
+): lambda.RecursiveLoop | undefined {
+    const partition = config.env.partition;
+    return partition === "aws" || partition === "aws-eusc" ? lambda.RecursiveLoop.ALLOW : undefined;
+}
+
+/**
  * The single writer of the vector embeddings table. Consumes the vector indexer queue (embedding-ready
  * events, bucket-sync S3 records, asset stream records, its own continuation messages); the queue wiring
- * lives in the construct, which passes the queue URL as `VECTOR_INDEXER_QUEUE_URL` through `extraEnv`.
+ * lives in the construct, which passes the queue URL as `VECTOR_INDEXER_QUEUE_URL` and the queue's
+ * dead-letter queue (where a continuation past the hop cap is parked) as `VECTOR_INDEXER_DLQ_URL` through
+ * `extraEnv`.
  */
 export function buildVectorIndexerFunction(
     scope: Construct,
@@ -87,6 +114,7 @@ export function buildVectorIndexerFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        recursiveLoop: vectorSelfContinuationRecursiveLoop(config),
         ...vectorLambdaPlacement(config, vpc, subnets),
         environment: {
             ...vectorIndexEnvironment(config),
@@ -104,29 +132,6 @@ export function buildVectorIndexerFunction(
     applyVectorLambdaSecurity(fun, storageResources, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
-}
-
-/**
- * Recursive-loop setting for the vector reindexer.
- *
- * A reindex run continues itself by invoking the function asynchronously every time fewer than 90 s of
- * its 15-minute window remain. AWS Lambda's recursive-loop detection counts a chain made only of Lambda
- * invocations and stops it after about 16, sending the event to the on-failure destination, so a run
- * longer than about four hours (a large enumeration or clear, the v2.6-to-v2.7 vector backfill) would
- * stop part-way. ALLOW turns the detection off for this function only; the handler bounds the chain itself
- * (`MAX_RUN_INVOCATIONS` in `vectorReindexer.py`), sending the resume payload to the reindexer's
- * asynchronous-invocation DLQ when a run reaches it.
- *
- * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the AWS
- * European Sovereign Cloud (`aws-eusc`), as for the bucket-sync function in `indexingFunctions.ts`. The AWS
- * GovCloud (US) user guide lists it as not available, so `aws-us-gov` and any other partition omit the
- * property and the function template stays unchanged there.
- */
-export function vectorReindexerRecursiveLoop(
-    config: Config.Config
-): lambda.RecursiveLoop | undefined {
-    const partition = config.env.partition;
-    return partition === "aws" || partition === "aws-eusc" ? lambda.RecursiveLoop.ALLOW : undefined;
 }
 
 /**
@@ -150,7 +155,7 @@ export function buildVectorReindexerFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
-        recursiveLoop: vectorReindexerRecursiveLoop(config),
+        recursiveLoop: vectorSelfContinuationRecursiveLoop(config),
         ...vectorLambdaPlacement(config, vpc, subnets),
         environment: {
             ...vectorIndexEnvironment(config),

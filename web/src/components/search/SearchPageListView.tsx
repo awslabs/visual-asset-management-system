@@ -1303,20 +1303,14 @@ function SearchPageListView({
                                         }
                                         triggerType="custom"
                                     >
-                                        <Box
-                                            color="text-status-info"
-                                            fontSize="body-s"
-                                            display="inline"
-                                        >
-                                            <span
-                                                style={{
-                                                    cursor: "help",
-                                                    textDecoration: "underline dotted",
-                                                }}
-                                            >
-                                                &#9432;
-                                            </span>
-                                        </Box>
+                                        {/* A Button, not a bare glyph: a custom trigger is reachable
+                                            by keyboard (Tab, then Enter or Space) and named for
+                                            screen readers only when the child itself takes focus. */}
+                                        <Button
+                                            variant="inline-icon"
+                                            iconName="status-info"
+                                            ariaLabel="About this count"
+                                        />
                                     </Popover>
                                 ) : undefined
                             }
@@ -1338,6 +1332,10 @@ function SearchPageListView({
                                         </Button>
                                         {showUnarchiveButton && (
                                             <Button
+                                                disabled={!!assetActionDisabledReasons?.unarchive}
+                                                disabledReason={
+                                                    assetActionDisabledReasons?.unarchive
+                                                }
                                                 onClick={() => {
                                                     setShowUnarchiveModal(true);
                                                 }}

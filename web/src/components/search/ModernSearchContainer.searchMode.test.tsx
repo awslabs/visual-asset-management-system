@@ -422,7 +422,7 @@ describe("ModernSearchContainer search modes", () => {
         expect(header?.textContent).toContain("2+");
         // No window filled, so no "top N" line; the popover names approximate matching.
         expect(screen.queryByText(/semantic matches; more may exist/)).toBeNull();
-        fireEvent.click(screen.getByText("\u24D8"));
+        fireEvent.click(screen.getByRole("button", { name: "About this count" }));
         expect(
             screen.getByText(/finds the closest matches approximately, so it can miss a weak match/)
         ).toBeInTheDocument();

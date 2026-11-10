@@ -109,7 +109,12 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
         </Button>,
         ...(showUnarchiveButton
             ? [
-                  <Button key="unarchive" onClick={() => setShowUnarchiveModal(true)}>
+                  <Button
+                      key="unarchive"
+                      disabled={!!assetActionDisabledReasons?.unarchive}
+                      disabledReason={assetActionDisabledReasons?.unarchive}
+                      onClick={() => setShowUnarchiveModal(true)}
+                  >
                       Unarchive Selected
                   </Button>,
               ]

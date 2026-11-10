@@ -5,7 +5,8 @@
 
 Each of the four rules calls its store method with the invocation's remaining-time callable and, when the
 store returns a `next_key`, sends ONE `vector.indexer.continue` message to the indexer's own queue naming
-the rule, the partition key, the key path / archived flag the rule needs, and the start key. A
+the rule, the partition key, the key path / archived flag the rule needs, the start key, and its hop count
+(1 for the first hand-off; the cap is pinned in test_vectorIndexer_continuation_cap.py). A
 continuation message resumes the named rule from that key and passes it to the store; a run that completes
 sends nothing. A new version's un-archive step hands off as the file archive rule. The fake store's
 `hand_off` decides which method returns a key; the real paging belongs to the store's own tests.
@@ -87,7 +88,7 @@ class TestHandOff:
         outcome = indexer.handle_s3_record(_s3("ObjectRemoved:DeleteMarkerCreated"), "assets", "prefix-a/", _budget)
         assert outcome.ok and outcome.action == "archived" and "continued" in outcome.detail
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "setArchivedForFile", "pk": "db1:a1",
-                                  "keyPath": KEY_PATH, "archived": True, "startKey": NEXT_KEY}
+                                  "keyPath": KEY_PATH, "archived": True, "startKey": NEXT_KEY, "hops": 1}
 
     def test_a_new_version_hands_off_the_unarchive_step_as_its_own_rule(self, indexer):
         indexer.vector_store = FakeVectorStore(hand_off={"set_archived_for_file": NEXT_KEY})
@@ -95,7 +96,7 @@ class TestHandOff:
         assert outcome.action == "created" and "continued" in outcome.detail
         assert indexer.vector_store.names() == ["set_archived_for_file"]
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "setArchivedForFile", "pk": "db1:a1",
-                                  "keyPath": KEY_PATH, "archived": False, "startKey": NEXT_KEY}
+                                  "keyPath": KEY_PATH, "archived": False, "startKey": NEXT_KEY, "hops": 1}
 
     def test_a_permanent_delete_hands_off(self, indexer):
         indexer.vector_store = FakeVectorStore(hand_off={"delete_file": NEXT_KEY})
@@ -103,14 +104,14 @@ class TestHandOff:
         outcome = indexer.handle_s3_record(_s3("ObjectRemoved:Delete"), "assets", "prefix-a/", _budget)
         assert outcome.action == "deleted" and "continued" in outcome.detail
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "deleteFile", "pk": "db1:a1",
-                                  "keyPath": KEY_PATH, "startKey": NEXT_KEY}
+                                  "keyPath": KEY_PATH, "startKey": NEXT_KEY, "hops": 1}
 
     def test_an_asset_archive_hands_off(self, indexer):
         indexer.vector_store = FakeVectorStore(hand_off={"set_archived_for_asset": NEXT_KEY})
         outcome = indexer.handle_stream_record(_stream(indexer, "INSERT", "db1#deleted"), _budget)
         assert outcome.action == "asset-archived" and "continued" in outcome.detail
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "setArchivedForAsset", "pk": "db1:a1",
-                                  "archived": True, "startKey": NEXT_KEY}
+                                  "archived": True, "startKey": NEXT_KEY, "hops": 1}
 
     def test_an_asset_delete_hands_off(self, indexer):
         indexer.vector_store = FakeVectorStore(hand_off={"delete_asset": NEXT_KEY})
@@ -118,7 +119,7 @@ class TestHandOff:
         outcome = indexer.handle_stream_record(_stream(indexer, "REMOVE", "db1"), _budget)
         assert outcome.action == "asset-deleted" and "continued" in outcome.detail
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "deleteAsset", "pk": "db1:a1",
-                                  "startKey": NEXT_KEY}
+                                  "startKey": NEXT_KEY, "hops": 1}
 
 
 RESUMES = [

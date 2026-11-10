@@ -11,7 +11,7 @@ import Select from "@cloudscape-design/components/select";
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
 import Toggle from "@cloudscape-design/components/toggle";
-import { SearchPreferences, FIELD_MAPPINGS, SearchFilters } from "../types";
+import { SearchPreferences, FIELD_MAPPINGS, SearchFilters, SearchMode } from "../types";
 import { RECORD_TYPE_FIELD } from "../utils/recordType";
 import DraggableColumnList from "./DraggableColumnList";
 import { searchRunningReason } from "./searchRunning";
@@ -24,6 +24,8 @@ interface PreferencesPanelProps {
     disabled?: boolean;
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
+    /** The effective search mode; the keyword-only Show result explanation toggle is left out under `nlp`. */
+    searchMode?: SearchMode;
 }
 
 const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
@@ -33,6 +35,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     disabled = false,
     filters,
     onFilterChange,
+    searchMode = "keyword",
 }) => {
     const pageSizeOptions = [
         { label: "25 per page", value: "25" },
@@ -195,21 +198,25 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                     />
                 </FormField>
 
-                {/* Show Result Explanation Toggle */}
-                <FormField
-                    label="Search Insights"
-                    description="Show detailed information about why each result matched"
-                >
-                    <Toggle
-                        onChange={({ detail }) =>
-                            onFilterChange("showResultExplanation", detail.checked)
-                        }
-                        checked={filters.showResultExplanation || false}
-                        readOnly={disabled}
+                {/* Show Result Explanation Toggle. Keyword search only: a natural-language search
+                    does not send it (its hits carry a relevance popover instead), so it is not
+                    offered there. */}
+                {searchMode !== "nlp" && (
+                    <FormField
+                        label="Search Insights"
+                        description="Show detailed information about why each result matched"
                     >
-                        Show result explanation
-                    </Toggle>
-                </FormField>
+                        <Toggle
+                            onChange={({ detail }) =>
+                                onFilterChange("showResultExplanation", detail.checked)
+                            }
+                            checked={filters.showResultExplanation || false}
+                            readOnly={disabled}
+                        >
+                            Show result explanation
+                        </Toggle>
+                    </FormField>
+                )}
 
                 {/* Reset Button */}
                 <Box textAlign="center">

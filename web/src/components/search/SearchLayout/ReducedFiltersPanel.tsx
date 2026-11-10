@@ -13,6 +13,8 @@ import Toggle from "@cloudscape-design/components/toggle";
 import { SearchFilters, SearchResponse, SearchResult } from "../types";
 import { fetchAllDatabases } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
+import { selectedValues } from "../hooks/searchRequestBuilders";
+import { lockedDatabasePlaceholder } from "./lockedDatabase";
 
 /**
  * The filters natural-language search can honour without OpenSearch: which databases to search
@@ -148,7 +150,7 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
                     }
                 >
                     <Multiselect
-                        selectedOptions={selected(filters.str_databaseid?.values)}
+                        selectedOptions={selected(selectedValues(filters.str_databaseid))}
                         onChange={({ detail }) =>
                             writeMultiselect(
                                 "str_databaseid",
@@ -158,7 +160,12 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
                             )
                         }
                         options={databases}
-                        placeholder={`All ${Synonyms.databases}`}
+                        // Locked: the control names the database it is locked to.
+                        placeholder={lockedDatabasePlaceholder(
+                            databaseLocked,
+                            selected(selectedValues(filters.str_databaseid))
+                        )}
+                        hideTokens={databaseLocked}
                         disabled={loading || databaseLocked}
                         filteringType="auto"
                         filteringAriaLabel={`Filter ${Synonyms.databases}`}
