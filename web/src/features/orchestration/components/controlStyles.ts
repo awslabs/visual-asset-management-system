@@ -23,7 +23,8 @@ export const btnSecondary =
     "rounded-lg border border-border-input bg-surface text-text-primary hover:bg-surface-hover " +
     "disabled:opacity-50 disabled:cursor-not-allowed";
 
-// Destructive confirm button (Archive, Abort, Permanent Delete): the red the confirm dialogs use.
+// Destructive confirm button: the same red the core Archive, Abort and Permanent Delete dialogs set
+// inline. Add-on confirm dialogs import it from here.
 export const btnDanger =
     "px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 " +
     "disabled:opacity-50 disabled:cursor-not-allowed";
