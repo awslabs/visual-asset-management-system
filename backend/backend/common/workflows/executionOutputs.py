@@ -443,6 +443,84 @@ def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
     return ledger
 
 
+# ---------------------------------------------------------------------------
+# Copy claims: one asynchronous copy per run output
+# ---------------------------------------------------------------------------
+#
+# A retried end-state step can queue a large output for its asynchronous copy a second time (its
+# attempt ended before it saw the ingestion answer). The large-file worker takes a claim on that output
+# before it copies: a conditional UpdateItem on a row in the run's ledger partition, sort key
+# `copy:<destination key>`. Only the holder copies. Another worker that finds a live claim returns its
+# message to the queue and, once redelivered, reports the holder's outcome. A claim whose holder
+# crashed is taken over once it is older than COPY_CLAIM_TAKEOVER_SECONDS; the holder's own message,
+# redelivered after a crash, takes its claim back at once. The rows carry no ingestState, so the
+# end-state step's ledger reads pass over them.
+
+COPY_CLAIM_SORT_KEY_PREFIX = "copy:"
+COPY_CLAIM_COPYING = "copying"
+COPY_CLAIM_COPIED = "copied"
+# The large-file worker's timeout (15 minutes) plus a margin: a claim this old has no live holder.
+COPY_CLAIM_TAKEOVER_SECONDS = 15 * 60 + 5 * 60
+
+CLAIM_ACQUIRED = "acquired"
+CLAIM_HELD = "held"
+CLAIM_COPIED = "copied"
+
+
+def copy_claim_key(workflow_execution_id, destination_key):
+    return {"pipelineExecutionId": ingest_ledger_partition(workflow_execution_id),
+            INGEST_LEDGER_SORT_KEY: f"{COPY_CLAIM_SORT_KEY_PREFIX}{destination_key}"}
+
+
+def acquire_copy_claim(dynamo, output_files_table, workflow_execution_id, destination_key, holder,
+                       now_epoch):
+    """Take the copy claim for one run output. Returns CLAIM_ACQUIRED (this holder copies),
+    CLAIM_COPIED (another holder already copied it) or CLAIM_HELD (another holder is copying it).
+
+    The write succeeds when no one holds the claim, when `holder` already holds it (its message was
+    redelivered), or when the claim is still `copying` and older than COPY_CLAIM_TAKEOVER_SECONDS."""
+    table = dynamo.Table(output_files_table)
+    key = copy_claim_key(workflow_execution_id, destination_key)
+    try:
+        table.update_item(
+            Key=key,
+            UpdateExpression="SET claimHolder = :h, claimedAt = :now, claimState = :copying",
+            ConditionExpression=("attribute_not_exists(claimHolder) OR claimHolder = :h OR "
+                                 "(claimState = :copying AND claimedAt < :stale)"),
+            ExpressionAttributeValues={
+                ":h": holder, ":now": int(now_epoch), ":copying": COPY_CLAIM_COPYING,
+                ":stale": int(now_epoch) - COPY_CLAIM_TAKEOVER_SECONDS},
+        )
+        return CLAIM_ACQUIRED
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+    item = table.get_item(Key=key, ConsistentRead=True).get("Item") or {}
+    if item.get("claimState") == COPY_CLAIM_COPIED:
+        return CLAIM_COPIED
+    return CLAIM_HELD
+
+
+def finish_copy_claim(dynamo, output_files_table, workflow_execution_id, destination_key, holder,
+                      copied):
+    """Finalize this holder's claim: `copied` after a successful copy, released (no holder) after a
+    failure so another worker may copy. Conditional on `holder` still holding it; a claim taken over
+    in the meantime is left to its new holder."""
+    table = dynamo.Table(output_files_table)
+    if copied:
+        expression, values = "SET claimState = :copied", {":copied": COPY_CLAIM_COPIED, ":h": holder}
+    else:
+        expression, values = "REMOVE claimHolder, claimedAt, claimState", {":h": holder}
+    try:
+        table.update_item(Key=copy_claim_key(workflow_execution_id, destination_key),
+                          UpdateExpression=expression, ConditionExpression="claimHolder = :h",
+                          ExpressionAttributeValues=values)
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.warning("The copy claim was taken over before this holder finished; left to its holder")
+
+
 def ledger_row_descriptor(row):
     """The output descriptor (the shape the end-state step collects) a ledger row records."""
     return {

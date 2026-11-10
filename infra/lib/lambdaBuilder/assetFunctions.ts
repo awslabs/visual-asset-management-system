@@ -497,6 +497,17 @@ export function buildSqsUploadFileLargeFunction(
     // when a queued message predates the bucketRegion field.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
+    // A workflow run's output is copied under a claim on its row in the run's ingest ledger (the
+    // output-files table), so two queued copies of one output cannot both write it: a conditional
+    // UpdateItem takes, finalizes or releases the claim and a GetItem reads a refused claim's state.
+    // The table ARN only; no index is read.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources: [storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableArn],
+        })
+    );
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

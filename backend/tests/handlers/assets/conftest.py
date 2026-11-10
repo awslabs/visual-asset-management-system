@@ -4,6 +4,12 @@
 import os
 import pytest
 
+# sqsUploadFileLarge resolves the output-files table (the run's ingest ledger, which holds a workflow
+# output's copy claim) at import. Seeded at module level, with the value every workflows test module
+# also seeds, so whichever directory collects first leaves the others' expectations intact.
+os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME", "t-of")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():
     """Set up environment variables for all tests"""

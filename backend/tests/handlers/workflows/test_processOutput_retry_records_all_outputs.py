@@ -39,6 +39,7 @@ for _k, _v in {
     "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-inputs",
     "WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME": "t-locks",
     "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-config",
+    "PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME": "t-of",
     "SEND_EMAIL_FUNCTION_NAME": "test-send-email-function",
     "PRESIGNED_URL_TIMEOUT_SECONDS": "3600",
 }.items():
@@ -412,7 +413,9 @@ class TestTheAsyncCopyIsWrittenOnce:
             s3.put_object(Bucket=ASSET_BUCKET, Key=_asset_key(LARGE), Body=b"x",
                           Metadata={VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: EXEC})
             s3.put_object(Bucket=RUN_BUCKET, Key=FILES_PREFIX + LARGE, Body=b"x")
+            ddb, _uploads = _tables()
             with patch.object(large, "s3", s3), \
+                    patch.object(large, "dynamodb", ddb), \
                     patch.object(large, "validateS3AssetExtensionsAndContentType", return_value=True), \
                     patch.object(large, "copy_s3_object") as copy, \
                     patch.object(large, "update_asset_after_file_processing") as update:
