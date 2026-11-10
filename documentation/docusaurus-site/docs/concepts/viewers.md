@@ -125,7 +125,7 @@ The tables in this section list the viewers available in every deployment. The P
 | `.spz`    | BabylonJS Gaussian Splat Viewer                                                                 | --                                                 |
 
 :::info[PLY files and multiple viewers]
-The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. VAMS presents all compatible viewers and you can select the appropriate one for your data type.
+The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. VAMS presents all compatible viewers and you can select the appropriate one for your data type. The Three.js Viewer draws a `.ply` file with no faces as a point cloud, and uses the file's per-vertex colours for points and meshes when it has them; a `.ply` without colours is drawn in grey.
 :::
 
 ### USD extensions
