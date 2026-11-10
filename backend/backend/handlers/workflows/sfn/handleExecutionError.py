@@ -36,7 +36,6 @@ from common.workflows import executionRecords as er
 from common.workflows import executionLogCapture as elc
 from common.workflows import executionOutputs as eo
 from common.workflows import executionLocks as el
-from common.workflows import systemPipelines as sp
 from common import largeObjectCopy as loc
 from common.s3 import region_routing_s3_client
 
@@ -368,20 +367,10 @@ def reconcile_failed_execution(body, error_info):
         rows = existing.get('Items', [])
         current_status = rows[0].get('executionStatus', '') if rows else ''
         if current_status not in eo.TERMINAL_STATUSES:
-            won = eo.finalize_main_row(
+            eo.finalize_main_row(
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
-            # Terminal callback of a system-pipeline run: sent only when this write won the terminal
-            # guard. Never raises. With no main row read there is no trigger to identify a system run
-            # by (the guarded update created the row), so nothing is sent and nothing is wrong.
-            if won is True and not rows:
-                logger.warning(f"Main execution row of {execution_id} was missing; it was written "
-                               f"{FAILED_STATUS} and no terminal callback was sent")
-            elif won is True:
-                sp.notify_terminal_transition(
-                    rows[0], FAILED_STATUS, stop_date=now, execution_error=error_message,
-                    writer=sp.WRITER_ERROR_HANDLER)
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 

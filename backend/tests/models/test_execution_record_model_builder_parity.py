@@ -40,7 +40,7 @@ def workflow_execution_record_keys():
     # A system-pipeline run additionally stores its server-only context (systemPipelines.py).
     system_run = er.build_workflow_execution_record(
         "E1", "db1", "wf1", "wfArn", "execArn", "2026-01-01T00:00:00Z", "NEW",
-        "SYSTEM_USER", "Zip-Download", "logGroupArn", system_execution_context='{"k":"v"}')
+        "SYSTEM_USER", "System-TestFeature", "logGroupArn", system_execution_context='{"k":"v"}')
     # The SKIPPED record of a refused trigger launch is the main row's other write path: one UpdateItem
     # naming every attribute it sets in ExpressionAttributeNames, plus the key.
     skip_update = er.build_skip_record_update(

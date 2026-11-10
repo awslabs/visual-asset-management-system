@@ -82,10 +82,10 @@ claims_and_roles = {}
 
 def _stored_trigger_type(value) -> str:
     """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
-    and 'File-Upload', and a system trigger's request spelling (e.g. 'zipDownload') to its stored
-    value; any other value is compared as given."""
+    and 'File-Upload'; any other value (a system trigger value included, whose request and stored
+    spellings are the same) is compared as given."""
     value = (value or "").strip()
-    return TRIGGER_TYPE_TO_STORED.get(value, sp.SYSTEM_TRIGGER_TYPE_TO_STORED.get(value, value))
+    return TRIGGER_TYPE_TO_STORED.get(value, value)
 
 # Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
 # is reversible, so an archived asset is still authorized on its own row rather than on its database.
@@ -467,14 +467,10 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     terminal status by reading the current one first: the read and the write are separate calls, so
     another writer can finish the execution in between and a plain write would revert it. Losing that
     race is the expected outcome for the second writer, so the ConditionalCheckFailed is logged and
-    swallowed while any other write error surfaces.
-
-    Returns True when the write happened and False when there was nothing to write or the guard lost
-    the race, so a caller that wrote a terminal status sends the system-pipeline terminal callback only
-    when its own write won."""
+    swallowed while any other write error surfaces."""
     reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
     if not reconciled:
-        return False
+        return
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
@@ -500,76 +496,6 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
             raise
         logger.info(f"Main execution row {main_item.get('workflowExecutionId', '')} already holds a "
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
-        return False
-    return True
-
-
-def _persist_list_reconcile(main_table, item, fetch_main_row):
-    """Persist one execution listing's lazy reconcile (`item`: the row's keys plus only what the poll
-    produced; see build_execution_items) and, when it wrote a terminal status under the guard, send the
-    system-pipeline terminal callback.
-
-    A reconcile that writes any attribute a COMPLETING writer owns takes the shared terminal guard: the
-    poll and this write are separate calls, so the end-state lambda can finish the execution in between,
-    and its status, written from inside the state machine with the log it captured at completion, is the
-    authoritative one. Keyed on the attributes rather than on the status value, so a poll reporting a
-    stop date under some other status is guarded too. A sync-stamp-only write needs no guard: it touches
-    nothing a terminal writer owns, and guarding it would leave a row that somehow holds a terminal
-    status without a stop date re-polling Step Functions on every request."""
-    guarded = any(attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES)
-    won = _persist_reconciled_main_row(
-        main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES, only_if_not_terminal=guarded)
-    # A terminal status this reconcile wrote under the guard: the run stopped outside VAMS.
-    if guarded:
-        _notify_reconciled_terminal(
-            fetch_main_row(item.get('workflowExecutionId', '')), item, won, sp.WRITER_RECONCILE_LIST)
-    return won
-
-
-def _notify_reconciled_terminal(main_item, written_snapshot, won, writer):
-    """Send the system-pipeline terminal callback for a terminal status a read-path reconcile or an
-    abort wrote. Only when that guarded write won (`won` is True) and the written attributes carry a
-    terminal status; `main_item` supplies the run's trigger and stored context. Never raises."""
-    if won is not True:
-        return
-    status = (written_snapshot or {}).get("executionStatus", "")
-    if status not in TERMINAL_STATUSES:
-        return
-    sp.notify_terminal_transition(
-        main_item, status, stop_date=(written_snapshot or {}).get("executionStopDate", ""),
-        execution_error=(written_snapshot or {}).get("executionError", ""), writer=writer)
-
-
-def _send_held_abort_callback(main_table, main_item, raise_on_failure=False):
-    """Send the terminal callback an earlier abort held back because it could not confirm the state
-    machine stopped (sp.CALLBACK_PENDING_ATTRIBUTE on the main row). The caller has now confirmed the
-    stop: a repeated abort, the status change event, or a details read whose DescribeExecution shows
-    the execution ended. The attribute is removed under a condition that it is still present, so of
-    two concurrent confirmations only the one whose removal wins sends the callback.
-
-    A lost condition is the expected outcome for the second confirmation and is never an error. Any
-    other failure of the removal is logged and swallowed, unless `raise_on_failure` (the status change
-    event), which re-raises it so Lambda's asynchronous retries deliver the event again."""
-    execution_id = main_item.get('workflowExecutionId', '')
-    status = main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE, '')
-    try:
-        main_table.update_item(
-            Key={"workflowExecutionId": execution_id,
-                 "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")},
-            UpdateExpression="REMOVE #p",
-            ConditionExpression="attribute_exists(#p)",
-            ExpressionAttributeNames={"#p": sp.CALLBACK_PENDING_ATTRIBUTE})
-    except Exception as e:
-        if eo.is_conditional_check_failure(e):
-            return
-        if raise_on_failure:
-            raise
-        logger.warning(f"Could not clear the held terminal callback of execution {execution_id} "
-                       f"(non-critical; a later abort, status event or details read retries it): {e}")
-        return
-    sp.notify_terminal_transition(
-        main_item, status, stop_date=main_item.get('executionStopDate', ''),
-        execution_error=main_item.get('executionError', ''), writer=sp.WRITER_ABORT)
 
 
 # Bounds on the log read a listing makes for an execution it finds terminated outside VAMS: the
@@ -1405,9 +1331,20 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 return None
 
         def _persist(item):
-            # Persist the lazily-reconciled main row (status/dates/sync-time/log/error) to V2 under the
-            # terminal guard when it writes a completion-owned attribute (_persist_list_reconcile).
-            _persist_list_reconcile(main_table, item, _fetch_main_row)
+            # Persist the lazily-reconciled main row (status/dates/sync-time/log/error) to V2.
+            #
+            # A reconcile that writes any attribute a COMPLETING writer owns takes the shared terminal
+            # guard: the poll and this write are separate calls, so the end-state lambda can finish the
+            # execution in between, and its status — written from inside the state machine, with the log
+            # it captured at completion — is the authoritative one. Keyed on the attributes rather than
+            # on the status value, so a poll reporting a stop date under some other status is guarded
+            # too. A sync-stamp-only write needs no guard: it touches nothing a terminal writer owns,
+            # and guarding it would leave a row that somehow holds a terminal status without a stop date
+            # re-polling Step Functions on every request.
+            _persist_reconciled_main_row(
+                main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES,
+                only_if_not_terminal=any(
+                    attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
 
         log_capture_deadline = time.monotonic() + RECONCILE_LOG_CAPTURE_BUDGET_SECONDS
 
@@ -2357,36 +2294,13 @@ def abort_execution(event, execution_id):
     # 4) Mark the main row ABORTED (unless it already reached a terminal state). The status read above
     # and the write below are separate calls, so the write carries the same terminal guard: an end-state
     # lambda that finishes the execution inside that window keeps its status instead of being reverted.
-    # The ABORTED callback of a system run is sent only once the state machine is confirmed stopped.
-    # An unconfirmed stop writes ABORTED as before but holds the callback on the row, for the first of
-    # a repeated abort, the status change event, or a details read to confirm the stop
-    # (_send_held_abort_callback).
     if main_item.get('executionStatus', '') not in TERMINAL_STATUSES:
         main_item['executionStatus'] = ABORTED_STATUS
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        hold_callback = not main_stopped and sp.is_system_trigger(main_item.get('triggerType'))
-        attributes = ABORT_MAIN_ROW_ATTRIBUTES
-        if hold_callback:
-            main_item[sp.CALLBACK_PENDING_ATTRIBUTE] = ABORTED_STATUS
-            attributes = ABORT_MAIN_ROW_ATTRIBUTES + (sp.CALLBACK_PENDING_ATTRIBUTE,)
-        won = _persist_reconciled_main_row(main_table, main_item, attributes,
-                                           only_if_not_terminal=True)
-        if hold_callback:
-            if won is True:
-                logger.info(f"Execution {execution_id} could not be confirmed stopped; its ABORTED "
-                            f"terminal callback is held until the stop is confirmed")
-                # A callback that does not depend on the stop (sp.STOP_INDEPENDENT_CALLBACK_TRIGGERS)
-                # gets the status now, so the feature's record does not wait on the confirmation alone.
-                # The held callback above still goes out on confirmation; such callbacks are idempotent.
-                sp.notify_unconfirmed_abort(main_item, ABORTED_STATUS,
-                                            stop_date=main_item.get('executionStopDate', ''),
-                                            execution_error=main_item.get('executionError', ''))
-        else:
-            _notify_reconciled_terminal(main_item, main_item, won, sp.WRITER_ABORT)
-    elif main_stopped and main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
-        _send_held_abort_callback(main_table, main_item)
+        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                     only_if_not_terminal=True)
 
     # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
     # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
@@ -4412,37 +4326,14 @@ def handle_details_results_request(event):
     return get_execution_results(event, execution_id, queryParameters)
 
 
-def _flush_held_abort_callback(execution_id, main_item):
-    """Details read path: send the ABORTED callback an unconfirmed abort held on a terminal row, once
-    DescribeExecution shows the execution ended. The status change event normally sends it; this is
-    the fallback when that event never arrives (dead-lettered, or Step Functions events unavailable),
-    so the held callback does not depend on someone repeating the abort.
-
-    At most one DescribeExecution per SFN_SYNC_MIN_INTERVAL_SECONDS of the row's last sync stamp (the
-    abort set it), and only for a row that holds the attribute. Best-effort: a failed describe answers
-    "not ended" and the callback stays held for the next read."""
-    if not main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
-        return
-    if er.iso_seconds_since(main_item.get("lastSfnSyncCheckDate", "")) < SFN_SYNC_MIN_INTERVAL_SECONDS:
-        return
-    arn = main_item.get("workflow_execution_arn", "")
-    if not arn or not el.sfn_execution_has_ended(sfn, arn):
-        return
-    logger.info(f"Execution {execution_id} is confirmed stopped; sending its held terminal callback")
-    _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item)
-
-
-def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITER_RECONCILE_DETAILS,
-                           raise_on_failure=False):
+def _reconcile_main_status(execution_id, main_item, force=False, raise_on_failure=False):
     """Lazily reconcile a non-terminal main row's status against Step Functions (in place). No-op
-    when polled within SFN_SYNC_MIN_INTERVAL_SECONDS. A terminal row is not re-polled, except that one
-    still holding an unconfirmed abort's callback is checked for the stop
-    (_flush_held_abort_callback). Best-effort for a read.
+    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort for a read.
 
     `force` skips the poll interval, for the status change event that reports the execution ended
-    (handle_sfn_status_change); `writer` names the caller in the system-pipeline callback.
-    `raise_on_failure` (the status change event) re-raises a failed DescribeExecution or a failed
-    guarded write instead of logging it, so the event is retried by Lambda's asynchronous retries.
+    (handle_sfn_status_change). `raise_on_failure` (the status change event) re-raises a failed
+    DescribeExecution or a failed guarded write instead of logging it, so the event is retried by
+    Lambda's asynchronous retries.
     A lost guard is never a failure: another writer finished the row.
 
     The row was non-terminal when this request read it, and the write below carries the terminal guard
@@ -4450,8 +4341,6 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
     and a plain write would then push a pre-completion snapshot back over it — reverting the status and
     the stop date the completing writer set."""
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
-        if not force:
-            _flush_held_abort_callback(execution_id, main_item)
         return
     last_sync = main_item.get("lastSfnSyncCheckDate", "")
     if not force and er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
@@ -4503,9 +4392,8 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
         reconciled_snapshot["executionStatus"] = main_item["executionStatus"]
-    won = False
     try:
-        won = _persist_reconciled_main_row(
+        _persist_reconciled_main_row(
             dynamodb.Table(workflow_execution_database_v2), reconciled_snapshot,
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
@@ -4515,8 +4403,6 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
                            f"the status change event will be retried: {e}")
             raise
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
-    # A terminal status this reconcile wrote under the guard: the run stopped outside VAMS.
-    _notify_reconciled_terminal(main_item, reconciled_snapshot, won, writer)
     if sfn_stop and status in TERMINAL_STATUSES:
         _settle_reconciled_terminal(execution_id, main_item, status)
 
@@ -4546,24 +4432,23 @@ def handle_sfn_status_change(event):
     prefix in this account and Region, which several deployments can share, so the event is acted on
     only when its execution has a main row in THIS deployment whose recorded execution ARN is the
     event's. The reconcile is the details read path's own (_reconcile_main_status, poll interval
-    skipped) under the shared terminal guard, so whichever of the push, a read, or a VAMS terminal
-    writer wins the write is the one that sends the system-pipeline callback, and a duplicate event
-    finds the row terminal and does nothing. For a row already terminal with a held abort callback, the
-    event is the confirmation the abort lacked that the execution runs no further, so the held callback
-    is sent (once, through its own conditional write).
+    skipped) under the shared terminal guard, so the push, a read and a VAMS terminal writer never
+    revert each other, and a duplicate event finds the row terminal and does nothing.
 
     Unlike a read, the push raises when it cannot do its work: a failed main-row read, a failed
-    DescribeExecution (for example throttling when many runs end at once), or a failed guarded write
-    or held-callback removal. EventBridge delivers the event asynchronously, so a raise makes Lambda
-    retry it (twice, with backoff), and a retry is safe: nothing was written, or the row is now
+    DescribeExecution (for example throttling when many runs end at once), or a failed guarded write.
+    EventBridge delivers the event asynchronously, so a raise makes Lambda retry it (twice, with
+    backoff), and a retry is safe: nothing was written, or the row is now
     terminal and the retry ends like a duplicate. A lost guard is not a failure. An event whose
     retries are all spent is dropped, and the run falls back to the read paths, which reconcile the
-    status and send a held callback when the run is next read.
+    status when the run is next read.
 
     Applies to every workflow run, not only system runs: what it writes is exactly what the next read
     would have written, and it releases the locks and settles the pipeline rows of a run stopped
     outside VAMS at once instead of when someone opens it. A run that finished through the state
-    machine is already terminal when the event arrives, so it costs one read. Never logs the event's
+    machine is already terminal when the event arrives, so it costs one read. A feature that launched
+    the run (a system pipeline run) sees the result on the row it reads by its stored
+    workflowExecutionId; this handler names no pipeline and calls no feature. Never logs the event's
     input or output. Returns a small dict for the log; EventBridge ignores it."""
     detail = event.get("detail") or {}
     execution_arn = detail.get("executionArn", "") or ""
@@ -4584,17 +4469,13 @@ def handle_sfn_status_change(event):
         return {"handled": False, "reason": "no matching execution"}
     logger.info(f"Step Functions reported execution {execution_id} {status}")
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
-        if main_item.get(sp.CALLBACK_PENDING_ATTRIBUTE):
-            _send_held_abort_callback(dynamodb.Table(workflow_execution_database_v2), main_item,
-                                      raise_on_failure=True)
         if status in NON_SUCCESS_TERMINAL_STATUSES and main_item.get("outputIngestionStartedDate"):
             # A read recorded the end first: it never stops copies, and its terminal write removed
             # executionPhase. outputIngestionStartedDate stays, so a run that was ingesting still has
             # its copies stopped here (jobs already ended are skipped).
             _cancel_output_copies(execution_id)
         return {"handled": True, "reconciled": False}
-    _reconcile_main_status(execution_id, main_item, force=True, writer=sp.WRITER_STATUS_EVENT,
-                           raise_on_failure=True)
+    _reconcile_main_status(execution_id, main_item, force=True, raise_on_failure=True)
     if (status in NON_SUCCESS_TERMINAL_STATUSES
             and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
         # Stopped, failed or timed out outside VAMS while it waited on its large output copies: they

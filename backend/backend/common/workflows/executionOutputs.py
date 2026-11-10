@@ -441,10 +441,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
     same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
     Losing that race is the expected outcome for the second writer, not a failure, so the
-    ConditionalCheckFailed is logged and swallowed while any other write error surfaces.
-
-    Returns True when this call wrote the terminal status and False when another writer had already
-    finished the row: the system-pipeline terminal callback is sent only by the writer that won."""
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -469,8 +466,6 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
-        return False
-    return True
 
 
 def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
