@@ -130,7 +130,7 @@ Perform these static checks without running commands:
 
 #### 9. Vector Search and Amazon Bedrock Prerequisites
 
-Read `infra/config/config.json`. An absent `app.vectorSearch` (or `enabled`) resolves to enabled only when `app.pipelines.useSystemGenAiMetadata.enabled` and `.autoRegisterAutoTriggerOnFileUpload` are `true`, `.autoRegisterWithVAMS` is not `false`, and `app.govCloud.enabled` is not `true`; otherwise it resolves to disabled with a warning. Report which way it resolves. When it is enabled, verify:
+Read `infra/config/config.json`. An absent `app.vectorSearch` or `app.vectorSearch.enabled` resolves to enabled only when `app.pipelines.useSystemGenAiMetadata.enabled` and `.autoRegisterAutoTriggerOnFileUpload` are `true`, `.autoRegisterWithVAMS` is not `false`, and `app.govCloud.enabled` is not `true`; otherwise it resolves to disabled with a warning. Report which way it resolves. When `app.vectorSearch.enabled` is `true`, set or resolved, verify:
 
 -   `app.pipelines.useSystemGenAiMetadata.enabled`, `.autoRegisterWithVAMS`, and `.autoRegisterAutoTriggerOnFileUpload` are all `true` (configuration validation throws otherwise)
 -   `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` is non-empty and `bedrockModels.embeddingDimensions` is a positive integer the model supports; `app.vectorSearch.indexingConcurrency` is a positive integer
