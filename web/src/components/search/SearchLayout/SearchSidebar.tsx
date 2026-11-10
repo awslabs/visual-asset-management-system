@@ -14,7 +14,13 @@ import MetadataSearchPanel from "./MetadataSearchPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import GeoFilterPanel from "./GeoFilterPanel";
 import ReducedFiltersPanel from "./ReducedFiltersPanel";
-import { SearchFilters, MetadataFilter, SearchPreferences, SearchMode } from "../types";
+import {
+    SearchFilters,
+    MetadataFilter,
+    SearchPreferences,
+    SearchMode,
+    isTotalLowerBound,
+} from "../types";
 import { nlpCountsAreMinimums } from "../utils/nlpResultPaging";
 
 interface SearchSidebarProps {
@@ -112,9 +118,12 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
         </Checkbox>
     );
 
-    // A natural-language count that is a minimum ("132+") makes every facet count beside it one too;
-    // keyword facets keep their counts as they are.
-    const countsAreMinimums = searchMode === "nlp" && nlpCountsAreMinimums(searchResult);
+    // A count that is a minimum ("132+") makes every facet count beside it one too. Natural-language
+    // counts are minimums because matching is approximate; a keyword total is one when some
+    // permission rules can't be counted in advance, and its buckets are then minimums as well
+    // (docs/api/search.md, "Counts and permissions").
+    const countsAreMinimums =
+        searchMode === "nlp" ? nlpCountsAreMinimums(searchResult) : isTotalLowerBound(searchResult);
 
     if (reduced) {
         return (

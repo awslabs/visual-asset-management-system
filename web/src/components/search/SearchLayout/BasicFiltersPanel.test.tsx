@@ -90,7 +90,7 @@ describe("BasicFiltersPanel file-type options", () => {
         }
     });
 
-    it("keeps offering the cached types once a file type narrows the answer", async () => {
+    it("keeps offering the cached types once a file type narrows the answer, with the narrowed answer's counts", async () => {
         const onFilterChange = jest.fn();
         const { container, rerender } = render(
             <BasicFiltersPanel
@@ -115,6 +115,82 @@ describe("BasicFiltersPanel file-type options", () => {
                 searchResult={withFileTypes([{ key: "txt", doc_count: 2 }])}
             />
         );
-        expect(fileTypeLabels(container)).toEqual(["glb (1)", "txt (2)"]);
+        // glb is still offered, without the unfiltered search's count: the answer shown has none.
+        expect(fileTypeLabels(container)).toEqual(["glb", "txt (2)"]);
+    });
+
+    it("shows the filtered answer's counts on the cached options, not the unfiltered search's", async () => {
+        // An unfiltered file search counts 75 usda files and 40 glb files.
+        const { container, rerender } = render(
+            <BasicFiltersPanel
+                filters={fileMode}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={withFileTypes([
+                    { key: "usda", doc_count: 75 },
+                    { key: "glb", doc_count: 40 },
+                ])}
+            />
+        );
+        await waitFor(() => expect(fetchAllDatabases).toHaveBeenCalled());
+        expect(fileTypeLabels(container)).toEqual(["glb (40)", "usda (75)"]);
+
+        // A database filter narrows the answer to 32 usda files and no glb file.
+        rerender(
+            <BasicFiltersPanel
+                filters={{
+                    ...fileMode,
+                    str_databaseid: { label: "db-a", value: "db-a", values: ["db-a"] },
+                }}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={withFileTypes([{ key: "usda", doc_count: 32 }])}
+            />
+        );
+        expect(fileTypeLabels(container)).toEqual(["glb", "usda (32)"]);
+    });
+
+    it("does the same for tags, whose bucket keys can join several values", async () => {
+        const withTags = (buckets: Array<{ key: string; doc_count: number }>) => ({
+            hits: { total: { value: 0, relation: "eq" }, hits: [] },
+            aggregations: { list_tags: { buckets } },
+        });
+        const tagLabels = (root: HTMLElement) => {
+            const field = createWrapper(root)
+                .findAllFormFields()
+                .find((f) => f.findLabel()?.getElement().textContent === "Tags");
+            const multiselect = field?.findControl()?.findMultiselect();
+            if (!multiselect) throw new Error("Tags multiselect not rendered");
+            multiselect.openDropdown();
+            const found = multiselect
+                .findDropdown()
+                .findOptions()
+                .map((option) => option.findLabel().getElement().textContent);
+            multiselect.closeDropdown();
+            return found;
+        };
+        const { container, rerender } = render(
+            <BasicFiltersPanel
+                filters={fileMode}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={withTags([
+                    { key: "engine", doc_count: 9 },
+                    { key: "gear, shaft", doc_count: 4 },
+                ])}
+            />
+        );
+        await waitFor(() => expect(fetchAllDatabases).toHaveBeenCalled());
+        expect(tagLabels(container)).toEqual(["engine (9)", "gear (4)", "shaft (4)"]);
+
+        rerender(
+            <BasicFiltersPanel
+                filters={{ ...fileMode, list_tags: { label: "engine", value: "engine" } }}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={withTags([{ key: "engine", doc_count: 3 }])}
+            />
+        );
+        expect(tagLabels(container)).toEqual(["engine (3)", "gear", "shaft"]);
     });
 });

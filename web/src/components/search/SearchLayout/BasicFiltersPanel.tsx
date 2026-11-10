@@ -24,6 +24,28 @@ const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: 
         })
     );
 
+/**
+ * Each value a terms aggregation's buckets name, with its bucket's count. A tag bucket's key can join
+ * several values with commas (`splitKeys`); a value named by more than one bucket keeps the first count.
+ */
+function bucketCounts(
+    aggregation: { buckets?: Array<{ key: string; doc_count: number }> } | undefined,
+    splitKeys = false
+): Map<string, number> {
+    const counts = new Map<string, number>();
+    (aggregation?.buckets || []).forEach((bucket) => {
+        const values = splitKeys
+            ? String(bucket.key)
+                  .split(",")
+                  .map((value) => value.trim())
+            : [bucket.key];
+        values.forEach((value) => {
+            if (!counts.has(value)) counts.set(value, bucket.doc_count);
+        });
+    });
+    return counts;
+}
+
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
@@ -48,14 +70,11 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     const [databases, setDatabases] = useState<any[]>([]);
     const [tags, setTags] = useState<any[]>([]);
 
-    // Cache for aggregation results from non-filtered searches
-    const [cachedAssetTypes, setCachedAssetTypes] = useState<
-        Array<{ label: string; value: string }>
-    >([]);
-    const [cachedFileTypes, setCachedFileTypes] = useState<Array<{ label: string; value: string }>>(
-        []
-    );
-    const [cachedTags, setCachedTags] = useState<Array<{ label: string; value: string }>>([]);
+    // The type and tag values of the last non-filtered search, kept so a filtered search can still
+    // offer the other values. Values only: their counts belong to that search, not to the one shown.
+    const [cachedAssetTypes, setCachedAssetTypes] = useState<string[]>([]);
+    const [cachedFileTypes, setCachedFileTypes] = useState<string[]>([]);
+    const [cachedTags, setCachedTags] = useState<string[]>([]);
 
     useEffect(() => {
         // Load databases
@@ -93,40 +112,40 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     // Update cache when we get results from a non-filtered search
     useEffect(() => {
         if (searchResult?.aggregations && isNonFilteredSearch()) {
-            // Cache asset types
-            if (recordType === "asset" && searchResult.aggregations.str_assettype?.buckets) {
-                const assetTypes = searchResult.aggregations.str_assettype.buckets.map(
-                    (bucket: any) => ({
-                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
-                        value: bucket.key,
-                    })
-                );
-                setCachedAssetTypes(assetTypes);
+            const aggregations = searchResult.aggregations;
+            if (recordType === "asset" && aggregations.str_assettype?.buckets) {
+                setCachedAssetTypes(Array.from(bucketCounts(aggregations.str_assettype).keys()));
             }
-
-            // Cache file types
-            if (recordType === "file" && searchResult.aggregations.str_fileext?.buckets) {
-                const fileTypes = searchResult.aggregations.str_fileext.buckets.map(
-                    (bucket: any) => ({
-                        label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
-                        value: bucket.key,
-                    })
-                );
-                setCachedFileTypes(fileTypes);
+            if (recordType === "file" && aggregations.str_fileext?.buckets) {
+                setCachedFileTypes(Array.from(bucketCounts(aggregations.str_fileext).keys()));
             }
-
-            // Cache tags
-            if (searchResult.aggregations.list_tags?.buckets) {
-                const tagList = searchResult.aggregations.list_tags.buckets.flatMap((tag: any) =>
-                    tag.key.split(",").map((value: string) => ({
-                        label: `${value.trim()} (${facetCount(tag.doc_count)})`,
-                        value: value.trim(),
-                    }))
-                );
-                setCachedTags(tagList);
+            if (aggregations.list_tags?.buckets) {
+                setCachedTags(Array.from(bucketCounts(aggregations.list_tags, true).keys()));
             }
         }
     }, [searchResult, recordType, filters]);
+
+    /**
+     * A facet's options: `value (count)` from the answer on screen. In a filtered search the values
+     * kept from the last non-filtered search are offered too, so another value can still be picked;
+     * each shows the count of the answer on screen, and a value with no bucket in it shows none, so
+     * no option repeats a count from a search that is no longer shown.
+     */
+    const facetOptions = (counts: Map<string, number>, cachedValues: string[]) => {
+        const values =
+            cachedValues.length > 0 && !isNonFilteredSearch()
+                ? Array.from(new Set([...cachedValues, ...Array.from(counts.keys())]))
+                : Array.from(counts.keys());
+        return sortOptionsByLabel(
+            values.map((value) => {
+                const count = counts.get(value);
+                return {
+                    label: count === undefined ? value : `${value} (${facetCount(count)})`,
+                    value,
+                };
+            })
+        );
+    };
 
     // Build database options with result counts (alphabetized by database id)
     const databaseOptions = sortOptionsByLabel(
@@ -152,52 +171,18 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         })
     );
 
-    // Build asset type options - use cache if available and we're in a filtered search
-    const assetTypeOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
-                value: bucket.key,
-            })) || [];
-
-        // Use cache if we have it and current results are filtered
-        if (cachedAssetTypes.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedAssetTypes);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
-
-    // Build file type options - use cache if available and we're in a filtered search
-    const fileTypeOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.str_fileext?.buckets?.map((bucket: any) => ({
-                label: `${bucket.key} (${facetCount(bucket.doc_count)})`,
-                value: bucket.key,
-            })) || [];
-
-        // Use cache if we have it and current results are filtered
-        if (cachedFileTypes.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedFileTypes);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
-
-    // Build tag options - use cache if available and we're in a filtered search
-    const tagOptions = (() => {
-        const currentOptions =
-            searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
-                tag.key.split(",").map((value: string) => ({
-                    label: `${value.trim()} (${facetCount(tag.doc_count)})`,
-                    value: value.trim(),
-                }))
-            ) || [];
-
-        // Use cache if we have it and current results are filtered
-        if (cachedTags.length > 0 && !isNonFilteredSearch()) {
-            return sortOptionsByLabel(cachedTags);
-        }
-        return sortOptionsByLabel(currentOptions);
-    })();
+    const assetTypeOptions = facetOptions(
+        bucketCounts(searchResult?.aggregations?.str_assettype),
+        cachedAssetTypes
+    );
+    const fileTypeOptions = facetOptions(
+        bucketCounts(searchResult?.aggregations?.str_fileext),
+        cachedFileTypes
+    );
+    const tagOptions = facetOptions(
+        bucketCounts(searchResult?.aggregations?.list_tags, true),
+        cachedTags
+    );
 
     // Get selected options for each filter. A database route locks the filter with `value` only, so the
     // locked control shows that database rather than its "All databases" placeholder.
@@ -235,8 +220,8 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             headingTagOverride="h5"
         >
             <Box variant="p" color="text-body-secondary" margin={{ bottom: "s" }}>
-                Note: Type and tag values are cached from non-filtered searches for easier
-                multi-selection
+                Note: Type and tag values are kept from the last unfiltered search for easier
+                multi-selection. Counts are for the current results.
             </Box>
             <SpaceBetween direction="vertical" size="m">
                 {/* Asset Name Filter */}
