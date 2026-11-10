@@ -121,6 +121,37 @@ def _body(response):
 
 
 @pytest.mark.unit
+class _RepeatClock:
+    """uploadFile's `time` for the repeated call: monotonic time advances only by the repeat's own
+    polls, and its first poll releases the first call and waits (real time, generously) for it to
+    finish. Calls from the first call's thread use real time."""
+
+    def __init__(self, first_thread, release):
+        self._first = first_thread
+        self._release = release
+        self._now = time.monotonic()
+        self.polls = 0
+
+    def time(self):
+        return time.time()
+
+    def monotonic(self):
+        if threading.current_thread() is self._first:
+            return time.monotonic()
+        return self._now
+
+    def sleep(self, seconds):
+        if threading.current_thread() is self._first:
+            return time.sleep(seconds)
+        self.polls += 1
+        self._now += seconds
+        self._release.set()
+        self._first.join(60)
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 class TestARepeatedCompletionAnswersTheFirstResult:
     def test_a_repeat_after_the_first_finished_gets_its_result_and_runs_nothing(self, env):
         first = uf.lambda_handler(_payload(env["upload_id"]), _context())
@@ -141,24 +172,32 @@ class TestARepeatedCompletionAnswersTheFirstResult:
         assert "completionResult" in record and int(record["expiresAt"]) > time.time()
 
     def test_a_repeat_while_the_first_still_runs_waits_for_its_result(self, env):
+        """The repeat's wait runs on a controlled clock: its deadline (5 s here) is spent only by its
+        own polls, and the first call is released only once the repeat is polling. So the repeat
+        always sees the first call still running and then its stored result, however slowly the
+        first call runs under load (the wall-clock version timed out to 409 in parallel runs)."""
         started, release = threading.Event(), threading.Event()
         real_copy = env["copy"].side_effect
 
         def slow_copy(*args, **kwargs):
             started.set()
-            release.wait(5)
+            assert release.wait(60), "the repeat never started polling"
             return True
 
         env["copy"].side_effect = slow_copy
         results = {}
         first = threading.Thread(target=lambda: results.setdefault(
             "first", uf.lambda_handler(_payload(env["upload_id"]), _context())))
+        clock = _RepeatClock(first, release)
         first.start()
-        assert started.wait(5)
-        threading.Timer(0.3, release.set).start()
-        second = uf.lambda_handler(_payload(env["upload_id"]), _context())
-        first.join(10)
+        assert started.wait(60)
+        with patch.object(uf, "time", clock):
+            second = uf.lambda_handler(_payload(env["upload_id"]), _context())
+        first.join(60)
         env["copy"].side_effect = real_copy
+        assert not first.is_alive()
+        # The repeat found the first call still running and waited for it (at least one poll).
+        assert clock.polls >= 1
         assert second["statusCode"] == 200
         assert _body(second) == _body(results["first"])
         assert env["copy"].call_count == len(FILES)
