@@ -95,7 +95,7 @@ const keywordRows = {
     aggregationTotal: 2,
 };
 
-// The route's answer: its total is a minimum whether or not a window filled (D75, approximate
+// The route's answer: its total is a minimum whether or not a window filled (approximate
 // matching); `truncated` alone says a window filled.
 const nlpEnvelope = (truncated: boolean) => ({
     took: 5,
@@ -247,14 +247,14 @@ describe("ModernSearchContainer search modes", () => {
         await screen.findByText("No matches");
         expect(screen.queryByText("Describe what you are looking for")).toBeNull();
         expect(screen.getByText("0 results")).toBeInTheDocument();
-        // Positive control for the no-database empty state (D78): an answer that searched and found
+        // Positive control for the no-database empty state: an answer that searched and found
         // nothing keeps "We can't find a match." and its Clear filter action.
         expect(screen.getByText("We can't find a match.")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
         expect(screen.queryByText("No results")).toBeNull();
     });
 
-    describe("an answer that searched no database (D78)", () => {
+    describe("an answer that searched no database", () => {
         const noneAccessible = {
             code: "databases:none_accessible",
             message: "No searchable database is accessible to the caller",
@@ -361,8 +361,8 @@ describe("ModernSearchContainer search modes", () => {
     });
 
     it("announces an explicit natural-language search's count in the polite live region, with no completion toast", async () => {
-        // D72: a "Search completed" toast covered the title row's view switch and Clear all
-        // filters for 5 s after every search; the badge shows the count, the live region reads it out.
+        // A "Search completed" toast would cover the title row's view switch and Clear all filters
+        // for 5 s after every search; the badge shows the count, the live region reads it out.
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         (searchNlp as jest.Mock).mockResolvedValue([true, nlpEnvelope(true)]);
         renderContainer();
@@ -380,10 +380,10 @@ describe("ModernSearchContainer search modes", () => {
     });
 
     it("shows one count for a natural-language search: the route's total, in the announcement, the badge and the table header", async () => {
-        // UAT D61: the notification said "Found 101+ results" (the route's total) while the badge and
-        // the table header said "100+" (the returned hits). The route counted 150 readable matches,
-        // a minimum (D75), and returned 2, so every place shows 150+ (as `vamscli search nlp` does);
-        // the table still pages the 2 returned hits.
+        // The announcement must not give the route's total ("Found 101+ results") while the badge and
+        // the table header give the returned hits ("100+"). The route counted 150 readable matches,
+        // a minimum, and returned 2, so every place shows 150+ (as `vamscli search nlp` does); the
+        // table still pages the 2 returned hits.
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const envelope = nlpEnvelope(false);
         (searchNlp as jest.Mock).mockResolvedValue([
@@ -409,7 +409,7 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.getByText("Lorry")).toBeInTheDocument();
     });
 
-    it("shows a natural-language count whose windows did not fill as a minimum, with the approximate-matching reason (D75)", async () => {
+    it("shows a natural-language count whose windows did not fill as a minimum, with the approximate-matching reason", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const { container } = renderContainer();
         const input = await screen.findByPlaceholderText("Describe what you are looking for...");
@@ -429,7 +429,7 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.queryByText(/result limit/)).toBeNull();
     });
 
-    it("announces a single natural-language hit as a minimum: Found 1+ results (D75)", async () => {
+    it("announces a single natural-language hit as a minimum: Found 1+ results", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         const envelope = nlpEnvelope(false);
         (searchNlp as jest.Mock).mockResolvedValue([
@@ -559,12 +559,12 @@ describe("ModernSearchContainer search modes", () => {
         expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
     });
 
-    describe("response warnings (D77: rare ones in a Search notice above the results, never a toast)", () => {
+    describe("response warnings: rare ones in a Search notice above the results, never a toast", () => {
         const truncatedMessage = "A result window of 100 filled; more files may match";
         const segmentMessage = "A segment window of 100 filled; more segments may match";
         const ignoredMessage = "OpenSearch is not enabled; ignored: filters, tags";
         const noneAccessibleMessage = "No searchable database is accessible to the caller";
-        // D76: what the page shows for those two codes instead of the API's message.
+        // What the page shows for those two codes instead of the API's message.
         const ignoredText =
             "Some filters aren't available for natural-language search in this deployment and weren't applied.";
         const noneAccessibleText =
@@ -618,7 +618,7 @@ describe("ModernSearchContainer search modes", () => {
             return container;
         };
 
-        it("shows a rare warning in the Search notice above the results, in the page's words, and raises no toast (D77)", async () => {
+        it("shows a rare warning in the Search notice above the results, in the page's words, and raises no toast", async () => {
             const container = await searchWith(false, [
                 { code: "databases:none_accessible", message: noneAccessibleMessage },
             ]);
@@ -646,7 +646,7 @@ describe("ModernSearchContainer search modes", () => {
             expect(screen.queryByText(segmentLine)).toBeNull();
         });
 
-        it("shows each rare warning once, in the API's order, on its own line, and never the API's message, the object or a window-full message (D76, D77)", async () => {
+        it("shows each rare warning once, in the API's order, on its own line, and never the API's message, the object or a window-full message", async () => {
             const container = await searchWith(true, [
                 { code: "truncated:window", message: truncatedMessage },
                 { code: "opensearch:fields_ignored", message: ignoredMessage },
@@ -690,7 +690,7 @@ describe("ModernSearchContainer search modes", () => {
             ]);
             expect(screen.getByText(segmentLine)).toBeInTheDocument();
             // A segment window is not a truncated answer: no whole-file line. The count is the route's
-            // minimum (D75, approximate matching).
+            // minimum (approximate matching).
             expect(screen.queryByText(truncatedLine)).toBeNull();
             expect(countAnnouncement().textContent).toBe("Found 2+ results");
             await new Promise((resolve) => setTimeout(resolve, 300));
@@ -699,7 +699,7 @@ describe("ModernSearchContainer search modes", () => {
             expect(screen.queryByText(segmentMessage)).toBeNull();
         });
 
-        it("announces the count, then the notice's text, in the polite live region (D77)", async () => {
+        it("announces the count, then the notice's text, in the polite live region", async () => {
             // The no-access answer: nothing found, an exact zero, and the one rare warning.
             setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
             (searchNlp as jest.Mock).mockResolvedValue([
@@ -719,7 +719,7 @@ describe("ModernSearchContainer search modes", () => {
             );
             await userEvent.type(input, "gearbox{Enter}");
             await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-            // No database was searched, so the empty table says so (D78).
+            // No database was searched, so the empty table says so.
             await screen.findByText("No results");
             const announcement = `Found 0 results. ${noneAccessibleText}`;
             await waitFor(() => expect(countAnnouncement().textContent).toBe(announcement));
@@ -728,7 +728,7 @@ describe("ModernSearchContainer search modes", () => {
             expect(screen.getByText("0 results")).toBeInTheDocument();
         });
 
-        it("dismissing hides the notice for that answer only; the next answer shows its notice again (D77)", async () => {
+        it("dismissing hides the notice for that answer only; the next answer shows its notice again", async () => {
             setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
             const answer = () => ({
                 ...nlpEnvelope(false),
@@ -771,7 +771,7 @@ describe("ModernSearchContainer search modes", () => {
             expect(toastHeaders(container)).not.toContain("Search notice");
         });
 
-        it("never shows a Search notice for a keyword answer, and a mode switch brings the next natural-language notice back (D77)", async () => {
+        it("never shows a Search notice for a keyword answer, and a mode switch brings the next natural-language notice back", async () => {
             setFeatures(["VECTORSEARCH"]);
             // A keyword answer carrying a warnings entry still shows no notice.
             (searchAssets as jest.Mock).mockResolvedValue([
@@ -948,7 +948,7 @@ describe("ModernSearchContainer natural-language File Type filter", () => {
     });
 
     // The natural-language envelope with the terms buckets the keyword route also returns; its
-    // total is a minimum, as the route reports every total that is not zero (D75).
+    // total is a minimum, as the route reports every total that is not zero.
     const nlpFiles = (
         hits: ReturnType<typeof fileHit>[],
         fileTypes: Array<{ key: string; doc_count: number }>

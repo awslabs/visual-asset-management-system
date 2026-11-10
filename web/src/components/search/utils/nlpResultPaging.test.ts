@@ -26,7 +26,7 @@ const hit = (id: string, score: number, key: string, size?: number): SearchResul
     _source: { str_key: key, num_filesize: size },
 });
 
-// The route's relation (D75): every total that is not zero is a minimum, a truncated one included.
+// The route's relation: every total that is not zero is a minimum, a truncated one included.
 const response = (hits: SearchResult[], truncated = false): NlpSearchResponse => ({
     hits: {
         total: { value: hits.length, relation: truncated || hits.length > 0 ? "gte" : "eq" },
@@ -100,7 +100,7 @@ describe("pageNlpResult", () => {
         expect(page.nlp.truncated).toBe(true);
     });
 
-    it("shows a non-window answer as a minimum because the route reports it as one (D75)", () => {
+    it("shows a non-window answer as a minimum because the route reports it as one", () => {
         // No window filled (truncated false), yet the matching is approximate, so the route says gte
         // and every place shows "3+"; the "top N" line still keys on truncated alone.
         const page = pageNlpResult(response(hits), { from: 0, size: 50 }, []);
@@ -127,9 +127,9 @@ describe("pageNlpResult", () => {
     });
 
     it("shows the route's total when the API found more readable hits than it returned", () => {
-        // D53/D61: the route counts every readable hit (its total and facets) but returns at most `size`.
+        // The route counts every readable hit (its total and facets) but returns at most `size`.
         // The count is the route's total, the one the announcement and `vamscli search nlp` show too,
-        // a minimum as the route says (D75), and the pages cover the returned hits only.
+        // a minimum as the route says, and the pages cover the returned hits only.
         const more = response(hits);
         more.hits.total = { value: 150, relation: "gte" };
         const page = pageNlpResult(more, { from: 0, size: 50 }, []);
@@ -140,25 +140,25 @@ describe("pageNlpResult", () => {
         expect(getPagedResultCount(page)).toBe(3);
     });
 
-    it("gives the notification, the badge and the table header one count (UAT D61)", () => {
-        // The UAT search: the route found 101 matches, its window filled (gte), and it returned 100.
+    it("gives the notification, the badge and the table header one count", () => {
+        // A search whose route found 101 matches, filled its window (gte) and returned 100.
         const many = Array.from({ length: 100 }, (_, i) =>
             hit(`h${i}`, 1 - i / 1000, `/f${i}.glb`)
         );
-        const uat = response(many, true);
-        uat.hits.total = { value: 101, relation: "gte" };
-        const notified = withNlpResultTotal(uat);
-        const page = pageNlpResult(uat, { from: 0, size: 50 }, []);
+        const answer = response(many, true);
+        answer.hits.total = { value: 101, relation: "gte" };
+        const notified = withNlpResultTotal(answer);
+        const page = pageNlpResult(answer, { from: 0, size: 50 }, []);
         expect(formatTotalResultCount(notified)).toBe("101+");
         expect(formatTotalResultCount(page)).toBe("101+");
         expect(isTotalLowerBound(page)).toBe(true);
         expect(getTotalResultCount(page)).toBe(101);
         expect(getPagedResultCount(page)).toBe(100);
-        expect(nlpResultTotal(uat)).toEqual({ value: 101, relation: "gte" });
+        expect(nlpResultTotal(answer)).toEqual({ value: 101, relation: "gte" });
     });
 
-    it("shows a restricted user's count the way the CLI does (UAT D61, second repro)", () => {
-        // uat-dbuser, "gearbox", Files: the route counted 132 readable matches (gte) and returned 100;
+    it("shows a restricted user's count the way the CLI does", () => {
+        // A database-user role, "gearbox", Files: the route counted 132 readable matches (gte) and returned 100;
         // `vamscli search nlp` printed "Found 132+ files" while the page showed "100+".
         const many = Array.from({ length: 100 }, (_, i) =>
             hit(`r${i}`, 1 - i / 1000, `/g${i}.glb`)
@@ -203,7 +203,7 @@ describe("pageNlpResult", () => {
     });
 });
 
-describe("nlpCountExplanation (D75: why a natural-language count is a minimum)", () => {
+describe("nlpCountExplanation: why a natural-language count is a minimum", () => {
     const approximate =
         "The + means there may be more: natural-language search finds the closest matches approximately, so it can miss a weak match.";
 

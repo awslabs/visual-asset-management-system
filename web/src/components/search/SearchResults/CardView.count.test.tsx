@@ -5,7 +5,7 @@
 
 /**
  * The card view's header counter shows a minimum with "+", as the table header and the badge do: every
- * natural-language count that is not zero is one (D75), and so is a keyword total some permission rules
+ * natural-language count that is not zero is one, and so is a keyword total some permission rules
  * cannot count in advance.
  */
 import React from "react";

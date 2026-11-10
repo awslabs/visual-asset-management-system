@@ -230,7 +230,7 @@ describe("SearchTabsHost", () => {
         expect(screen.getByText("Search is not available")).toBeInTheDocument();
     });
 
-    // D52: a provider body is the search page's content, so its chunk recovers like a route page's
+    // A provider body is the search page's content, so its chunk recovers like a route page's
     // (#1035): a chunk that fails to download is fetched again before anything is reported.
     it("fetches a provider body again when its chunk fails to download", async () => {
         // An id of its own: the host keeps one lazy component per provider id for the module's life.
