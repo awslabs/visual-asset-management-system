@@ -14,6 +14,7 @@ import { SearchQuery, SearchResponse, NlpSearchResponse } from "../types";
 import {
     buildKeywordSearchRequest,
     buildNlpSearchRequest,
+    KeywordRequestOptions,
     NlpRequestOptions,
 } from "./searchRequestBuilders";
 
@@ -26,14 +27,16 @@ export const useSearchAPI = () => {
             searchQuery: SearchQuery,
             databaseId?: string,
             metadataSearchMode?: string,
-            metadataOperator?: string
+            metadataOperator?: string,
+            options?: KeywordRequestOptions
         ): Promise<SearchResponse> => {
             try {
                 const body = buildKeywordSearchRequest(
                     searchQuery,
                     databaseId,
                     metadataSearchMode,
-                    metadataOperator
+                    metadataOperator,
+                    options
                 );
 
                 console.log("Search API request body:", body);
