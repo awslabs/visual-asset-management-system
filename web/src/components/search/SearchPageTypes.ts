@@ -7,12 +7,14 @@ import { Dispatch, ReducerAction } from "react";
 import Synonyms from "../../synonyms";
 
 /**
- * Why the asset list's Create and Delete Selected actions are unavailable to the signed-in role
- * (Cloudscape `disabledReason`). An action with no reason is enabled.
+ * Why the asset list's Create, Delete Selected and Unarchive Selected actions are unavailable to the
+ * signed-in role (Cloudscape `disabledReason`), from the API's route listing. An action with no
+ * reason is enabled; the API still authorizes each request.
  */
 export interface AssetActionDisabledReasons {
     create?: string;
     delete?: string;
+    unarchive?: string;
 }
 
 /**

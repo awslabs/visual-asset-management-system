@@ -163,6 +163,37 @@ describe("AssetListProviderComponent bulk actions", () => {
         expect(screen.queryByTestId("asset-delete-modal")).toBeNull();
     });
 
+    it.each([
+        ["may not unarchive", "Your role does not allow unarchiving assets.", true],
+        ["may unarchive", undefined, false],
+    ])(
+        "gates Unarchive Selected on the reason the page passes: a role that %s",
+        async (_, reason, refused) => {
+            render(
+                <MemoryRouter>
+                    <AssetListProviderComponent
+                        isActive
+                        assetActionDisabledReasons={{ unarchive: reason }}
+                    />
+                </MemoryRouter>
+            );
+            await screen.findByText("Live asset");
+            await userEvent.click(screen.getByRole("checkbox", { name: "Show archived" }));
+            const row = (await screen.findByText("Archived asset")).closest("tr") as HTMLElement;
+            await userEvent.click(within(row).getByRole("checkbox"));
+            const unarchive = await screen.findByRole("button", { name: "Unarchive Selected" });
+            await userEvent.click(unarchive);
+            if (refused) {
+                expect(unarchive).toHaveAttribute("aria-disabled", "true");
+                expect(unarchive).toHaveAccessibleDescription(reason as string);
+                expect(screen.queryByTestId("asset-unarchive-modal")).toBeNull();
+            } else {
+                expect(unarchive).not.toHaveAttribute("aria-disabled");
+                expect(await screen.findByTestId("asset-unarchive-modal")).toBeInTheDocument();
+            }
+        }
+    );
+
     it("renders no page heading of its own; the table's header names the list", async () => {
         // The search page's title row carries the page h1 (SearchTabsHost); a second one here would
         // repeat it above a table already headed "Assets (n)".

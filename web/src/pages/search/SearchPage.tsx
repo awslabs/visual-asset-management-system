@@ -36,6 +36,15 @@ const NewSearchPage: React.FC<NewSearchPageProps> = () => {
             can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
             `Your role does not allow archiving or deleting ${Synonyms.assets}.`
         ),
+        // The route the asset page gates its Unarchive on. The shipped templates grant it through
+        // route patterns the listing reports (database-admin) or not at all (database-user denies
+        // it, database-readonly has no PUT), so no role loses an Unarchive it may perform.
+        unarchive: routeDisabledReason(
+            permissionsLoading,
+            permissionsFailed,
+            can("PUT", "/database/{databaseId}/assets/{assetId}/unarchiveAsset"),
+            `Your role does not allow unarchiving ${Synonyms.assets}.`
+        ),
     };
 
     return (

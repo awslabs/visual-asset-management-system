@@ -1338,6 +1338,10 @@ function SearchPageListView({
                                         </Button>
                                         {showUnarchiveButton && (
                                             <Button
+                                                disabled={!!assetActionDisabledReasons?.unarchive}
+                                                disabledReason={
+                                                    assetActionDisabledReasons?.unarchive
+                                                }
                                                 onClick={() => {
                                                     setShowUnarchiveModal(true);
                                                 }}
