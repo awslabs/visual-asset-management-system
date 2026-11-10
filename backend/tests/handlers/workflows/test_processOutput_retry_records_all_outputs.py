@@ -124,9 +124,10 @@ def _listing(s3, prefix):
     return {"Contents": [dict(o) for o in contents]} if contents else {}
 
 
-def _ctx(i):
-    """A Lambda context per attempt: its own request id, a full 15 minutes left."""
-    return MagicMock(aws_request_id=f"attempt-{i}", **{"get_remaining_time_in_millis.return_value": 900_000})
+def _ctx(i, remaining_ms=900_000):
+    """A Lambda context per attempt: its own request id and the time it has left (15 minutes)."""
+    return MagicMock(aws_request_id=f"attempt-{i}",
+                     **{"get_remaining_time_in_millis.return_value": remaining_ms})
 
 
 def _refused():
@@ -140,7 +141,7 @@ class _Never(Exception):
 
 
 def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False, real_stamp=False,
-         run_bucket_versioned=True, fail_upload_of=None):
+         run_bucket_versioned=True, fail_upload_of=None, retry_remaining_ms=900_000):
     """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
 
     'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
@@ -271,7 +272,7 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         answer = None
         for i in range(1, 4):
             try:
-                answer = po.lambda_handler(_event(with_preview), _ctx(i))
+                answer = po.lambda_handler(_event(with_preview), _ctx(i, retry_remaining_ms))
                 break
             except _refused():
                 refusals += 1
@@ -292,7 +293,7 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", []))
     return {"answer": answer, "versions": versions, "recorded": recorded, "queued": queued,
             "staged": staged, "staged_versions": staged_versions, "ingestion_calls": ingestion_calls,
-            "refusals": refusals,
+            "refusals": refusals, "slept": sleep.call_count,
             "first_answer": first.get("answer")}
 
 
@@ -341,6 +342,36 @@ class TestRetryAfterAMidMoveTimeout:
         assert landed["refusals"] == 1
         assert landed["answer"]["statusCode"] == 200
         assert landed["ingestion_calls"].count("MainThread") == 2
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestAShortFunctionTimeout:
+    """[in-dev D3] With a process-output timeout of 30 s, a retry still finishes the run."""
+
+    def test_a_killed_attempts_finished_upload_is_taken_over_within_the_attempt(self):
+        with mock_aws():
+            # The real stamp: the killed attempt's staged original stays listed (it died before it
+            # removed it), so the retry must deal with that attempt's unsettled row.
+            landed = _run("after_ingest", with_preview=True, real_stamp=True, retry_remaining_ms=30_000)
+        # Attempt 0's preview upload finished but it died before settling: attempt 1 waits the (scaled)
+        # grace, takes the row over and completes, instead of refusing at once with no wait budget.
+        assert landed["refusals"] == 0
+        assert landed["slept"] > 0
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["recorded"] == sorted(
+            [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+
+    def test_every_output_already_ingested_is_recorded_without_waiting(self):
+        with mock_aws():
+            landed = _run("during_record", with_preview=True, retry_remaining_ms=30_000)
+        assert landed["refusals"] == 0 and landed["slept"] == 0
+        assert landed["ingestion_calls"] == ["MainThread", "MainThread"]  # attempt 0's two calls only
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["recorded"] == sorted(
+            [("file", name) for name in SMALL] + [("preview", PREVIEW)])
 
 
 @pytest.mark.unit
@@ -472,11 +503,19 @@ class TestAwaitEarlierIngestion:
         assert sleep.call_count == 2
 
     def test_the_wait_is_bounded_by_the_remaining_time(self):
-        # 320 s left keeps 300 s for this attempt's own work: at most 20 s of waiting.
+        # 900 s left keeps the full 300 s margin; the wait is capped at EARLIER_INGESTION_WAIT_MAX_SECONDS.
         ledger, takeover, sleep = self._wait(
-            [self._ledger()] * 10, [{"Item": {"status": "processing"}}] * 10, remaining_ms=320_000)
+            [self._ledger()] * 200, [{"Item": {"status": "processing"}}] * 200, remaining_ms=900_000)
         assert ledger["file:a.glb"]["ingestState"] == "moving" and takeover == {}
-        assert sleep.call_count == 20 // po.EARLIER_INGESTION_POLL_SECONDS
+        assert sleep.call_count == po.EARLIER_INGESTION_WAIT_MAX_SECONDS // po.EARLIER_INGESTION_POLL_SECONDS
+
+    def test_a_short_function_timeout_still_leaves_time_to_wait(self):
+        """[in-dev D3] The margin is at most a third of the attempt's time: with 60 s left the attempt
+        keeps 20 s and waits 40 s, rather than having no wait budget at all after a fixed 300 s."""
+        ledger, takeover, sleep = self._wait(
+            [self._ledger()] * 20, [{"Item": {"status": "processing"}}] * 20, remaining_ms=60_000)
+        assert takeover == {}
+        assert sleep.call_count == 40 // po.EARLIER_INGESTION_POLL_SECONDS
 
     def test_a_holder_whose_upload_finished_but_never_settled_is_taken_over_after_the_grace(self):
         ledger, takeover, sleep = self._wait([self._ledger()] * 30, [{}] * 30)

@@ -643,18 +643,43 @@ def not_terminal_condition(values):
             + ", ".join(terminal_names) + ")")
 
 
+# Marks a FAILED the end-state step wrote (`executionFailedBy`). Attempts of that step can overlap, and
+# one can record FAILED (it saw outputs vanish mid-move) before the attempt that moved them records
+# SUCCEEDED; that SUCCEEDED may replace a FAILED carrying this marker. A FAILED or ABORTED the error
+# handler or the abort path wrote carries no marker and is never replaced.
+END_STATE_FAILURE_SOURCE = "endStateStep"
+
+
+def end_state_status_write(values, status):
+    """The (SET/REMOVE clause additions, ConditionExpression) of an end-state status write. FAILED is
+    marked END_STATE_FAILURE_SOURCE; SUCCEEDED is allowed over a FAILED with that mark and clears it
+    (and its error). Adds the placeholders to `values`."""
+    condition = not_terminal_condition(values)
+    values[":failedBy"] = END_STATE_FAILURE_SOURCE
+    if status == "FAILED":
+        return ", executionFailedBy = :failedBy", "", condition
+    values[":failedStatus"] = "FAILED"
+    condition = f"({condition}) OR (executionStatus = :failedStatus AND executionFailedBy = :failedBy)"
+    return "", " REMOVE executionFailedBy, executionError", condition
+
+
 def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id,
-                        workflow_execution_id, status, stop_date=None):
+                        workflow_execution_id, status, stop_date=None, end_state=False):
     """Set a pipeline-execution row's status (and stop date when terminal), conditioned on the row not
     already being terminal so a still-in-flight writer (the interim tracking lambda) cannot regress a
-    row the abort/error path already finished. A row that is already terminal is left untouched."""
+    row the abort/error path already finished. A row that is already terminal is left untouched, except
+    that with `end_state` a SUCCEEDED replaces a FAILED the end-state step wrote (end_state_status_write)."""
     table = dynamo.Table(pipeline_executions_table)
     expr = "SET executionStatus = :st"
     values = {":st": status}
     if stop_date:
         expr += ", executionStopDate = :s"
         values[":s"] = stop_date
-    condition = not_terminal_condition(values)
+    if end_state:
+        set_extra, remove_extra, condition = end_state_status_write(values, status)
+        expr += set_extra + remove_extra.replace(", executionError", "")
+    else:
+        condition = not_terminal_condition(values)
     try:
         table.update_item(
             Key={"pipelineExecutionId": pipeline_execution_id,

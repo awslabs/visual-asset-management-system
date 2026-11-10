@@ -46,7 +46,7 @@ _ASL_INTRINSIC_UNSAFE_CHARS = "'{}\\"
 
 
 # The errors the process-output state retries (see build_* below). Changing this list changes every
-# workflow's definition: bump workflowAsl.ASL_DEFINITION_VERSION in the same change so deployed
+# workflow's definition: bump workflowAsl.ASL_SCHEMA_VERSION (and this module's) in the same change so deployed
 # workflows are redeployed at their next launch.
 PROCESS_OUTPUT_RETRY_ERRORS = [
     "Lambda.ServiceException",

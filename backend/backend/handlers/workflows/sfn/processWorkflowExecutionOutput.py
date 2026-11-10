@@ -7,6 +7,7 @@ import boto3
 import json
 import uuid
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from common.timestamps import utc_now
@@ -141,7 +142,10 @@ s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
 
 s3c = region_routing_s3_client()
 s3r = region_routing_s3_resource()
-dynamodb = boto3.resource('dynamodb', config=retry_config)
+# The ledger claims run eo.INGEST_CLAIM_WORKERS puts in parallel; size the pool for them.
+dynamodb = boto3.resource('dynamodb', config=Config(
+    retries={'max_attempts': 5, 'mode': 'adaptive'},
+    max_pool_connections=max(eo.INGEST_CLAIM_WORKERS, MAX_PARALLEL_S3_WORKERS)))
 client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
@@ -202,6 +206,10 @@ def get_default_bucket_details(bucketId):
         logger.exception(f"Error getting bucket details: {e}")
         raise Exception(f"Error getting bucket details.")
 
+# A HEAD answer meaning the listed object no longer exists.
+_GONE_ERROR_CODES = ('404', 'NoSuchKey', 'NotFound', 'NoSuchVersion')
+
+
 def _head_listed_objects(bucketName: str, objects):
     """HEAD every listed object once, annotating each with its 'ContentType', 'VersionId',
     'Metadata' and 'ContentHeaders' (the system-defined headers a metadata-replacing copy restates).
@@ -210,7 +218,15 @@ def _head_listed_objects(bucketName: str, objects):
     the provenance stamp, so an output block costs a single HEAD per object however many consumers
     read it. The heads run in a bounded pool because a listing can hold thousands of objects."""
     def _head_one(obj):
-        head = s3c.head_object(Bucket=bucketName, Key=obj['Key'])
+        try:
+            head = s3c.head_object(Bucket=bucketName, Key=obj['Key'])
+        except ClientError as e:
+            # Listed, then moved by an overlapping attempt of this step before this HEAD (#1271 D2):
+            # it is no longer staged, which is what the listing would have said a moment later.
+            if e.response.get('Error', {}).get('Code') in _GONE_ERROR_CODES:
+                obj['_gone'] = True
+                return
+            raise
         obj['ContentType'] = head.get('ContentType', '') or ''
         obj['VersionId'] = head.get('VersionId', '') or ''
         obj['Metadata'] = head.get('Metadata', {}) or {}
@@ -233,6 +249,10 @@ def verify_get_path_objects(bucketName: str, pathPrefix: str):
 
     #Do MIME check on whatever is uploaded to S3 at this point for this asset, before we do DynamoDB insertion, to validate it's not malicious
     _head_listed_objects(bucketName, objects)
+    gone = [obj['Key'] for obj in objects if obj.get('_gone')]
+    if gone:
+        logger.info(f"{len(gone)} listed objects were moved before they could be read; skipped")
+        objects = [obj for obj in objects if not obj.get('_gone')]
     for obj in objects:
         if not validateUnallowedFileExtensionAndContentType(obj['Key'], obj.get('ContentType', '')):
             raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
@@ -371,6 +391,10 @@ EARLIER_INGESTION_WAIT_MAX_SECONDS = 600
 EARLIER_INGESTION_WAIT_MARGIN_SECONDS = 300
 EARLIER_INGESTION_POLL_SECONDS = 5
 EARLIER_INGESTION_SETTLE_GRACE_SECONDS = 60
+# The margin and grace scale down with a shorter function timeout (#1271 D3): at most these fractions
+# of the time the attempt started with, so an attempt with a short timeout can still wait and take over.
+EARLIER_INGESTION_MARGIN_FRACTION = 1 / 3
+EARLIER_INGESTION_GRACE_FRACTION = 1 / 6
 UPLOAD_STATUS_PROCESSING = "processing"
 
 
@@ -480,6 +504,16 @@ def _remaining_seconds(context):
         return 0.0
 
 
+def _attempt_limits(context, start_seconds=None):
+    """(wait margin, settle grace) in seconds for this attempt: the fixed limits, capped at a fraction
+    of the time the attempt started with (`start_seconds`, else its remaining time now)."""
+    start = _remaining_seconds(context) if start_seconds is None else start_seconds
+    margin = min(EARLIER_INGESTION_WAIT_MARGIN_SECONDS, start * EARLIER_INGESTION_MARGIN_FRACTION)
+    grace = min(EARLIER_INGESTION_SETTLE_GRACE_SECONDS,
+                max(EARLIER_INGESTION_POLL_SECONDS, start * EARLIER_INGESTION_GRACE_FRACTION))
+    return margin, grace
+
+
 def _upload_processing(upload_id, asset_id):
     """Whether an upload record is still 'processing' (an unreadable record counts as processing)."""
     try:
@@ -490,7 +524,7 @@ def _upload_processing(upload_id, asset_id):
     return bool(item) and item.get('status') == UPLOAD_STATUS_PROCESSING
 
 
-def _await_earlier_ingestion(workflow_execution_id, asset_id, context, holder):
+def _await_earlier_ingestion(workflow_execution_id, asset_id, context, holder, start_seconds=None):
     """Wait, bounded, while another live attempt holds outputs `moving`; return the ledger as read at
     the end and the takeover map ({sort key: (holder, movingSince)}) of rows whose holder is gone (its
     upload finished EARLIER_INGESTION_SETTLE_GRACE_SECONDS ago and it never settled them).
@@ -498,8 +532,8 @@ def _await_earlier_ingestion(workflow_execution_id, asset_id, context, holder):
     Rows still held by a live attempt when the wait ends stay in the ledger as `moving`; the caller
     leaves them to that attempt."""
     ledger = _read_ingest_ledger(workflow_execution_id)
-    budget = min(EARLIER_INGESTION_WAIT_MAX_SECONDS,
-                 _remaining_seconds(context) - EARLIER_INGESTION_WAIT_MARGIN_SECONDS)
+    margin, grace = _attempt_limits(context, start_seconds)
+    budget = min(EARLIER_INGESTION_WAIT_MAX_SECONDS, _remaining_seconds(context) - margin)
     waited = 0.0
     finished_at = {}
     while True:
@@ -510,7 +544,7 @@ def _await_earlier_ingestion(workflow_execution_id, asset_id, context, holder):
             rows = {k: r for k, r in live.items() if r.get("uploadId", "") == upload_id}
             if upload_id and not _upload_processing(upload_id, asset_id):
                 finished_at.setdefault(upload_id, waited)
-                if waited - finished_at[upload_id] >= EARLIER_INGESTION_SETTLE_GRACE_SECONDS:
+                if waited - finished_at[upload_id] >= grace:
                     takeover.update({k: (r.get("ingestHolder"), r.get("movingSince")) for k, r in rows.items()})
                     continue
             pending += len(rows)
@@ -527,14 +561,15 @@ class _NothingClaimed(Exception):
     """Every output this attempt meant to hand over was claimed by another attempt first."""
 
 
-def _await_held_outputs(workflow_execution_id, held, context, holder):
+def _await_held_outputs(workflow_execution_id, held, context, holder, start_seconds=None):
     """Wait, bounded by the attempt's remaining time, until every output another live attempt held is
     `ingested`; return the ledger as last read. Raises EarlierIngestionInProgress when the budget is
     spent first, or when an output that attempt held was released un-ingested (its ingestion failed),
     so the step is retried and the output claimed then, instead of this attempt recording the run
     without it or ingesting it a second time beside the holder."""
     keys = {eo.ingest_ledger_sort_key(d) for d in held}
-    budget = _remaining_seconds(context) - EARLIER_INGESTION_WAIT_MARGIN_SECONDS
+    margin, _grace = _attempt_limits(context, start_seconds)
+    budget = _remaining_seconds(context) - margin
     waited = 0.0
     while True:
         ledger = _read_ingest_ledger(workflow_execution_id)
@@ -1370,7 +1405,7 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     # Completion status on the end-state pipeline-execution row, conditioned on the row not being
     # terminal already so an in-flight task cannot regress a row the abort/error path finished.
     eo.set_pipeline_status(dynamo, pipeline_executions_table, end_state_pipeline_execution_id,
-                           workflow_execution_id, execution_status, stop_date=stop_date)
+                           workflow_execution_id, execution_status, stop_date=stop_date, end_state=True)
 
     # Completion status + full execution log on the main V2 row, under the same terminal guard. The
     # log is captured on every completed run (success or failure) for later debugging by limited
@@ -1381,7 +1416,10 @@ def _write_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     if execution_error:
         expression += ", executionError = :er"
         values[":er"] = execution_error
-    condition = eo.not_terminal_condition(values)
+    # Attempts of this step can overlap (#1271 D2): a SUCCEEDED replaces a FAILED an earlier-finishing
+    # attempt of this step wrote, never one the error handler or the abort path wrote.
+    set_extra, remove_extra, condition = eo.end_state_status_write(values, execution_status)
+    expression += set_extra + ("" if execution_error else remove_extra)
     try:
         main_table.update_item(
             Key={"workflowExecutionId": workflow_execution_id,
@@ -1658,8 +1696,10 @@ def lambda_handler(event, context):
             # with a conditional write, and only claimed outputs are handed to ingestion.
             ledger_execution_id = event.get('workflowExecutionId', '')
             attempt_holder = _attempt_holder(context)
+            attempt_start_seconds = _remaining_seconds(context)
             ingest_ledger, ingest_takeover = _await_earlier_ingestion(
-                ledger_execution_id, event['assetId'], context, attempt_holder)
+                ledger_execution_id, event['assetId'], context, attempt_holder,
+                start_seconds=attempt_start_seconds)
             # Outputs another live attempt still holds when this attempt's wait ended.
             held_by_other_attempt = []
             # The staged keys this attempt listed per output type; a type whose listing failed is absent.
@@ -1767,10 +1807,12 @@ def lambda_handler(event, context):
                                                    or d["relativeFilePath"] in ingested_keys)]
                                 collected_output_files.extend(landed_previews)
                                 if result:
+                                    # Staged versions go first, while the rows are still this attempt's
+                                    # `moving`: a waiting attempt never lists a prefix mid-delete (D2).
+                                    _remove_listed_staged_versions(landed_previews, source_bucket)
                                     _settle_ingest_ledger(
                                         ledger_execution_id, preview_descriptors, landed_previews,
                                         holder=attempt_holder)
-                                    _remove_listed_staged_versions(landed_previews, source_bucket)
                                 if all_ingested and result:
                                     logger.info("Preview upload completed successfully")
                                 else:
@@ -1882,9 +1924,11 @@ def lambda_handler(event, context):
                                                or d["relativeFilePath"] in ingested_keys)]
                             collected_output_files.extend(landed_files)
                             if result:
+                                # Staged versions go first, while the rows are still this attempt's
+                                # `moving`: a waiting attempt never lists a prefix mid-delete (D2).
+                                _remove_listed_staged_versions(landed_files, source_bucket)
                                 _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files,
                                                       holder=attempt_holder)
-                                _remove_listed_staged_versions(landed_files, source_bucket)
                             if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:
@@ -1904,7 +1948,8 @@ def lambda_handler(event, context):
             # them; if it does not in time, the retriable path is taken rather than a second ingestion.
             if held_by_other_attempt:
                 ingest_ledger = _await_held_outputs(
-                    ledger_execution_id, held_by_other_attempt, context, attempt_holder)
+                    ledger_execution_id, held_by_other_attempt, context, attempt_holder,
+                    start_seconds=attempt_start_seconds)
 
             #Handle metadata outputs (needs to happen after S3 file processing)
             if('metadataPathKey' in event):
