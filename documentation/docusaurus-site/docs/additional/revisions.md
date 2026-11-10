@@ -199,6 +199,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Multi-word keyword search** — A keyword query of several words finds records in which any of the words appears anywhere inside a value, metadata values included. (issue #1273)
 -   **Field filters of several words** — A field filter or metadata value of several words matches only records that hold every word. (issue #1282)
 -   **Exact and prefix metadata values** — A metadata value search finds an exact value or a prefix such as `PRJ*`, not only patterns that start with `*`, on OpenSearch Serverless and provisioned domains. (issue #1285)
+-   **Quoted search values** — A metadata value or search field value in double quotes, such as `"SBXC-325"`, is matched exactly instead of finding nothing. (issue #1299)
 -   **Search totals past 1,000 databases** — `aggregationTotal` counts the records in every database. (issue #770)
 -   **Cut facet lists are reported** — Each search facet reports the records left out of its returned values in `sum_other_doc_count`; the search page notes under the type and tag lists that only the most common values are listed, and shows no count for a database whose results may lie past them. (issue #1283)
 -   **Deleted and archived records leave search** — An index write that lands after a delete or archive no longer leaves the record in search as live. (issue #789)

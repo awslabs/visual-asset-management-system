@@ -239,6 +239,7 @@ A field filter narrows the results, so a value of several words asks for every w
 
 -   `assetName`, `assetId`, `assetType`, `fileKey` and each `tags` entry: a value without `*` or `?` matches the field's exact value. A value with `*` or `?` matches a record whose field contains every word, each word with its own wildcards: `gearbox hous*` finds `gearbox housing`, and `gearbox zzz*` does not find `gearbox`.
 -   `metadataValue`: a value without wildcards matches a record whose metadata (and, on files, attribute) values contain every word, each anywhere inside a value; the words may sit in different keys. A value with wildcards is one pattern for a whole value: `Line 3*` matches a value that starts with `Line 3`.
+-   A value of any of these fields wrapped in one pair of double quotes is matched exactly: `"Line 3"` matches the whole value `Line 3` and not `Line 30` or `Assembly Line 3`, and `*` and `?` inside the quotes are literal characters. A quote that is not part of such a pair is a character of the value.
 
 :::tip[When to Use Simple Search]
 Use simple search when you need basic filtering by known fields. Use [Advanced Search](#advanced-search) when you need structured tokens, custom filters, or fine-grained control over query behavior.
@@ -757,6 +758,8 @@ Three separate things are worth keeping apart when reading the rest of this page
 #### Values of Several Words
 
 A `metadataQuery` term is one value. In `both` mode a `key:value` term with a value without wildcards matches that key's exact value (`Plant:Line 3`), and a value with `*` or `?` is one pattern for the key's whole value (`Plant:Line 3*` matches `Line 3` and `Line 30`); a bare term without wildcards matches an exact value. In `value` mode a term without wildcards matches a record whose values contain every word, each anywhere inside a value, and a term with wildcards is one pattern for a whole value. Unlike the general `query`, no word of a value is matched on its own.
+
+A value wrapped in one pair of double quotes is matched exactly, in `both` and `value` mode, as a bare term or as the value of a `key:value` term: `"SBXC-325"` and `ProjectCode:"SBXC-325"` match a value that is exactly `SBXC-325`, and `"Line 3"` matches the whole value `Line 3`. Inside the quotes `*` and `?` are literal characters, and a `:`, `AND` or `OR` belongs to the value. A quote that is not part of such a pair is a character of the value.
 
 #### Metadata Key Spellings a Request May Use
 

@@ -504,7 +504,9 @@ def search():
 
 @search.command()
 @click.option('-q', '--query', help='General text search query')
-@click.option('--metadata-query', help='Metadata search query (field:value format, supports AND/OR)')
+@click.option('--metadata-query',
+              help='Metadata search query (field:value format, supports AND/OR); a value in double quotes '
+                   'is matched exactly')
 @click.option('--metadata-mode', type=click.Choice(['key', 'value', 'both']), default='both',
               help='Metadata search mode: key (field names), value (field values), or both (default: both)')
 @click.option('--include-metadata/--no-metadata', default=True,
@@ -565,6 +567,7 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         --metadata-query "MD_str_product:A AND MD_num_version:1" # Multiple conditions
         --metadata-query "product" --metadata-mode key          # Search field names only
         --metadata-query "Training" --metadata-mode value       # Search values only
+        --metadata-query '"SBXC-325"'                           # Exactly this value (quoted)
     
     General Examples:
         vamscli search assets -q "training model" --filters 'str_databaseid.keyword:"my-db"'
@@ -690,7 +693,9 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
 
 @search.command()
 @click.option('-q', '--query', help='General text search query')
-@click.option('--metadata-query', help='Metadata search query (field:value format, supports AND/OR)')
+@click.option('--metadata-query',
+              help='Metadata search query (field:value format, supports AND/OR); a value in double quotes '
+                   'is matched exactly')
 @click.option('--metadata-mode', type=click.Choice(['key', 'value', 'both']), default='both',
               help='Metadata search mode: key (field names), value (field values), or both (default: both)')
 @click.option('--include-metadata/--no-metadata', default=True,
@@ -868,7 +873,7 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
 @click.option('-d', '--database', help='Filter by database ID')
 @click.option('--tags', help='Filter by tags (comma-separated)')
 @click.option('--metadata-key', help='Search metadata field names')
-@click.option('--metadata-value', help='Search metadata field values')
+@click.option('--metadata-value', help='Search metadata field values; a value in double quotes is matched exactly')
 @click.option('--entity-types', help='Filter by entity type: asset, file, or both (comma-separated)')
 @click.option('--include-archived', is_flag=True, help='Include archived items')
 @click.option('--geo-point', help="Geo point filter: 'lat,lon' or 'lat,lon,radiusMeters'")

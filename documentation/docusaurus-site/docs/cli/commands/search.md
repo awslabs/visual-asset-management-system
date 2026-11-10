@@ -75,6 +75,8 @@ Identifier fields such as `str_databaseid` are analyzed text: the index splits a
 
 `--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default). `field:value` terms are parsed only in `both` mode; in `key` and `value` mode each `AND`/`OR` term is a field name or a value. A value of several words is one value: `Plant:Line 3` matches that exact value, `Plant:Line 3*` a value starting with `Line 3`, and a `value`-mode term without wildcards a record whose values contain every word. In `search simple`, a wildcard value of `--asset-name`, `--asset-id`, `--asset-type`, `--file-key` or `--tags` matches a record whose field holds every word (`--asset-name "gearbox hous*"`).
 
+A value wrapped in one pair of double quotes is matched exactly: `--metadata-query '"SBXC-325"'` and `--metadata-query 'ProjectCode:"SBXC-325"'` match a value that is exactly `SBXC-325`, in `value` mode too, and `--metadata-value '"Line 3"'` matches the whole value `Line 3` and not `Line 30`. Inside the quotes `*` and `?` are literal characters. The same holds for the `search simple` options above. Put single quotes around the argument so the shell passes the double quotes on.
+
 The key may be given bare, with the `MD_` / `AB_` entity prefix, or with a type prefix; all three address the same field. See [Search field reference](#search-field-reference).
 
 ```bash
@@ -99,6 +101,9 @@ vamscli search assets --metadata-query "product" --metadata-mode key
 
 # Match metadata field values only
 vamscli search assets --metadata-query "Training" --metadata-mode value
+
+# An exact value: the double quotes inside the single quotes reach the search
+vamscli search assets --metadata-query '"SBXC-325"'
 
 # Combine text query with metadata search (both must match)
 vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
@@ -197,7 +202,7 @@ vamscli search simple [OPTIONS]
 | `-d`, `--database`   | TEXT    | No       | Filter by database ID                                                      |
 | `--tags`             | TEXT    | No       | Filter by tags (comma-separated)                                           |
 | `--metadata-key`     | TEXT    | No       | Search metadata field names                                                |
-| `--metadata-value`   | TEXT    | No       | Search metadata field values                                               |
+| `--metadata-value`   | TEXT    | No       | Search metadata field values; a value in double quotes is matched exactly  |
 | `--entity-types`     | TEXT    | No       | Entity types to search: `asset`, `file`, or `asset,file` (comma-separated) |
 | `--include-archived` | Flag    | No       | Include archived items                                                     |
 | `--geo-point`        | TEXT    | No       | Geo point filter: `lat,lon` or `lat,lon,radiusMeters`                      |
