@@ -884,6 +884,8 @@ After deployment, place a file named `init` inside each asset folder. This trigg
 
 The `init` file can be empty (zero bytes). Its only purpose is to trigger the S3 event notification.
 
+An object named exactly `init`, or a folder named `init/`, at any level inside an asset folder is an import marker. Bucket sync deletes it with all its versions, so do not store asset files named `init`. A file whose name only ends in `init`, such as `postinit` or `config.init`, is an ordinary asset file.
+
 **Bulk-create init files using the AWS CLI:**
 
 ```bash
@@ -1048,7 +1050,7 @@ The init-file approach scales well. Add a short delay (0.5-1 second) between cre
 
 **Will the init files remain in my bucket?**
 
-Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
+Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. Other files in the folder are kept, including files whose names start or end with `init`, such as `init.txt` or `postinit`. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
 
 ## Related resources
 
