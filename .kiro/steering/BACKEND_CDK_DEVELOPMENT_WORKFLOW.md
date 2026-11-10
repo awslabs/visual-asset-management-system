@@ -1116,11 +1116,12 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
     (any word, anywhere inside a value); a field filter with wildcards on an analyzed text field
     `every_word_in_field_query`; a wildcard pattern on a keyword-typed field `whole_value_pattern`;
     a contains search of metadata values `every_word_anywhere_in_values_query`.
--   **Flat-object value fields depend on the engine.** For an exact or prefix term name only the
-    root (`MD_`, `AB_`) or a key (`MD_.<key>`). For any other wildcard pattern use
-    `FieldClassifier.flat_object_value_fields` or `flat_object_key_pattern_query`, which choose
-    `<root>._value` / `<root>._valueAndPath` on OpenSearch Serverless (`OPENSEARCH_TYPE`) and the
-    root or key on provisioned domains. Never hardcode `MD_._value`.
+-   **Flat-object value fields depend on the query, not the engine.** For an exact or prefix term
+    name only the root (`MD_`, `AB_`) or a key (`MD_.<key>`). Neither engine rewrites any other
+    wildcard pattern, so it names `<root>._value` (a value) or `<root>._valueAndPath` (one key's
+    value): use `FieldClassifier.flat_object_value_fields` and `flat_object_key_pattern_query`,
+    and do not branch on `OPENSEARCH_TYPE` (confirmed on OpenSearch Serverless and provisioned
+    OpenSearch 3.5). Never hardcode `MD_._value`.
 
 #### **System User (`SYSTEM_USER`)**
 
