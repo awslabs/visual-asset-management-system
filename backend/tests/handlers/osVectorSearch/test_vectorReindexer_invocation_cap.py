@@ -62,7 +62,9 @@ class TestInvocationCap:
         assert failure["error"].startswith("ReindexHopLimitReached: the run reached 200 invocations")
         resumed = failure["resumePayload"]["continuation"]
         # The work this invocation did is kept, and the resumed run gets a fresh invocation budget.
-        assert (resumed["clearStartKey"], resumed["deleted"], resumed["invocations"]) == (CURSOR, 2, 0)
+        assert resumed["clearStartKey"] == CURSOR
+        assert resumed["deleted"] == 2
+        assert resumed["invocations"] == 0
         assert failure["resumePayload"]["operation"] == "clear"
 
     def test_below_the_cap_the_run_continues_itself(self, reindexer):
@@ -75,7 +77,9 @@ class TestInvocationCap:
     def test_an_invocation_at_the_cap_that_finishes_its_work_completes(self, reindexer):
         body = json.loads(
             reindexer.lambda_handler(_continuation(CAP - 1, CURSOR, deleted=2), _context(600000))["body"])
-        assert (body["phase"], body["continued"], body["deleted"]) == ("done", False, 3)
+        assert body["phase"] == "done"
+        assert body["continued"] is False
+        assert body["deleted"] == 3
         reindexer.lambda_client.invoke.assert_not_called()
 
     def test_the_resume_payload_from_the_cap_continues_the_run(self, reindexer):
@@ -83,5 +87,7 @@ class TestInvocationCap:
             reindexer.lambda_handler(_continuation(CAP - 1), _context(60000))
         resume = json.loads(str(excinfo.value))["resumePayload"]
         body = json.loads(reindexer.lambda_handler(resume, _context(600000))["body"])
-        assert (body["reindexRunId"], body["phase"], body["deleted"], body["invocations"]) == (
-            "abc123def456", "done", 3, 1)
+        assert body["reindexRunId"] == "abc123def456"
+        assert body["phase"] == "done"
+        assert body["deleted"] == 3
+        assert body["invocations"] == 1
