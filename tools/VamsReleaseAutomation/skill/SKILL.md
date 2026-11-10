@@ -113,11 +113,11 @@ The `vra mcp` server exposes the engine as tools. Each tool runs
 codes apply. Tools appear in three tiers, chosen by the operator in the
 server's environment:
 
-| Tier                                 | Tools                                                                                                                                                                                                                   |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| read (always)                        | `status` (`run_id`, `all_runs`), `report`, `ledger_validate`, `ledger_show`, `ledger_diff`, `ledger_graph`, `preflight`, `sync_dry_run`, `history_verify`, `history_show`, `home_show`, `iam_verify`, `pipeline_status` |
-| write (`VRA_MCP_ENABLE_WRITES=true`) | `sync`, `merge`, `merge_continue`, `build`, `deploy`, `test`, `backup` (deploy, test and backup only on envs without `requiresApproval`), `resume`, `watch`, `iam_plan`, `pipeline_plan`, `pipeline_sync_ledger`        |
-| gated (`VRA_MCP_ENABLE_GATED=true`)  | `deploy` on approval-gated envs, `promote`, `rollback`, `restore`, `data_copy`, `migrate` (each needs `approval`); `pipeline_deploy`, `pipeline_push_source` (the adapters ask the human first)                         |
+| Tier                                 | Tools                                                                                                                                                                                                                               |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| read (always)                        | `status` (`run_id`, `all_runs`), `report`, `ledger_validate`, `ledger_show`, `ledger_diff`, `ledger_graph`, `preflight`, `sync_dry_run`, `history_verify`, `history_show`, `home_show`, `iam_verify`, `pipeline_status`             |
+| write (`VRA_MCP_ENABLE_WRITES=true`) | `sync`, `merge`, `merge_continue`, `build`, `deploy`, `test`, `backup` (deploy, test and backup only on envs without `requiresApproval`), `resume`, `watch`, `iam_plan`, `pipeline_plan`, `pipeline_sync_ledger`                    |
+| gated (`VRA_MCP_ENABLE_GATED=true`)  | `deploy` on approval-gated envs, `promote`, `data_copy` (each needs `approval`); `rollback`, `restore`, `migrate` (`approval` on approval-gated envs); `pipeline_deploy`, `pipeline_push_source` (the adapters ask the human first) |
 
 The workflow files name engine actions by their CLI spelling. Call the
 matching tool: the tool name is the command with `_` for spaces and dashes
