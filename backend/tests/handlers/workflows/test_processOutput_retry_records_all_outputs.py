@@ -491,6 +491,13 @@ class TestTheMovingClaimIsConditional:
 
 
 @pytest.mark.unit
+class TestTheStoodAsideAttemptIsRetried:
+    def test_the_raised_error_name_is_in_the_process_output_retrier(self):
+        from backend.backend.common.workflows import workflowAslBuilder as asl
+        assert po.EarlierIngestionInProgress.__name__ in asl.PROCESS_OUTPUT_RETRY_ERRORS
+
+
+@pytest.mark.unit
 class TestMergeEarlierOutputs:
     def _row(self, name, state, file_type="file"):
         return {"fileType": file_type, "relativeFilePath": name, "s3Bucket": RUN_BUCKET,
