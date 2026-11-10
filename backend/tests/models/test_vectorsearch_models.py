@@ -207,6 +207,30 @@ class TestFileClasses:
         assert "mesh" in message and "usd" in message and "cad" in message
 
 
+class TestRefusalsNameTheFieldOnce:
+    """The 400 for an unknown file class or entity type names the field once, as the other /search/nlp
+    field errors do: the message formatter puts "<field>: " before a field validator's message, which
+    named the field again ("fileClasses: fileClasses accepts only these values: ...")."""
+
+    def _message(self, **request):
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query="x", **request)
+        return validation_error_message(caught.value)
+
+    def test_an_unknown_file_class(self):
+        from models.vectorsearch import FILE_CLASSES
+
+        message = self._message(fileClasses=["3d-model"])
+        assert message == "fileClasses: only these values are accepted: " + ", ".join(FILE_CLASSES)
+        assert message.count("fileClasses") == 1
+
+    @pytest.mark.parametrize("entity_types", [["folder"], ["file", "asset"], []])
+    def test_an_invalid_entity_type(self, entity_types):
+        message = self._message(entityTypes=entity_types)
+        assert message == "entityTypes: exactly one of these values is accepted: file, asset"
+        assert "folder" not in message
+
+
 class TestResponseModelsIgnoreExtraKeys:
     """Every response model declares extra='ignore' itself (A15, backend Rule 8), rather than leaning on
     the library default, which a base-class change could move."""

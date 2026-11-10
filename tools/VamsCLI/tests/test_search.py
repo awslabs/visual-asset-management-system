@@ -1810,8 +1810,8 @@ class TestSearchNlpClientThroughTheRequestWrapper:
         assert str(caught.value) == message
 
     def test_a_400_names_the_refusal(self, monkeypatch):
-        client = self._client_answering(monkeypatch, 400, "fileClasses accepts only these values: image, video")
-        with pytest.raises(APIError, match="Invalid search parameters: fileClasses accepts only"):
+        client = self._client_answering(monkeypatch, 400, "fileClasses: only these values are accepted: image, video")
+        with pytest.raises(APIError, match="Invalid search parameters: fileClasses: only these values are accepted"):
             client.search_nlp({"query": "x", "fileClasses": ["3d-model"]})
 
     def test_a_404_says_the_feature_may_be_off(self, monkeypatch):

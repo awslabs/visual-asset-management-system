@@ -37,7 +37,9 @@ MAX_DATABASE_IDS = 100
 MAX_FILE_EXTENSIONS = 100
 # Characters in one tag or file-extension value, the bound the keyword search puts on a tag.
 MAX_FILTER_VALUE_LENGTH = 256
-UNKNOWN_FILE_CLASS_MESSAGE = "fileClasses accepts only these values: " + ", ".join(FILE_CLASSES)
+# Field validator messages: the 400 names the field once, as "<field>: <message>" (validation_error_message)
+UNKNOWN_FILE_CLASS_MESSAGE = "only these values are accepted: " + ", ".join(FILE_CLASSES)
+ENTITY_TYPE_MESSAGE = "exactly one of these values is accepted: " + ", ".join(ENTITY_TYPES)
 MAX_SIZE = 100
 DEFAULT_SIZE = 25
 VECTOR_INDEX_LABEL = "vams-vectors"
@@ -91,7 +93,7 @@ class NlpSearchRequestModel(BaseModel):
     @validator("entityTypes")
     def _one_entity_kind(cls, value):
         if len(value) != 1 or value[0] not in ENTITY_TYPES:
-            raise ValueError(f"entityTypes must be exactly one of {list(ENTITY_TYPES)}")
+            raise ValueError(ENTITY_TYPE_MESSAGE)
         return value
 
     @validator("fileClasses")
