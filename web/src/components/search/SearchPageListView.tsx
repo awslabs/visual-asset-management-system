@@ -50,7 +50,7 @@ import {
     isViewableSearchRow,
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
-import { isFileHitSource } from "./utils/recordType";
+import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import {
     areFilenamesViewableTogether,
     areFilesComparableTogether,
@@ -915,7 +915,14 @@ function SearchPageListView({
                 header: fieldLabel,
                 cell: (e: any) => {
                     if (name === "metadata") {
-                        const { metadata, attributes } = extractMetadata(e);
+                        // A natural-language asset row's MD_ is its asset's location only (D83).
+                        const { metadata, attributes } = hasLocationOnlyMetadata(
+                            e,
+                            e._vector,
+                            isFileMode
+                        )
+                            ? { metadata: [], attributes: [] }
+                            : extractMetadata(e);
                         // console.log("[MetadataDebug] Extracted data:", {
                         //     metadata,
                         //     attributes,

@@ -171,6 +171,11 @@ export interface SearchResponse {
                 key: string;
                 doc_count: number;
             }>;
+            /**
+             * Records whose value is not among `buckets` (a facet returns at most 1,000 per index);
+             * 0 when every value is listed, null when the aggregation reports no such count.
+             */
+            sum_other_doc_count?: number | null;
         };
     };
     aggregationTotal?: number;

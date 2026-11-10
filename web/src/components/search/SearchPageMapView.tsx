@@ -35,7 +35,7 @@ import {
     isTotalLowerBound,
 } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
-import { isFileHitSource } from "./utils/recordType";
+import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 
@@ -270,7 +270,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
             const location = extractLocationData(source);
             if (location && location.type) {
-                const { metadata, attributes } = extractMetadata(source);
+                // A natural-language asset hit's MD_ is its asset's location only, not its metadata.
+                const { metadata, attributes } = hasLocationOnlyMetadata(
+                    source,
+                    hit._vector,
+                    isFileSearchMode
+                )
+                    ? { metadata: [], attributes: [] }
+                    : extractMetadata(source);
                 // Authoritative source: the search-state `_rectype` filter.
                 // Fall back to the document's own record type only if the
                 // filter is unset (e.g., a future "all" mode).

@@ -23,3 +23,19 @@ export function isFileHitSource(
     if (isFileSearchMode) return true;
     return source?.[RECORD_TYPE_FIELD] === "file";
 }
+
+/**
+ * Whether a hit's `MD_` holds only its asset's location rather than the asset's metadata (D83). A
+ * natural-language asset hit (one with `_vector`) carries `geo_MD_location` and the location keys of
+ * the asset's `MD_` (location, latitude, lat, longitude, lon, long) so the Map view can plot it, and
+ * nothing else of that metadata; listing those keys as the asset's metadata fields would misstate
+ * it. A natural-language file hit carries its file's whole `MD_` from the file index, and a keyword
+ * hit its record's, so their metadata is listed as it is.
+ */
+export function hasLocationOnlyMetadata(
+    source: Record<string, any> | null | undefined,
+    vector: unknown,
+    isFileSearchMode: boolean
+): boolean {
+    return !!vector && !isFileHitSource(source, isFileSearchMode);
+}
