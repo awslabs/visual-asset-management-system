@@ -9,6 +9,7 @@ import {
     type AssetFileRef,
     canvasStats,
     type CanvasStats,
+    captureCanvas,
     chooseViewer,
     CONSOLE_ERROR_IGNORE,
     CSP_CONSOLE_REPORT,
@@ -397,6 +398,12 @@ interface RenderCase {
      * bundle). The case skips, with the reason, when the path is not served as JavaScript.
      */
     servedBundle?: string;
+    /**
+     * Select the loaded object by its row in the Three.js panel's scene graph (the row carrying the
+     * file name, the object's own row being the last), check the canvas turns visibly highlight
+     * green, then deselect it and check the green goes again (#1275).
+     */
+    selectInPanel?: boolean;
 }
 
 /** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
@@ -544,6 +551,15 @@ const renderCases: RenderCase[] = [
     { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
     // .ply also matches the Gaussian splat and Three.js viewers.
     { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
+    // #1257: a coloured PLY with no faces draws as coloured points; the info box reports the
+    // sample's `expect.vertexCount` points.
+    {
+        sample: "threejs-ply-points",
+        viewer: "Three.js Viewer",
+        kind: "canvas",
+        select: /Three\.js/i,
+        selectInPanel: true,
+    },
     // Licensed add-on, disabled by default: these cases run only on a build that enables it.
     {
         sample: "vntana-glb-box",
@@ -729,6 +745,16 @@ test.describe("viewer render proof (seeded samples)", () => {
                     caseThresholds(c, sample)
                 );
                 console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+                // A sample may name how many vertices (for a point cloud, points) the viewer's
+                // info box must report, as the Three.js viewer's "▲ N vertices" line does.
+                if (typeof sample.expect?.vertexCount === "number") {
+                    await expect(
+                        page.getByText(
+                            `${sample.expect.vertexCount.toLocaleString("en-US")} vertices`
+                        )
+                    ).toBeVisible({ timeout: 30_000 });
+                }
+                if (c.selectInPanel) await expectPanelSelectionHighlight(page, fileName);
             } else if (c.kind === "pdf") {
                 const pageCanvas = page.locator(".react-pdf__Page canvas").first();
                 await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
@@ -859,6 +885,68 @@ test.describe("viewer render proof (seeded samples)", () => {
         });
     }
 });
+
+/**
+ * Share of the canvas's pixels drawn in the selection highlight's green family (0x4caf50: green well
+ * above red and blue), from a screenshot of the canvas alone (`captureCanvas`).
+ */
+async function highlightGreenShare(page: Page, canvas: Locator): Promise<number> {
+    const png = await captureCanvas(page, canvas);
+    return await page.evaluate(async (base64: string) => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = surface.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+        let green = 0;
+        for (let p = 0; p < data.length; p += 4) {
+            const [r, g, b] = [data[p], data[p + 1], data[p + 2]];
+            if (g > 120 && g > r + 50 && g > b + 50) green += 1;
+        }
+        return green / (data.length / 4);
+    }, png.toString("base64"));
+}
+
+/** Least share of highlight-green pixels a selected point cloud adds to the canvas. */
+const HIGHLIGHT_MIN_GREEN_GAIN = 0.002;
+
+/**
+ * Selects the loaded object through its row in the Three.js panel's scene graph and checks the
+ * canvas shows the selection highlight, then deselects it and checks the highlight is gone (#1275).
+ * A point cloud's material has no emissive colour, so before the fix a selection drew nothing.
+ */
+async function expectPanelSelectionHighlight(page: Page, fileName: string): Promise<void> {
+    const canvas = await largestCanvas(page);
+    const before = await highlightGreenShare(page, canvas);
+    const row = page.locator("[data-node-id]").filter({ hasText: fileName }).last();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    await row.click();
+    let selected = before;
+    await expect(async () => {
+        selected = await highlightGreenShare(page, canvas);
+        expect(
+            selected,
+            `${fileName}: the selected object is not drawn highlighted`
+        ).toBeGreaterThan(before + HIGHLIGHT_MIN_GREEN_GAIN);
+    }).toPass({ timeout: 30_000 });
+
+    await row.click();
+    let after = selected;
+    await expect(async () => {
+        after = await highlightGreenShare(page, canvas);
+        expect(
+            after,
+            `${fileName}: the highlight stayed after the object was deselected`
+        ).toBeLessThan(before + HIGHLIGHT_MIN_GREEN_GAIN / 2);
+    }).toPass({ timeout: 30_000 });
+    console.log(
+        `[viewers] ${fileName} highlight green share ${JSON.stringify({ before, selected, after })}`
+    );
+}
 
 /** Share of the Potree canvas that must hold point pixels after fitToScreen. */
 const POTREE_MIN_POINT_SHARE = 0.005;
