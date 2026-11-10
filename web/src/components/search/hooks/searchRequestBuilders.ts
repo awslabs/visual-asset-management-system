@@ -204,14 +204,31 @@ export function entityTypesFor(searchQuery: SearchQuery): ("asset" | "file")[] {
     return [];
 }
 
+/**
+ * The Map view's one addition to a keyword search: only records with a location. The indexers write
+ * `geo_MD_location` from a `location` metadata value or from latitude / longitude fields, matching
+ * the key in any letter case, and leave it out when the values are unusable (common/indexing/
+ * geoLocation.py), so it is the field the map plots first (utils/locationUtils.ts).
+ */
+export const HAS_LOCATION_FILTER = { query_string: { query: "_exists_:geo_MD_location" } };
+
+export interface KeywordRequestOptions {
+    /** The Map view: only records with a location, added to the user's filters, which stay as set. */
+    requireLocation?: boolean;
+}
+
 /** The `POST /search` body (`SearchRequestModel`). */
 export function buildKeywordSearchRequest(
     searchQuery: SearchQuery,
     databaseId?: string,
     metadataSearchMode?: string,
-    metadataOperator?: string
+    metadataOperator?: string,
+    { requireLocation = false }: KeywordRequestOptions = {}
 ): Record<string, unknown> {
     const filters = buildKeywordFilters(searchQuery, databaseId);
+    if (requireLocation) {
+        filters.push(HAS_LOCATION_FILTER);
+    }
     const metadataQuery = buildMetadataQuery(
         searchQuery.metadataFilters,
         metadataSearchMode,

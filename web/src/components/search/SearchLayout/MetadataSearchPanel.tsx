@@ -37,7 +37,6 @@ interface MetadataSearchPanelProps {
     onSearchModeChange?: (mode: string) => void;
     metadataOperator?: string;
     onOperatorChange?: (operator: string) => void;
-    isMapView?: boolean;
 }
 
 const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
@@ -50,13 +49,9 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
     onSearchModeChange,
     metadataOperator = "OR",
     onOperatorChange,
-    isMapView = false,
 }) => {
-    // Helper function to check if a filter is a location filter (added by map view)
-    const isLocationFilter = (filter: MetadataFilter) => {
-        const keyLower = filter.key.toLowerCase();
-        return keyLower === "location" || keyLower === "latitude" || keyLower === "longitude";
-    };
+    // Every row is the user's own, a location field included: the Map view adds its location scope
+    // to the request, not as rows here, and changes neither the mode nor the operator.
     const searchModeOptions = [
         { label: "Search Both (Field Names & Values)", value: "both" },
         { label: "Search Field Names Only", value: "key" },
@@ -84,11 +79,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                 {metadataFilters.length > 0 && (
                     <FormField
                         label="Metadata Mode"
-                        description={
-                            isMapView
-                                ? "Locked to 'Search Both' for map view"
-                                : "Choose where to search for your metadata terms"
-                        }
+                        description="Choose where to search for your metadata terms"
                     >
                         <Select
                             selectedOption={
@@ -96,12 +87,11 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 searchModeOptions[0]
                             }
                             onChange={({ detail }) => {
-                                if (onSearchModeChange && !isMapView) {
+                                if (onSearchModeChange) {
                                     onSearchModeChange(detail.selectedOption.value || "both");
                                 }
                             }}
                             options={searchModeOptions}
-                            disabled={isMapView}
                             readOnly={disabled}
                         />
                     </FormField>
@@ -111,11 +101,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                 {metadataFilters.length > 1 && (
                     <FormField
                         label="Combine Filters"
-                        description={
-                            isMapView
-                                ? "Locked to 'OR' for map view"
-                                : "Choose how to combine multiple metadata filters"
-                        }
+                        description="Choose how to combine multiple metadata filters"
                     >
                         <Select
                             selectedOption={
@@ -123,65 +109,59 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                 operatorOptions[0]
                             }
                             onChange={({ detail }) => {
-                                if (onOperatorChange && !isMapView) {
+                                if (onOperatorChange) {
                                     onOperatorChange(detail.selectedOption.value || "AND");
                                 }
                             }}
                             options={operatorOptions}
-                            disabled={isMapView}
                             readOnly={disabled}
                         />
                     </FormField>
                 )}
 
                 {/* Metadata Filter Rows */}
-                {metadataFilters.map((filter, index) => {
-                    const isLocFilter = isLocationFilter(filter);
-                    return (
-                        <Box key={index} padding={{ bottom: "s" }}>
-                            <Grid gridDefinition={[{ colspan: 5 }, { colspan: 5 }, { colspan: 2 }]}>
-                                <FormField label="Field Name">
-                                    <Input
-                                        value={filter.key}
-                                        onChange={({ detail }) =>
-                                            onUpdateFilter(index, { ...filter, key: detail.value })
-                                        }
-                                        placeholder="e.g., product"
-                                        disabled={metadataSearchMode === "value" || isLocFilter}
-                                        readOnly={disabled}
-                                    />
-                                </FormField>
+                {metadataFilters.map((filter, index) => (
+                    <Box key={index} padding={{ bottom: "s" }}>
+                        <Grid gridDefinition={[{ colspan: 5 }, { colspan: 5 }, { colspan: 2 }]}>
+                            <FormField label="Field Name">
+                                <Input
+                                    value={filter.key}
+                                    onChange={({ detail }) =>
+                                        onUpdateFilter(index, { ...filter, key: detail.value })
+                                    }
+                                    placeholder="e.g., product"
+                                    disabled={metadataSearchMode === "value"}
+                                    readOnly={disabled}
+                                />
+                            </FormField>
 
-                                <FormField label="Value">
-                                    <Input
-                                        value={filter.value}
-                                        onChange={({ detail }) =>
-                                            onUpdateFilter(index, {
-                                                ...filter,
-                                                value: detail.value,
-                                            })
-                                        }
-                                        placeholder="Enter value (use * for wildcard)"
-                                        disabled={metadataSearchMode === "key" || isLocFilter}
-                                        readOnly={disabled}
-                                    />
-                                </FormField>
+                            <FormField label="Value">
+                                <Input
+                                    value={filter.value}
+                                    onChange={({ detail }) =>
+                                        onUpdateFilter(index, {
+                                            ...filter,
+                                            value: detail.value,
+                                        })
+                                    }
+                                    placeholder="Enter value (use * for wildcard)"
+                                    disabled={metadataSearchMode === "key"}
+                                    readOnly={disabled}
+                                />
+                            </FormField>
 
-                                <FormField label="Action">
-                                    <Button
-                                        ariaLabel={removeFilterLabel(filter, index)}
-                                        onClick={() => onRemoveFilter(index)}
-                                        disabled={disabled || isLocFilter}
-                                        disabledReason={searchRunningReason(
-                                            disabled && !isLocFilter
-                                        )}
-                                        iconName="remove"
-                                    />
-                                </FormField>
-                            </Grid>
-                        </Box>
-                    );
-                })}
+                            <FormField label="Action">
+                                <Button
+                                    ariaLabel={removeFilterLabel(filter, index)}
+                                    onClick={() => onRemoveFilter(index)}
+                                    disabled={disabled}
+                                    disabledReason={searchRunningReason(disabled)}
+                                    iconName="remove"
+                                />
+                            </FormField>
+                        </Grid>
+                    </Box>
+                ))}
 
                 <Button
                     onClick={onAddFilter}

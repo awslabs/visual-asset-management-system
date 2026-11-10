@@ -13,7 +13,6 @@ import Alert from "@cloudscape-design/components/alert";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import {
     SearchContainerProps,
-    MetadataFilter,
     NlpSearchResponse,
     SearchMode,
     SearchResponse,
@@ -163,6 +162,9 @@ const ModernSearchContainer: React.FC<
         }
         return supportedViews[0] as "table" | "card" | "map";
     });
+    // The Map view shows only records with a location: a keyword search on it adds that one filter
+    // to the request and leaves the user's own filters, metadata mode and operator as set.
+    const mapScoped = useMapView && currentView === "map";
     const [autoRefreshing, setAutoRefreshing] = useState(false);
     const [hasInitialLoad, setHasInitialLoad] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(preferences.sidebarWidth || 400);
@@ -282,7 +284,8 @@ const ModernSearchContainer: React.FC<
             searchQuery,
             databaseId,
             metadataSearchMode,
-            metadataOperator
+            metadataOperator,
+            { requireLocation: mapScoped }
         );
         if (!isLatestSearch(searchNumber)) return null;
         setNlpResult(null);
@@ -403,6 +406,15 @@ const ModernSearchContainer: React.FC<
         searchMode,
     ]);
 
+    // Entering or leaving the Map view re-runs a keyword search, whose request adds or drops the
+    // location scope. In natural-language mode the map pages through the answer already held, as
+    // the table does, so no search runs (and no query is embedded again).
+    useEffect(() => {
+        if (hasInitialLoad && searchMode !== "nlp") {
+            debouncedAutoRefresh(searchState.query);
+        }
+    }, [mapScoped]);
+
     // Add/remove Archived column when includeArchived filter changes
     useEffect(() => {
         const hasArchivedFilter = !!searchState.filters.bool_archived;
@@ -520,17 +532,9 @@ const ModernSearchContainer: React.FC<
     const handleRecordTypeChange = (type: "asset" | "file") => {
         setRecordType(type);
 
-        // Map view only available for assets — switch to table and clean up map filters
+        // Switching to files on the Map view returns to the table; the user's metadata filters stay.
         if (type === "file" && currentView === "map") {
             setCurrentView("table");
-            // Remove location metadata filters that map view added
-            const filteredMetadata = searchState.metadataFilters.filter((filter) => {
-                const keyLower = filter.key.toLowerCase();
-                return (
-                    keyLower !== "location" && keyLower !== "latitude" && keyLower !== "longitude"
-                );
-            });
-            searchState.setMetadataFilters(filteredMetadata);
         }
 
         // Remove mode-specific filters that don't apply to the new mode
@@ -555,43 +559,15 @@ const ModernSearchContainer: React.FC<
         // The PreferencesPanel will automatically use the correct column list
     };
 
-    // Handle view changes - add/remove location metadata filters for map view
+    // Entering or leaving the Map view changes only the view. The location scope it needs is added
+    // to the request (mapScoped), never to the user's filters, metadata mode or operator, so the
+    // sidebar shows and the other views search exactly what the user set.
     const handleViewChange = (view: "table" | "card" | "map") => {
-        const previousView = currentView;
+        if (view === currentView) return;
         setCurrentView(view);
-
-        // When switching TO map view, add location metadata filters
-        if (view === "map" && previousView !== "map") {
-            // Add location metadata filters (disabled from editing)
-            // Include both lowercase and capitalized versions to handle different capitalizations
-            const locationFilters: MetadataFilter[] = [
-                { key: "location", value: "*", operator: "=", type: "string" },
-                { key: "Location", value: "*", operator: "=", type: "string" },
-                { key: "latitude", value: "*", operator: "=", type: "string" },
-                { key: "Latitude", value: "*", operator: "=", type: "string" },
-                { key: "longitude", value: "*", operator: "=", type: "string" },
-                { key: "Longitude", value: "*", operator: "=", type: "string" },
-            ];
-
-            // Add these filters to existing metadata filters
-            searchState.setMetadataFilters([...searchState.metadataFilters, ...locationFilters]);
-
-            // Set metadata search mode to "both" and operator to "OR"
-            setMetadataSearchMode("both");
-            setMetadataOperator("OR");
-        }
-
-        // When switching FROM map view, remove location metadata filters
-        if (previousView === "map" && view !== "map") {
-            // Remove the location filters we added (both lowercase and capitalized versions)
-            const filteredMetadata = searchState.metadataFilters.filter((filter) => {
-                // Remove filters that match our location filter pattern (case-insensitive)
-                const keyLower = filter.key.toLowerCase();
-                const isLocationFilter =
-                    keyLower === "location" || keyLower === "latitude" || keyLower === "longitude";
-                return !isLocationFilter;
-            });
-            searchState.setMetadataFilters(filteredMetadata);
+        // A keyword search on the map covers other records than the table's: start at page 1.
+        if ((view === "map") !== (currentView === "map")) {
+            searchState.setPagination({ from: 0 });
         }
     };
 
@@ -917,7 +893,6 @@ const ModernSearchContainer: React.FC<
                         showMapThumbnails={preferences.showMapThumbnails}
                         onMapThumbnailToggle={handleMapThumbnailToggle}
                         useMapView={useMapView}
-                        isMapView={currentView === "map"}
                         reduced={useNoOpenSearch}
                         searchMode={searchMode}
                     />

@@ -57,7 +57,6 @@ interface SearchSidebarProps {
     showMapThumbnails?: boolean;
     onMapThumbnailToggle?: () => void;
     useMapView?: boolean;
-    isMapView?: boolean;
 
     /** True when OpenSearch is off: only the mode selector and the natural-language filters render. */
     reduced?: boolean;
@@ -88,7 +87,6 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     showMapThumbnails,
     onMapThumbnailToggle,
     useMapView,
-    isMapView = false,
     reduced = false,
     searchMode = "keyword",
 }) => {
@@ -183,7 +181,6 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     metadataOperator={metadataOperator}
                     onOperatorChange={onMetadataOperatorChange}
                     disabled={loading}
-                    isMapView={isMapView}
                 />
 
                 {/* Geospatial Filter (after Metadata Search) */}
