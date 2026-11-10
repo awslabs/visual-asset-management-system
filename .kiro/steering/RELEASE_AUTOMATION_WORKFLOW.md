@@ -69,7 +69,7 @@ tools/VamsReleaseAutomation/
       approvals.py           # approval records and separation of duties
       identity.py            # initiator resolution (the separation-of-duties input)
       gitops.py, githost.py  # sync, merge with path policy, pull requests per git host
-      build.py, deploy.py    # build once (synth per env, bundle, tag); deploy, promote, rollback
+      build.py, deploy.py    # build once (synth per env, bundle, tag); deploy (diff + IAM/CloudFront quota gates), promote, rollback
       migrate.py             # VAMS data-migration discovery and chaining
       backup.py, restore.py  # checkpoints and restore
       datacopy.py, freeze.py # data copy between envs; write freeze and workflow executions
@@ -223,8 +223,8 @@ Synchronization is bidirectional (root `CLAUDE.md` Rule 11): a rule changed here
 same change, and the reverse.
 
 The Claude Code command `/release-automation` (`.claude/commands/release-automation.md`) is a thin
-entry point over `tools/VamsReleaseAutomation/skill/SKILL.md` (root `CLAUDE.md` Rule 12).
-`skill/SKILL.md` has no Kiro mirror: the Kiro adapter loads it directly.
+entry point over `tools/VamsReleaseAutomation/skill/SKILL.md` (root `CLAUDE.md` Rule 12). Update it
+when the skill's path or its read-only default changes. `skill/SKILL.md` has no Kiro mirror: the Kiro adapter loads it directly.
 
 Update the user and developer guides under
 `documentation/docusaurus-site/docs/deployment/release-automation/` when a workflow, flag, ledger
