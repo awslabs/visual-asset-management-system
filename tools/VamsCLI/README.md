@@ -91,6 +91,8 @@ vamscli assets --help
 | `subscription`     | Asset event subscriptions                    |
 | `search`           | OpenSearch-powered search                    |
 | `workflow`         | Workflow execution and monitoring            |
+| `pipeline`         | Manage pipelines, templates, and tag schemas  |
+| `execution`        | Inspect, rerun, and abort workflow executions |
 | `tag` / `tag-type` | Tag and tag type management                  |
 | `role`             | Roles, constraints, user-role assignments    |
 | `api-key`          | API key management                           |

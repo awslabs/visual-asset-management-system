@@ -277,6 +277,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Other changes:**
 
+-   **CLI quickstart** — The command table lists the pipeline and execution groups. (issue #782)
 -   **Core end-to-end specs** — Tag and viewer cases skip with a reason when their tag data or required viewer features are unavailable. (issue #765)
 -   **3D Preview Thumbnail dependency lock** — The pipeline container installs its Python dependencies from a hash-locked `requirements.lock` generated from `requirements.txt`, so every build of a commit installs the same package versions. (issue #471)
 -   **Smaller 3D Preview Thumbnail image with one format list** — The container is built in two stages, so compilers no longer ship in the image a job pulls; the supported extensions are one list checked against the pipeline registration, upload trigger, CDK and documentation by a test; failure messages keep their full detail; and the README's defaults and size-fallback description match the code. (issue #471)
