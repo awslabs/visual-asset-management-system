@@ -52,7 +52,6 @@ export const ADMIN_ROUTES: ListedRoute[] = [
     route("/uploads", ["POST"]),
     route("/database/{databaseId}/assets/{assetId}", ["GET", "PUT"]),
     route("/database/{databaseId}/assets/{assetId}/archiveAsset", ["DELETE"]),
-    route("/database/{databaseId}/assets/{assetId}/unarchiveAsset", ["PUT"]),
     route("/database/{databaseId}/assets/{assetId}/metadata", ["GET", "POST", "PUT", "DELETE"]),
 ];
 

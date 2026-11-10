@@ -80,11 +80,26 @@ describe("search page asset actions by role", () => {
         });
     });
 
-    it("the administrator role may create, delete and unarchive", async () => {
+    it("a role whose listing holds the unarchive route may create, delete and unarchive", async () => {
+        // ADMIN_ROUTES leaves the unarchive route out on purpose (ViewAsset.permissions.test.tsx); a
+        // database-admin role's listing reports it, as its template grants every method on /database.
+        expect(
+            await reasonsFor([
+                ...ADMIN_ROUTES,
+                {
+                    path: "/database/{databaseId}/assets/{assetId}/unarchiveAsset",
+                    methods: ["PUT"],
+                    category: "test",
+                },
+            ])
+        ).toEqual({ create: undefined, delete: undefined, unarchive: undefined });
+    });
+
+    it("the administrator listing without the unarchive route may create and delete only", async () => {
         expect(await reasonsFor(ADMIN_ROUTES)).toEqual({
             create: undefined,
             delete: undefined,
-            unarchive: undefined,
+            unarchive: `Your role does not allow unarchiving ${Synonyms.assets}.`,
         });
     });
 
