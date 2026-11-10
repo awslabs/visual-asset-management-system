@@ -2337,6 +2337,13 @@ export function storageResourcesBuilder(
     // S3 VersionId, "null" on unversioned buckets, + "#" + segment key on a segment item), so one
     // Query covers an asset, begins_with covers a file's items across versions, and a longer
     // begins_with covers one version's segments. No streams, TTL, or GSIs.
+    //
+    // Created in every deployment, vector search on or off; only its vector index follows the switch.
+    // It holds items only after vector search has been enabled, and keeping it while the feature is
+    // off preserves the embeddings across an off-on cycle: a table gated on the switch would be
+    // retained on the way off (RETAIN) and a new, empty one created on the way back on, orphaning the
+    // embeddings and re-billing every file's analysis on the reindex. It also keeps its resource-name
+    // parameter and backend constant independent of the switch.
     const vectorEmbeddingsStorageTable = new dynamodb.Table(scope, "VectorEmbeddingsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
