@@ -182,11 +182,11 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                                                                                                                                   |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, missing required criteria, or a role that does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request. |
-| `403`  | Not authorized                                                                                                                                                                                                                                                                                |
-| `500`  | Internal server error                                                                                                                                                                                                                                                                         |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, missing required criteria, an object type the deployment does not offer (such as one of an add-on it has not enabled, which the message says), or a role that does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request. |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -314,11 +314,11 @@ The request body is a permission template with a `variableValues` object added. 
 
 #### Error responses
 
-| Status | Description                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, or no constraints |
-| `403`  | Not authorized                                                                                                                          |
-| `500`  | Internal server error                                                                                                                   |
+| Status | Description                                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, an object type of an add-on the deployment has not enabled, or no constraints |
+| `403`  | Not authorized                                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                               |
 
 ---
 
@@ -326,7 +326,7 @@ The request body is a permission template with a `variableValues` object added. 
 
 Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
 
-`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does.
+`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does. An add-on's types are listed only while the deployment enables the add-on (or, for a type of an optional add-on feature, that feature); a constraint stored earlier with such a type is still returned by the constraint list and get operations, and can be deleted.
 
 ```
 GET /auth/constraints/permissionObjects
@@ -375,7 +375,7 @@ These endpoints expose the deployment's API route surface from the master route 
 
 ### List all API routes
 
-Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories.
+Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories. An add-on route is listed only when the deployment enables the add-on, or the optional add-on feature that registers the route.
 
 ```
 GET /auth/routes/api
@@ -407,9 +407,9 @@ GET /auth/routes/api
 
 ### List allowed API routes
 
-Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
+Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted. The routes of an add-on the deployment has not enabled are not evaluated, so they are neither listed nor recorded as denials.
 
-The route is itself authorized at the API tier. The web interface calls it to decide which actions to enable on pages such as Pipelines, Workflows, and Executions, and treats a refused call as no allowed routes. A web-interface user therefore needs `GET` on it through one of their roles, for example through a `starts_with /auth/routes` criterion as in the `database-user.json` template.
+The route is itself authorized at the API tier. The web interface calls it to decide which actions to enable on pages such as Pipelines, Workflows, and Executions, and on the pages an add-on contributes, and treats a refused call as no allowed routes. A web-interface user therefore needs `GET` on it through one of their roles, for example through a `starts_with /auth/routes` criterion as in the `database-user.json` template.
 
 ```
 GET /auth/routes/api/allowed
@@ -848,6 +848,8 @@ The `/auth/api-keys` routes are the administrative variant of these endpoints. T
 :::warning[Administrative routes]
 Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
 :::
+
+API-key create and update — `POST` and `PUT` in both the administrative and the self-service scope — refuse a caller that authenticates with a temporary session key (an API key whose name starts with the reserved prefix `temporary-session-`, minted on a user's behalf by a VAMS component) with `403` `API keys cannot be created or updated with a temporary session key`, so a session credential cannot mint or extend a key. The refusal runs after the route's own authorization; a caller whose own key record cannot be read is answered the generic `500 Internal Server Error`, not that refusal. Because the prefix is reserved, a create request whose `apiKeyName` starts with `temporary-session-` is refused with `400` `API key names starting with the temporary session key prefix are reserved. Please choose a different name.`
 
 ### List API keys
 

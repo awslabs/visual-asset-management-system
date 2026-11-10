@@ -36,13 +36,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
-| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                     | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                    | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                       | **Ad-hoc specs (untracked)**                                |
+| --------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                         | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                             | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                             | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                            | No — keep out of git                                        |
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -121,17 +121,19 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 ## Rule 3: Use the shared harness, don't re-derive selectors
 
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
-locators — the app's markup is not always guessable, and these were established empirically.
+locators — the app's markup is not always guessable, and these were established empirically. An
+add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
 | Helper                                                        | Use for                                                                                            |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                |
+| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag       |
 | `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                   |
 | `searchBox(page)`                                             | The orchestration filter-bar search input                                                          |
 | `facet(page, label)`                                          | A native `<select>` filter                                                                         |
 | `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                             |
 | `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                         |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                               |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex       |
 | `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                 |
 | `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                    |
 | `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                              |
@@ -246,7 +248,8 @@ Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
 case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
 thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
-0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+0.6% of the pixels; `expect.vertexCount` makes a canvas case also assert the viewer reports
+`<n> vertices`, as the Three.js info box does for the `threejs-ply-points` point cloud). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 
@@ -263,7 +266,9 @@ must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disa
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
 such as Chromium's own `416` line for an empty file; never widen `CONSOLE_ERROR_IGNORE` for one case)
 and `reads` (the statuses, in order, of the presigned GETs of the sample's file: `[206]`, `[206, 200]`
-or `[416]`, how the bounded text loader read it). A text sample's `viewer` must list the sample's
+or `[416]`, how the bounded text loader read it), and `selectInPanel` (a Three.js canvas case also
+selects the object by its scene graph row and checks the canvas gains, then loses, highlight-green
+pixels, as `threejs-ply-points` does for a point cloud, #1275). A text sample's `viewer` must list the sample's
 `extensionToken` (so `.gitignore` is `(none)`, `.env.example` is `.example`); the manifest jest test
 checks it. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the

@@ -497,8 +497,9 @@ class IsaacVAMSConnector:
             True if the download succeeded.
 
         Raises:
-            VamsCliError: If the download failed; a ``VamsTransferError`` naming the error the
-                          download report gives for the file when it gives one.
+            VamsCliError: If the download failed; a ``VamsAccessDeniedError`` when VAMS refused the
+                          credential, and a ``VamsTransferError`` naming the error the download
+                          report gives for the file when it gives one.
         """
         try:
             return self._cli.download_file(local_path, database_id, asset_id, file_key)
