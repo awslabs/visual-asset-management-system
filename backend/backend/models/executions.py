@@ -354,7 +354,8 @@ class WorkflowExecutionConfigurationRecord(
 # "Manual"/"File-Upload"/"System-Reindex" (TRIGGER_TYPES above); the request accepts the lowercase forms
 # and the handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger
 # dispatcher and "systemReindex" by the vector-search reindex launcher; both invoke the execute handler
-# directly as SYSTEM_USER. The workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
+# directly as SYSTEM_USER, and the handler refuses either value on any other request (400). The
+# workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
 # vocabulary: a reindex launch is not a workflow trigger.
 EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload", "systemReindex")
 TRIGGER_TYPE_TO_STORED = {

@@ -584,6 +584,30 @@ class TestFileHasItems:
 
 
 @pytest.mark.unit
+class TestItemExists:
+    """One strongly consistent keys-only Query on the full key: the redelivery check of the indexer."""
+
+    def test_the_item_at_the_key_answers_true(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_key("v1#t0000083456")]}, name="item")
+        assert _store(vs, fake).item_exists("db1:a1", "/m.glb#v1#t0000083456") is True
+        (call,) = fake.query_pager.calls
+        assert call == {
+            "TableName": TABLE,
+            "KeyConditionExpression": "#pk = :pk AND #sk = :sk",
+            "ExpressionAttributeNames": {"#pk": PK, "#sk": SK},
+            "ExpressionAttributeValues": {":pk": {"S": "db1:a1"}, ":sk": {"S": "/m.glb#v1#t0000083456"}},
+            "ProjectionExpression": "#pk, #sk",
+            "ConsistentRead": True,
+        }
+
+    def test_no_item_answers_false(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": []}, name="item")
+        assert _store(vs, fake).item_exists("db1:a1", "/m.glb#v1") is False
+
+
+@pytest.mark.unit
 class TestSetLatestForFileVersion:
     """The realignment a writer runs when its latest write raced a newer upload: the named version's
     items are flipped to latest, every other item of the file to not-latest, each conditionally."""

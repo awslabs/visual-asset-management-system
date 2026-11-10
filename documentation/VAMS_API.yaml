@@ -4357,7 +4357,7 @@ paths:
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload, systemReindex]
-                                    description: "Trigger type in its request form (default manual). fileUpload is set by the upload trigger dispatcher and systemReindex by the vector-search reindex launcher; the execution row stores the canonical forms Manual, File-Upload and System-Reindex, which the list endpoints filter on."
+                                    description: "Trigger type in its request form (default manual). fileUpload and systemReindex are set only by the system launchers (the upload trigger dispatcher and the vector-search reindex launcher), which invoke the handler directly as the system identity; an API request that names either value is refused with 400. The execution row stores the canonical forms Manual, File-Upload and System-Reindex, which the list endpoints filter on."
             responses:
                 "200":
                     description: Workflow execution started.

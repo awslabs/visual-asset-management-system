@@ -79,7 +79,7 @@ def _rows(table, execution_id):
 
 
 def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None, user="user1",
-            s3_checks=None):
+            s3_checks=None, raw=False):
     """Drive the execute handler through a launch whose S3 check resolves each requested version to
     itself (and an unversioned request to 'v-latest'). Every table but the inputs and lock tables is a
     stub. `s3_checks`, when given, collects the (key, versionId) of every S3 existence check."""
@@ -117,7 +117,13 @@ def _launch(inputs_table, restriction="none", body=TWO_VERSIONS, lock_table=None
             stack.enter_context(context)
         sfn = stack.enter_context(patch(f"{MOD}.sfn_client"))
         sfn.start_execution.return_value = {"executionArn": "arn:exec"}
-        response = ewv2.lambda_handler(_event(body), MagicMock())
+        event = _event(body)
+        if user == "SYSTEM_USER":
+            # The trigger dispatcher's envelope; a system trigger type is accepted only on it.
+            event["lambdaCrossCall"] = {"userName": "SYSTEM_USER"}
+        response = ewv2.lambda_handler(event, MagicMock())
+    if raw:
+        return response
     assert response["statusCode"] == 200, response
     return json.loads(response["body"])["message"]["executionId"], lock_table
 
@@ -269,10 +275,14 @@ class TestOnlyAChosenVersionIsPinned:
         assert _rerun(table, execution_id)["inputFiles"] == [
             {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v7"}]
 
-    def test_a_user_launch_labelled_file_upload_with_a_version_stays_pinned(self):
+    def test_a_user_launch_labelled_file_upload_is_refused_and_writes_nothing(self):
+        # Only a system launch may name the fileUpload trigger type (the upload trigger dispatcher's
+        # SYSTEM_USER cross-call); a user's request naming it is refused before anything is written.
         table = _inputs_table(ewv2.workflow_execution_inputs_table)
-        execution_id, _locks = _launch(table, body=self._trigger_body(), user="user1")
-        assert [r["versionPinned"] for r in _rows(table, execution_id)] == [True]
+        response = _launch(table, body=self._trigger_body(), user="user1", raw=True)
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"])["message"] == ewv2.SYSTEM_TRIGGER_TYPE_MESSAGE
+        assert table.scan()["Items"] == []
 
     def test_a_rerun_of_a_trigger_launch_is_itself_unpinned(self):
         table = _inputs_table(ewv2.workflow_execution_inputs_table)

@@ -131,7 +131,7 @@ class TestVectorFileVersionKey:
         path = _path_of_bytes(1020)
         key_path = vector_file_key_path(path)
         assert len(key_path.encode("utf-8")) == FILE_PATH_KEY_BUDGET
-        assert key_path.endswith("#" + hashlib.sha256(path.encode("utf-8")).hexdigest())
+        assert key_path.endswith("%#" + hashlib.sha256(path.encode("utf-8")).hexdigest())
         v1 = build_vector_file_version_key(path, "A" * 32)
         v2 = build_vector_file_version_key(path, "B" * 32)
         assert v1 != v2
@@ -238,15 +238,16 @@ class TestKeyPathEncoding:
         """A path whose plain form fits the budget but whose encoded form does not is shortened: the
         prefix is a slice of the ENCODED bytes, so it carries no separator, and the digest is of the
         plain path, so two paths that encode to the same prefix still differ in their digest. The one
-        ``#`` of a shortened key path sits in front of the digest."""
+        ``#`` of a shortened key path sits in front of the digest, behind the ``%`` of the ``%#`` marker."""
         path = "/" + "#" * 400 + "/model.glb"  # 411 plain bytes, 1211 encoded
         assert len(path.encode("utf-8")) <= FILE_PATH_KEY_BUDGET
         key_path = vector_file_key_path(path)
         assert len(key_path.encode("utf-8")) == FILE_PATH_KEY_BUDGET
-        prefix, _, digest = key_path.rpartition("#")
-        assert "#" not in prefix
+        marked, _, digest = key_path.rpartition("#")
+        assert "#" not in marked and marked.endswith("%")
+        prefix = marked[:-1]
         encoded = ("/" + "%23" * 400 + "/model.glb").encode("utf-8")
-        assert prefix == encoded[: FILE_PATH_KEY_BUDGET - 64 - 1].decode("utf-8")
+        assert prefix == encoded[: FILE_PATH_KEY_BUDGET - 64 - 2].decode("utf-8")
         assert digest == hashlib.sha256(path.encode("utf-8")).hexdigest()
 
     def test_the_budget_is_measured_on_the_encoded_form(self):
@@ -257,7 +258,35 @@ class TestKeyPathEncoding:
         over = at_budget + "d"
         shortened = vector_file_key_path(over)
         assert len(shortened.encode("utf-8")) == FILE_PATH_KEY_BUDGET
-        assert shortened.endswith("#" + hashlib.sha256(over.encode("utf-8")).hexdigest())
+        assert shortened.endswith("%#" + hashlib.sha256(over.encode("utf-8")).hexdigest())
+
+    def test_a_short_path_equal_to_a_long_paths_prefix_reaches_none_of_its_items(self):
+        """The collision A10 names: a short path whose encoded form equals the truncated prefix of a long
+        path's key path. Its file prefix ``K#`` must not match any item of the long file, so archive,
+        delete and demotion of the short file never reach the long one."""
+        long_path = "/" + "d" * 1200  # plain == encoded: no % or # in it
+        long_items = [build_vector_file_version_key(long_path, version, segment)
+                      for version in ("v1", "null") for segment in ("", "t0000083456")]
+        assert all(key.startswith(vector_file_key_path(long_path) + "#") for key in long_items)
+        # Every short path that is a leading slice of the long one near the truncation point.
+        for length in range(FILE_PATH_KEY_BUDGET - 64 - 4, FILE_PATH_KEY_BUDGET - 64 + 1):
+            short_path = long_path[:length]
+            assert vector_file_key_path(short_path) == short_path
+            short_file_prefix = vector_file_key_path(short_path) + "#"
+            assert not any(key.startswith(short_file_prefix) for key in long_items), length
+
+    @pytest.mark.parametrize("cut", range(0, 3))
+    def test_a_prefix_cut_inside_an_escape_still_cannot_be_reached(self, cut):
+        """The truncation can split a ``%23`` escape; the prefix then ends in ``%`` or ``%2``, which no
+        whole encoded path ends in, so no short path's ``K#`` reaches the long file."""
+        long_path = "/" + "x" * (FILE_PATH_KEY_BUDGET - 64 - 2 - 1 - cut) + "#" * 100
+        key_path = vector_file_key_path(long_path)
+        assert len(key_path.encode("utf-8")) == FILE_PATH_KEY_BUDGET
+        marked = key_path.rsplit("#", 1)[0]
+        for end in range(1, len(marked) + 1):
+            candidate = marked[:end]
+            if unquote(candidate) and vector_file_key_path(unquote(candidate)) == candidate:
+                assert not (key_path + "#v1").startswith(candidate + "#")
 
 
 @pytest.mark.unit

@@ -101,6 +101,8 @@ _bucket_details_cache = {}
 GLOBAL_DATABASE = "GLOBAL"
 # The identity workflowTriggerDispatch launches fired triggers as (lambdaCrossCall userName).
 SYSTEM_USER = "SYSTEM_USER"
+# The answer to a request that names a trigger type other than "manual" without being a system launch.
+SYSTEM_TRIGGER_TYPE_MESSAGE = "triggerType must be 'manual' or omitted."
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 OBJECT_TYPE_ASSET = "asset"
@@ -3226,6 +3228,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 # Route handler
 #######################
 
+def _is_system_cross_call(event) -> bool:
+    """True for a direct invoke by another VAMS Lambda as SYSTEM_USER: the event carries a top-level
+    ``lambdaCrossCall`` whose ``userName`` is SYSTEM_USER. API Gateway cannot add a top-level key to the
+    proxy event it builds, so no API request is one (the same envelope rule as ``vamsInternalAction``)."""
+    cross_call = event.get("lambdaCrossCall") if isinstance(event, dict) else None
+    return isinstance(cross_call, dict) and cross_call.get("userName") == SYSTEM_USER
+
+
 def handle_post_request(event):
     """Validate path params + request body, then execute the workflow."""
     path_params = event.get("pathParameters", {}) or {}
@@ -3257,6 +3267,12 @@ def handle_post_request(event):
             body = raw
 
     request_model = parse(body, model=ExecuteWorkflowRequestV2Model)
+    # A trigger type records why a run started, and fileUpload / systemReindex are set only by the system
+    # launchers (the upload trigger dispatcher and the vector-search reindex launcher), which invoke this
+    # handler as SYSTEM_USER. Anyone else's request may only be a manual run.
+    if request_model.triggerType != "manual" and not _is_system_cross_call(event):
+        logger.warning("Refused an execute request naming a system trigger type outside a system launch")
+        return validation_error(body={"message": SYSTEM_TRIGGER_TYPE_MESSAGE}, event=event)
     return execute_workflow(
         event, path_params["workflowDatabaseId"], path_params["workflowId"], request_model)
 
