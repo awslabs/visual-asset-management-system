@@ -276,6 +276,23 @@ def delete_s3_object(bucket: str, key: str) -> bool:
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
 
+def destination_written_by_execution(bucket: str, key: str, workflow_execution_id: str) -> bool:
+    """Whether the current version at ``key`` was written by workflow execution
+    ``workflow_execution_id`` (mirrors uploadFile.destination_written_by_execution). False for no
+    execution id or an unreadable destination, so the copy goes ahead as before."""
+    if not workflow_execution_id:
+        return False
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except Exception as e:
+        if not (isinstance(e, ClientError)
+                and e.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound')):
+            logger.warning(f"Could not read destination {key} before the copy (non-critical): {e}")
+        return False
+    metadata = head.get('Metadata') or {}
+    return metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY) == workflow_execution_id
+
+
 def is_preview_file(file_path: str) -> bool:
     """
     Check if file is a preview file (.previewFile.X pattern).
@@ -807,6 +824,13 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             # This validation is simplified for async processing - we assume the base file exists
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
+
+        # A retried workflow end-state step can queue an output a second time; when this run already
+        # wrote it (an earlier message's copy landed), finish without a second version.
+        if destination_written_by_execution(bucket_name, final_s3_key, file_info.get('workflowExecutionId')):
+            logger.info(f"{final_s3_key} already written by this workflow execution; removing the staged source only")
+            delete_s3_object(source_bucket, temp_s3_key)
+            return True
 
         # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")

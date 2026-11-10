@@ -609,6 +609,30 @@ def delete_s3_object(bucket, key):
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
 
+def destination_written_by_execution(bucket, key, workflow_execution_id):
+    """Whether the current version at ``key`` was written by workflow execution ``workflow_execution_id``.
+
+    A workflow run writes each of its outputs into the asset once, through its end-state step. That step
+    is retried on a timeout, and an attempt cut short after an output's copy landed but before its staged
+    source was deleted leaves the source for the retry to hand over again. A destination whose current
+    version carries this run's change provenance is that output, already written, so the retry must not
+    write a second version. Any other answer, including an unreadable destination, is False and the
+    move goes ahead as before."""
+    if not workflow_execution_id:
+        return False
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') not in ('404', 'NoSuchKey', 'NotFound'):
+            logger.warning(f"Could not read destination {key} before the move (non-critical): {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Could not read destination {key} before the move (non-critical): {e}")
+        return False
+    metadata = head.get('Metadata') or {}
+    return metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY) == workflow_execution_id
+
+
 def build_upload_change_metadata(user_id):
     """Build the change-provenance metadata for a user-initiated upload.
 
@@ -1478,7 +1502,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # Check if file should be processed asynchronously based on size
                 process_async = False
                 try:
-                    process_async = should_process_asynchronously(file_size)
+                    # An output this workflow run already wrote takes the synchronous path, which only
+                    # removes its staged source (see destination_written_by_execution), rather than
+                    # queueing a second copy.
+                    process_async = should_process_asynchronously(file_size) and not (
+                        destination_written_by_execution(bucket_name, final_s3_key, workflow_execution_id))
                 except Exception as e:
                     logger.warning(f"Error determining if external file {file.relativeKey} should be processed asynchronously: {e}")
                     # Default to synchronous processing for unknown file sizes
@@ -1701,6 +1729,15 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     def _move_one_file(file_detail):
         """Move a completed upload from temp to final. Returns (relativeKey, success)."""
         try:
+            # A retried workflow end-state step can hand over an output this run already wrote (its
+            # copy landed, its staged source was not yet deleted): finish that move without a second
+            # version. Checked before the preview clean-up below, which would delete that output.
+            if destination_written_by_execution(bucket_name, file_detail['final_s3_key'], workflow_execution_id):
+                logger.info(f"{file_detail['final_s3_key']} already written by this workflow execution; "
+                            "removing the staged source only")
+                delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+                return file_detail['relativeKey'], True
+
             logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
 
             # If this is a preview file in an assetFile upload, delete any existing preview files for the base file

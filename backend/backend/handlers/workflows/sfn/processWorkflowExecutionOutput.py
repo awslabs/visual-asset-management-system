@@ -361,6 +361,132 @@ def _ingestion_outcome(result):
     return all_succeeded, ingested
 
 
+# A retried attempt waits for an earlier attempt's ingestion that is still moving files (its upload
+# record still 'processing') before it lists the staged outputs, so it does not hand a file that is
+# mid-move to ingestion a second time. The wait is bounded by these limits and by the attempt's own
+# remaining time, keeping EARLIER_INGESTION_WAIT_MARGIN_SECONDS for its own ingestion and recording.
+EARLIER_INGESTION_WAIT_MAX_SECONDS = 600
+EARLIER_INGESTION_WAIT_MARGIN_SECONDS = 300
+EARLIER_INGESTION_POLL_SECONDS = 5
+UPLOAD_STATUS_PROCESSING = "processing"
+
+
+def _wait_sleep(seconds):
+    time.sleep(seconds)
+
+
+def _read_ingest_ledger(workflow_execution_id):
+    """The run's ingest ledger (see common.workflows.executionOutputs), or {} when it cannot be read: a
+    failed read leaves the attempt recording what it still finds staged, as before the ledger."""
+    try:
+        return eo.read_ingest_ledger(dynamodb, pipeline_execution_output_files_table, workflow_execution_id)
+    except Exception as e:
+        logger.warning(f"Could not read the run's ingest ledger (non-critical): {e}")
+        return {}
+
+
+def _write_ingest_ledger(workflow_execution_id, descriptors, state, upload_id=""):
+    """Best-effort ledger write: a failed write costs a later retry the record of these outputs (the
+    behaviour before the ledger), never the ingestion itself."""
+    try:
+        eo.write_ingest_ledger(dynamodb, pipeline_execution_output_files_table, workflow_execution_id,
+                               descriptors, state, upload_id=upload_id)
+    except Exception as e:
+        logger.warning(f"Could not write the run's ingest ledger (non-critical): {e}")
+
+
+def _drop_ingest_ledger_rows(workflow_execution_id, descriptors):
+    try:
+        eo.drop_ingest_ledger_rows(dynamodb, pipeline_execution_output_files_table, workflow_execution_id,
+                                   descriptors)
+    except Exception as e:
+        logger.warning(f"Could not update the run's ingest ledger (non-critical): {e}")
+
+
+def _settle_ingest_ledger(workflow_execution_id, descriptors, landed):
+    """After an ingestion response: mark the outputs that landed `ingested` and drop the rows of those
+    that failed, so a later attempt ingests only those again."""
+    landed_keys = {eo.ingest_ledger_sort_key(d) for d in landed}
+    _write_ingest_ledger(workflow_execution_id, landed, eo.INGEST_STATE_INGESTED)
+    _drop_ingest_ledger_rows(
+        workflow_execution_id,
+        [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys])
+
+
+def _already_ingested(descriptor, ledger):
+    row = ledger.get(eo.ingest_ledger_sort_key(descriptor))
+    return bool(row) and row.get("ingestState") == eo.INGEST_STATE_INGESTED
+
+
+def _remaining_seconds(context):
+    try:
+        return int(context.get_remaining_time_in_millis()) / 1000.0
+    except Exception:
+        return 0.0
+
+
+def _await_earlier_ingestion(ledger, asset_id, context):
+    """Wait, bounded, while an upload an earlier attempt handed outputs to is still 'processing'.
+
+    An attempt that timed out while its synchronous ingestion call was running leaves that ingestion
+    running on its own. Listing the staged outputs before it finishes would see a file it has not moved
+    yet and hand it to ingestion again. Returns the upload ids still processing when the wait ended
+    (empty when none was, or every one finished)."""
+    upload_ids = sorted({row.get("uploadId") for row in ledger.values()
+                         if row.get("ingestState") == eo.INGEST_STATE_MOVING and row.get("uploadId")})
+    if not upload_ids:
+        return []
+    budget = min(EARLIER_INGESTION_WAIT_MAX_SECONDS,
+                 _remaining_seconds(context) - EARLIER_INGESTION_WAIT_MARGIN_SECONDS)
+    waited = 0.0
+    pending = list(upload_ids)
+    while pending:
+        still = []
+        for upload_id in pending:
+            try:
+                item = asset_upload_table.get_item(
+                    Key={'uploadId': upload_id, 'assetId': asset_id}).get('Item')
+            except Exception as e:
+                logger.warning(f"Could not read an earlier attempt's upload record (non-critical): {e}")
+                item = None
+            if item and item.get('status') == UPLOAD_STATUS_PROCESSING:
+                still.append(upload_id)
+        pending = still
+        if not pending or waited + EARLIER_INGESTION_POLL_SECONDS > budget:
+            break
+        _wait_sleep(EARLIER_INGESTION_POLL_SECONDS)
+        waited += EARLIER_INGESTION_POLL_SECONDS
+    if pending:
+        logger.warning(f"An earlier attempt's ingestion is still processing after {waited:.0f}s; "
+                       "continuing (ingestion skips an output that attempt already wrote)")
+    return pending
+
+
+def _merge_earlier_outputs(collected_output_files, ledger, staged_keys_by_type):
+    """Add to the collected outputs the ones an earlier attempt of this run ingested.
+
+    A row in `ingested` landed. A row still `moving` belongs to an attempt that ended before it saw the
+    ingestion response: its output landed when its staged source is gone, because ingestion deletes the
+    staged source only after the copy into the asset succeeded. That inference is drawn only for an
+    output type whose staged listing this attempt read (`staged_keys_by_type` holds a set for it); a
+    type whose listing failed or was not read adds nothing from `moving` rows."""
+    seen = {eo.ingest_ledger_sort_key(d) for d in collected_output_files}
+    for sort_key, row in ledger.items():
+        if sort_key in seen:
+            continue
+        state = row.get("ingestState")
+        if state == eo.INGEST_STATE_INGESTED:
+            landed = True
+        elif state == eo.INGEST_STATE_MOVING:
+            staged = staged_keys_by_type.get(row.get("fileType", "file"))
+            landed = staged is not None and row.get("s3Key", "") not in staged
+        else:
+            landed = False
+        if landed:
+            collected_output_files.append(eo.ledger_row_descriptor(row))
+            seen.add(sort_key)
+
+
 def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None):
     """Process an external upload using the fileIngestion Lambda.
 
@@ -1418,6 +1544,17 @@ def lambda_handler(event, context):
                 None if event.get('executingUserName') == 'SYSTEM_USER'
                 else bool(claims_and_roles.get("mfaEnabled", False)))
 
+            # This state is retried on States.Timeout and transient Lambda faults, and ingestion MOVES
+            # each output out of the staged prefix, so a retried attempt reads the run's ingest ledger to
+            # learn what earlier attempts already handed to ingestion: it does not ingest those again and
+            # records them with its own. It first waits (bounded) for an earlier ingestion still moving
+            # files, so it does not list a file that ingestion is part-way through moving.
+            ledger_execution_id = event.get('workflowExecutionId', '')
+            ingest_ledger = _read_ingest_ledger(ledger_execution_id)
+            _await_earlier_ingestion(ingest_ledger, event['assetId'], context)
+            # The staged keys this attempt listed per output type; a type whose listing failed is absent.
+            staged_keys_by_type = {}
+
             # Accumulate output descriptors for execution-output recording.
             collected_output_files = []
             collected_output_metadata = []
@@ -1434,6 +1571,8 @@ def lambda_handler(event, context):
                 try:
                     objectsFound = verify_get_path_objects(source_bucket, previewPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in preview path")
+                    staged_keys_by_type["preview"] = {
+                        x['Key'] for x in objectsFound.get('Contents', [])}
                 except Exception as e:
                     logger.exception(f"Error listing preview objects: {e}")
                     output_failures.append("Listing the pipeline preview output failed.")
@@ -1461,55 +1600,68 @@ def lambda_handler(event, context):
                         preview_descriptors = _collect_output_descriptors(
                             {'Contents': preview_objects}, "preview", preview_folder, source_bucket)
 
-                        try:
-                            # Create external upload record
-                            upload_id = create_external_upload_record(
-                                event['assetId'],
-                                event['databaseId'],
-                                "assetPreview",
-                                previewPathKey
-                            )
+                        if preview_descriptors and all(
+                                _already_ingested(d, ingest_ledger) for d in preview_descriptors):
+                            # An earlier attempt of this run ingested it; it is recorded from the ledger.
+                            logger.info("Preview output already ingested by an earlier attempt")
+                        else:
+                            try:
+                                # Create external upload record
+                                upload_id = create_external_upload_record(
+                                    event['assetId'],
+                                    event['databaseId'],
+                                    "assetPreview",
+                                    previewPathKey
+                                )
+                                # Recorded before the move, so a retry of an attempt cut short mid-move still
+                                # knows this output was handed to ingestion.
+                                _write_ingest_ledger(ledger_execution_id, preview_descriptors,
+                                                     eo.INGEST_STATE_MOVING, upload_id)
 
-                            # Stamp the staged file (in the source bucket) with its provenance. An
-                            # unstamped object would be ingested carrying no asset/upload identity,
-                            # so a failed stamp fails the write-back.
-                            if not _stamp_output_objects(
-                                    preview_objects, event['assetId'], event['databaseId'],
-                                    upload_id, source_bucket):
-                                raise VAMSGeneralErrorResponse(
-                                    "Stamping the staged preview object failed")
+                                # Stamp the staged file (in the source bucket) with its provenance. An
+                                # unstamped object would be ingested carrying no asset/upload identity,
+                                # so a failed stamp fails the write-back.
+                                if not _stamp_output_objects(
+                                        preview_objects, event['assetId'], event['databaseId'],
+                                        upload_id, source_bucket):
+                                    raise VAMSGeneralErrorResponse(
+                                        "Stamping the staged preview object failed")
 
-                            # Process the external upload
-                            result = process_external_upload(
-                                upload_id,
-                                event['assetId'],
-                                event['databaseId'],
-                                "assetPreview",
-                                [preview_file],
-                                previewPathKey,
-                                requestContext,
-                                workflow_id=event.get('workflowId'),
-                                execution_id=event.get('workflowExecutionId'),
-                                change_user_id=event.get('executingUserName'),
-                                source_bucket=source_bucket,
-                                mfa_enabled=write_back_mfa_enabled
-                            )
+                                # Process the external upload
+                                result = process_external_upload(
+                                    upload_id,
+                                    event['assetId'],
+                                    event['databaseId'],
+                                    "assetPreview",
+                                    [preview_file],
+                                    previewPathKey,
+                                    requestContext,
+                                    workflow_id=event.get('workflowId'),
+                                    execution_id=event.get('workflowExecutionId'),
+                                    change_user_id=event.get('executingUserName'),
+                                    source_bucket=source_bucket,
+                                    mfa_enabled=write_back_mfa_enabled
+                                )
 
-                            # Ingestion answers 200 when only SOME files landed, so read the
-                            # per-file outcome and record rows only for what actually landed.
-                            all_ingested, ingested_keys = _ingestion_outcome(result)
-                            collected_output_files.extend(
-                                d for d in preview_descriptors
-                                if result and (ingested_keys is None
-                                               or d["relativeFilePath"] in ingested_keys))
-                            if all_ingested and result:
-                                logger.info("Preview upload completed successfully")
-                            else:
-                                logger.error("Preview upload failed")
+                                # Ingestion answers 200 when only SOME files landed, so read the
+                                # per-file outcome and record rows only for what actually landed.
+                                all_ingested, ingested_keys = _ingestion_outcome(result)
+                                landed_previews = [
+                                    d for d in preview_descriptors
+                                    if result and (ingested_keys is None
+                                                   or d["relativeFilePath"] in ingested_keys)]
+                                collected_output_files.extend(landed_previews)
+                                if result:
+                                    _settle_ingest_ledger(
+                                        ledger_execution_id, preview_descriptors, landed_previews)
+                                if all_ingested and result:
+                                    logger.info("Preview upload completed successfully")
+                                else:
+                                    logger.error("Preview upload failed")
+                                    output_failures.append("The asset preview write-back failed.")
+                            except Exception as e:
+                                logger.exception(f"Error processing preview upload: {e}")
                                 output_failures.append("The asset preview write-back failed.")
-                        except Exception as e:
-                            logger.exception(f"Error processing preview upload: {e}")
-                            output_failures.append("The asset preview write-back failed.")
                     elif files:
                         logger.error("No image files found in preview folder")
                         output_failures.append(
@@ -1524,6 +1676,8 @@ def lambda_handler(event, context):
                 try:
                     objectsFound = verify_get_path_objects(source_bucket, filesPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in files path")
+                    staged_keys_by_type["file"] = {
+                        x['Key'] for x in objectsFound.get('Contents', [])}
                 except Exception as e:
                     logger.exception(f"Error listing file objects: {e}")
                     output_failures.append("Listing the pipeline file output failed.")
@@ -1539,6 +1693,17 @@ def lambda_handler(event, context):
                         objectsFound, "file", filesPathKey, source_bucket,
                         file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
 
+                    # A staged file an earlier attempt of this run already ingested (its staged source
+                    # can outlive the ingest, e.g. a large file still queued for its asynchronous copy)
+                    # is not handed to ingestion again; it is recorded from the ledger.
+                    earlier_keys = {d["s3Key"] for d in file_descriptors
+                                    if _already_ingested(d, ingest_ledger)}
+                    if earlier_keys:
+                        logger.info(f"{len(earlier_keys)} staged outputs already ingested by an earlier attempt")
+                        file_objects = [x for x in file_objects if x['Key'] not in earlier_keys]
+                        files = [x['Key'] for x in file_objects]
+                        file_descriptors = [d for d in file_descriptors if d["s3Key"] not in earlier_keys]
+
                     if files:
                         try:
                             # Create external upload record
@@ -1548,6 +1713,10 @@ def lambda_handler(event, context):
                                 "assetFile",
                                 filesPathKey
                             )
+                            # Recorded before the move, so a retry of an attempt cut short mid-move still
+                            # knows these outputs were handed to ingestion.
+                            _write_ingest_ledger(ledger_execution_id, file_descriptors,
+                                                 eo.INGEST_STATE_MOVING, upload_id)
 
                             # Stamp each staged file (in the source bucket) with its provenance. An
                             # unstamped object would be ingested carrying no asset/upload identity,
@@ -1578,10 +1747,13 @@ def lambda_handler(event, context):
                             # Ingestion answers 200 when only SOME files landed, so read the
                             # per-file outcome and record rows only for what actually landed.
                             all_ingested, ingested_keys = _ingestion_outcome(result)
-                            collected_output_files.extend(
+                            landed_files = [
                                 d for d in file_descriptors
                                 if result and (ingested_keys is None
-                                               or d["relativeFilePath"] in ingested_keys))
+                                               or d["relativeFilePath"] in ingested_keys)]
+                            collected_output_files.extend(landed_files)
+                            if result:
+                                _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files)
                             if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:
@@ -1591,7 +1763,7 @@ def lambda_handler(event, context):
                         except Exception as e:
                             logger.exception(f"Error processing asset file upload: {e}")
                             output_failures.append("The asset file write-back failed.")
-                    else:
+                    elif not earlier_keys:
                         logger.warning("No files found in asset output folder")
 
             #Handle metadata outputs (needs to happen after S3 file processing)
@@ -1764,6 +1936,10 @@ def lambda_handler(event, context):
                     if reported:
                         output_failures.insert(0, reported)
 
+
+            # The outputs earlier attempts of this run ingested are the run's outputs too, though this
+            # attempt no longer finds them staged.
+            _merge_earlier_outputs(collected_output_files, ingest_ledger, staged_keys_by_type)
 
             # Record end-state pipeline outputs + completion status.
             try:

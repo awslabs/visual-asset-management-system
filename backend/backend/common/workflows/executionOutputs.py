@@ -345,6 +345,117 @@ def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_
             ))
 
 
+# ---------------------------------------------------------------------------
+# Per-run output ingest ledger
+# ---------------------------------------------------------------------------
+#
+# The end-state step moves each output into the asset (copy, then delete of the staged source) before
+# it records the run's output rows, and its state is retried on States.Timeout and transient Lambda
+# faults. A retried attempt lists only what is still staged, so it needs a durable record of what an
+# earlier attempt already handed to ingestion. The ledger is that record: one row per output, written
+# to the PipelineExecutionOutputFiles table under a partition of its own,
+# `ingest#<workflowExecutionId>`, with the row's usual `fileType:relativeFilePath` sort key. No reader
+# of the run's output rows queries that partition (they query by pipelineExecutionId), so ledger rows
+# never show as outputs; the permanent execution delete removes the partition with the run's other rows.
+#
+# States: `moving` is written BEFORE an output is handed to ingestion (the outcome is not yet known),
+# `ingested` once the ingestion response says it landed. A failed output's row is dropped, so a later
+# attempt ingests it afresh.
+
+INGEST_LEDGER_PARTITION_PREFIX = "ingest#"
+INGEST_STATE_MOVING = "moving"
+INGEST_STATE_INGESTED = "ingested"
+INGEST_LEDGER_SORT_KEY = "fileType:relativeFilePath"
+# Upper bound on the ledger rows one read returns: twice the output-file recording cap, so a run whose
+# output was truncated at the cap still reads every row it wrote.
+MAX_INGEST_LEDGER_ROWS = 20000
+
+
+def ingest_ledger_partition(workflow_execution_id):
+    """The PipelineExecutionOutputFiles partition holding a run's ingest ledger. The prefix keeps it
+    apart from every pipelineExecutionId partition."""
+    return f"{INGEST_LEDGER_PARTITION_PREFIX}{workflow_execution_id}"
+
+
+def ingest_ledger_sort_key(descriptor):
+    """The ledger sort-key value of an output descriptor; the same value its output row carries."""
+    return f"{descriptor.get('fileType', 'file')}:{descriptor.get('relativeFilePath', '')}"
+
+
+def write_ingest_ledger(dynamo, output_files_table, workflow_execution_id, descriptors, state,
+                        upload_id=""):
+    """Write (or overwrite) one ledger row per output descriptor in `state`, batched. `upload_id` names
+    the external upload record the outputs were handed to, so a later attempt can wait for that
+    ingestion to finish before it lists the staged outputs again."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+        for d in descriptors:
+            item = er.build_output_file_record(
+                pipeline_execution_id=partition,
+                file_type=d.get("fileType", "file"),
+                relative_file_path=d.get("relativeFilePath", ""),
+                s3_bucket=d.get("s3Bucket", ""), s3_key=d.get("s3Key", ""),
+                file_size=d.get("fileSize", 0), content_type=d.get("contentType", ""),
+                s3_version_id=d.get("s3VersionId", ""),
+            )
+            item["ingestState"] = state
+            if upload_id:
+                item["uploadId"] = upload_id
+            batch.put_item(Item=item)
+
+
+def drop_ingest_ledger_rows(dynamo, output_files_table, workflow_execution_id, descriptors):
+    """Delete the ledger rows of outputs whose ingestion failed, batched."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+        for d in descriptors:
+            batch.delete_item(Key={"pipelineExecutionId": partition,
+                                   INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)})
+
+
+def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
+    """The run's ledger rows as {sort key: row}, at most MAX_INGEST_LEDGER_ROWS (a longer ledger is
+    logged and read up to the bound). Empty for a run that wrote none, including a run whose earlier
+    attempts ran before the ledger existed."""
+    ledger = {}
+    if not workflow_execution_id:
+        return ledger
+    table = dynamo.Table(output_files_table)
+    kwargs = {'KeyConditionExpression': _key_eq(
+        'pipelineExecutionId', ingest_ledger_partition(workflow_execution_id))}
+    resp = table.query(**kwargs)
+    while True:
+        for row in resp.get('Items', []):
+            ledger[row.get(INGEST_LEDGER_SORT_KEY, '')] = row
+        if 'LastEvaluatedKey' not in resp:
+            break
+        if len(ledger) >= MAX_INGEST_LEDGER_ROWS:
+            logger.warning(f"Ingest ledger read stopped at the {MAX_INGEST_LEDGER_ROWS}-row bound")
+            break
+        kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+        resp = table.query(**kwargs)
+    return ledger
+
+
+def ledger_row_descriptor(row):
+    """The output descriptor (the shape the end-state step collects) a ledger row records."""
+    return {
+        "fileType": row.get("fileType", "file"),
+        "relativeFilePath": row.get("relativeFilePath", ""),
+        "s3Bucket": row.get("s3Bucket", ""),
+        "s3Key": row.get("s3Key", ""),
+        "fileSize": int(row.get("fileSize", 0) or 0),
+        "contentType": row.get("contentType", ""),
+        "s3VersionId": row.get("s3VersionId", ""),
+    }
+
+
 def is_conditional_check_failure(error):
     """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row already holds a
     terminal status), as opposed to a real failure that must surface."""
