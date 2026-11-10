@@ -25,6 +25,10 @@ GROUPS = [
 ]
 
 DESCRIPTIONS = {
+    "iam/tests/test_execution_policy_role_names.py":
+        "The CDK execution policy creates, changes and passes every real VAMS role name and no other role",
+    "iam/tests/vams-role-names.json":
+        "Every role name of real VAMS v2.6.6 and development synths, with and without a role-name prefix",
     "README.md": "Package overview and links to the documentation",
     "CLAUDE.md": "Component development guide",
     "FILES.md": "This index",

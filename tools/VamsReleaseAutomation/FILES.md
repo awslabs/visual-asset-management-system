@@ -239,37 +239,39 @@ Codex, Claude Code and Kiro front-ends (MCP wiring, permissions, guard hook), th
 
 Action manifests for preflight, CloudFormation role and state-store templates.
 
-| File                                                                                                   | Purpose                                                    |
-| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| [`iam/README.md`](iam/README.md)                                                                       |                                                            |
-| [`iam/actions/backup.yaml`](iam/actions/backup.yaml)                                                   |                                                            |
-| [`iam/actions/build.yaml`](iam/actions/build.yaml)                                                     |                                                            |
-| [`iam/actions/data-copy-source.yaml`](iam/actions/data-copy-source.yaml)                               |                                                            |
-| [`iam/actions/data-copy-target.yaml`](iam/actions/data-copy-target.yaml)                               |                                                            |
-| [`iam/actions/deploy.yaml`](iam/actions/deploy.yaml)                                                   |                                                            |
-| [`iam/actions/iam-verify.yaml`](iam/actions/iam-verify.yaml)                                           | Read-only `vra iam verify` (role reads, simulation)        |
-| [`iam/actions/migrate.yaml`](iam/actions/migrate.yaml)                                                 |                                                            |
-| [`iam/actions/pipeline.yaml`](iam/actions/pipeline.yaml)                                               |                                                            |
-| [`iam/actions/preflight.yaml`](iam/actions/preflight.yaml)                                             |                                                            |
-| [`iam/actions/report.yaml`](iam/actions/report.yaml)                                                   |                                                            |
-| [`iam/actions/restore.yaml`](iam/actions/restore.yaml)                                                 |                                                            |
-| [`iam/actions/rollback.yaml`](iam/actions/rollback.yaml)                                               |                                                            |
-| [`iam/actions/sync.yaml`](iam/actions/sync.yaml)                                                       |                                                            |
-| [`iam/actions/test-live.yaml`](iam/actions/test-live.yaml)                                             |                                                            |
-| [`iam/cdk-bootstrap.md`](iam/cdk-bootstrap.md)                                                         |                                                            |
-| [`iam/cloudformation/vra-cdk-execution-policy.yaml`](iam/cloudformation/vra-cdk-execution-policy.yaml) |                                                            |
-| [`iam/cloudformation/vra-data-copy-roles.yaml`](iam/cloudformation/vra-data-copy-roles.yaml)           |                                                            |
-| [`iam/cloudformation/vra-deploy-role.yaml`](iam/cloudformation/vra-deploy-role.yaml)                   |                                                            |
-| [`iam/cloudformation/vra-state-store.yaml`](iam/cloudformation/vra-state-store.yaml)                   |                                                            |
-| [`iam/it-roles/README.md`](iam/it-roles/README.md)                                                     | Inputs of the IT role package and how it is generated      |
-| [`iam/it-roles/cdk-bootstrap-roles.json`](iam/it-roles/cdk-bootstrap-roles.json)                       | CDK bootstrap role trust + policies of the pinned CDK CLI  |
-| [`iam/scripts/extract_cdk_bootstrap_roles.py`](iam/scripts/extract_cdk_bootstrap_roles.py)             | Refreshes cdk-bootstrap-roles.json from a CDK CLI          |
-| [`iam/scripts/extract_vams_services.py`](iam/scripts/extract_vams_services.py)                         |                                                            |
-| [`iam/scripts/patch-bootstrap-template.py`](iam/scripts/patch-bootstrap-template.py)                   | Adds sts:SetSourceIdentity to the CDK bootstrap role trust |
-| [`iam/tests/cfn_eval.py`](iam/tests/cfn_eval.py)                                                       |                                                            |
-| [`iam/tests/test_execution_policy_services.py`](iam/tests/test_execution_policy_services.py)           |                                                            |
-| [`iam/tests/test_state_store_iam.py`](iam/tests/test_state_store_iam.py)                               |                                                            |
-| [`iam/vams-services.json`](iam/vams-services.json)                                                     |                                                            |
+| File                                                                                                   | Purpose                                                                                          |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| [`iam/README.md`](iam/README.md)                                                                       |                                                                                                  |
+| [`iam/actions/backup.yaml`](iam/actions/backup.yaml)                                                   |                                                                                                  |
+| [`iam/actions/build.yaml`](iam/actions/build.yaml)                                                     |                                                                                                  |
+| [`iam/actions/data-copy-source.yaml`](iam/actions/data-copy-source.yaml)                               |                                                                                                  |
+| [`iam/actions/data-copy-target.yaml`](iam/actions/data-copy-target.yaml)                               |                                                                                                  |
+| [`iam/actions/deploy.yaml`](iam/actions/deploy.yaml)                                                   |                                                                                                  |
+| [`iam/actions/iam-verify.yaml`](iam/actions/iam-verify.yaml)                                           | Read-only `vra iam verify` (role reads, simulation)                                              |
+| [`iam/actions/migrate.yaml`](iam/actions/migrate.yaml)                                                 |                                                                                                  |
+| [`iam/actions/pipeline.yaml`](iam/actions/pipeline.yaml)                                               |                                                                                                  |
+| [`iam/actions/preflight.yaml`](iam/actions/preflight.yaml)                                             |                                                                                                  |
+| [`iam/actions/report.yaml`](iam/actions/report.yaml)                                                   |                                                                                                  |
+| [`iam/actions/restore.yaml`](iam/actions/restore.yaml)                                                 |                                                                                                  |
+| [`iam/actions/rollback.yaml`](iam/actions/rollback.yaml)                                               |                                                                                                  |
+| [`iam/actions/sync.yaml`](iam/actions/sync.yaml)                                                       |                                                                                                  |
+| [`iam/actions/test-live.yaml`](iam/actions/test-live.yaml)                                             |                                                                                                  |
+| [`iam/cdk-bootstrap.md`](iam/cdk-bootstrap.md)                                                         |                                                                                                  |
+| [`iam/cloudformation/vra-cdk-execution-policy.yaml`](iam/cloudformation/vra-cdk-execution-policy.yaml) |                                                                                                  |
+| [`iam/cloudformation/vra-data-copy-roles.yaml`](iam/cloudformation/vra-data-copy-roles.yaml)           |                                                                                                  |
+| [`iam/cloudformation/vra-deploy-role.yaml`](iam/cloudformation/vra-deploy-role.yaml)                   |                                                                                                  |
+| [`iam/cloudformation/vra-state-store.yaml`](iam/cloudformation/vra-state-store.yaml)                   |                                                                                                  |
+| [`iam/it-roles/README.md`](iam/it-roles/README.md)                                                     | Inputs of the IT role package and how it is generated                                            |
+| [`iam/it-roles/cdk-bootstrap-roles.json`](iam/it-roles/cdk-bootstrap-roles.json)                       | CDK bootstrap role trust + policies of the pinned CDK CLI                                        |
+| [`iam/scripts/extract_cdk_bootstrap_roles.py`](iam/scripts/extract_cdk_bootstrap_roles.py)             | Refreshes cdk-bootstrap-roles.json from a CDK CLI                                                |
+| [`iam/scripts/extract_vams_services.py`](iam/scripts/extract_vams_services.py)                         |                                                                                                  |
+| [`iam/scripts/patch-bootstrap-template.py`](iam/scripts/patch-bootstrap-template.py)                   | Adds sts:SetSourceIdentity to the CDK bootstrap role trust                                       |
+| [`iam/tests/cfn_eval.py`](iam/tests/cfn_eval.py)                                                       |                                                                                                  |
+| [`iam/tests/test_execution_policy_role_names.py`](iam/tests/test_execution_policy_role_names.py)       | The CDK execution policy creates, changes and passes every real VAMS role name and no other role |
+| [`iam/tests/test_execution_policy_services.py`](iam/tests/test_execution_policy_services.py)           |                                                                                                  |
+| [`iam/tests/test_state_store_iam.py`](iam/tests/test_state_store_iam.py)                               |                                                                                                  |
+| [`iam/tests/vams-role-names.json`](iam/tests/vams-role-names.json)                                     | Every role name of real VAMS v2.6.6 and development synths, with and without a role-name prefix  |
+| [`iam/vams-services.json`](iam/vams-services.json)                                                     |                                                                                                  |
 
 ## CI/CD
 

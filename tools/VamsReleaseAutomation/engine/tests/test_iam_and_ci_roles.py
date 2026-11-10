@@ -148,9 +148,10 @@ BOUNDARY = f"arn:{P}:iam::{ACCT}:policy/vra-cdk-execution-role-boundary"
 def exec_policy():
     t = load_cfn("iam/cloudformation/vra-cdk-execution-policy.yaml")
     params = {"AWS::Partition": P, "AWS::AccountId": ACCT, "AWS::Region": "us-east-1", "PolicyName": "vra-cdk-execution",
-              "ConfigName": "vams", "AllowedRegions": ["us-east-1"], "RequiredPermissionsBoundaryArn": "",
+              "ConfigName": "vams", "RoleNamePrefix": "", "AllowedRegions": ["us-east-1"], "RequiredPermissionsBoundaryArn": "",
               "AllowRolesWithoutBoundary": "false", "ProtectForeignTrailsAndKeys": "true"}
-    conds = {"CreateBoundary": True, "BoundaryOptional": False, "BoundaryEnforced": True, "ProtectForeign": True}
+    conds = {"CreateBoundary": True, "BoundaryOptional": False, "BoundaryEnforced": True, "ProtectForeign": True,
+             "HasRoleNamePrefix": False}
     res = {"RoleBoundary": BOUNDARY}
     doc = render(t["Resources"]["ExecutionPolicy"]["Properties"]["PolicyDocument"], params, conds, res)
     return doc["Statement"]

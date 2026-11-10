@@ -312,6 +312,14 @@ know them before it starts.
 -   **Every role gets an explicit name.** The `IamRoleTransform` aspect sets `RoleName` to
     `<prefix><unique construct name>-<region>` on every role, also when the prefix is empty. Deploys need
     `CAPABILITY_NAMED_IAM`, and a role name collides if two stacks share a base name in one Region.
+    Without a prefix the unique construct name starts with the core stack name without its hyphens
+    (`vamscore...` for config name `vams`); roles of the other VAMS stacks get CloudFormation names that
+    start with `<config name>-`. The scoped CDK execution policy
+    (`iam/cloudformation/vra-cdk-execution-policy.yaml`, parameters `ConfigName` and `RoleNamePrefix` from the
+    env's `configName` and `iam.rolePrefix`) creates, changes and passes only roles with these names, so
+    CloudFormation cannot reach the account's other roles, nor the `cdk-*` and `vra-*` roles. A role IT
+    pre-creates for VAMS must start with the `RoleNamePrefix` the IT package's deploy role notes give (the
+    env's `iam.rolePrefix`, or `<baseStackName>-` in `precreated` mode without one).
 -   **A discovery synth is not deployable.** With `generateReportOnly: true` the templates still contain the
     roles, but functions and services reference `arn:<partition>:iam::<account>:role` without a name.
     `vra iam plan` synthesizes into scratch and never deploys that assembly.

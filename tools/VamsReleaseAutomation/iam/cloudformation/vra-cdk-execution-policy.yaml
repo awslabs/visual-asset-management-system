@@ -4,11 +4,12 @@ Description: >-
     INSTEAD of AdministratorAccess:
       cdk bootstrap --cloudformation-execution-policies arn:<partition>:iam::<account>:policy/vra-cdk-execution
     Allows the service surface VAMS (infra/lib) deploys, restricted to the allowed regions, and closes the
-    escalation paths a synthesized template could otherwise use: every role CloudFormation creates must carry
-    a permissions boundary (created here by default), the execution policy and the vra/cdk policies cannot be
-    rewritten, iam:PassRole is limited to the services VAMS passes roles to, AWS-managed admin policies cannot
-    be attached, and CloudTrail trails / KMS keys that VAMS does not own cannot be stopped, deleted or
-    re-keyed. Deploy this stack in each env account BEFORE `cdk bootstrap`; set the env's
+    escalation paths a synthesized template could otherwise use: roles can be created, changed, deleted and
+    passed only when their names are VAMS's own (ConfigName, RoleNamePrefix), never the cdk-* / vra-* roles;
+    every role CloudFormation creates must carry a permissions boundary (created here by default); the
+    execution policy and the vra/cdk policies cannot be rewritten; iam:PassRole also names the services VAMS
+    passes roles to; AWS-managed admin policies cannot be attached; and CloudTrail trails / KMS keys that VAMS
+    does not own cannot be stopped, deleted or re-keyed. Deploy this stack in each env account BEFORE `cdk bootstrap`; set the env's
     permissionsBoundaryName in the vra ledger so `vra build` applies the boundary at synth.
     See iam/cdk-bootstrap.md. Partition-generic.
 
@@ -25,10 +26,26 @@ Parameters:
     ConfigName:
         Type: String
         Default: vams
+        AllowedPattern: "^[A-Za-z0-9]{1,12}$"
+        ConstraintDescription: >-
+            1-12 letters and digits: VAMS names its core-stack roles from the stack name with every other character
+            removed and keeps 16 characters of it, so only such a name keeps "<ConfigName>core" at the start.
         Description: >-
-            VAMS config "name". VAMS stack names (and so the aws:cloudformation:stack-name tag CloudFormation puts on
-            the keys and trails it creates) start with "<ConfigName>-"; trails and keys outside that prefix are
-            protected.
+            VAMS config "name" (the env's configName in the vra ledger; `vra iam plan` writes the value). VAMS stack
+            names (and so the aws:cloudformation:stack-name tag CloudFormation puts on the keys and trails it creates)
+            start with "<ConfigName>-"; trails and keys outside that prefix are protected. Roles: the core stack
+            names its roles "<ConfigName>core..." (no role-name prefix), every other VAMS stack's roles get
+            CloudFormation names "<ConfigName>-...". Only roles named so (or with RoleNamePrefix) can be created,
+            changed, deleted or passed.
+    RoleNamePrefix:
+        Type: String
+        Default: ""
+        AllowedPattern: "^[A-Za-z0-9+=,.@_-]{0,32}$"
+        Description: >-
+            The env's IAM role-name prefix (iam.rolePrefix in the vra ledger, cdk.json
+            environments.aws.IamRoleNamePrefix; for iam.mode precreated, the start of the names of IT's roles);
+            `vra iam plan` writes the value. Empty: none. Roles named "<RoleNamePrefix>..." can be created, changed,
+            deleted and passed too, except "<RoleNamePrefix>cdk-*" and "<RoleNamePrefix>vra-*".
     RequiredPermissionsBoundaryArn:
         Type: String
         Default: ""
@@ -54,6 +71,7 @@ Conditions:
     BoundaryOptional: !Equals [!Ref AllowRolesWithoutBoundary, "true"]
     BoundaryEnforced: !Not [!Condition BoundaryOptional]
     ProtectForeign: !Equals [!Ref ProtectForeignTrailsAndKeys, "true"]
+    HasRoleNamePrefix: !Not [!Equals [!Ref RoleNamePrefix, ""]]
 
 Resources:
     # Maximum permissions of every role a VAMS stack creates. VAMS roles (Lambda, Step Functions, Batch, ECS
@@ -283,16 +301,6 @@ Resources:
                           - iam:DeletePolicyVersion
                           - iam:TagPolicy
                           - iam:UntagPolicy
-                          - iam:DeleteRole
-                          - iam:UpdateRole
-                          - iam:UpdateRoleDescription
-                          - iam:UpdateAssumeRolePolicy
-                          - iam:PutRolePolicy
-                          - iam:DeleteRolePolicy
-                          - iam:AttachRolePolicy
-                          - iam:DetachRolePolicy
-                          - iam:TagRole
-                          - iam:UntagRole
                           - iam:CreateServiceLinkedRole
                           - iam:DeleteServiceLinkedRole
                           - iam:GetServiceLinkedRoleDeletionStatus
@@ -303,14 +311,42 @@ Resources:
                           - iam:UpdateOpenIDConnectProviderThumbprint
                           - sts:GetCallerIdentity
                       Resource: "*"
-                    # Roles may only be handed to the services VAMS wires them to (iam/vams-services.json
-                    # passRoleServices): function, state machine, Batch / ECS / EKS, CodeBuild and EventBridge target roles,
+                    # Role changes only on VAMS's own roles (names: ConfigName, RoleNamePrefix). Pre-existing roles of
+                    # the account are out of reach; the cdk-* / vra-* roles are denied below.
+                    - Sid: ChangeVamsRoles
+                      Effect: Allow
+                      Action:
+                          - iam:DeleteRole
+                          - iam:UpdateRole
+                          - iam:UpdateRoleDescription
+                          - iam:UpdateAssumeRolePolicy
+                          - iam:PutRolePolicy
+                          - iam:DeleteRolePolicy
+                          - iam:AttachRolePolicy
+                          - iam:DetachRolePolicy
+                          - iam:TagRole
+                          - iam:UntagRole
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                            - !Ref AWS::NoValue
+                    # VAMS's own roles (names as in ChangeVamsRoles) may only be handed to the services VAMS wires them
+                    # to (iam/vams-services.json passRoleServices): function, state machine, Batch / ECS / EKS, CodeBuild and EventBridge target roles,
                     # instance profiles, the API Gateway logging role, the Cognito SMS role and identity-pool roles, the
                     # CloudTrail-to-CloudWatch-Logs role, the VPC flow-log role and the AgentCore runtime role.
                     - Sid: PassRoleToVamsServices
                       Effect: Allow
                       Action: iam:PassRole
-                      Resource: "*"
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                            - !Ref AWS::NoValue
                       Condition:
                           StringLike:
                               iam:PassedToService:
@@ -337,7 +373,13 @@ Resources:
                         Action:
                             - iam:CreateRole
                             - iam:PutRolePermissionsBoundary
-                        Resource: "*"
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                            - !If
+                              - HasRoleNamePrefix
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                              - !Ref AWS::NoValue
                         Condition:
                             StringEquals:
                                 iam:PermissionsBoundary:
@@ -349,10 +391,20 @@ Resources:
                       - Sid: CreateRoleWithoutBoundaryNotForProd
                         Effect: Allow
                         Action: iam:CreateRole
-                        Resource: "*"
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                            - !If
+                              - HasRoleNamePrefix
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                              - !Ref AWS::NoValue
                     - Sid: DenyProtectedRoles
                       Effect: Deny
                       Action:
+                          - iam:CreateRole
+                          - iam:TagRole
+                          - iam:UntagRole
+                          - iam:UpdateRoleDescription
                           - iam:AttachRolePolicy
                           - iam:DetachRolePolicy
                           - iam:PutRolePolicy
@@ -366,6 +418,15 @@ Resources:
                       Resource:
                           - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*
                           - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/vra-*
+                          # bootstrap and vra roles IT names with the env's prefix (iam.mode bootstrap)
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}cdk-*
+                            - !Ref AWS::NoValue
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}vra-*
+                            - !Ref AWS::NoValue
                     # A template could otherwise rewrite this very policy (or the boundary) to *:* (CreatePolicyVersion).
                     - Sid: DenyProtectedPolicies
                       Effect: Deny

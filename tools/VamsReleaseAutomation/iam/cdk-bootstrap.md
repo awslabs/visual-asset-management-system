@@ -22,7 +22,9 @@ start with B and move to A without re-bootstrapping (add the deploy role, drop `
 
 ## 2. Deploy the scoped execution policy
 
-Run in each env account, in the VAMS region. Replace placeholders.
+Run in each env account, in the VAMS region. Replace placeholders. `ConfigName` and `RoleNamePrefix` come
+from the ledger: the env's `configName` and `iam.rolePrefix` (empty when the env sets none). The deploy role
+notes of the IT package (`vra iam plan --env <env>`) name both values for each env.
 
 ```bash
 # Commercial, CloudFront deployment (the CloudFront WAF stack lives in us-east-1)
@@ -30,16 +32,25 @@ aws cloudformation deploy \
   --stack-name vra-cdk-execution-policy \
   --template-file iam/cloudformation/vra-cdk-execution-policy.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AllowedRegions=us-east-1,us-west-2
+  --parameter-overrides AllowedRegions=us-east-1,us-west-2 ConfigName=vams RoleNamePrefix=
 
-# GovCloud (ALB deployment, no CloudFront)
+# GovCloud (ALB deployment, no CloudFront), with a role-name prefix
 aws cloudformation deploy \
   --stack-name vra-cdk-execution-policy \
   --template-file iam/cloudformation/vra-cdk-execution-policy.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AllowedRegions=us-gov-west-1 \
+  --parameter-overrides AllowedRegions=us-gov-west-1 ConfigName=vams RoleNamePrefix=ITVAMS- \
   --region us-gov-west-1
 ```
+
+The policy creates, changes, deletes and passes only VAMS's own roles. VAMS names the roles of its core stack
+`<ConfigName>core...` (from the stack name, without its hyphens), or `<RoleNamePrefix>...` with a prefix;
+CloudFormation names the roles of the other VAMS stacks `<ConfigName>-...`. The grants cover exactly those
+three name patterns, so `ConfigName` must be 1-12 letters and digits. `<RoleNamePrefix>cdk-*`,
+`<RoleNamePrefix>vra-*` and every `cdk-*` / `vra-*` role stay protected. In `iam.mode: precreated`, IT's role
+names must start with `RoleNamePrefix` (without a prefix, the IT package suggests `<baseStackName>-...`
+names, and `vra iam plan` gives that start as the value). Environments that share an account share its
+execution policy, so give them the same `ConfigName` and prefix, or separate accounts.
 
 ## 3. Bootstrap
 
@@ -118,18 +129,18 @@ environment: `setSourceIdentity: false` in its `env.yaml` and `RequireSourceIden
 
 ## 4. Trade-offs of the scoped execution policy
 
-|                                                | `AdministratorAccess` (CDK default) | `vra-cdk-execution` (this package)                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Deploy reliability                             | Never fails on permissions          | Fails when a new VAMS feature uses a service not on the list; `vra` classifies the CloudFormation event and writes an IT request with the missing action                                                                                                                                                                                                                                                                                                                                 |
-| Blast radius of a malicious or broken template | Whole account                       | Listed services in allowed regions; no IAM users, access keys, Organizations, account settings; cannot modify `cdk-*` / `vra-*` roles                                                                                                                                                                                                                                                                                                                                                    |
-| Privilege escalation                           | A template can create an admin role | Every role CloudFormation creates must carry the permissions boundary (created by the stack as `vra-cdk-execution-role-boundary`, or your `RequiredPermissionsBoundaryArn`), which denies IAM changes, audit-trail and key destruction to VAMS roles. The execution policy itself, the boundary and every `vra-*` / `cdk-*` policy cannot be rewritten (`CreatePolicyVersion` denied); `iam:PassRole` is limited by `iam:PassedToService`; AWS-managed admin policies cannot be attached |
-| Maintenance                                    | None                                | Re-check on each VAMS minor release (`vra ledger upgrade-config` reports new config keys; new pipelines often mean new services)                                                                                                                                                                                                                                                                                                                                                         |
-| Auditor view                                   | Usually flagged                     | Explainable statement by statement                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|                                                | `AdministratorAccess` (CDK default) | `vra-cdk-execution` (this package)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deploy reliability                             | Never fails on permissions          | Fails when a new VAMS feature uses a service not on the list; `vra` classifies the CloudFormation event and writes an IT request with the missing action                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Blast radius of a malicious or broken template | Whole account                       | Listed services in allowed regions; no IAM users, access keys, Organizations, account settings; roles: only VAMS's own role names (`ConfigName`, `RoleNamePrefix`), never `cdk-*` / `vra-*` roles                                                                                                                                                                                                                                                                                                                                                                          |
+| Privilege escalation                           | A template can create an admin role | Every role CloudFormation creates must carry the permissions boundary (created by the stack as `vra-cdk-execution-role-boundary`, or your `RequiredPermissionsBoundaryArn`), which denies IAM changes, audit-trail and key destruction to VAMS roles. The execution policy itself, the boundary and every `vra-*` / `cdk-*` policy cannot be rewritten (`CreatePolicyVersion` denied); creating, changing, deleting and passing roles is limited to VAMS's own role names, and `iam:PassRole` also by `iam:PassedToService`; AWS-managed admin policies cannot be attached |
+| Maintenance                                    | None                                | Re-check on each VAMS minor release (`vra ledger upgrade-config` reports new config keys; new pipelines often mean new services)                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Auditor view                                   | Usually flagged                     | Explainable statement by statement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Things the scoped policy deliberately still allows, because VAMS needs them: key management on the keys
 VAMS stacks create (`kms:PutKeyPolicy` / `ScheduleKeyDeletion` only where the key's
 `aws:cloudformation:stack-name` tag starts with `<ConfigName>-`), `ec2:*` (VPC, endpoints, security groups),
-`iam:PassRole` to the services VAMS wires roles to (Lambda, Step Functions, ECS tasks, Batch, EC2, EKS, API
+`iam:PassRole` of VAMS's own roles to the services VAMS wires roles to (Lambda, Step Functions, ECS tasks, Batch, EC2, EKS, API
 Gateway, EventBridge, CodeBuild, OpenSearch, Cognito user and identity pools, CloudTrail, VPC flow logs,
 Bedrock AgentCore), and the CloudTrail actions for VAMS's own trail
 (`app.addStackCloudTrailLogs`; trails not named `<ConfigName>-*` cannot be stopped, deleted or changed).

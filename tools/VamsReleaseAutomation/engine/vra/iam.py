@@ -769,10 +769,12 @@ def vra_roles(ctx, env: str, s: dict) -> list[dict]:
         return out
 
     deploy_wfs = ["deploy", "backup", "migrate", "test-live", "preflight", "rollback", "restore"]
+    xp = execution_policy_parameters(e, env, s)
     deploy_notes = ["CloudFormation runs as the CDK execution role; use iam/cloudformation/vra-cdk-execution-"
                     "policy.yaml as its policy (RequiredPermissionsBoundaryArn = the env's boundary in boundary "
-                    "mode). Its iam:PassRole statement (PassRoleToVamsServices) is scoped by service, so it "
-                    "also covers IT-precreated VAMS roles"]
+                    "mode) with ConfigName=" + xp["ConfigName"] + " and RoleNamePrefix=" +
+                    (xp["RoleNamePrefix"] or '""') + ": it creates, changes and passes only roles with those "
+                    "names (also the IT-precreated VAMS roles), never cdk-* / vra-* roles"]
     q = s["bootstrap"].get("qualifier") or ctx.ledger.project.get("cdk", {}).get("qualifier") or DEFAULT_QUALIFIER
     if "bootstrap" in s["modes"] and s["cliCredentialsSynthesizer"]:
         deploy_notes.append("bootstrap mode with cliCredentialsSynthesizer: there are no CDK bootstrap roles; this "
@@ -1072,6 +1074,17 @@ def env_info(ctx, env: str, asm: Assembly | None = None) -> dict:
     return {"partition": part, "region": e["region"], "account": str(e["account"]), "coreStack": stack,
             "rolePattern": f"{s['rolePrefix']}{name_base(e, env)}-*", "precreated": "precreated" in s["modes"],
             "rolePrefix": s["rolePrefix"], "nameBase": name_base(e, env)}
+
+
+def execution_policy_parameters(e: dict, env: str, s: dict | None = None) -> dict:
+    """The ledger's values for iam/cloudformation/vra-cdk-execution-policy.yaml, which confines role changes and
+    iam:PassRole to VAMS's role names: ``ConfigName`` (the env's configName) and ``RoleNamePrefix`` (iam.rolePrefix;
+    in precreated mode without one, the start of the names the IT package suggests, ``<nameBase>-``)."""
+    s = s or settings(e)
+    prefix = s["rolePrefix"]
+    if not prefix and "precreated" in s["modes"]:
+        prefix = name_base(e, env) + "-"
+    return {"ConfigName": str(e.get("configName") or "vams"), "RoleNamePrefix": prefix}
 
 
 def name_base(e: dict, env: str) -> str:

@@ -43,12 +43,12 @@ private repository for the shared home ([Shared home](shared-home.md#git)).
 
 Per environment account, in this order:
 
-| Step | Template or command                                                                                                                                                                 | Result                                                                                                     |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 1    | [`vra-cdk-execution-policy.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-cdk-execution-policy.yaml) | The scoped AWS CloudFormation execution policy and its mandatory permissions boundary                      |
-| 2    | `cdk bootstrap` (below)                                                                                                                                                             | The CDK bootstrap roles, using that policy                                                                 |
-| 3    | [`vra-deploy-role.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-deploy-role.yaml)                   | `vra-deploy-<env>` (and optionally `vra-synth-<env>`, `vra-test-<env>`); record its ARN as `deployRoleArn` |
-| 4    | [`vra-data-copy-roles.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-data-copy-roles.yaml)           | Only for [data copy](data-copy.md): `Side=target` in the target account first, then `Side=source`          |
+| Step | Template or command                                                                                                                                                                 | Result                                                                                                                                                                       |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | [`vra-cdk-execution-policy.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-cdk-execution-policy.yaml) | The scoped AWS CloudFormation execution policy and its mandatory permissions boundary, with the env's `configName` and `iam.rolePrefix` as `ConfigName` and `RoleNamePrefix` |
+| 2    | `cdk bootstrap` (below)                                                                                                                                                             | The CDK bootstrap roles, using that policy                                                                                                                                   |
+| 3    | [`vra-deploy-role.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-deploy-role.yaml)                   | `vra-deploy-<env>` (and optionally `vra-synth-<env>`, `vra-test-<env>`); record its ARN as `deployRoleArn`                                                                   |
+| 4    | [`vra-data-copy-roles.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-data-copy-roles.yaml)           | Only for [data copy](data-copy.md): `Side=target` in the target account first, then `Side=source`                                                                            |
 
 Tools account: [`vra-state-store.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/iam/cloudformation/vra-state-store.yaml)
 only with `stateStore.type: s3`, then the optional CI pipeline ([CI/CD and AWS CodePipeline](codepipeline.md)).
@@ -76,6 +76,11 @@ npx cdk bootstrap "aws://${ACCOUNT}/${REGION}" --template bootstrap-template.vra
 -   **Source identity.** The patch adds `sts:SetSourceIdentity` to the bootstrap roles' trust, which gated
     environments need because their sessions carry the initiator as source identity. Re-run it whenever the
     CDK CLI's bootstrap template changes.
+-   **VAMS roles only.** The scoped execution policy creates, changes, deletes and passes only roles named as
+    VAMS names them (`<ConfigName>core...`, `<ConfigName>-...`, `<RoleNamePrefix>...`), never the CDK bootstrap
+    or `vra-*` roles, so a template cannot reach the account's other roles. `ConfigName` is 1-12 letters and
+    digits. Environments that share an account share this policy: give them the same `configName` and
+    `iam.rolePrefix`.
 -   **Permissions boundary.** The scoped execution policy refuses to create a role without its boundary.
     Set the boundary's name as `permissionsBoundaryName` in every environment of that account; `vra build`
     applies it to every role VAMS synthesizes and checks the synthesized templates. VAMS v2.6.6 and
