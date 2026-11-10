@@ -168,3 +168,43 @@ def test_the_help_names_the_image_column_and_lines(cli_runner):
     record = ' '.join(cli_runner.invoke(cli, ['edh', 'workstation', 'get', '--help']).output.split())
     for fragment in ('Image', 'Recipe version', 'imageLatest'):
         assert fragment in record, fragment
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", "uat-isaacsim62v14-gr6-4xlarge-4"),
+    ("name", "n" * 256),
+    ("lastError", "EDH_START_NOT_CARRIED_OUT_LONG_CODE"),
+    ("instanceType", "g6e.48xlarge.metal-ext"),
+])
+def test_the_list_keeps_every_column_aligned_beside_a_long_value(cli_runner, generic_command_mocks, field,
+                                                                  value):
+    # [in-dev D40] Name and Last Error had fixed widths, so a longer value pushed that row's later
+    # columns out of line. Every column now starts at the header's offset on every row.
+    long_row = dict(BASELINE, **{field: value, "sessionId": "s-3", "bootstrapId": "b-3"})
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].list_edh_workstations.return_value = {'Items': [long_row, BASELINE]}
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        header = next(line for line in lines if "Identifier" in line)
+        rows = [line for line in lines if line.startswith("  s-")]
+        assert len(rows) == 2
+        for title in ("State", "Last Error", "Image", "Instance", "OS", "Created"):
+            start = header.index(title)
+            for row in rows:
+                assert row[start - 2:start] == "  ", (title, row)
+                assert row[start] != " ", (title, row)
+        assert value in rows[0]
+        assert rows[1][header.index("Instance"):].split()[0] == "g6e.4xlarge"
+
+
+def test_the_list_keeps_its_usual_widths_for_short_values(cli_runner, generic_command_mocks):
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].list_edh_workstations.return_value = {'Items': [BASELINE]}
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
+        assert result.exit_code == 0, result.output
+        header = next(line for line in result.output.splitlines() if "Identifier" in line)
+        assert header.index("Name") == 2 + 38 + 2
+        assert header.index("State") == header.index("Name") + 24 + 2
+        assert header.index("Last Error") == header.index("State") + 10 + 2
+        assert header.index("Image") == header.index("Last Error") + 22 + 2

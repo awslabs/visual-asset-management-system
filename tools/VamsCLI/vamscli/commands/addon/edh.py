@@ -445,22 +445,30 @@ def format_workstation_list(result: Dict[str, Any]) -> str:
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No workstations found."
-    images = [workstation_image_name(item) + newer_image_suffix(item) for item in items]
-    # The Image column is as wide as its longest value, so a long recipe name keeps the table aligned.
-    image_width = max(24, *(len(image) for image in images))
-    header = (f"  {'Identifier':38s}  {'Name':24s}  {'State':10s}  {'Last Error':22s}  "
-              f"{'Image':{image_width}s}  {'Instance':14s}  {'OS':8s}  Created")
+    rows = [
+        [
+            _identifier(item),
+            str(item.get('name', 'N/A')),
+            state_label(item),
+            str(item.get('lastError') or '-'),
+            workstation_image_name(item) + newer_image_suffix(item),
+            str(item.get('instanceType', 'N/A')),
+            str(item.get('osFamily', 'N/A')),
+        ]
+        for item in items
+    ]
+    # Each column is at least its usual width and as wide as its longest value, so a long name (up
+    # to 256 characters), error code or recipe name keeps every row aligned. Created comes last.
+    columns = [('Identifier', 38), ('Name', 24), ('State', 10), ('Last Error', 22), ('Image', 24),
+               ('Instance', 14), ('OS', 8)]
+    widths = [max(width, *(len(row[index]) for row in rows)) for index, (_title, width) in enumerate(columns)]
+    header = '  ' + '  '.join(title.ljust(width) for (title, _min), width in zip(columns, widths)) + '  Created'
     lines = [header, '-' * len(header)]
     session_less = False
-    for item, image in zip(items, images):
+    for item, row in zip(items, rows):
         session_less = session_less or not item.get('sessionId')
-        lines.append(
-            f"  {_identifier(item):38s}  {str(item.get('name', 'N/A')):24s}  "
-            f"{state_label(item):10s}  {str(item.get('lastError') or '-'):22s}  "
-            f"{image:{image_width}s}  "
-            f"{str(item.get('instanceType', 'N/A')):14s}  {str(item.get('osFamily', 'N/A')):8s}  "
-            f"{item.get('createdAt', 'N/A')}"
-        )
+        lines.append('  ' + '  '.join(cell.ljust(width) for cell, width in zip(row, widths))
+                     + f"  {item.get('createdAt', 'N/A')}")
     if session_less:
         lines.append("")
         lines.append("  * bootstrap id: the launch has no EDH session id yet. Every workstation command "
