@@ -561,7 +561,7 @@ Resources:
                           - lambda:GetFunction
                       Resource: !Sub
                           # generated Lambda names keep at most 25 characters of the core stack name
-                          # (vams-core-prod01-us-east-1 -> vams-core-prod01-us-east--crOsReindexer...), so the region
+                          # (vams-core-prodfr-us-east-1 -> vams-core-prodfr-us-east--crOsReindexer...), so the region
                           # part may be cut; the ARN's region field still scopes it
                           - arn:${AWS::Partition}:lambda:${R}:${AWS::AccountId}:function:${ConfigName}-core-${BaseStackName}-*
                           - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]

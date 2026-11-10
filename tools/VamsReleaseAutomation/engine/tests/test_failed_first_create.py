@@ -1,8 +1,8 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Live test Phase B10c regression.
+"""Regression found in a live pipeline run.
 
-the first prod deploy of prod01 failed during CREATE, leaving `vams-core-prod01-us-east-1` in
+the first prod deploy of prodfr failed during CREATE, leaving `vams-core-prodfr-us-east-1` in
 ROLLBACK_COMPLETE (no outputs, no SSM resource names; CloudFormation cannot update it and `cdk deploy` deletes and
 re-creates it). The next deploy treated that stack as a live deployment: the pre-deploy checkpoint looked for the
 SSM resource names and stopped every retry with NEEDS_HUMAN ("no SSM resource names under ... is the core stack

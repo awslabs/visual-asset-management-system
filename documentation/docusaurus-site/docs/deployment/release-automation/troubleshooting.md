@@ -279,7 +279,7 @@ it. `bundle of <id> does not match the manifest <env> deployed` means the stored
 the environment ran. Do not deploy it; find out who changed the bucket. A `build.upload` step that takes
 many minutes copies a bundle of thousands of files; 0.5.0 sends 16 at a time (`VRA_STORE_WORKERS`), so
 raise the number on a job with more network headroom. `build <id> already exists in the bundle store
-with different content` from a CI build before 0.5.0's Phase B10 fix means the job rebuilt a commit that
+with different content` from a CI build before the 0.5.0 fix means the job rebuilt a commit that
 already had a bundle (for example after `vra iam apply`). Upgrade the package; the next build reuses
 the stored bundle or takes the next free id. The old refusal could add files to the stored bundle, so a
 later deploy or rollback of that build stops at `bundle integrity check failed`; deploy a newer build

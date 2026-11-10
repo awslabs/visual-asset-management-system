@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Live test Phase B10 regressions on the bundle store (VRA_BUNDLE_STORE, the pipeline's CI setup).
+"""Regressions on the bundle store (VRA_BUNDLE_STORE, the pipeline's CI setup).
 
 execution b5788c18 rebuilt commit 82ce189 after `vra iam apply` of prod-3 (a bundle synthesized
 under other IAM settings is never reused). The CI job holds no earlier bundle, so the build took the commit's id

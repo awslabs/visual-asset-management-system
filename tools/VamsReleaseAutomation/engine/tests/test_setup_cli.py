@@ -143,7 +143,7 @@ def test_setup_gated_env_keys_and_approvals_readme(tmp_path):
 
 
 def test_blank_strings_in_the_answers_file_mean_unset(tmp_path):
-    """Live test O1: `synthRoleArn: ""` in an answers file was written to env.yaml and failed validation; a blank
+    """`synthRoleArn: ""` in an answers file was written to env.yaml and failed validation; a blank
     answer in the file is unset, the same as a blank answer at the prompt."""
     answers = json.loads(json.dumps(ANSWERS))
     answers["envs"]["prod"].update({"synthRoleArn": "", "permissionsBoundaryName": "  ", "dataOwners": ""})

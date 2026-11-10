@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""(live test Phase B10f): a run that parks mid-change more than once (each CodePipeline retry of the
-Deploy-prod of 5437d5c2 resumed it and it parked again) listed the same "stays locked by this run" note once per park,
+"""A run that parks mid-change more than once (each CodePipeline retry of the
+Deploy-prod retry resumed it and it parked again) listed the same "stays locked by this run" note once per park,
 and the note only said "`vra resume` continues", although a resume from another machine (every CI retry runs on a new
 CodeBuild host) is refused at the held lock. The note is now written once per env and names both ways on."""
 

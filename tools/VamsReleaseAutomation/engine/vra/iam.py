@@ -529,7 +529,7 @@ def _partition(s: str, partition: str) -> str:
 
 
 # Generated (CloudFormation-named) Lambda functions keep at most this many characters of the stack name: a census of
-# 639 generated function names in 26 VAMS stacks (live test B9, 2026-11-06) found the full name for 25-char core stack
+# 639 generated function names in 26 VAMS stacks (a live census) found the full name for 25-char core stack
 # names and exactly 25 characters for 26-char ones. DynamoDB tables, SNS topics and SQS queues kept the full name.
 LAMBDA_GENERATED_STACK_CHARS = 25
 TOKEN_RE = re.compile(r"\(([^()]+)\)")
@@ -578,7 +578,7 @@ def _arn_for(res: dict, attr: str, stack: str, v: dict) -> str | None:
         return f"arn:{p}:logs:{r}:{a}:log-group:{name or '*'}:*"
     if t == "AWS::Lambda::Function" and attr in ("Arn", "Ref"):
         # CloudFormation keeps at most LAMBDA_GENERATED_STACK_CHARS of the stack name in a generated
-        # function name (vams-core-prod01-us-east-1 -> vams-core-prod01-us-east--PopulateS3AssetBucketsTa-3HgT...)
+        # function name (vams-core-prodfr-us-east-1 -> vams-core-prodfr-us-east--PopulateS3AssetBucketsTa-3HgT...)
         fn = name or stack[:LAMBDA_GENERATED_STACK_CHARS] + "*"
         return fn if attr == "Ref" else f"arn:{p}:lambda:{r}:{a}:function:{fn}"
     if t == "AWS::SQS::Queue" and attr == "Arn":
@@ -2397,7 +2397,7 @@ def wf_plan(ctx, run, args):
                 creds, cred_role = {**region_env, **build.NO_CREDENTIALS_ENV}, "none"
                 sc.log(f"no AWS credentials for synth lookups in {env}: {exc}")
             # as vra build: prove the build-only role before minutes of synth, and turn a lookup that found no
-            # credentials into what to set (live test: test1's VPC lookup failed as a bare `command failed (1)`)
+            # credentials into what to set (live test: stage's VPC lookup failed as a bare `command failed (1)`)
             if cred_role in ("synth", "readonly"):
                 build.prove_synth_role(ctx, env, cred_role)
             sub_env, _keys = build.synth_environment(ctx, env, {**region_env, **creds})

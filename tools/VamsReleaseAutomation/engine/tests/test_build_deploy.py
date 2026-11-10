@@ -92,7 +92,7 @@ def test_unit_suite_skips_npm_script_missing_at_this_version(ctx, repos, calls):
 
 def test_build_ids_count_the_homes_builds_when_tags_are_not_pushed(ctx, repos, calls):
     """Live test: with build.pushTags false every CodeBuild build clones the fork afresh, without the tags of
-    earlier builds, so the build of aa5ec64 got id cust-v2.6.6-1, the id the earlier build of 8f54a8b had; a
+    earlier builds, so the build of a second commit got id cust-v2.6.6-1, the id the earlier build of the first commit had; a
     rollback that excludes the failing build then excluded both. The ids the shared home recorded count now."""
     proj = util.read_yaml(ctx.ledger.root / "vra.yaml")
     proj.setdefault("build", {})["pushTags"] = False

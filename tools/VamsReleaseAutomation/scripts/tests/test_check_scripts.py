@@ -113,6 +113,27 @@ def test_private_terms_file_adds_terms(repo, tmp_path, monkeypatch):
     assert any("private term" in b for b in check_files.check_neutral(pkg, [docs]))
 
 
+# assembled so this file passes the neutrality scan it tests
+LABELS = ["de" + "mo11 stack", "the E2" + "E-050 run", "e2e-0" + "50-run/K/K11", "live test Pha" + "se B10d",
+          "finding B-0" + "50-29", "R" + "50-18: a gate", "REVIE" + "W-050 fix wave", "live test O" + "4",
+          "role vra" + "e2e-deploy", "the pro" + "d01 env", "the tes" + "t1 stack"]
+
+
+@pytest.mark.parametrize("line", LABELS)
+def test_internal_test_run_labels_fail_the_scan(repo, line):
+    _, pkg, docs = repo
+    (pkg / "engine/c.py").write_text(f"# {line}\n")
+    assert any("engine/c.py" in b for b in check_files.check_neutral(pkg, [docs])), line
+
+
+@pytest.mark.parametrize("line", ["Phase 1: pre-implementation", "found live: a fresh prod install",
+                                  "env prod, stage and dev", "workflow W9", "test10 and prod1"])
+def test_neutral_wording_passes_the_scan(repo, line):
+    _, pkg, docs = repo
+    (pkg / "engine/c.py").write_text(f"# {line}\n")
+    assert check_files.check_neutral(pkg, [docs]) == []
+
+
 def test_scanner_carries_no_customer_terms():
     text = (SCRIPTS / "check_files.py").read_text()
     assert "map(chr" not in text and "customer name" not in text

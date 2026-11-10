@@ -351,10 +351,10 @@ def test_resume_does_not_crash_on_an_it_request_whose_principal_is_in_another_ac
     assert perms.resimulate(ctx, run, {"id": "IT-REQUEST-1"}) is None
 
 
-# ------------------------------------------------------------------ (live test Phase B3, live)
+# ------------------------------------------------------------------ (found live)
 _B8_VALS = {"Partition": "aws", "Region": "us-east-1", "Account": "111111111111", "ConfigName": "vams",
-            "CoreStack": "vams-core-dev01-us-east-1", "SsmPrefix": "/vams-dev01-us-east-1/resourceNames",
-            "BaseStackName": "dev01-us-east-1", "CdkQualifier": "hnb659fds"}
+            "CoreStack": "vams-core-devel-us-east-1", "SsmPrefix": "/vams-devel-us-east-1/resourceNames",
+            "BaseStackName": "devel-us-east-1", "CdkQualifier": "hnb659fds"}
 
 
 class _ConditionAwareIam:
@@ -376,7 +376,7 @@ class _ConditionAwareIam:
 
 
 def test_conditioned_manifest_statements_simulate_with_their_context():
-    """, live on dev01 through the pipeline: the backup and migrate preflights of vra-deploy-dev (deployed
+    """, live on devel through the pipeline: the backup and migrate preflights of vra-deploy-dev (deployed
     from vra-deploy-role.yaml, whose DataKms grants kms:* on key/* only via dynamodb.* / s3.*) reported
     kms:Decrypt/DescribeKey as implicitDeny, because the manifest's ``condition:`` never reached
     SimulatePrincipalPolicy. The real call (through DynamoDB) is allowed, so the IT request was false."""

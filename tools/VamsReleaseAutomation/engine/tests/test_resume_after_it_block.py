@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Live test Phase B10 regressions.
+"""Regressions found in a live pipeline run.
 
 `vra --dry-run resume <run>` of a real run re-simulated its IT requests, reset its steps, ran the
 workflow and saved (and published) the run: the parked prod run of execution 0b86fcb7 went from BLOCKED_ON_IT to

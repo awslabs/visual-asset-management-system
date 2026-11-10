@@ -163,7 +163,7 @@ def test_post_deploy_smoke_reads_with_the_deploy_identity_not_the_test_role(ctx,
     monkeypatch.setenv("VRA_VAMSCLI", "/opt/own/vamscli")
     env = util.read_yaml(ledger.root / "envs/test/env.yaml")
     env["testRoleArn"] = f"arn:aws:iam::{env['account']}:role/vra-test-test"
-    env["liveTest"] = {"auth": {"type": "password", "secret": "vra/test1/smoke-user"}}
+    env["liveTest"] = {"auth": {"type": "password", "secret": "vra/stage/smoke-user"}}
     util.write_yaml(ledger.root / "envs/test/env.yaml", env)
     ledger._envs.clear()
     asked = []
@@ -216,7 +216,7 @@ def test_smoke_secret_read_errors_are_engine_errors_not_crashes(ctx, ledger, tmp
     monkeypatch.setenv("VRA_VAMSCLI", "/opt/own/vamscli")
     env = util.read_yaml(ledger.root / "envs/test/env.yaml")
     env["liveTest"] = {"webUrl": "https://test.vams.example.com",
-                       "auth": {"type": "password", "secret": "vra/prod01/smoke-user"}}
+                       "auth": {"type": "password", "secret": "vra/prodfr/smoke-user"}}
     util.write_yaml(ledger.root / "envs/test/env.yaml", env)
     ledger._envs.clear()
 
@@ -234,7 +234,7 @@ def test_smoke_secret_read_errors_are_engine_errors_not_crashes(ctx, ledger, tmp
     with pytest.raises(errors.VraError) as info:
         run.step("smoke", lambda sc: deploy._smoke(ctx, run, "test", sc, None, []))
     assert type(info.value).__name__ == expected
-    assert "vra/prod01/smoke-user" in info.value.message
+    assert "vra/prodfr/smoke-user" in info.value.message
 
 
 def test_ledger_diff_against_deployed_bundle(ctx, repos, ledger):

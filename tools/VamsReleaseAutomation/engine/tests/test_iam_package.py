@@ -661,7 +661,7 @@ def test_verify_reports_missing_unbounded_untrusted_and_denied(tmp_path):
 
 
 def test_verify_labels_grants_vams_never_makes_effective_and_keeps_real_gaps(tmp_path):
-    """Live test: on prod01, `vra iam verify` reported 136 problems for IT's 87 roles: `kms:ListKeys` /
+    """Live test: on prodfr, `vra iam verify` reported 136 problems for IT's 87 roles: `kms:ListKeys` /
     `kms:ListAliases` granted on `key/*` (they take only `*`) and SNS subscription actions granted on the topic
     pattern. VAMS's own policy never makes these effective, so they are listed under `notEffective` with that label
     instead of as IT gaps; a real denial stays a problem."""

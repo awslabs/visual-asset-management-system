@@ -76,7 +76,7 @@ if [ -n "${VRA_PIPELINE_EXECUTION_ID:-}" ] && [ "${VRA_PIPELINE_RESUME:-true}" =
 fi
 
 # report-run begin: `report` without a run id reports (and notifies) the run this job ran, not the newest run in
-# the home by start time (a resumed run is older than any later watch run, so the Deploy-prod job of 5437d5c2
+# the home by start time (a resumed run is older than any later watch run, so a Deploy-prod job
 # notified the morning's watch-sync run instead of the promote it had just finished)
 if [ "${cmd_args[0]:-}" = "report" ] && [ -s "${out_dir}/last-run-id" ]; then
   has_id=false

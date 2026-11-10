@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """the CloudFront quota check before `cdk deploy` (vra 0.5.1).
 
-live test: prod01's fresh prod install failed about 8 minutes into `cdk deploy` because the account's custom
+Found live: a fresh prod install failed about 8 minutes into `cdk deploy` because the account's custom
 CloudFront cache-policy quota (L-7D134442, 20 at the time) was full: StaticWeb `ApiCachePolicy` CREATE_FAILED
 (ServiceLimitExceeded), and the rollback then got stuck. Each VAMS CloudFront deployment adds 2 cache
 policies, 1 origin request policy, 1 response headers policy and 1 distribution. The engine checked IAM quotas
@@ -116,7 +116,7 @@ def vams_cloudfront_diff() -> str:
 
 def vams_static_web_templates(asm: Path) -> Path:
     """A synthesized assembly shaped like the real cust-v2.6.6-8 bundle: StaticWeb nested stack with the
-    CloudFront resources, IAM-free (precreated roles, as prod01)."""
+    CloudFront resources, IAM-free (precreated roles, as prodfr)."""
     asm.mkdir(parents=True, exist_ok=True)
     util.write_json(asm / "vams-core-dev.template.json", {"Resources": {
         "StaticWebNestedStack": {"Type": "AWS::CloudFormation::Stack"}, "Fn": {"Type": "AWS::Lambda::Function"}}})

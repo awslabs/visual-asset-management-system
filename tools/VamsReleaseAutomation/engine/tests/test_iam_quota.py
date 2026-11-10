@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """the IAM quota check before `cdk deploy`.
 
-Live test Phase B7, live: a permission-boundary + role-prefix switch on test1 replaced all 91 VAMS roles; the
+Found live: a permission-boundary + role-prefix switch on stage replaced all 91 VAMS roles; the
 account held 942 of 1000 roles, CloudFormation creates each replacement before it deletes the old role, and
 `cdk deploy` failed after 18 minutes with "Cannot exceed quota for RolesPerAccount: 1000" (UPDATE_ROLLBACK_COMPLETE).
 The engine checked permissions, not quotas. Each test here failed on the code before the check."""
@@ -25,7 +25,7 @@ PKG = Path(__file__).resolve().parents[2]
 
 
 def boundary_switch_diff(n: int = 91) -> str:
-    """`cdk diff` of a boundary + prefix switch, in the rendering of the live test1 diff (cdk-diff-test.txt)."""
+    """`cdk diff` of a boundary + prefix switch, in the rendering of the live stage diff (cdk-diff-test.txt)."""
     lines = ["Stack vams-core-dev", "Resources"]
     for i in range(n):
         lines += [f"[~] AWS::IAM::Role ApiBuilder/fn{i}/ServiceRole fn{i}ServiceRole{i:08X} replace",
@@ -132,7 +132,7 @@ def test_quota_headroom_is_validated():
 
 def test_precreated_roles_env_counts_zero_and_reads_no_quota(ctx, repos, calls, monkeypatch):
     """A switch to IT-precreated roles removes the stack roles ([-]): nothing needs quota, so the deploy neither
-    reads iam:GetAccountSummary nor needs that grant (the prod01 case: IT's 87 roles, no AWS::IAM::Role)."""
+    reads iam:GetAccountSummary nor needs that grant (the prodfr case: IT's 87 roles, no AWS::IAM::Role)."""
     diff = "Stack vams-core-dev\nResources\n" + "".join(
         f"[-] AWS::IAM::Role ApiBuilder/fn{i}/ServiceRole fn{i}ServiceRole destroy\n" for i in range(91)) + \
         "[~] AWS::Lambda::Function Fn Fn1\n\u2728  Number of stacks with differences: 1\n"

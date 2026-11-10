@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""(live test Phase B10g): the Deploy-prod of 5437d5c2 parked with prod dirty (smoke secret missing), a person
+"""A promote run to prod parked with prod dirty (smoke secret missing), a person
 released the lock, and the CodePipeline retry resumed the run, which SUCCEEDED and released prod. Its report still
 said "prod stays locked by this run ... `vra unlock` releases it", sending the reader to unlock an env nobody held.
 Releasing the lock now drops that env's held-lock note."""

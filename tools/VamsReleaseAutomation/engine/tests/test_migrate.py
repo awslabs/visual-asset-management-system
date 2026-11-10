@@ -127,7 +127,7 @@ def test_standalone_migrate_dry_run_on_gated_env_needs_no_approval(ctx, mig_root
     assert out.exit_code == 0, out.message
 
 
-# --- standalone migrate on an env with no vra deploy history (live test O2) ------------------------------------------
+# --- standalone migrate on an env with no vra deploy history (found live) ------------------------------------------
 
 class _CoreStack:
     """describe_stacks of an imported env: the core stack is live, its description names the VAMS version."""
@@ -150,7 +150,7 @@ def _imported(ctx, description):
 
 
 def test_migrate_on_imported_env_reads_from_stack_and_to_from_source_tree(ctx, mig_root, monkeypatch):
-    """Live test O2: with no vra history, `vra migrate --source` refused without --from/--to (exit 2). `from` now
+    """With no vra history, `vra migrate --source` refused without --from/--to (exit 2). `from` now
     comes from the core stack description (as `vra deploy` reads it), `to` from the tree's VAMS_VERSION."""
     stub_inventory(monkeypatch)
     _imported(ctx, "(SO9299) (VAMS-CORE) (version:2.5.3) Primary Components")

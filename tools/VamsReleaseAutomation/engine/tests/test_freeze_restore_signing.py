@@ -304,7 +304,7 @@ def test_restore_verification_catches_a_write_during_the_reload(ctx, ledger, aws
 
 
 def test_writes_vams_derives_from_the_object_rollback_are_reported_not_failed(ctx, ledger, aws, monkeypatch):
-    """Drill finding B12: rolling objects back creates new S3 versions; VAMS's S3 event processing then adds
+    """Restore drill finding: rolling objects back creates new S3 versions; VAMS's S3 event processing then adds
     version-history rows. The table check runs before the rollback (strict); rows added after it are reported."""
     names, ddb = _stack_with_data()
     cid = _checkpoint(ctx, ledger)
@@ -699,7 +699,7 @@ def test_an_offered_approval_is_verified_even_on_an_ungated_env(ctx, ledger, aws
 
 
 def test_temp_table_cleanup_is_idempotent():
-    """Drill finding B13: a retried DeleteTable met 'Table is being deleted' and failed the whole restore."""
+    """Restore drill finding: a retried DeleteTable met 'Table is being deleted' and failed the whole restore."""
     calls = []
 
     class Ddb:
@@ -758,7 +758,7 @@ def test_freeze_acknowledgement_names_the_verified_initiator(ctx, ledger, aws):
 
 
 def test_temp_table_names_are_unique_per_table_key(ctx):
-    """Drill finding B14: dynamoTables/legacy/tagStorage and dynamoTables/tagStorage shared a temporary table."""
+    """Restore drill finding: dynamoTables/legacy/tagStorage and dynamoTables/tagStorage shared a temporary table."""
     a = restore.temp_table_name(ctx, "dev", "dynamoTables/legacy/tagStorage", "t1")
     b = restore.temp_table_name(ctx, "dev", "dynamoTables/tagStorage", "t1")
     assert a != b and a == "vra-restore-dev-us-east-1-legacy-tagStorage-t1"

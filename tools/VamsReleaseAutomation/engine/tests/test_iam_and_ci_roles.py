@@ -241,7 +241,7 @@ def _statements(node):
 
 
 def test_drift_detection_grants_the_per_resource_action_it_needs():
-    """Live test: the first approval-gated promote (test1) stopped BLOCKED_ON_IT at deploy.test.drift:
+    """Live test: the first approval-gated promote (stage) stopped BLOCKED_ON_IT at deploy.test.drift:
     CloudFormation's DetectStackDrift runs DetectStackResourceDrift as the caller, and the deploy role, the deploy
     and rollback manifests granted only DetectStackDrift and DescribeStackResourceDrifts."""
     t = load_cfn("iam/cloudformation/vra-deploy-role.yaml")

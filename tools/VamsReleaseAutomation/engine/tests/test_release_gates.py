@@ -737,7 +737,7 @@ def test_source_identity_passed_when_env_requires_it(ledger):
 
 
 def test_gated_synth_without_credentials_that_needs_lookups_says_what_to_set(tmp_path):
-    """Live test: test1 (existing VPC) as a gated env without synthRoleArn failed `cdk synth` with a bare exit 1
+    """Live test: stage (existing VPC) as a gated env without synthRoleArn failed `cdk synth` with a bare exit 1
     ("Need to perform AWS calls ... but no credentials have been configured"). The build now parks with the fix."""
     log = tmp_path / "synth.log"
     log.write_text("ERROR Need to perform AWS calls for account 222222222222, but no credentials have been "
@@ -770,7 +770,7 @@ def test_synth_role_that_cannot_be_assumed_blocks_before_synth(ctx, ledger, repo
 
 
 def test_iam_plan_proves_the_synth_role_before_synth(ctx, ledger, repos, calls):
-    """Live test: `vra iam plan --env test` (test1, existing VPC) used the gated env's synth role, whose trust lacked
+    """Live test: `vra iam plan --env test` (stage, existing VPC) used the gated env's synth role, whose trust lacked
     sts:SetSourceIdentity; the VPC lookup inside cdk found no credentials and the plan failed with a bare
     `command failed (1)`. Like `vra build`, iam plan now proves the role first and writes an IT request."""
     from botocore.exceptions import ClientError

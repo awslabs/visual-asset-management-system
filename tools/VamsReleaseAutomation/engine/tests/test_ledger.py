@@ -128,18 +128,18 @@ def test_import_fills_env_yaml_from_the_config(ledger, tmp_path):
     raw.pop("baseStackName")
     util.write_yaml(ledger.env_dir("dev") / "env.yaml", raw)
     src = tmp_path / "cfg" / "config.json"
-    util.write_json(src, {"name": "vams", "env": {"region": None, "account": None}, "app": {"baseStackName": "dev01"}})
+    util.write_json(src, {"name": "vams", "env": {"region": None, "account": None}, "app": {"baseStackName": "devel"}})
     res = ledger.import_config("dev", src)
-    assert res["envYamlUpdates"]["baseStackName"] == "dev01"
-    assert util.read_yaml(ledger.env_dir("dev") / "env.yaml")["baseStackName"] == "dev01"
+    assert res["envYamlUpdates"]["baseStackName"] == "devel"
+    assert util.read_yaml(ledger.env_dir("dev") / "env.yaml")["baseStackName"] == "devel"
     cfg = util.read_json(ledger.overlay_dir("dev") / "infra/config/config.json")
     assert cfg["env"] == {"region": "us-east-1", "account": "111111111111"}  # never left to the host's region
-    assert Ledger(ledger.root).core_stack_name("dev") == "vams-core-dev01-us-east-1"
+    assert Ledger(ledger.root).core_stack_name("dev") == "vams-core-devel-us-east-1"
 
 
 def test_env_yaml_and_overlay_must_name_the_same_stack(ledger):
     cfg = util.read_json(ledger.overlay_dir("dev") / "infra/config/config.json")
-    cfg["app"]["baseStackName"] = "dev01"
+    cfg["app"]["baseStackName"] = "devel"
     util.write_json(ledger.overlay_dir("dev") / "infra/config/config.json", cfg)
     lg = Ledger(ledger.root)
     res = lg.validate()

@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""(live test Phase B10g): every CI deploy/test/watch job ends with `run-vra.sh report-<env> report --notify`.
-Without a run id `vra report` picks the newest run in the home by start time. The Deploy-prod retry of 5437d5c2
+"""Every CI deploy/test/watch job ends with `run-vra.sh report-<env> report --notify`.
+Without a run id `vra report` picks the newest run in the home by start time. A Deploy-prod retry
 resumed a run started two days earlier, so its POST_BUILD reported and notified the morning's watch-sync run
 (sync-20261109T060202Z-a7ac) instead of the promote it had just finished. run-vra.sh now remembers the run of the
 job's own vra step and hands it to a later `report` that names none."""
@@ -49,12 +49,12 @@ def _calls(tmp_path: Path) -> list[str]:
 
 def test_report_after_a_resume_reports_the_resumed_run(tmp_path):
     env = _env(tmp_path)
-    _run(env, "promote-prod", "resume", "cp-5437d5c2-promote-prod")
+    _run(env, "promote-prod", "resume", "cp-0a1b2c3d-promote-prod")
     _run(env, "report-prod", "report", "--notify")
     report_call = _calls(tmp_path)[-1]
-    assert report_call.startswith("report cp-5437d5c2-promote-prod --notify"), report_call
+    assert report_call.startswith("report cp-0a1b2c3d-promote-prod --notify"), report_call
     assert json.loads((tmp_path / "out" / "report-prod.result.json").read_text())["runId"] == \
-        "cp-5437d5c2-promote-prod"
+        "cp-0a1b2c3d-promote-prod"
 
 
 def test_an_explicit_run_id_is_kept(tmp_path):

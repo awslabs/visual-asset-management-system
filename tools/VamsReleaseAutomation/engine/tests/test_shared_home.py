@@ -571,7 +571,7 @@ def test_engine_never_pushes_a_persons_unpushed_ledger_commit(tmp_path, repos):
     assert b.publish("run r1 SUCCEEDED")
 
 
-# --- a refused first publish, and runs nothing owns any more (live test O3) -------------------------------------------
+# --- a refused first publish, and runs nothing owns any more (found live) -------------------------------------------
 
 @workflow("_test_noop")
 def _wf_noop(ctx, run, args):
@@ -585,7 +585,7 @@ def _committed_status(h: Home, run_id: str) -> str:
 
 
 def test_run_whose_first_publish_is_refused_is_parked_not_left_running(tmp_path, repos):
-    """Live test O3: a person's unpushed ledger commit made the run's first publish refuse, and the run stayed RUNNING
+    """A person's unpushed ledger commit made the run's first publish refuse, and the run stayed RUNNING
     in the home (committed locally, published with the person's push) with no owner. It is parked NEEDS_HUMAN with
     the reason, in the working copy and in the local commit that a later push publishes."""
     _a, b, _remote = _git_home(tmp_path, repos)
@@ -645,7 +645,7 @@ def test_status_all_and_history_verify_flag_running_runs_whose_lease_expired(tmp
     assert dead.status == "RUNNING" and live.status == "RUNNING"
 
 
-# --- `vra setup` reports whether the home really reached its remote (live test O4) -----------------------------------
+# --- `vra setup` reports whether the home really reached its remote (found live) -----------------------------------
 
 def _setup_git_home(tmp_path, repos, capsys, remote: str | None, sync_type: str = "git") -> dict:
     ans = tmp_path / f"answers-{sync_type}.yaml"
@@ -664,7 +664,7 @@ def _setup_git_home(tmp_path, repos, capsys, remote: str | None, sync_type: str 
 
 
 def test_setup_reports_published_false_until_the_first_push_happened(tmp_path, repos, capsys):
-    """Live test O4: setup with sync.type git reported published: true while nothing was pushed (no upstream yet)."""
+    """Setup with sync.type git reported published: true while nothing was pushed (no upstream yet)."""
     remote = tmp_path / "setup-remote.git"
     git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
     res = _setup_git_home(tmp_path, repos, capsys, str(remote))

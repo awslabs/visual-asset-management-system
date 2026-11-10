@@ -217,6 +217,17 @@ INCLUSIVE_TERMS = [
     (re.compile(r"\b(white|black)list(s|ed|ing)?\b", re.I), "non-inclusive term"),
     (re.compile(r"\b(white|black)days?\b", re.I), "non-inclusive term"),
 ]
+# Internal test-run labels: sandbox stack names, live-test run and phase labels, finding / requirement ids, run
+# folders, and the environment and role names of test deployments. The package ships to customers; describe
+# what happened instead (for example "found live", "a fresh prod install").
+LABEL_TERMS = [
+    (re.compile(r"\bdemo\d+\b", re.I), "sandbox stack name"),
+    (re.compile(r"\bE2E-\d{3}\b|\be2e-\d{3}(-run)?\b", re.I), "live-test run label"),
+    (re.compile(r"\bPhase [A-Z]\d+[a-z]?\b"), "live-test phase label"),
+    (re.compile(r"\b[BO]-\d{3}-\d+[a-z]?\b|\bR\d{2}-\d+\b|\bREVIEW-\d{3}\b"), "internal finding id"),
+    (re.compile(r"\b(?:live test|drill finding) [BOKW]\d+[a-z]?\b", re.I), "internal finding id"),
+    (re.compile(r"\bvrae2e\b|\bprod0\d\b|\btest1\b"), "test deployment name"),
+]
 ACCOUNT_RE = re.compile(r"(?<![\w-])\d{12}(?![\w-])")
 # code and deployable templates must derive the partition; examples, tests and docs may show sample ARNs
 ARN_SCOPES = ("engine/vra/", "adapters/shared/", "cicd/codebuild/", "cicd/pipeline/lib/", "cicd/pipeline/bin/",
@@ -237,7 +248,7 @@ def private_terms() -> list[tuple[re.Pattern, str]]:
 
 def check_neutral(root: Path, extra: list[Path]) -> list[str]:
     repo = root.parent.parent
-    terms = INCLUSIVE_TERMS + private_terms()
+    terms = INCLUSIVE_TERMS + LABEL_TERMS + private_terms()
     bad = []
     me = Path(__file__).resolve()
     for p in scanned(root, extra):

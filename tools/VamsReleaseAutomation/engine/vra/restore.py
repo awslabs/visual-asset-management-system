@@ -112,7 +112,7 @@ def temp_table_name(ctx, env: str, key: str, tag: str) -> str:
     """
     base = ctx.ledger.stack_suffix(env)
     # the whole key below dynamoTables/ (dynamoTables/legacy/tagStorage and dynamoTables/tagStorage are two tables;
-    # their last segment alone collided, drill finding B14)
+    # their last segment alone collided, a restore drill finding)
     rel = key.split("/", 1)[1] if key.startswith("dynamoTables/") else key
     short = re.sub(r"[^A-Za-z0-9_.-]", "-", rel)
     name = f"{TEMP_PREFIX}{base}-{short}-{tag}"
@@ -482,7 +482,7 @@ def do_restore(ctx, run, env: str, cid: str, approval: str | None = None, prefix
 
 def delete_temp_table(ddb, env: str, name: str, max_wait: int = 900) -> None:
     """DeleteTable, idempotent: a table that is gone or already being deleted (a retried or resumed call) counts as
-    deleted (drill finding B13); too many concurrent table operations waits and retries."""
+    deleted (a restore drill finding); too many concurrent table operations waits and retries."""
     deadline = time.monotonic() + max_wait
     while True:
         try:
