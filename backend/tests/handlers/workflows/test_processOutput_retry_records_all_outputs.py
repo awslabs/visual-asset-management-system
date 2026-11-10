@@ -25,6 +25,8 @@ A Lambda timeout ends the process rather than raising, so `_Killed` derives from
 import io
 import json
 import os
+import threading
+import time
 from contextlib import ExitStack
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
@@ -121,20 +123,48 @@ def _listing(s3, prefix):
     return {"Contents": [dict(o) for o in contents]} if contents else {}
 
 
-def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False):
-    """Run attempt 0, which `first_attempt` ends ('after_ingest' | 'mid_move'), then attempt 1.
+def _ctx(i):
+    """A Lambda context per attempt: its own request id, a full 15 minutes left."""
+    return MagicMock(aws_request_id=f"attempt-{i}", **{"get_remaining_time_in_millis.return_value": 900_000})
 
-    Returns the retry's answer, the asset versions per key, the outputs each attempt recorded and the
-    large-file queue calls."""
+
+def _refused():
+    """The error an attempt raises instead of ingesting outputs another live attempt holds (absent on
+    code without the ledger)."""
+    return getattr(po, "EarlierIngestionInProgress", _Never)
+
+
+class _Never(Exception):
+    pass
+
+
+def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False):
+    """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
+
+    'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
+    complete; 'overlap' keeps attempt 0 running (blocked before its ingestion call) while attempt 1
+    starts, and lets it finish during attempt 1's first wait. An attempt refused because another live
+    attempt holds outputs is followed by one past the takeover age (the clock is advanced).
+
+    Returns the last answer, the asset versions per key, the outputs the last attempt recorded, the
+    large-file queue calls, the staged keys left, the ingestion calls per attempt and the refusals."""
     s3 = boto3.client("s3", region_name=REGION)
     _stage(s3, with_preview=with_preview, with_large=with_large)
     ddb, uploads = _tables()
     enforcer = MagicMock(**{"enforce.return_value": True, "enforceAPI.return_value": True})
     attempt = [0]
     queued = []
+    ingestion_calls = []
+    clock = [time.time()]
+    go, in_upload = threading.Event(), threading.Event()
+    first = {}
 
     def invoke_upload(payload):
         context = MagicMock(**{"get_remaining_time_in_millis.return_value": 900_000})
+        ingestion_calls.append(threading.current_thread().name)
+        if first_attempt == "overlap" and threading.current_thread().name == "attempt-0":
+            in_upload.set()
+            assert go.wait(20)
         if attempt[0] == 0 and first_attempt == "mid_move":
             # The first output's copy lands; the attempt is killed before its staged source is deleted.
             real_delete = uf.delete_s3_object
@@ -170,7 +200,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         p(po, "_stamp_output_objects", return_value=True)
         p(po, "_lambda_file_ingestion", side_effect=invoke_upload)
         # create=True keeps the harness runnable against code without these seams (the base branch).
-        p(po, "_wait_sleep", create=True)
+        sleep = p(po, "_wait_sleep", create=True)
+        p(po, "_now_epoch", create=True, side_effect=lambda: clock[0])
         record = p(po, "record_execution_outputs")
         if first_attempt == "during_record":
             # The attempt saw the ingestion response and is killed while it records.
@@ -202,17 +233,44 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         p(uf, "LARGE_FILE_THRESHOLD_BYTES", THRESHOLD)
         p(uf, "queue_large_file_for_processing", side_effect=queue)
 
+        refusals = 0
         if old_code_first:
             # The first attempt ran on a deployment without the ledger.
             with patch.object(po, "_write_ingest_ledger", create=True), \
-                    patch.object(po, "_settle_ingest_ledger", create=True):
+                    patch.object(po, "_settle_ingest_ledger", create=True), \
+                    patch.object(po, "_claim_ingest_rows", create=True,
+                                 side_effect=lambda _e, d, *_a, **_k: list(d)):
                 with pytest.raises(_Killed):
-                    po.lambda_handler(_event(with_preview), MagicMock())
+                    po.lambda_handler(_event(with_preview), _ctx(0))
+        elif first_attempt == "finished":
+            po.lambda_handler(_event(with_preview), _ctx(0))
+        elif first_attempt == "overlap":
+            def attempt_zero():
+                first["answer"] = po.lambda_handler(_event(with_preview), _ctx(0))
+
+            t0 = threading.Thread(target=attempt_zero, name="attempt-0")
+            t0.start()
+            assert in_upload.wait(20)
+
+            def finish_attempt_zero(_seconds):
+                go.set()
+                t0.join(20)
+
+            sleep.side_effect = finish_attempt_zero
         else:
             with pytest.raises(_Killed):
-                po.lambda_handler(_event(with_preview), MagicMock())
+                po.lambda_handler(_event(with_preview), _ctx(0))
         attempt[0] = 1
-        answer = po.lambda_handler(_event(with_preview), MagicMock())
+        answer = None
+        for i in range(1, 4):
+            try:
+                answer = po.lambda_handler(_event(with_preview), _ctx(i))
+                break
+            except _refused():
+                refusals += 1
+                attempt[0] = i + 1
+                clock[0] += getattr(po.eo, "INGEST_TAKEOVER_SECONDS", 0) + 60
+        go.set()
 
         versions = {}
         for v in s3.list_object_versions(Bucket=ASSET_BUCKET).get("Versions", []):
@@ -224,7 +282,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
                 for f in record.call_args.kwargs["output_files"])
         staged = sorted(o["Key"] for o in s3.list_objects_v2(Bucket=RUN_BUCKET).get("Contents", []))
     return {"answer": answer, "versions": versions, "recorded": recorded, "queued": queued,
-            "staged": staged}
+            "staged": staged, "ingestion_calls": ingestion_calls, "refusals": refusals,
+            "first_answer": first.get("answer")}
 
 
 def _asset_key(name):
@@ -264,6 +323,42 @@ class TestRetryAfterAMidMoveTimeout:
         assert landed["recorded"] == sorted(("file", name) for name in SMALL)
         assert landed["staged"] == []
 
+    def test_the_killed_holders_rows_are_left_until_the_takeover_age_then_taken_over(self):
+        with mock_aws():
+            landed = _run("mid_move")
+        # Attempt 1 cannot tell the killed holder from a live one: it refuses rather than ingest beside
+        # it; the attempt after the takeover age takes the rows over and completes.
+        assert landed["refusals"] == 1
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["ingestion_calls"].count("MainThread") == 2
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestOverlappingAttempts:
+    """[in-dev D1] A timed-out attempt keeps running beside its retry (a state timeout does not stop the
+    Lambda). Each output is ingested once, by one attempt, and the retry completes."""
+
+    def test_attempt_two_waits_for_attempt_one_and_ingests_nothing_itself(self):
+        with mock_aws():
+            landed = _run("overlap", with_preview=True)
+        assert landed["ingestion_calls"] == ["attempt-0", "attempt-0"]  # files + preview, attempt 0 only
+        assert landed["first_answer"]["statusCode"] == 200
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["refusals"] == 0
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+        assert landed["recorded"] == sorted(
+            [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+
+    def test_attempt_two_after_attempt_one_finished_ingests_nothing_new(self):
+        with mock_aws():
+            landed = _run("finished", with_preview=True)
+        assert landed["ingestion_calls"] == ["MainThread", "MainThread"]  # attempt 0's two calls only
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["recorded"] == sorted(
+            [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+
 
 @pytest.mark.unit
 @pytest.mark.aws
@@ -302,35 +397,97 @@ class TestALargeOutputAcrossARetry:
 
 @pytest.mark.unit
 class TestAwaitEarlierIngestion:
-    def _ledger(self, upload_id="y1", state="moving"):
-        return {"file:a.glb": {"ingestState": state, "uploadId": upload_id}}
+    NOW = 1_800_000_000
 
-    def test_waits_while_the_earlier_upload_is_processing(self):
-        table = MagicMock()
-        table.get_item.side_effect = [
-            {"Item": {"status": "processing"}}, {"Item": {"status": "processing"}}, {}]
-        context = MagicMock(**{"get_remaining_time_in_millis.return_value": 900_000})
-        with patch.object(po, "asset_upload_table", table), patch.object(po, "_wait_sleep") as sleep:
-            pending = po._await_earlier_ingestion(self._ledger(), ASSET_ID, context)
-        assert pending == []
+    def _ledger(self, upload_id="y1", state="moving", holder="attempt-0", age=10):
+        return {"file:a.glb": {"ingestState": state, "uploadId": upload_id, "ingestHolder": holder,
+                               "movingSince": self.NOW - age}}
+
+    def _wait(self, ledgers, upload_items, remaining_ms=900_000):
+        table = MagicMock(**{"get_item.side_effect": upload_items})
+        context = MagicMock(**{"get_remaining_time_in_millis.return_value": remaining_ms})
+        with patch.object(po, "asset_upload_table", table), \
+                patch.object(po, "_wait_sleep") as sleep, \
+                patch.object(po, "_now_epoch", return_value=self.NOW), \
+                patch.object(po, "_read_ingest_ledger", side_effect=ledgers):
+            ledger, takeover = po._await_earlier_ingestion(EXEC, ASSET_ID, context, "attempt-1")
+        return ledger, takeover, sleep
+
+    def test_waits_while_a_live_attempt_moves_and_returns_the_ledger_read_after(self):
+        settled = self._ledger(state="ingested")
+        ledger, takeover, sleep = self._wait(
+            [self._ledger(), self._ledger(), settled],
+            [{"Item": {"status": "processing"}}, {"Item": {"status": "processing"}}])
+        assert ledger == settled and takeover == {}
         assert sleep.call_count == 2
 
     def test_the_wait_is_bounded_by_the_remaining_time(self):
-        table = MagicMock(**{"get_item.return_value": {"Item": {"status": "processing"}}})
         # 320 s left keeps 300 s for this attempt's own work: at most 20 s of waiting.
-        context = MagicMock(**{"get_remaining_time_in_millis.return_value": 320_000})
-        with patch.object(po, "asset_upload_table", table), patch.object(po, "_wait_sleep") as sleep:
-            pending = po._await_earlier_ingestion(self._ledger(), ASSET_ID, context)
-        assert pending == ["y1"]
+        ledger, takeover, sleep = self._wait(
+            [self._ledger()] * 10, [{"Item": {"status": "processing"}}] * 10, remaining_ms=320_000)
+        assert ledger["file:a.glb"]["ingestState"] == "moving" and takeover == {}
         assert sleep.call_count == 20 // po.EARLIER_INGESTION_POLL_SECONDS
 
-    def test_no_wait_without_a_moving_row(self):
-        table = MagicMock()
-        with patch.object(po, "asset_upload_table", table), patch.object(po, "_wait_sleep") as sleep:
-            assert po._await_earlier_ingestion(
-                self._ledger(state="ingested"), ASSET_ID, MagicMock()) == []
-        table.get_item.assert_not_called()
-        sleep.assert_not_called()
+    def test_a_holder_whose_upload_finished_but_never_settled_is_taken_over_after_the_grace(self):
+        ledger, takeover, sleep = self._wait([self._ledger()] * 30, [{}] * 30)
+        assert takeover == {"file:a.glb": ("attempt-0", self.NOW - 10)}
+        assert sleep.call_count == po.EARLIER_INGESTION_SETTLE_GRACE_SECONDS // po.EARLIER_INGESTION_POLL_SECONDS
+
+    def test_no_wait_for_an_ingested_a_stale_or_an_own_row(self):
+        for row in (self._ledger(state="ingested"), self._ledger(age=po.eo.INGEST_TAKEOVER_SECONDS + 1),
+                    self._ledger(holder="attempt-1")):
+            _ledger, takeover, sleep = self._wait([row], [])
+            sleep.assert_not_called()
+            assert takeover == {}
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestTheMovingClaimIsConditional:
+    """claim_ingest_rows never takes a row already `ingested` or a live attempt's `moving` row."""
+
+    def _claim(self, existing, holder="attempt-1", takeover=None):
+        with mock_aws():
+            ddb, _uploads = _tables()
+            table = ddb.Table(po.pipeline_execution_output_files_table)
+            d = {"fileType": "file", "relativeFilePath": "a.glb", "s3Key": FILES_PREFIX + "a.glb"}
+            if existing:
+                table.put_item(Item={"pipelineExecutionId": f"ingest#{EXEC}",
+                                     "fileType:relativeFilePath": "file:a.glb", **existing})
+            claimed = eo.claim_ingest_rows(ddb, po.pipeline_execution_output_files_table, EXEC, [d],
+                                           holder, "y2", 1_800_000_000, takeover=takeover)
+            row = table.get_item(Key={"pipelineExecutionId": f"ingest#{EXEC}",
+                                      "fileType:relativeFilePath": "file:a.glb"})["Item"]
+        return claimed, row
+
+    def test_a_free_output_is_claimed(self):
+        claimed, row = self._claim(None)
+        assert len(claimed) == 1 and row["ingestHolder"] == "attempt-1" and row["ingestState"] == "moving"
+
+    def test_an_ingested_row_is_never_overwritten(self):
+        claimed, row = self._claim({"ingestState": "ingested"})
+        assert claimed == [] and row["ingestState"] == "ingested"
+
+    def test_a_live_attempts_moving_row_is_not_taken(self):
+        claimed, row = self._claim({"ingestState": "moving", "ingestHolder": "attempt-0",
+                                    "movingSince": 1_800_000_000 - 30})
+        assert claimed == [] and row["ingestHolder"] == "attempt-0"
+
+    def test_a_stale_moving_row_past_the_takeover_age_is_taken_over(self):
+        claimed, row = self._claim({"ingestState": "moving", "ingestHolder": "attempt-0",
+                                    "movingSince": 1_800_000_000 - eo.INGEST_TAKEOVER_SECONDS - 1})
+        assert len(claimed) == 1 and row["ingestHolder"] == "attempt-1"
+
+    def test_a_row_from_before_holders_were_recorded_is_taken_over(self):
+        claimed, row = self._claim({"ingestState": "moving", "uploadId": "y1"})
+        assert len(claimed) == 1 and row["ingestHolder"] == "attempt-1"
+
+    def test_an_abandoned_row_is_taken_over_only_if_unchanged(self):
+        live = {"ingestState": "moving", "ingestHolder": "attempt-0", "movingSince": 1_800_000_000 - 30}
+        claimed, _row = self._claim(live, takeover={"file:a.glb": ("attempt-0", 1_800_000_000 - 30)})
+        assert len(claimed) == 1
+        claimed, row = self._claim(live, takeover={"file:a.glb": ("attempt-0", 1_800_000_000 - 99)})
+        assert claimed == [] and row["ingestHolder"] == "attempt-0"
 
 
 @pytest.mark.unit

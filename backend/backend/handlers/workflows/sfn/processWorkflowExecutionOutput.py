@@ -361,18 +361,37 @@ def _ingestion_outcome(result):
     return all_succeeded, ingested
 
 
-# A retried attempt waits for an earlier attempt's ingestion that is still moving files (its upload
-# record still 'processing') before it lists the staged outputs, so it does not hand a file that is
-# mid-move to ingestion a second time. The wait is bounded by these limits and by the attempt's own
-# remaining time, keeping EARLIER_INGESTION_WAIT_MARGIN_SECONDS for its own ingestion and recording.
+# A retried attempt can overlap the attempt it retries: a state timeout ends the attempt for Step
+# Functions while its Lambda keeps running. Before it decides what to ingest, an attempt waits (bounded
+# by these limits and its own remaining time, keeping EARLIER_INGESTION_WAIT_MARGIN_SECONDS for its own
+# work) while another live attempt holds outputs `moving`, re-reading the ledger as it goes, so it takes
+# over nothing that attempt is about to settle. A holder whose upload has finished but whose rows stay
+# `moving` for EARLIER_INGESTION_SETTLE_GRACE_SECONDS more is treated as gone.
 EARLIER_INGESTION_WAIT_MAX_SECONDS = 600
 EARLIER_INGESTION_WAIT_MARGIN_SECONDS = 300
 EARLIER_INGESTION_POLL_SECONDS = 5
+EARLIER_INGESTION_SETTLE_GRACE_SECONDS = 60
 UPLOAD_STATUS_PROCESSING = "processing"
+
+
+class EarlierIngestionInProgress(Exception):
+    """Another live attempt of this run still holds outputs `moving` when this attempt's wait budget is
+    spent. Raised instead of ingesting those outputs a second time; the outputs that attempt holds are
+    left to it. The state's Catch records the run FAILED unless a later attempt runs (see #1290 for the
+    errors the process-output retrier lists)."""
 
 
 def _wait_sleep(seconds):
     time.sleep(seconds)
+
+
+def _now_epoch():
+    return time.time()
+
+
+def _attempt_holder(context):
+    """This attempt's ledger holder id: its Lambda request id, unique per invocation."""
+    return str(getattr(context, "aws_request_id", "") or "") or f"attempt-{uuid.uuid4()}"
 
 
 def _read_ingest_ledger(workflow_execution_id):
@@ -386,8 +405,7 @@ def _read_ingest_ledger(workflow_execution_id):
 
 
 def _write_ingest_ledger(workflow_execution_id, descriptors, state, upload_id=""):
-    """Best-effort ledger write: a failed write costs a later retry the record of these outputs (the
-    behaviour before the ledger), never the ingestion itself."""
+    """Best-effort ledger write (used to settle `ingested`, which is true whoever wrote the row)."""
     try:
         eo.write_ingest_ledger(dynamodb, pipeline_execution_output_files_table, workflow_execution_id,
                                descriptors, state, upload_id=upload_id)
@@ -395,22 +413,37 @@ def _write_ingest_ledger(workflow_execution_id, descriptors, state, upload_id=""
         logger.warning(f"Could not write the run's ingest ledger (non-critical): {e}")
 
 
-def _drop_ingest_ledger_rows(workflow_execution_id, descriptors):
+def _claim_ingest_rows(workflow_execution_id, descriptors, holder, upload_id, takeover):
+    """The outputs this attempt may hand to ingestion: those it marked `moving` with a conditional put.
+    Without a run id there is no ledger and every output is handed over as before. A ledger that cannot
+    be written falls back to the same (best-effort, as every ledger call): the upload handler still
+    writes no second version of an output this run already wrote (destination_written_by_execution)."""
+    if not workflow_execution_id:
+        return list(descriptors)
+    try:
+        return eo.claim_ingest_rows(dynamodb, pipeline_execution_output_files_table, workflow_execution_id,
+                                    descriptors, holder, upload_id, _now_epoch(), takeover=takeover)
+    except Exception as e:
+        logger.warning(f"Could not claim outputs in the run's ingest ledger; handing all over (non-critical): {e}")
+        return list(descriptors)
+
+
+def _drop_ingest_ledger_rows(workflow_execution_id, descriptors, holder=None):
     try:
         eo.drop_ingest_ledger_rows(dynamodb, pipeline_execution_output_files_table, workflow_execution_id,
-                                   descriptors)
+                                   descriptors, holder=holder)
     except Exception as e:
         logger.warning(f"Could not update the run's ingest ledger (non-critical): {e}")
 
 
-def _settle_ingest_ledger(workflow_execution_id, descriptors, landed):
-    """After an ingestion response: mark the outputs that landed `ingested` and drop the rows of those
-    that failed, so a later attempt ingests only those again."""
+def _settle_ingest_ledger(workflow_execution_id, descriptors, landed, holder=None):
+    """After an ingestion response: mark the outputs that landed `ingested` and drop this holder's rows
+    of those that failed, so a later attempt ingests only those again."""
     landed_keys = {eo.ingest_ledger_sort_key(d) for d in landed}
     _write_ingest_ledger(workflow_execution_id, landed, eo.INGEST_STATE_INGESTED)
     _drop_ingest_ledger_rows(
         workflow_execution_id,
-        [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys])
+        [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
 
 
 def _already_ingested(descriptor, ledger):
@@ -425,41 +458,92 @@ def _remaining_seconds(context):
         return 0.0
 
 
-def _await_earlier_ingestion(ledger, asset_id, context):
-    """Wait, bounded, while an upload an earlier attempt handed outputs to is still 'processing'.
+def _upload_processing(upload_id, asset_id):
+    """Whether an upload record is still 'processing' (an unreadable record counts as processing)."""
+    try:
+        item = asset_upload_table.get_item(Key={'uploadId': upload_id, 'assetId': asset_id}).get('Item')
+    except Exception as e:
+        logger.warning(f"Could not read an earlier attempt's upload record (non-critical): {e}")
+        return True
+    return bool(item) and item.get('status') == UPLOAD_STATUS_PROCESSING
 
-    An attempt that timed out while its synchronous ingestion call was running leaves that ingestion
-    running on its own. Listing the staged outputs before it finishes would see a file it has not moved
-    yet and hand it to ingestion again. Returns the upload ids still processing when the wait ended
-    (empty when none was, or every one finished)."""
-    upload_ids = sorted({row.get("uploadId") for row in ledger.values()
-                         if row.get("ingestState") == eo.INGEST_STATE_MOVING and row.get("uploadId")})
-    if not upload_ids:
-        return []
+
+def _await_earlier_ingestion(workflow_execution_id, asset_id, context, holder):
+    """Wait, bounded, while another live attempt holds outputs `moving`; return the ledger as read at
+    the end and the takeover map ({sort key: (holder, movingSince)}) of rows whose holder is gone (its
+    upload finished EARLIER_INGESTION_SETTLE_GRACE_SECONDS ago and it never settled them).
+
+    Rows still held by a live attempt when the wait ends stay in the ledger as `moving`; the caller
+    leaves them to that attempt."""
+    ledger = _read_ingest_ledger(workflow_execution_id)
     budget = min(EARLIER_INGESTION_WAIT_MAX_SECONDS,
                  _remaining_seconds(context) - EARLIER_INGESTION_WAIT_MARGIN_SECONDS)
     waited = 0.0
-    pending = list(upload_ids)
-    while pending:
-        still = []
-        for upload_id in pending:
-            try:
-                item = asset_upload_table.get_item(
-                    Key={'uploadId': upload_id, 'assetId': asset_id}).get('Item')
-            except Exception as e:
-                logger.warning(f"Could not read an earlier attempt's upload record (non-critical): {e}")
-                item = None
-            if item and item.get('status') == UPLOAD_STATUS_PROCESSING:
-                still.append(upload_id)
-        pending = still
+    finished_at = {}
+    while True:
+        now = _now_epoch()
+        live = {k: r for k, r in ledger.items() if eo.is_live_moving_row(r, holder, now)}
+        takeover, pending = {}, 0
+        for upload_id in sorted({r.get("uploadId", "") for r in live.values()}):
+            rows = {k: r for k, r in live.items() if r.get("uploadId", "") == upload_id}
+            if upload_id and not _upload_processing(upload_id, asset_id):
+                finished_at.setdefault(upload_id, waited)
+                if waited - finished_at[upload_id] >= EARLIER_INGESTION_SETTLE_GRACE_SECONDS:
+                    takeover.update({k: (r.get("ingestHolder"), r.get("movingSince")) for k, r in rows.items()})
+                    continue
+            pending += len(rows)
         if not pending or waited + EARLIER_INGESTION_POLL_SECONDS > budget:
-            break
+            if pending:
+                logger.warning(f"{pending} outputs are still held by another live attempt after {waited:.0f}s")
+            return ledger, takeover
         _wait_sleep(EARLIER_INGESTION_POLL_SECONDS)
         waited += EARLIER_INGESTION_POLL_SECONDS
-    if pending:
-        logger.warning(f"An earlier attempt's ingestion is still processing after {waited:.0f}s; "
-                       "continuing (ingestion skips an output that attempt already wrote)")
-    return pending
+        ledger = _read_ingest_ledger(workflow_execution_id)
+
+
+class _NothingClaimed(Exception):
+    """Every output this attempt meant to hand over was claimed by another attempt first."""
+
+
+def _await_held_outputs(workflow_execution_id, held, context, holder):
+    """Wait, bounded by the attempt's remaining time, until every output another live attempt held is
+    `ingested`; return the ledger as last read. Raises EarlierIngestionInProgress when the budget is
+    spent first, or when an output that attempt held was released un-ingested (its ingestion failed),
+    so the step is retried and the output claimed then, instead of this attempt recording the run
+    without it or ingesting it a second time beside the holder."""
+    keys = {eo.ingest_ledger_sort_key(d) for d in held}
+    budget = _remaining_seconds(context) - EARLIER_INGESTION_WAIT_MARGIN_SECONDS
+    waited = 0.0
+    while True:
+        ledger = _read_ingest_ledger(workflow_execution_id)
+        now = _now_epoch()
+        open_keys = {k for k in keys if (ledger.get(k) or {}).get("ingestState") != eo.INGEST_STATE_INGESTED}
+        if not open_keys:
+            return ledger
+        if any(not eo.is_live_moving_row(ledger.get(k), holder, now) for k in open_keys):
+            raise EarlierIngestionInProgress(
+                "An output another attempt of this run held was not ingested; retry to ingest it")
+        if waited + EARLIER_INGESTION_POLL_SECONDS > budget:
+            raise EarlierIngestionInProgress(
+                f"{len(open_keys)} outputs are still being ingested by another attempt of this run")
+        _wait_sleep(EARLIER_INGESTION_POLL_SECONDS)
+        waited += EARLIER_INGESTION_POLL_SECONDS
+
+
+def _partition_for_ingest(descriptors, ledger, holder, takeover):
+    """Split listed outputs into (to_claim, already_ingested, held_by_live_attempt)."""
+    now = _now_epoch()
+    to_claim, earlier, held = [], [], []
+    for d in descriptors:
+        key = eo.ingest_ledger_sort_key(d)
+        row = ledger.get(key)
+        if row and row.get("ingestState") == eo.INGEST_STATE_INGESTED:
+            earlier.append(d)
+        elif eo.is_live_moving_row(row, holder, now) and key not in takeover:
+            held.append(d)
+        else:
+            to_claim.append(d)
+    return to_claim, earlier, held
 
 
 def _merge_earlier_outputs(collected_output_files, ledger, staged_keys_by_type):
@@ -1544,14 +1628,18 @@ def lambda_handler(event, context):
                 None if event.get('executingUserName') == 'SYSTEM_USER'
                 else bool(claims_and_roles.get("mfaEnabled", False)))
 
-            # This state is retried on States.Timeout and transient Lambda faults, and ingestion MOVES
-            # each output out of the staged prefix, so a retried attempt reads the run's ingest ledger to
-            # learn what earlier attempts already handed to ingestion: it does not ingest those again and
-            # records them with its own. It first waits (bounded) for an earlier ingestion still moving
-            # files, so it does not list a file that ingestion is part-way through moving.
+            # This state is retried on States.Timeout and transient Lambda faults, ingestion MOVES each
+            # output out of the staged prefix, and a timed-out attempt can keep running beside its retry.
+            # So an attempt first waits (bounded) while another live attempt holds outputs `moving`, then
+            # decides from the ledger as read after that wait: outputs already `ingested` are recorded,
+            # not ingested again; outputs a live attempt still holds are left to it; the rest are claimed
+            # with a conditional write, and only claimed outputs are handed to ingestion.
             ledger_execution_id = event.get('workflowExecutionId', '')
-            ingest_ledger = _read_ingest_ledger(ledger_execution_id)
-            _await_earlier_ingestion(ingest_ledger, event['assetId'], context)
+            attempt_holder = _attempt_holder(context)
+            ingest_ledger, ingest_takeover = _await_earlier_ingestion(
+                ledger_execution_id, event['assetId'], context, attempt_holder)
+            # Outputs another live attempt still holds when this attempt's wait ended.
+            held_by_other_attempt = []
             # The staged keys this attempt listed per output type; a type whose listing failed is absent.
             staged_keys_by_type = {}
 
@@ -1600,10 +1688,12 @@ def lambda_handler(event, context):
                         preview_descriptors = _collect_output_descriptors(
                             {'Contents': preview_objects}, "preview", preview_folder, source_bucket)
 
-                        if preview_descriptors and all(
-                                _already_ingested(d, ingest_ledger) for d in preview_descriptors):
-                            # An earlier attempt of this run ingested it; it is recorded from the ledger.
-                            logger.info("Preview output already ingested by an earlier attempt")
+                        preview_to_claim, _preview_earlier, preview_held = _partition_for_ingest(
+                            preview_descriptors, ingest_ledger, attempt_holder, ingest_takeover)
+                        held_by_other_attempt.extend(preview_held)
+                        if not preview_to_claim:
+                            # Ingested by an earlier attempt (recorded from the ledger) or held by a live one.
+                            logger.info("Preview output already ingested or held by another attempt")
                         else:
                             try:
                                 # Create external upload record
@@ -1613,10 +1703,13 @@ def lambda_handler(event, context):
                                     "assetPreview",
                                     previewPathKey
                                 )
-                                # Recorded before the move, so a retry of an attempt cut short mid-move still
-                                # knows this output was handed to ingestion.
-                                _write_ingest_ledger(ledger_execution_id, preview_descriptors,
-                                                     eo.INGEST_STATE_MOVING, upload_id)
+                                # Claimed before the move, so a retry of an attempt cut short mid-move still
+                                # knows this output was handed to ingestion, and no other attempt hands it over.
+                                claimed = _claim_ingest_rows(ledger_execution_id, preview_to_claim,
+                                                             attempt_holder, upload_id, ingest_takeover)
+                                if not claimed:
+                                    held_by_other_attempt.extend(preview_to_claim)
+                                    raise _NothingClaimed()
 
                                 # Stamp the staged file (in the source bucket) with its provenance. An
                                 # unstamped object would be ingested carrying no asset/upload identity,
@@ -1653,12 +1746,15 @@ def lambda_handler(event, context):
                                 collected_output_files.extend(landed_previews)
                                 if result:
                                     _settle_ingest_ledger(
-                                        ledger_execution_id, preview_descriptors, landed_previews)
+                                        ledger_execution_id, preview_descriptors, landed_previews,
+                                        holder=attempt_holder)
                                 if all_ingested and result:
                                     logger.info("Preview upload completed successfully")
                                 else:
                                     logger.error("Preview upload failed")
                                     output_failures.append("The asset preview write-back failed.")
+                            except _NothingClaimed:
+                                logger.info("Preview output was claimed by another attempt")
                             except Exception as e:
                                 logger.exception(f"Error processing preview upload: {e}")
                                 output_failures.append("The asset preview write-back failed.")
@@ -1694,17 +1790,18 @@ def lambda_handler(event, context):
                         file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
 
                     # A staged file an earlier attempt of this run already ingested (its staged source
-                    # can outlive the ingest, e.g. a large file still queued for its asynchronous copy)
-                    # is not handed to ingestion again; it is recorded from the ledger.
-                    earlier_keys = {d["s3Key"] for d in file_descriptors
-                                    if _already_ingested(d, ingest_ledger)}
+                    # can outlive the ingest) is recorded from the ledger, and one a live attempt still
+                    # holds is left to it; neither is handed to ingestion by this attempt.
+                    to_claim, earlier, held = _partition_for_ingest(
+                        file_descriptors, ingest_ledger, attempt_holder, ingest_takeover)
+                    held_by_other_attempt.extend(held)
+                    earlier_keys = {d["s3Key"] for d in earlier + held}
                     if earlier_keys:
-                        logger.info(f"{len(earlier_keys)} staged outputs already ingested by an earlier attempt")
-                        file_objects = [x for x in file_objects if x['Key'] not in earlier_keys]
-                        files = [x['Key'] for x in file_objects]
-                        file_descriptors = [d for d in file_descriptors if d["s3Key"] not in earlier_keys]
+                        logger.info(f"{len(earlier)} staged outputs already ingested and {len(held)} held "
+                                    "by another attempt")
+                    file_descriptors = to_claim
 
-                    if files:
+                    if file_descriptors:
                         try:
                             # Create external upload record
                             upload_id = create_external_upload_record(
@@ -1713,10 +1810,19 @@ def lambda_handler(event, context):
                                 "assetFile",
                                 filesPathKey
                             )
-                            # Recorded before the move, so a retry of an attempt cut short mid-move still
-                            # knows these outputs were handed to ingestion.
-                            _write_ingest_ledger(ledger_execution_id, file_descriptors,
-                                                 eo.INGEST_STATE_MOVING, upload_id)
+                            # Claimed before the move, so a retry of an attempt cut short mid-move still
+                            # knows these outputs were handed to ingestion, and no two attempts hand the
+                            # same output over. An output another attempt claimed first is left to it.
+                            claimed = _claim_ingest_rows(ledger_execution_id, file_descriptors,
+                                                         attempt_holder, upload_id, ingest_takeover)
+                            claimed_keys = {d["s3Key"] for d in claimed}
+                            held_by_other_attempt.extend(
+                                d for d in file_descriptors if d["s3Key"] not in claimed_keys)
+                            file_descriptors = claimed
+                            file_objects = [x for x in file_objects if x['Key'] in claimed_keys]
+                            files = [x['Key'] for x in file_objects]
+                            if not files:
+                                raise _NothingClaimed()
 
                             # Stamp each staged file (in the source bucket) with its provenance. An
                             # unstamped object would be ingested carrying no asset/upload identity,
@@ -1753,18 +1859,28 @@ def lambda_handler(event, context):
                                                or d["relativeFilePath"] in ingested_keys)]
                             collected_output_files.extend(landed_files)
                             if result:
-                                _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files)
+                                _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files,
+                                                      holder=attempt_holder)
                             if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:
                                 logger.error("Asset file upload failed")
                                 output_failures.append("The asset file write-back failed.")
 
+                        except _NothingClaimed:
+                            logger.info("Every listed output was claimed by another attempt")
                         except Exception as e:
                             logger.exception(f"Error processing asset file upload: {e}")
                             output_failures.append("The asset file write-back failed.")
                     elif not earlier_keys:
                         logger.warning("No files found in asset output folder")
+
+            # Outputs another live attempt holds are its to ingest and record; this attempt neither
+            # ingests them again nor records the run without them. A short wait lets that attempt settle
+            # them; if it does not in time, the retriable path is taken rather than a second ingestion.
+            if held_by_other_attempt:
+                ingest_ledger = _await_held_outputs(
+                    ledger_execution_id, held_by_other_attempt, context, attempt_holder)
 
             #Handle metadata outputs (needs to happen after S3 file processing)
             if('metadataPathKey' in event):
@@ -1939,7 +2055,9 @@ def lambda_handler(event, context):
 
             # The outputs earlier attempts of this run ingested are the run's outputs too, though this
             # attempt no longer finds them staged.
-            _merge_earlier_outputs(collected_output_files, ingest_ledger, staged_keys_by_type)
+            _merge_earlier_outputs(
+                collected_output_files, _read_ingest_ledger(ledger_execution_id) or ingest_ledger,
+                staged_keys_by_type)
 
             # Record end-state pipeline outputs + completion status.
             try:
