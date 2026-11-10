@@ -20,6 +20,7 @@ import htmlbars from "react-syntax-highlighter/dist/esm/languages/hljs/htmlbars"
 import yaml from "react-syntax-highlighter/dist/esm/languages/hljs/yaml";
 import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
+import { loadTextFile, TextFetchError } from "../../core/textContent";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { ViewerPluginProps, FileInfo } from "../../core/types";
 import { fileIdentity } from "../../core/fileIdentity";
@@ -107,7 +108,16 @@ const HOST_TEXT_RESET: React.CSSProperties = { textAlign: "left", lineHeight: "n
  * Why one side could not be loaded. Each compare entry is fetched under its OWN asset and authorized
  * independently (Casbin, per asset), so a failure is a property of that side, not of the comparison.
  */
-type SideErrorKind = "unauthenticated" | "forbidden" | "archived" | "unavailable" | "failed";
+type SideErrorKind =
+    | "unauthenticated"
+    | "forbidden"
+    | "archived"
+    | "unavailable"
+    | "failed"
+    /** The side's first bytes are binary: never downloaded whole, never diffed. */
+    | "binary"
+    /** UTF-32, or UTF-16 without a byte-order mark. */
+    | "encoding";
 
 interface SideError {
     kind: SideErrorKind;
@@ -145,10 +155,33 @@ class DownloadFailure extends Error {
     }
 }
 
+/** A side whose bytes were read but are not text the differ can show. */
+class SideContentRefused extends Error {
+    kind: "binary" | "encoding";
+    constructor(kind: "binary" | "encoding") {
+        super(kind === "binary" ? "binary content" : "unsupported text encoding");
+        this.name = "SideContentRefused";
+        this.kind = kind;
+    }
+}
+
 /** Translate a failed fetch into what the user should see for that side, in the wording every
  *  viewer uses (`core/streamFailure.ts`). Generic on purpose: the backend's denial reason is not
  *  echoed. */
 const classifyFailure = (error: unknown): SideError => {
+    if (error instanceof SideContentRefused) {
+        return error.kind === "binary"
+            ? {
+                  kind: "binary",
+                  message:
+                      "This file appears to contain binary data and cannot be compared as text.",
+              }
+            : {
+                  kind: "encoding",
+                  message:
+                      "This file uses a text encoding the Text Diff Viewer cannot display (UTF-32 or UTF-16 without a byte-order mark).",
+              };
+    }
     const status = error instanceof DownloadFailure ? error.status : undefined;
     if (status === 401) {
         return { kind: "unauthenticated", message: DOWNLOAD_UNAUTHENTICATED_MESSAGE };
@@ -185,15 +218,19 @@ const fetchSideText = async (file: FileInfo, signal: AbortSignal): Promise<strin
         const status = Array.isArray(response) ? (response[2] as number | undefined) : undefined;
         throw new DownloadFailure(message, status);
     }
-    const fileResponse = await fetch(response[1], { signal });
-    if (!fileResponse.ok) {
+    let result;
+    try {
+        result = await loadTextFile(response[1], signal);
+    } catch (error) {
         // The presigned URL itself was refused (expired, object gone); classify like the API would.
-        throw new DownloadFailure(
-            `HTTP error! status: ${fileResponse.status}`,
-            fileResponse.status
-        );
+        if (error instanceof TextFetchError) throw new DownloadFailure(error.message, error.status);
+        throw error;
     }
-    return fileResponse.text();
+    // A binary side (or one in an encoding the viewer cannot read) is that side's state: its first
+    // bytes were read and nothing more, and the other side still renders.
+    if (result.kind === "binary") throw new SideContentRefused("binary");
+    if (result.kind === "unsupported-encoding") throw new SideContentRefused("encoding");
+    return result.text;
 };
 
 /** Short display form of an S3 versionId. */
@@ -260,7 +297,10 @@ const useSideContent = (side: Side, file: FileInfo | undefined, setSides: SetSid
             })
             .catch((error) => {
                 if (signal.aborted) return;
-                console.error(`Error loading ${side} side of diff:`, error);
+                // A binary side is an expected state with its own notice, not a failure to log.
+                if (!(error instanceof SideContentRefused)) {
+                    console.error(`Error loading ${side} side of diff:`, error);
+                }
                 patchSide(setSides, side, {
                     status: "error",
                     content: "",
@@ -587,18 +627,37 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                     ? "Version archived"
                     : state.error.kind === "unavailable"
                     ? "File unavailable"
+                    : state.error.kind === "binary"
+                    ? "Binary file"
+                    : state.error.kind === "encoding"
+                    ? "Unsupported text encoding"
                     : "Could not load file";
+            const informational = state.error.kind === "binary" || state.error.kind === "encoding";
             return (
-                <Box padding="m">
+                <Box padding="m" data-testid={`text-diff-side-${state.error.kind}`}>
                     <Alert
-                        type={state.error.kind === "failed" ? "error" : "warning"}
+                        type={
+                            informational
+                                ? "info"
+                                : state.error.kind === "failed"
+                                ? "error"
+                                : "warning"
+                        }
                         header={header}
                     >
                         {state.error.message}
                         {state.error.kind !== "forbidden" &&
                             state.error.kind !== "unauthenticated" &&
                             state.versions.length > 0 && (
-                                <Box variant="small" padding={{ top: "xs" }}>
+                                // A block element (<p>), not variant="small" (an inline <small>),
+                                // so the hint starts on its own line after the message (#1237).
+                                <Box
+                                    variant="p"
+                                    fontSize="body-s"
+                                    color="text-body-secondary"
+                                    padding={{ top: "xs" }}
+                                    data-testid="text-diff-side-version-hint"
+                                >
                                     Pick another version above to compare it instead.
                                 </Box>
                             )}
