@@ -13,6 +13,8 @@ import BabylonJSPanel from "./BabylonJSPanel";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
+import { appCache } from "../../../services/appCache";
+import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 
 // Declare BABYLON as it will be loaded dynamically
 declare const BABYLON: any;
@@ -270,9 +272,17 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     const head = await readFileHead(response[1]);
                     if (cancelled) return;
                     if (head) {
+                        // SuperSplat reads SPZ version 4 and is offered only where the
+                        // deployment config the API returned enables ALLOWUNSAFEEVAL.
+                        const features: unknown = appCache.getItem("config")?.featuresEnabled;
                         const refusal = unsupportedSplatMessage(
                             identifySplatFile(head),
-                            assetKey.split("/").pop() || assetKey
+                            assetKey.split("/").pop() || assetKey,
+                            {
+                                superSplatOffered:
+                                    Array.isArray(features) &&
+                                    features.includes(featuresEnabled.ALLOWUNSAFEEVAL),
+                            }
                         );
                         if (refusal) {
                             console.warn(`BabylonJS Gaussian Splat Viewer: ${refusal}`);
