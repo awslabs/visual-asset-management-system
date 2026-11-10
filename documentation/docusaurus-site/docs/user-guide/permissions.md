@@ -24,7 +24,7 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
 :::note[Extension object types]
-A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types and the types an enabled add-on seeds constraints for. An add-on's object types appear only while the deployment enables the add-on, and a type of an optional add-on feature only while that feature is enabled too. A constraint stored earlier with a type the deployment no longer offers opens with the notice **This object type is not offered on this deployment**: it is kept as stored, applies again once the add-on or feature is enabled, and can be deleted, but saving changes to it is refused. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
 :::
 
 ## Roles
@@ -167,7 +167,7 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing. Add-ons can ship templates of their own; see each add-on's page. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

@@ -22,10 +22,7 @@ import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionContext, AssetVersion, AssetVersionMetadataItem } from "./AssetVersionManager";
 import FileViewerModal from "../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
-import {
-    extensionOfFilename,
-    isExtensionComparableAsVersions,
-} from "../../../visualizerPlugin/core/viewableExtensions";
+import { isFilenameComparableAsVersions } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
@@ -194,8 +191,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
     // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
     const viewerRegistryReady = useViewerRegistryReady();
     const canCompareRow = (item: FileComparison): boolean =>
-        viewerRegistryReady &&
-        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
+        viewerRegistryReady && isFilenameComparableAsVersions(item.relativeKey);
 
     // State for table pagination and filtering
     const [comparisonFilterText, setComparisonFilterText] = useState<string>("");
@@ -962,8 +958,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
     // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
     const viewerRegistryReady = useViewerRegistryReady();
     const canCompareRow = (item: FileComparison): boolean =>
-        viewerRegistryReady &&
-        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
+        viewerRegistryReady && isFilenameComparableAsVersions(item.relativeKey);
 
     // State for tabs
     const [activeTabId, setActiveTabId] = useState<string>("files");

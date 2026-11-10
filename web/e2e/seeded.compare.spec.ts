@@ -12,6 +12,9 @@ import {
     openFileManager,
     selectTreePath,
     expectNoNewCspViolations,
+    treeNode,
+    viewerSamples,
+    watchConsoleErrors,
     watchCspViolations,
     watchRequestHosts,
 } from "./support/fixtures";
@@ -40,14 +43,13 @@ import {
  *     with a context-lines picker — render and change the rendered diff.
  *  5. Search "Compare Selected" enables only for a selection a compare viewer admits (count + types)
  *     and "View Selected" only for one a visualize viewer admits.
+ *
+ * "compare mode: files without an extension" (#1198) runs on the viewer samples instead
+ * (`E2E_VIEWER_SAMPLES`, from `tools/VamsCLI/examples/seed_viewer_samples.py`; its version-row case
+ * also needs that script's `--asset-version`), so each block skips on its own seed.
  */
 
 const seed = compareSeed();
-test.skip(
-    !seed,
-    "E2E_COMPARE_SEED is not set (or unreadable): run tools/VamsCLI/examples/seed_compare_smoke.py " +
-        "and export the path it prints"
-);
 
 const A = seed?.assets.a;
 const TEXT = seed?.textFile ?? "notes.txt";
@@ -75,6 +77,12 @@ async function expectDifferRendered(scope: Locator): Promise<Locator> {
 }
 
 test.describe("compare mode", () => {
+    test.skip(
+        !seed,
+        "E2E_COMPARE_SEED is not set (or unreadable): run tools/VamsCLI/examples/seed_compare_smoke.py " +
+            "and export the path it prints"
+    );
+
     test("compare-only viewer is absent from the Visualize picker for one text file", async ({
         page,
     }) => {
@@ -326,6 +334,224 @@ test.describe("compare mode", () => {
         await expect(modal).toBeVisible({ timeout: 30_000 });
         await expect(modal.getByLabel("Viewer mode")).toHaveCount(0);
         await expectDifferRendered(modal);
+        await page.keyboard.press("Escape");
+    });
+});
+
+const samples = viewerSamples();
+
+/**
+ * #1198: an extensionless file (README, LICENSE), a dotfile and a binary with no extension in the
+ * compare surfaces. Subjects are the seeded viewer samples under `/noext/`; nothing is mutated.
+ */
+test.describe("compare mode: files without an extension (seeded viewer samples)", () => {
+    test.skip(
+        !samples,
+        "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+            "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+    );
+    const DB = samples?.databaseId ?? "";
+    const ASSET = samples?.assetId ?? "";
+    const keyOf = (id: string): string | undefined => samples?.samples[id]?.key;
+    const nameOf = (id: string): string => (keyOf(id) ?? "").split("/").pop() ?? "";
+    const needSamples = (...ids: string[]) => {
+        const missing = ids.filter((id) => !keyOf(id));
+        test.skip(
+            missing.length > 0,
+            `the seed fixture lacks ${missing.join(", ")}; re-run the seed`
+        );
+    };
+
+    /**
+     * The first table row with a cell naming exactly this file (the cell ends in `/<name>` or is
+     * `<name>`), so "README" never matches a "README.md" row and "LICENSE" never "LICENSE.txt".
+     */
+    const rowOf = (page: Page, fileName: string): Locator => {
+        const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // e2e test helper: the file name is escaped before it is interpolated into the RegExp.
+        const exact = new RegExp(`(^|/)${escaped}$`); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        return page
+            .locator("table tbody tr")
+            .filter({ has: page.getByRole("cell", { name: exact }) })
+            .first();
+    };
+
+    /** Select the first sample through its folder, then Ctrl-add the second in the same folder. */
+    async function selectPair(page: Page, first: string, second: string): Promise<void> {
+        await openFileManager(page, DB, ASSET);
+        await selectTreePath(page, keyOf(first)!);
+        const node = treeNode(page, nameOf(second));
+        await expect(node).toBeVisible({ timeout: 60_000 });
+        await node.click({ modifiers: ["Control"] });
+    }
+
+    test("LICENSE vs LICENSE.txt opens the differ, with no multi-file visualizer offered", async ({
+        page,
+    }) => {
+        needSamples("noext-license", "license-txt");
+        const errors = watchConsoleErrors(page);
+        await selectPair(page, "noext-license", "license-txt");
+
+        const compareIcon = page.getByRole("button", { name: "Compare Selected Files" });
+        await expect(compareIcon).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByRole("button", { name: "Visualize Selected Files" })).toHaveCount(0);
+        await compareIcon.click();
+        const modal = dialog(page);
+        await expect(modal.getByText(/Compare Files - 2 Files/)).toBeVisible({ timeout: 30_000 });
+        await expectDifferRendered(modal);
+        // Same text both sides: no side is refused, and the pair is said to be identical.
+        await expect(
+            modal.locator('[data-testid^="text-diff-side-"][data-testid$="binary"]')
+        ).toHaveCount(0);
+        await expect(modal.getByTestId("text-diff-identical-notice")).toBeVisible();
+        expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
+        await page.keyboard.press("Escape");
+    });
+
+    test("a binary side shows its notice and the readable side still renders", async ({ page }) => {
+        needSamples("binary-noext", "noext-license");
+        const errors = watchConsoleErrors(page);
+        await selectPair(page, "binary-noext", "noext-license");
+
+        await page.getByRole("button", { name: "Compare Selected Files" }).click();
+        const modal = dialog(page);
+        // A notice on one side replaces the diff table with two per-side panes, so there is no
+        // `diff-container` to wait for: assert each pane on its own instead.
+        await expect(modal.getByTestId("text-diff-viewer")).toBeVisible({ timeout: 60_000 });
+        await expect(modal.getByTestId("text-diff-side-binary")).toBeVisible({ timeout: 60_000 });
+        await expect(modal.getByText("Binary file")).toBeVisible();
+        // The readable side renders on its own pane.
+        await expect(modal.getByText("Apache License", { exact: false }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(modal.locator('[class*="diff-container"]')).toHaveCount(0);
+        expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
+        await page.keyboard.press("Escape");
+    });
+
+    test("one README offers both Visualize and Compare in the file viewer", async ({ page }) => {
+        needSamples("noext-readme");
+        await openFileManager(page, DB, ASSET);
+        await selectTreePath(page, keyOf("noext-readme")!);
+        const name = nameOf("noext-readme");
+
+        const eye = page.getByRole("button", { name: `Visualize File ${name}` });
+        await expect(eye).toBeVisible({ timeout: 30_000 });
+        await eye.click();
+        const modal = dialog(page);
+        await expect(modal.getByText(new RegExp(`File Viewer - ${name}`))).toBeVisible({
+            timeout: 30_000,
+        });
+        const toggle = modal.getByTestId("file-viewer-mode-toggle");
+        await expect(toggle.getByRole("button", { name: "Visualize" })).toBeVisible();
+        await expect(toggle.getByRole("button", { name: "Compare" })).toBeVisible();
+        await expect(modal.getByText("ZLIB DATA COMPRESSION LIBRARY").first()).toBeVisible({
+            timeout: 60_000,
+        });
+        await page.keyboard.press("Escape");
+    });
+
+    test("the version file list offers Compare for README and diffs the row's version vs latest", async ({
+        page,
+    }) => {
+        needSamples("noext-readme");
+        test.skip(
+            !samples?.assetVersion,
+            "the viewer samples were seeded without --asset-version, so README has no snapshot row"
+        );
+        const name = nameOf("noext-readme");
+        await openFileManager(page, DB, ASSET);
+        await page
+            .getByRole("tab", { name: /^versions$/i })
+            .first()
+            .click();
+        const radio = page.locator("table tbody tr").getByRole("radio").first();
+        await expect(radio).toBeVisible({ timeout: 60_000 });
+        await radio.click();
+
+        // The version's file list is paged (the seeded samples span several pages), so README need
+        // not be on page 1. Narrow the list with its "Find files" filter, then page through what is
+        // left in case the filter still matches more than one page (README.md, other READMEs).
+        const filter = page.getByLabel("Filter files").first();
+        await expect(filter).toBeVisible({ timeout: 60_000 });
+        await filter.fill(name);
+        const row = rowOf(page, name);
+        for (let pageNumber = 2; pageNumber <= 20; pageNumber++) {
+            const found = await row
+                .waitFor({ state: "visible", timeout: 5_000 })
+                .then(() => true)
+                .catch(() => false);
+            if (found) break;
+            const next = page
+                .getByRole("button", { name: new RegExp(`^Page ${pageNumber} of \\d+$`) })
+                .last();
+            if (!(await next.count())) break;
+            await next.click();
+        }
+        await expect(row, `${name} is not in the version's file list`).toBeVisible({
+            timeout: 30_000,
+        });
+        const compare = row.getByRole("button", { name: "Compare", exact: true });
+        await expect(compare).toBeVisible({ timeout: 30_000 });
+        await compare.click();
+        const modal = dialog(page);
+        await expectDifferRendered(modal);
+        await expect(modal.getByTestId("text-diff-side-label-left")).toContainText("@");
+        await expect(modal.getByTestId("text-diff-side-label-right")).toContainText("(latest)");
+        await page.keyboard.press("Escape");
+    });
+
+    test("search: README is viewable, README + PDF is neither viewable nor comparable, .gitignore is viewable", async ({
+        page,
+    }) => {
+        needSamples("noext-readme", "dotfile-gitignore", "pdf");
+        await page.goto(`/#/search/${DB}/assets`, { waitUntil: "domcontentloaded" });
+        const filesTab = page.getByRole("button", { name: "Files", exact: true }).first();
+        await expect(filesTab).toBeVisible({ timeout: 60_000 });
+        await filesTab.click();
+        const keywords = page.getByPlaceholder(/Search by keywords/i);
+        await keywords.fill("");
+        await keywords.press("Enter");
+
+        const row = (fileName: string) => rowOf(page, fileName);
+        const readme = row(nameOf("noext-readme"));
+        const gitignore = row(nameOf("dotfile-gitignore"));
+        const pdf = row(nameOf("pdf"));
+        await expect(readme).toBeVisible({ timeout: 60_000 });
+        await expect(gitignore).toBeVisible({ timeout: 60_000 });
+        await expect(pdf).toBeVisible({ timeout: 60_000 });
+
+        // The per-row eye: an extensionless file and a dotfile are judged by the key, not str_fileext.
+        await expect(readme.getByRole("button", { name: /^Visualize File / })).toBeVisible();
+        await expect(gitignore.getByRole("button", { name: /^Visualize File / })).toBeVisible();
+
+        await page.getByRole("button", { name: "Multi-select to view" }).click();
+        const view = page.getByRole("button", { name: /^View Selected \(\d+\)$/ });
+        const compare = page.getByRole("button", { name: /^Compare Selected \(\d+\)$/ });
+        await expect(view).toBeVisible({ timeout: 30_000 });
+
+        // README alone: viewable.
+        await readme.getByRole("checkbox").check();
+        await expect(view).toHaveText(/\(1\)/);
+        await expect(view).toBeEnabled();
+
+        // README + PDF: no multi-file viewer and no differ covers the pair.
+        await pdf.getByRole("checkbox").check();
+        await expect(view).toHaveText(/\(2\)/);
+        await expect(view).toBeDisabled();
+        await expect(compare).toBeDisabled();
+
+        // .gitignore alone: viewable, and View Selected opens the Text Viewer on it.
+        await readme.getByRole("checkbox").uncheck();
+        await pdf.getByRole("checkbox").uncheck();
+        await gitignore.getByRole("checkbox").check();
+        await expect(view).toBeEnabled();
+        await view.click();
+        const modal = dialog(page);
+        await expect(modal).toBeVisible({ timeout: 30_000 });
+        await expect(modal.getByText("# Logs", { exact: false }).first()).toBeVisible({
+            timeout: 60_000,
+        });
         await page.keyboard.press("Escape");
     });
 });

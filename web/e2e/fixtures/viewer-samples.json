@@ -247,6 +247,265 @@
             "expect": {
                 "line": "VAMS viewer sample: plain text line 2"
             }
+        },
+        {
+            "id": "noext-license",
+            "viewer": "text-viewer",
+            "path": "/noext/LICENSE",
+            "url": "https://raw.githubusercontent.com/awslabs/visual-asset-management-system/v2.6.6/LICENSE",
+            "size": 10142,
+            "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+            "licence": "Apache-2.0",
+            "source": "https://github.com/awslabs/visual-asset-management-system/blob/v2.6.6/LICENSE (larger than the 8 KiB sample, so it is read in two requests)",
+            "expect": {
+                "line": "Apache License"
+            }
+        },
+        {
+            "id": "noext-readme",
+            "viewer": "text-viewer",
+            "path": "/noext/README",
+            "url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/README",
+            "size": 5317,
+            "sha256": "d106dcdb2a0b3087cb3a2380b9f00a0bbadc7eb835cd80408f94a2d78d69727d",
+            "licence": "Zlib",
+            "source": "https://github.com/madler/zlib/blob/v1.3.1/README (the zlib licence, LICENSE in the same tag)",
+            "expect": {
+                "line": "ZLIB DATA COMPRESSION LIBRARY"
+            }
+        },
+        {
+            "id": "noext-changes",
+            "viewer": "text-viewer",
+            "path": "/noext/CHANGES",
+            "url": "https://raw.githubusercontent.com/apache/httpd/2.4.62/CHANGES",
+            "size": 368784,
+            "sha256": "e854afc54eb36ca6ff4f497f9602a6d93265b8b95ae6934311bfe5f9bda51447",
+            "licence": "Apache-2.0",
+            "source": "https://github.com/apache/httpd/blob/2.4.62/CHANGES (Apache HTTP Server change log, LICENSE in the same tag; the large extensionless file)",
+            "expect": {
+                "line": "Changes with Apache 2.4.62"
+            }
+        },
+        {
+            "id": "dotfile-gitignore",
+            "viewer": "text-viewer",
+            "path": "/noext/.gitignore",
+            "url": "https://raw.githubusercontent.com/github/gitignore/d3feaa21d534865b9ab597bc46c7047a1520e97c/Node.gitignore",
+            "size": 2262,
+            "sha256": "c005855bbdbd73acfb5fae712c85beedc9954c9a84216e461f367c73b86e17c4",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/github/gitignore/blob/d3feaa21d534865b9ab597bc46c7047a1520e97c/Node.gitignore, stored as .gitignore (a dotfile has no extension)",
+            "expect": {
+                "line": "# Logs"
+            }
+        },
+        {
+            "id": "binary-noext",
+            "viewer": "text-viewer",
+            "path": "/noext/binary-noext",
+            "url": "https://raw.githubusercontent.com/awslabs/visual-asset-management-system/v2.6.6/web/public/logo512.png",
+            "size": 9664,
+            "sha256": "9ea4f4da7050c0cc408926f6a39c253624e9babb1d43c7977cd821445a60b461",
+            "licence": "Apache-2.0",
+            "source": "https://github.com/awslabs/visual-asset-management-system/blob/v2.6.6/web/public/logo512.png, stored without an extension (a PNG the Text Viewer is offered for)"
+        },
+        {
+            "id": "binary-as-txt",
+            "viewer": "text-viewer",
+            "path": "/noext/image.txt",
+            "derivedFrom": "binary-noext",
+            "transform": "copy",
+            "licence": "inherits binary-noext",
+            "source": "the binary-noext PNG stored under a .txt name"
+        },
+        {
+            "id": "license-utf16le-bom",
+            "viewer": "text-viewer",
+            "path": "/noext/LICENSE-utf16le-bom",
+            "derivedFrom": "noext-license",
+            "transform": "utf16le-bom",
+            "licence": "inherits noext-license",
+            "source": "the noext-license text re-encoded as UTF-16LE with a byte order mark",
+            "expect": {
+                "line": "Apache License"
+            }
+        },
+        {
+            "id": "license-utf16be-bom",
+            "viewer": "text-viewer",
+            "path": "/noext/LICENSE-utf16be-bom",
+            "derivedFrom": "noext-license",
+            "transform": "utf16be-bom",
+            "licence": "inherits noext-license",
+            "source": "the noext-license text re-encoded as UTF-16BE with a byte order mark",
+            "expect": {
+                "line": "Apache License"
+            }
+        },
+        {
+            "id": "license-utf16le",
+            "viewer": "text-viewer",
+            "path": "/noext/LICENSE-utf16le",
+            "derivedFrom": "noext-license",
+            "transform": "utf16le",
+            "licence": "inherits noext-license",
+            "source": "the noext-license text re-encoded as UTF-16LE with no byte order mark (an encoding the viewer names, not shows)"
+        },
+        {
+            "id": "noext-empty",
+            "viewer": "text-viewer",
+            "path": "/noext/EMPTY",
+            "generated": "text",
+            "content": "",
+            "licence": "generated by the seed script",
+            "source": "a 0-byte file the seed writes"
+        },
+        {
+            "id": "prettierrc-json",
+            "viewer": "text-viewer",
+            "path": "/noext/.prettierrc.json",
+            "generated": "text",
+            "content": "{\"semi\": true}\n",
+            "licence": "generated by the seed script",
+            "source": "a dotfile with an extension (.json), which the Text and Cesium viewers both list",
+            "expect": {
+                "line": "semi"
+            }
+        },
+        {
+            "id": "env-example",
+            "viewer": "none",
+            "path": "/noext/.env.example",
+            "generated": "text",
+            "content": "KEY=value\n",
+            "licence": "generated by the seed script",
+            "source": "a dotfile whose extension (.example) no viewer lists"
+        },
+        {
+            "id": "license-txt",
+            "viewer": "text-diff-viewer",
+            "path": "/noext/LICENSE.txt",
+            "derivedFrom": "noext-license",
+            "transform": "copy",
+            "licence": "inherits noext-license",
+            "source": "the noext-license text under a .txt name, compared against the extensionless LICENSE"
+        },
+        {
+            "id": "potree-las",
+            "viewer": "potree-viewer",
+            "path": "/pointclouds/autzen_trim.las",
+            "url": "https://raw.githubusercontent.com/PDAL/PDAL/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/las/autzen_trim.las",
+            "size": 3742038,
+            "sha256": "3d351885f3aa03d5ac92358037ba0b850ea4f56f644ffcc56d57cd5d830aaf75",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/PDAL/PDAL/blob/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/LICENSE.txt (PDAL test data; all files in the PDAL distribution unless otherwise indicated)",
+            "expect": {
+                "pipeline": "usePreviewPcPotreeViewer"
+            }
+        },
+        {
+            "id": "potree-laz",
+            "viewer": "potree-viewer",
+            "path": "/pointclouds/autzen_trim.laz",
+            "url": "https://raw.githubusercontent.com/PDAL/PDAL/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/test/data/laz/autzen_trim.laz",
+            "size": 603353,
+            "sha256": "75867b3e75cfc3c2e96da9f753c04c9fbaa6a59468dea13e2859f3109b38bd66",
+            "licence": "BSD-3-Clause",
+            "source": "https://github.com/PDAL/PDAL/blob/e49812f6909a5836b9b5bd4fcfbc8b80bed705d9/LICENSE.txt (PDAL test data; all files in the PDAL distribution unless otherwise indicated)",
+            "expect": {
+                "pipeline": "usePreviewPcPotreeViewer"
+            }
+        },
+        {
+            "id": "potree-ply",
+            "viewer": "potree-viewer",
+            "path": "/pointclouds/autzen_trim.ply",
+            "derivedFrom": "potree-las",
+            "transform": "las-to-ply",
+            "licence": "BSD-3-Clause (derived from potree-las)",
+            "source": "autzen_trim.las written as binary PLY vertices with colour by the seeder",
+            "expect": {
+                "pipeline": "usePreviewPcPotreeViewer"
+            }
+        },
+        {
+            "id": "potree-e57",
+            "viewer": "potree-viewer",
+            "path": "/pointclouds/ColouredCubeDouble.e57",
+            "url": "https://raw.githubusercontent.com/asmaloney/libE57Format-test-data/24201531715945ba7d49af6dfcb8e07b6b9b6b7f/self/ColouredCubeDouble.e57",
+            "size": 210944,
+            "sha256": "58e7cfbb3e9cef777c4cd8f52aff2ff704fcf6dd3aea4b420430adaa1cdb978d",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/asmaloney/libE57Format-test-data/blob/24201531715945ba7d49af6dfcb8e07b6b9b6b7f/README.md (self/: generated by libE57Format, CC0 1.0; 7680 coloured points)",
+            "expect": {
+                "pipeline": "usePreviewPcPotreeViewer"
+            }
+        },
+        {
+            "id": "threejs-ply-points",
+            "viewer": "threejs-viewer",
+            "path": "/threejs/fragment.ply",
+            "url": "https://raw.githubusercontent.com/isl-org/Open3D/a124f85e02d9e6d0c89d71ce57cb473dc4b9da62/examples/TestData/fragment.ply",
+            "size": 6081011,
+            "sha256": "96203542a5659c1efd2bcfe8a2dd7d3ffc9b88cf24680b4703515f6b21f67d99",
+            "licence": "MIT",
+            "source": "https://github.com/isl-org/Open3D/blob/a124f85e02d9e6d0c89d71ce57cb473dc4b9da62/LICENSE (Open3D v0.10.0 test data, MIT; examples/TestData has no separate licence; 196,133 RGB points, no faces)",
+            "expect": {
+                "vertexCount": 196133
+            }
+        },
+        {
+            "id": "vntana-glb-box",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/BoxTextured.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/BoxTextured/glTF-Binary/BoxTextured.glb",
+            "size": 5956,
+            "sha256": "b510eca2e2ef33f62f9ed57d6e7ce2d10ebb2bdebc4a8e59d347719ba81abdf4",
+            "licence": "CC-BY-4.0 (Cesium, 2017); the texture is the Cesium logo, a trademark",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxTextured"
+        },
+        {
+            "id": "vntana-glb-avocado",
+            "viewer": "vntana-viewer",
+            "path": "/vntana/Avocado.glb",
+            "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Avocado/glTF-Binary/Avocado.glb",
+            "size": 8110040,
+            "sha256": "ccc9c3ce56423720b09399c2351537207cd5a65f859f9e6e2f30922762f3abd4",
+            "licence": "CC0-1.0",
+            "source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado"
+        },
+        {
+            "id": "ifc-haus",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/haus.ifc",
+            "url": "https://raw.githubusercontent.com/kovacsv/Online3DViewer/0.18.0/website/assets/models/haus.ifc",
+            "size": 2526544,
+            "sha256": "ea6f04eaf92fac4d7ad0038bc3d2dfea4c094dd3f516ecc33c50bf1835ca108d",
+            "licence": "MIT",
+            "source": "IFC4 house model, MIT License, Copyright (c) 2021 Antonio Gonzalez Viegas (https://github.com/IFCjs/test-ifc-files), as listed in https://github.com/kovacsv/Online3DViewer/blob/0.18.0/website/assets/models/README.md",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "ifc-haus-zip",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/haus.ifczip",
+            "derivedFrom": "ifc-haus",
+            "transform": "zip",
+            "licence": "inherits ifc-haus",
+            "source": "the ifc-haus sample stored as the only entry of a ZIP archive",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
+        },
+        {
+            "id": "ifc-school-structural",
+            "viewer": "thatopenwebifc-viewer",
+            "path": "/school_str.ifc",
+            "url": "https://raw.githubusercontent.com/ThatOpen/engine_components/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc/school_str.ifc",
+            "size": 8593426,
+            "sha256": "82c3406c11cdf83a7ad00e2155bdcfdef50877e491e780623824161d8955b340",
+            "licence": "MIT",
+            "source": "IFC4 structural model from the That Open engine_components repository (MIT licence; no separate licence for resources/ifc), https://github.com/ThatOpen/engine_components/tree/ecedeb613b08d624c0b545e39477c5ca9ce4f4e1/resources/ifc",
+            "requiresFeature": "ALLOWUNSAFEEVAL"
         }
     ]
 }

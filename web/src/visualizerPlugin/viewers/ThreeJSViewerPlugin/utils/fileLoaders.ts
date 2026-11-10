@@ -213,6 +213,75 @@ export function convertFloat64Attributes(geometry: any, THREE: any): void {
     });
 }
 
+/** The grey a PLY file without per-vertex colours is drawn in. */
+export const PLY_DEFAULT_COLOR = 0xcccccc;
+
+/**
+ * Point size for a PLY point cloud, in world units (the material uses `sizeAttenuation`): a
+ * fraction of the cloud's bounding-box diagonal, so a point is a pixel or two wide when the camera
+ * frames the whole cloud and grows as the user zooms in. The viewer has no point-size control.
+ */
+export const PLY_POINT_SIZE_FRACTION = 1 / 200;
+
+/** The bounding-box diagonal of a position attribute, read from its array (stride `itemSize`). */
+function positionDiagonal(position: any): number {
+    const array = position?.array;
+    const stride = position?.itemSize || 3;
+    if (!array || array.length < 3) {
+        return 0;
+    }
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i + 2 < array.length; i += stride) {
+        for (let axis = 0; axis < 3; axis++) {
+            const value = array[i + axis];
+            if (Number.isFinite(value)) {
+                if (value < min[axis]) min[axis] = value;
+                if (value > max[axis]) max[axis] = value;
+            }
+        }
+    }
+    if (!Number.isFinite(min[0]) || !Number.isFinite(min[1]) || !Number.isFinite(min[2])) {
+        return 0;
+    }
+    return Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+}
+
+/**
+ * The object for a parsed PLY geometry. A PLY with no faces (no index) is a point cloud and is
+ * drawn as `THREE.Points`; one with faces is a `THREE.Mesh`, given vertex normals when the file has
+ * none so it shades. A `color` attribute (the file's red/green/blue vertex properties) is drawn
+ * with `vertexColors`; without one the object keeps the default grey.
+ */
+export function createPLYObject(geometry: any, fileName: string, THREE: any): any {
+    const attributes = geometry?.attributes || {};
+    const hasColors = !!attributes.color;
+    const isPointCloud = !geometry?.index;
+
+    let object: any;
+    if (isPointCloud) {
+        const diagonal = positionDiagonal(attributes.position);
+        const material = new THREE.PointsMaterial({
+            size: diagonal > 0 ? diagonal * PLY_POINT_SIZE_FRACTION : 1,
+            sizeAttenuation: true,
+            vertexColors: hasColors,
+            color: hasColors ? 0xffffff : PLY_DEFAULT_COLOR,
+        });
+        object = new THREE.Points(geometry, material);
+    } else {
+        if (!attributes.normal && typeof geometry.computeVertexNormals === "function") {
+            geometry.computeVertexNormals();
+        }
+        const material = new THREE.MeshStandardMaterial({
+            vertexColors: hasColors,
+            color: hasColors ? 0xffffff : PLY_DEFAULT_COLOR,
+        });
+        object = new THREE.Mesh(geometry, material);
+    }
+    object.name = fileName;
+    return object;
+}
+
 /**
  * Load PLY file
  */
@@ -228,12 +297,7 @@ export async function loadPLY(
             const geometry = loader.parse(arrayBuffer);
             convertFloat64Attributes(geometry, THREE);
 
-            // Create mesh with default material
-            const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.name = fileName;
-
-            resolve({ object: mesh });
+            resolve({ object: createPLYObject(geometry, fileName, THREE) });
         } catch (error: any) {
             reject(new Error(`Failed to load PLY: ${error.message || error}`));
         }

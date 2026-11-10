@@ -187,7 +187,8 @@
                 ".js",
                 ".ts",
                 ".sql",
-                ".ps1"
+                ".ps1",
+                "(none)"
             ],
             "supportsMultiFile": false,
             "canFullscreen": true,
@@ -227,7 +228,8 @@
                 ".js",
                 ".ts",
                 ".sql",
-                ".ps1"
+                ".ps1",
+                "(none)"
             ],
             "supportsMultiFile": false,
             "canFullscreen": true,

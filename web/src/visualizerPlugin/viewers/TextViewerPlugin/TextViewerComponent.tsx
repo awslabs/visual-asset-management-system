@@ -4,7 +4,14 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Button, SpaceBetween, Toggle, Select, SelectProps } from "@cloudscape-design/components";
+import {
+    Alert,
+    Button,
+    SpaceBetween,
+    Toggle,
+    Select,
+    SelectProps,
+} from "@cloudscape-design/components";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import { docco } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import { vs2015 } from "react-syntax-highlighter/dist/esm/styles/hljs";
@@ -17,6 +24,22 @@ import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
 import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
+import { loadTextFile } from "../../core/textContent";
+
+/** Why the file is not shown as text, when it is not. */
+type TextNotice = "binary" | "encoding";
+
+/** User-facing copy for each notice. Exported so the unit test asserts the same strings. */
+export const TEXT_NOTICE_COPY: Record<TextNotice, { header: string; body: string }> = {
+    binary: {
+        header: "Binary file",
+        body: "This file appears to contain binary data, so the Text Viewer does not display it. Download the file to open it in an application that supports its format.",
+    },
+    encoding: {
+        header: "Unsupported text encoding",
+        body: "This file uses a text encoding the Text Viewer cannot display (UTF-32 or UTF-16 without a byte-order mark).",
+    },
+};
 
 // Register languages with the light build
 SyntaxHighlighter.registerLanguage("json", json);
@@ -30,6 +53,8 @@ interface TextViewerState {
     content: string;
     loading: boolean;
     error: string | null;
+    /** Set instead of `content` when the file is binary or in an encoding the viewer cannot read. */
+    notice: TextNotice | null;
     language: string;
     showLineNumbers: boolean;
     wrapLines: boolean;
@@ -47,6 +72,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
         content: "",
         loading: true,
         error: null,
+        notice: null,
         language: "plaintext",
         showLineNumbers: true,
         wrapLines: true,
@@ -96,7 +122,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!assetKey) return;
 
             try {
-                setState((prev) => ({ ...prev, loading: true, error: null }));
+                setState((prev) => ({ ...prev, loading: true, error: null, notice: null }));
 
                 console.log("TextViewerComponent loading file:", {
                     assetId,
@@ -121,21 +147,26 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                             downloadFailureMessage(response, "Failed to download file")
                         );
                     } else {
-                        // Fetch the actual file content from the URL
-                        const fileResponse = await fetch(response[1], {
-                            signal: abortController.signal,
-                        });
-                        if (!fileResponse.ok) {
-                            throw new Error(`HTTP error! status: ${fileResponse.status}`);
-                        }
-
-                        const textContent = await fileResponse.text();
+                        // Read the first bytes and stop there when they are not text: a binary file
+                        // (an image under an extensionless name, a renamed archive) is never
+                        // downloaded whole and never handed to the highlighter.
+                        const result = await loadTextFile(response[1], abortController.signal);
                         if (cancelled) return;
+                        if (result.kind !== "text") {
+                            setState((prev) => ({
+                                ...prev,
+                                content: "",
+                                notice: result.kind === "binary" ? "binary" : "encoding",
+                                loading: false,
+                            }));
+                            return;
+                        }
                         const detectedLanguage = getLanguageFromExtension(assetKey);
 
                         setState((prev) => ({
                             ...prev,
-                            content: textContent,
+                            content: result.text,
+                            notice: null,
                             language: detectedLanguage,
                             loading: false,
                         }));
@@ -242,6 +273,20 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div style={{ color: "var(--vams-text-secondary)", fontSize: "14px" }}>
                     {state.error}
                 </div>
+            </div>
+        );
+    }
+
+    if (state.notice) {
+        const copy = TEXT_NOTICE_COPY[state.notice];
+        return (
+            <div
+                data-testid={`text-viewer-${state.notice}-notice`}
+                style={{ padding: "20px", textAlign: "left" }}
+            >
+                <Alert type="info" header={copy.header}>
+                    {copy.body}
+                </Alert>
             </div>
         );
     }

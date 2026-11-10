@@ -36,13 +36,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
-| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                     | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                    | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                       | **Ad-hoc specs (untracked)**                                |
+| --------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                         | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                             | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                             | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                            | No — keep out of git                                        |
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -121,17 +121,19 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 ## Rule 3: Use the shared harness, don't re-derive selectors
 
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
-locators — the app's markup is not always guessable, and these were established empirically.
+locators — the app's markup is not always guessable, and these were established empirically. An
+add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
 | Helper                                                        | Use for                                                                                            |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                |
+| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag       |
 | `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                   |
 | `searchBox(page)`                                             | The orchestration filter-bar search input                                                          |
 | `facet(page, label)`                                          | A native `<select>` filter                                                                         |
 | `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                             |
 | `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                         |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                               |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex       |
 | `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                 |
 | `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                    |
 | `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                              |
@@ -233,20 +235,21 @@ that it mounts. Add a viewer's cases to `renderCases` there; do not start anothe
 
 **Samples.** Every subject is an entry of `e2e/fixtures/viewer-samples.json` (tracked; schema checked by
 `web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`). An entry has `id`, `viewer` (a viewer id
-from the viewer configs), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
+from the viewer configs, or `none` for the subject of a `not-offered` case that no viewer may open), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
 `source`, and EXACTLY ONE of:
 
-| Kind      | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                                                                                                                       |
-| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                                                                                                                       |
-| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), `ply-to-splat` (a float 3DGS `.ply` as raw `.splat` rows, which splat-transform cannot write), or `ksplat` (`.ply` to `.ksplat` with `@mkkellogg/gaussian-splats-3d`: `version` and `threeVersion` pinned, optional `level`) |
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `copy`, `utf16le-bom` / `utf16be-bom` / `utf16le` (the source's UTF-8 re-encoded, with or without a byte order mark), `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), `ply-to-splat` (a float 3DGS `.ply` as raw `.splat` rows, which splat-transform cannot write), `ksplat` (`.ply` to `.ksplat` with `@mkkellogg/gaussian-splats-3d`: `version` and `threeVersion` pinned, optional `level`), or `las-to-ply` (an uncompressed `.las` with colour written as binary PLY vertices; stdlib only, LAZ refused) |
 
 Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
 case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
 thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
-0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+0.6% of the pixels; `expect.vertexCount` makes a canvas case also assert the viewer reports
+`<n> vertices`, as the Three.js info box does for the `threejs-ply-points` point cloud). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 
@@ -257,14 +260,28 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `not-offered`, `refused` — the viewer's refusal message), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
-must succeed for), `thresholds` and `cspAllowed`. Every case fails on console or page errors
+must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
+serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
+such as Chromium's own `416` line for an empty file; never widen `CONSOLE_ERROR_IGNORE` for one case)
+and `reads` (the statuses, in order, of the presigned GETs of the sample's file: `[206]`, `[206, 200]`
+or `[416]`, how the bounded text loader read it), and `selectInPanel` (a Three.js canvas case also
+selects the object by its scene graph row and checks the canvas gains, then loses, highlight-green
+pixels, as `threejs-ply-points` does for a point cloud, #1275). A text sample's `viewer` must list the sample's
+`extensionToken` (so `.gitignore` is `(none)`, `.env.example` is `.example`); the manifest jest test
+checks it. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
 development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
 (`watchRequestHosts`). The `supersplat` kind checks inside the editor's iframe with
 `expectSuperSplatRendered` and passes `SUPERSPLAT_CSP_ALLOWED` as `cspAllowed`. Run the spec on the development build first and record the pixel stats it logs;
 a case that passes there and fails on a change is a regression.
+
+A `potree` case reads the octree the Point Cloud Potree Viewer pipeline (`app.pipelines.usePreviewPcPotreeViewer`)
+wrote for the file, so after seeding run that pipeline on each `potree-*` sample; the case skips, naming the
+pipeline, while the file's `preview/PotreeViewer/metadata.json` is missing. It asserts `Potree.lru.numPoints > 0`
+and point pixels on `#potree_render_area > canvas` by red channel, because Potree's blue gradient background
+defeats the most-common-colour measure of `canvasStats`.
 
 ---
 

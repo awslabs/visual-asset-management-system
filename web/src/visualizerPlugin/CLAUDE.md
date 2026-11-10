@@ -16,6 +16,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
 -   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
+-   **extensionMatching.ts** (`core/extensionMatching.ts`) — The one filename rule (`filenameExtension`, `extensionToken`), the `NO_EXTENSION` token `(none)`, `describeExtensionToken` and `supportsAllExtensions` (see "Files Without an Extension and the Binary Guard")
+-   **textContent.ts** (`core/textContent.ts`) — `classifyTextSample(bytes, isComplete)` (text, binary or unsupported encoding, from a file's first 8 KiB) and `loadTextFile(url, signal)`, the bounded loader both text viewers use (see "Files Without an Extension and the Binary Guard")
 -   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer adopts it in its own change; Cesium and Potree name stream failures through `describeStreamFailure`.
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
@@ -36,8 +38,8 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `columnar-viewer`                  | Columnar Data Viewer              | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `text-diff-viewer`                 | Text Diff Viewer                  | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare-only: 2 files, cross-asset)        |
+| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (`(none)`)                                  | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer                  | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (same list as `text-viewer`)                       | enabled (compare-only: 2 files, cross-asset)        |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz, .splat, .sog                                                                                                                 | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .ksplat, .lcc, .ply, .sog, .splat, .spz                                                                                                  | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
@@ -99,7 +101,7 @@ Every entry point decides what to offer with the SAME predicates, never with its
 | -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
 | Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`           | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
 | Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`          | `areFilesComparableTogether(files)` (derives count + shape)          |
-| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isExtensionComparableAsVersions(ext)`                               |
+| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isFilenameComparableAsVersions(name)`                               |
 | Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)`    | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
 | What pair does a lone file enter Compare with?           | `seedCompareFromSingleFile(file)` (`core/compareShape.ts`) | — (hosts call it directly)                                           |
 
@@ -114,7 +116,7 @@ Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` 
     instead of mounting `DynamicViewer`.
 -   **A lone file admits Compare as two versions of itself.** `availableViewerModes` judges a
     one-file selection by `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`, pure) — the same
-    question as `isExtensionComparableAsVersions` — so one `.txt` offers BOTH modes and one `.png`/`.glb`
+    question as `isFilenameComparableAsVersions` — so one `.txt` (or `README`) offers BOTH modes and one `.png`/`.glb`
     (no differ admits it) offers Visualize only. In Compare the host hands the viewer
     `seedCompareFromSingleFile(file)` = `[the viewed entry (pinned versionId, else latest), the same
 file at latest]`; the differ's per-side picker takes it from there, and toggling back shows the one
@@ -128,7 +130,7 @@ file at latest]`; the differ's per-side picker takes it from there, and toggling
     real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
     neither).
 -   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
-    only when `isExtensionComparableAsVersions(ext)` holds; it opens the differ with the row's version
+    only when `isFilenameComparableAsVersions(relativeKey)` holds; it opens the differ with the row's version
     on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
 
 All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
@@ -210,6 +212,55 @@ renders a readable side beside a denied/archived one.
 | `allowSameFileDifferentVersions` | boolean  | Admit N versions of one file (same db + asset + key)                                    |
 | `allowDifferentFiles`            | boolean  | Admit N distinct files                                                                  |
 | `allowCrossAsset`                | boolean? | Admit entries spanning assets/databases; viewer must handle per-entry 403 (default: no) |
+
+---
+
+## Files Without an Extension and the Binary Guard
+
+A viewer opts into files that have no extension (README, LICENSE, Makefile, `.gitignore`) by listing
+the reserved token `(none)` (`NO_EXTENSION`, `core/extensionMatching.ts`) in `supportedExtensions`.
+The shipped `text-viewer` and `text-diff-viewer` list it; no other viewer does
+(`config/viewerConfig.test.ts` and `core/viewerSelection.test.ts` pin that).
+
+-   **One filename rule.** `filenameExtension(name)` reads the last path segment and splits it like
+    Python's `os.path.splitext`: leading dots do not start an extension, and a trailing dot leaves
+    none. `.gitignore`, `.bashrc` and `file.` have no extension; `.eslintrc.json` has `.json`;
+    `.env.example` has `.example` (no viewer). `extensionToken(name)` is that extension lowercased,
+    `(none)` when there is none, and undefined when there is no file name at all (a key ending in
+    `/` is a folder). `PluginRegistry.getFileExtension`/`getFileExtensions`, `extensionOfFilename` and
+    every lookup in `core/viewableExtensions.ts` apply it. A dotfile name declared as an extension
+    (`".gitignore"`) never matches; only `.`-prefixed lowercase values, `*` and `(none)` are valid.
+-   **Same matching.** The token rides the existing string-set matching, so every file must still
+    match: one `README` offers only the Text Viewer (it auto-opens) and, as a lone file, Compare;
+    `LICENSE` + `LICENSE.txt` is admitted by the differ; `README` + `model.glb`, or `README` + `x.3dm`
+    in the multi-file Online 3D Viewer, is admitted by nothing. The `*` wildcard matches the token.
+-   **Gate by name, not by extension.** Entry points ask the filename-based lookups:
+    `isViewableFilename(name)` (the file manager's eye icon, the search row's eye icon and checkbox
+    selection through `isViewableSearchRow`), `isFilenameComparableAsVersions(name)` (the version
+    lists' per-row Compare), `areFilenamesViewableTogether`, `areFilesComparableTogether` and
+    `availableModesForFiles`. Search rows are judged by `str_key`, not the indexed `str_fileext`
+    (the indexer stores `gitignore` for `.gitignore` and nothing for `README`).
+    `extensionOfFilename` is for display and format dispatch only.
+-   **Never show the token.** User-facing text names it with `describeExtensionToken` ("no
+    extension"): `DynamicViewer`'s "No compatible viewers found for file types: …" and
+    `FileViewerModal`'s no-viewer state.
+-   **Binary guard.** A text viewer is offered by name, so it can be handed an image or an archive.
+    Both text viewers load through `loadTextFile` (`core/textContent.ts`) from the presigned URL
+    `downloadAsset` returns. It sends `Range: bytes=0-8191`, classifies the first 8 KiB with
+    `classifyTextSample`, and stops there when they are not text: a binary file is never downloaded
+    whole and never reaches the highlighter. A larger text file takes one more full GET; a 200 (the
+    server ignored `Range`) is read as a stream and cancelled on binary content; S3's 416 for a range
+    on an empty object is empty text; a network `TypeError` (a bucket whose CORS refuses the `Range`
+    preflight) is retried once without `Range`. Classification: a UTF-32 byte-order mark is an
+    unsupported encoding; a UTF-16 LE/BE mark is text, decoded with `TextDecoder`; any NUL byte
+    otherwise is binary, except NULs on one side of each byte pair (UTF-16 without a mark: an
+    unsupported encoding); then the share of control bytes (TAB, LF, VT, FF, CR, backspace and ESC
+    excepted) is binary above 10 %, or above 2 % when the sample is not valid UTF-8. Latin-1 text
+    still renders, with replacement characters. The Text Viewer then shows an info notice
+    (`data-testid="text-viewer-binary-notice"` or `text-viewer-encoding-notice`); the Text Diff
+    Viewer shows it on that side only (`text-diff-side-binary` / `text-diff-side-encoding`) while the
+    other side renders, and logs nothing for it. A new text-style viewer loads through
+    `loadTextFile` too.
 
 ---
 
@@ -309,27 +360,33 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 
 ## Plugin Config Fields
 
-| Field                        | Type              | Description                                          |
-| ---------------------------- | ----------------- | ---------------------------------------------------- |
-| `id`                         | string            | Unique plugin identifier                             |
-| `componentPath`              | string            | Path for manifest lookup                             |
-| `dependencyManager`          | string?           | Path to dependency loader module                     |
-| `dependencyManagerClass`     | string?           | Class name in dependency module                      |
-| `dependencyManagerMethod`    | string?           | Load method name                                     |
-| `dependencyCleanupMethod`    | string?           | Cleanup method name                                  |
-| `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
-| `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
-| `canFullscreen`              | boolean           | Supports fullscreen mode                             |
-| `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
-| `category`                   | string            | Viewer category (3d, media, document, data, preview) |
-| `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
-| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
-| `enabled`                    | boolean           | Whether the plugin is active                         |
-| `customParameters`           | object?           | Viewer-specific configuration                        |
-| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)         |
+| Field                        | Type              | Description                                                                   |
+| ---------------------------- | ----------------- | ----------------------------------------------------------------------------- |
+| `id`                         | string            | Unique plugin identifier                                                      |
+| `componentPath`              | string            | Path for manifest lookup                                                      |
+| `dependencyManager`          | string?           | Path to dependency loader module                                              |
+| `dependencyManagerClass`     | string?           | Class name in dependency module                                               |
+| `dependencyManagerMethod`    | string?           | Load method name                                                              |
+| `dependencyCleanupMethod`    | string?           | Cleanup method name                                                           |
+| `supportedExtensions`        | string[]          | Lowercase `.ext` values, `*` (any file) or `(none)` (files with no extension) |
+| `supportsMultiFile`          | boolean           | Can handle multiple files at once                                             |
+| `canFullscreen`              | boolean           | Supports fullscreen mode                                                      |
+| `priority`                   | number            | Lower = listed first when multiple viewers match                              |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use                                     |
+| `category`                   | string            | Viewer category (3d, media, document, data, preview)                          |
+| `featuresEnabledRestriction` | string[]?         | Required feature flags                                                        |
+| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                                              |
+| `enabled`                    | boolean           | Whether the plugin is active                                                  |
+| `customParameters`           | object?           | Viewer-specific configuration                                                 |
+| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)                                  |
 
 ---
+
+## Three.js Selection Highlight (`ThreeJSViewerPlugin/utils/selectionHighlight.ts`)
+
+-   A selected object wears a highlight clone of its material library entry, made only by `createHighlightMaterial` and put back only by `releaseHighlight` / `syncSelectionHighlight`, which track each clone by identity (a `WeakMap` to the material it came from) and dispose it on deselect. Never detect a highlight from a colour value; the material editor can set any colour.
+-   A lit mesh material glows through `emissive` (0x4caf50, intensity 0.5). A material with no emissive colour (`PointsMaterial`, line and sprite materials, `MeshBasicMaterial`) is tinted green with `vertexColors` off (#1275).
+-   `supportsWireframe(material)` is false for point, line and sprite materials: Wireframe Mode (Controls tab), the material editor's Wireframe option and the material reset skip them, and never add a `wireframe` property to them.
 
 ## Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
 

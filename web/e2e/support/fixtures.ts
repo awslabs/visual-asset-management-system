@@ -60,6 +60,36 @@ export async function gotoOrchestration(
 }
 
 /**
+ * The deployment's feature list, read from the app's own cached config (localStorage
+ * `vams_cache_config`) — what the running application itself reads. Not `/api/secure-config` through
+ * `page.request`: that carries no bearer token, answers 401, and every feature then reads as disabled.
+ * The entry is written after the app boots, later than `page.goto` resolving, so it is polled to a
+ * short deadline; an empty list after the deadline is returned as such.
+ */
+export async function cachedFeaturesEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const config = parsed?.value ?? parsed ?? {};
+                return (config.featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/**
  * The id of the first card in a card list (pipelines / workflows), or null when the environment has
  * none. Cards expose an "Actions for {id}" button, which is the stable way to read their identity.
  */
@@ -117,14 +147,17 @@ export function collectPageErrors(page: Page): string[] {
 
 /**
  * Assert a table either has rows or shows its empty state — never that specific data exists. Use
- * this to prove a page renders in ANY environment.
+ * this to prove a page renders in ANY environment. `emptyState` is the page's own empty-state copy
+ * when it does not read "No … found".
  */
-export async function expectTableRendered(page: Page): Promise<number> {
+export async function expectTableRendered(
+    page: Page,
+    emptyState: RegExp = /no .*found/i
+): Promise<number> {
     const rows = tableRows(page);
     await expect
         .poll(
-            async () =>
-                (await rows.count()) > 0 || (await page.getByText(/no .*found/i).count()) > 0,
+            async () => (await rows.count()) > 0 || (await page.getByText(emptyState).count()) > 0,
             {
                 timeout: 60_000,
             }
@@ -312,6 +345,11 @@ export async function openFileManager(
  * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
  * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
  * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ *
+ * Clicking a folder's NAME only selects it (SELECT_ITEM); the tree expands a folder solely through
+ * its caret (`.tree-item-caret`, TOGGLE_EXPANDED). So after selecting a folder, expand it through the
+ * caret when its next segment is not yet visible. The visibility check comes first because a folder
+ * that is already expanded would collapse on a caret click.
  */
 export async function selectTreePath(
     page: Page,
@@ -319,12 +357,13 @@ export async function selectTreePath(
     options: { modifiers?: Array<"Control" | "Shift"> } = {}
 ): Promise<void> {
     const segments = filename.split("/").filter(Boolean);
-    for (const segment of segments) {
+    for (let index = 0; index < segments.length; index++) {
+        const segment = segments[index];
         const node = treeNode(page, segment);
         await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
             timeout: 60_000,
         });
-        const isLeaf = segment === segments[segments.length - 1];
+        const isLeaf = index === segments.length - 1;
         if (isLeaf && options.modifiers?.length) {
             await node.scrollIntoViewIfNeeded().catch(() => undefined);
             await node.click({ modifiers: options.modifiers, timeout: 8_000 });
@@ -332,6 +371,14 @@ export async function selectTreePath(
             await clickWhenActionable(node, `tree node "${segment}"`);
         }
         if (!isLeaf) {
+            const next = treeNode(page, segments[index + 1]);
+            // Let the selection settle; a folder may already be expanded (e.g. auto-expanded root).
+            await page.waitForTimeout(400);
+            if (!(await next.isVisible())) {
+                // `.tree-item-name` and `.tree-item-caret` are siblings in the row's `.tree-item-content`.
+                const caret = node.locator("xpath=..").locator(".tree-item-caret");
+                await clickWhenActionable(caret, `the expand caret of folder "${segment}"`);
+            }
             // Give the tree a moment to render the newly revealed children.
             await page.waitForTimeout(1200);
         }
@@ -382,6 +429,8 @@ export function compareSeed(): CompareSeed | null {
 export interface ViewerSamples {
     databaseId: string;
     assetId: string;
+    /** True when the seed ran with `--asset-version` (one snapshot, then a second README version). */
+    assetVersion?: boolean;
     samples: Record<
         string,
         {
