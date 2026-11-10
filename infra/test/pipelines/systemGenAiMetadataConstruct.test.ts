@@ -688,9 +688,9 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         const off = synth("SearchOff", (c) => {
             c.app.vectorSearch.enabled = false;
         });
-        expect(withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel")).toHaveLength(
-            0
-        );
+        expect(
+            withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel")
+        ).toHaveLength(0);
         expect(
             withActions(statementsOf(off, "GenerateEmbedding"), "bedrock:InvokeModel")
         ).toHaveLength(0);

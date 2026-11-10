@@ -317,7 +317,9 @@ describe("the v2.6 to v2.7 vectorBackfill grant names the function the script re
             [].concat(s.Action).includes("lambda:InvokeFunction" as never)
         );
         expect(invoke).toHaveLength(1);
-        expect(invoke[0].Resource).toBe("arn:*:lambda:*:*:function:<VECTOR_REINDEXER_FUNCTION_NAME>");
+        expect(invoke[0].Resource).toBe(
+            "arn:*:lambda:*:*:function:<VECTOR_REINDEXER_FUNCTION_NAME>"
+        );
         expect(policyBlock).not.toContain("*vectorReindexer*");
     });
 

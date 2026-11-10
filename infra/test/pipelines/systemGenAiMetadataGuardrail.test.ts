@@ -396,7 +396,11 @@ describe("the embedding and segment functions are granted only on the vector sea
         (fragment) => {
             const actions = actionsOf(on, fragment);
             for (const action of PATH_ACTIONS) {
-                expect([fragment, action, actions.includes(action)]).toEqual([fragment, action, true]);
+                expect([fragment, action, actions.includes(action)]).toEqual([
+                    fragment,
+                    action,
+                    true,
+                ]);
             }
         }
     );
