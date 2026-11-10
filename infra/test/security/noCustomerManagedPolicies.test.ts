@@ -16,8 +16,12 @@
  * CDK creates on its own when a role's default policy outgrows CDK's size estimate. The cells are the
  * shipped templates, the commercial worst case for policy size (a customer managed key, the Deadline
  * Cloud execution type and every Lambda in the VPC), and the commercial template with every optional
- * pipeline enabled, so a pipeline construct cannot add one unseen. One policy predates the rule and is
- * named in KNOWN until its own change removes it.
+ * pipeline enabled, so a pipeline construct cannot add one unseen.
+ *
+ * A policy VAMS code creates explicitly (iam.ManagedPolicy, or addManagedPolicy() / managedPolicies:
+ * with a stack-created policy) is never allowed and cannot be waived. A CDK-generated OverflowPolicy is
+ * the only kind that may appear, and only as a tracked, owner-waived exception named in
+ * WAIVED_OVERFLOW_POLICIES; it is not a pattern to copy.
  */
 
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
@@ -66,18 +70,42 @@ const CELLS: Cell[] = [
     },
 ];
 
-/**
- * Managed policies development already synthesized when this test was added, each to be removed by its
- * own change. The list may only shrink (MAX_KNOWN): the asset service role is above IAM's inline quota
- * once CDK's overflow policy is folded back in (iamInlinePolicyBudget.test.ts, BUDGET_EXCEPTIONS), so it
- * needs the route split the execution service got before the overflow can go.
- */
-const KNOWN: RegExp[] = [/^assetServiceServiceRoleOverflowPolicy[0-9]+[0-9A-F]{8}$/];
-const MAX_KNOWN = 1;
+interface WaivedOverflowPolicy {
+    /** Logical id of the CDK-generated overflow policy (CDK names it <role>OverflowPolicy<n><hash>). */
+    logicalId: RegExp;
+    /** Why it is waived, with the tracking issue and the owner's waiver. */
+    reason: string;
+}
 
-test("the known list does not grow", () => {
-    expect(KNOWN.length).toBeLessThanOrEqual(MAX_KNOWN);
+/**
+ * CDK-generated overflow policies that are tracked, owner-waived exceptions. Only an OverflowPolicy may
+ * be listed (an explicitly created managed policy is never waived), and the list may only shrink
+ * (MAX_WAIVED). Remove an entry once its role no longer overflows.
+ */
+const WAIVED_OVERFLOW_POLICIES: WaivedOverflowPolicy[] = [
+    {
+        logicalId: /^assetServiceServiceRoleOverflowPolicy[0-9]+[0-9A-F]{8}$/,
+        reason:
+            "#1264: the asset service role is above IAM's inline quota once CDK's overflow policy is folded " +
+            "back in (iamInlinePolicyBudget.test.ts, BUDGET_EXCEPTIONS) and needs a route split; deferred " +
+            "and waived as an exception by the owner (2026-11-10).",
+    },
+];
+const MAX_WAIVED = 1;
+
+test("the waived list does not grow", () => {
+    expect(WAIVED_OVERFLOW_POLICIES.length).toBeLessThanOrEqual(MAX_WAIVED);
 });
+
+test("only CDK-generated overflow policies can be waived, each with a tracked reason", () => {
+    for (const w of WAIVED_OVERFLOW_POLICIES) {
+        expect(w.logicalId.source).toMatch(/OverflowPolicy\[0-9\]\+\[0-9A-F\]\{8\}\$$/);
+        expect(w.reason).toMatch(/#\d+/);
+        expect(w.reason).toMatch(/waived/);
+    }
+});
+
+const isWaived = (id: string) => WAIVED_OVERFLOW_POLICIES.some((w) => w.logicalId.test(id));
 
 const synthCell = (cell: Cell): SynthResult =>
     cell.mutate
@@ -96,17 +124,21 @@ describe.each(CELLS)("no customer managed policies ($name)", (cell) => {
         expect(synth.ofType("AWS::IAM::Policy").length).toBeGreaterThan(50);
     });
 
-    test("no template creates an AWS::IAM::ManagedPolicy beyond the known one", () => {
+    test("no template creates an AWS::IAM::ManagedPolicy beyond the waived overflow", () => {
         const created = synth
             .ofType("AWS::IAM::ManagedPolicy")
             .map((p) => p.logicalId)
-            .filter((id) => !KNOWN.some((re) => re.test(id)));
+            .filter((id) => !isWaived(id));
         expect(created).toEqual([]);
     });
 
-    test("each known managed policy is still synthesized (remove it from KNOWN once it is gone)", () => {
+    test("each waived overflow policy is still synthesized (remove it from the list once it is gone)", () => {
         const ids = synth.ofType("AWS::IAM::ManagedPolicy").map((p) => p.logicalId);
-        expect(KNOWN.filter((re) => !ids.some((id) => re.test(id)))).toEqual([]);
+        expect(
+            WAIVED_OVERFLOW_POLICIES.filter((w) => !ids.some((id) => w.logicalId.test(id))).map(
+                (w) => w.reason
+            )
+        ).toEqual([]);
     });
 
     test("every managed policy a role or user names is an AWS managed policy", () => {

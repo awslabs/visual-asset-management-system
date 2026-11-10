@@ -39,7 +39,7 @@ const INLINE_POLICY_BUDGET = 9216;
 /**
  * 90% of IAM's per-managed-policy limit, for a managed policy still on one of these roles. VAMS creates
  * none (noCustomerManagedPolicies.test.ts); the one left is CDK's overflow policy on the asset service
- * role, named there in KNOWN.
+ * role, a waived exception (#1264) named there in WAIVED_OVERFLOW_POLICIES.
  */
 const MANAGED_POLICY_BUDGET = 5530;
 
