@@ -291,6 +291,58 @@ describe("Create Constraint", () => {
         expect(screen.getByText("edhImageId")).toBeInTheDocument();
     });
 
+    it("names an optional add-on feature as a cause when the add-on itself is on", async () => {
+        // EDH is on and container jobs are off: the API offers the add-on's types but not
+        // edhContainer, so the notice must not say the add-on is off.
+        const EDH_WORKSTATION = {
+            label: "EDH Workstation",
+            value: "edhWorkstation",
+            fields: [{ label: "EDH Image ID", value: "edhImageId" }],
+        };
+        (fetchConstraintPermissionObjects as jest.Mock).mockResolvedValue(
+            permissionObjects([ASSET, EDH_WORKSTATION])
+        );
+        render(
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: EDH }}>
+                <MemoryRouter>
+                    <CreateConstraint
+                        open={true}
+                        setOpen={jest.fn()}
+                        setReload={jest.fn()}
+                        initState={{
+                            constraintId: "initial_admin_allow_all_edhcontainers",
+                            name: "admin-allow-all-edhcontainers",
+                            description: "Allow GET/PUT/POST/DELETE on all EDH container jobs",
+                            objectType: "edhContainer",
+                            criteriaAnd: [
+                                {
+                                    id: "c1",
+                                    field: "edhJobDefinition",
+                                    operator: "contains",
+                                    value: ".*",
+                                },
+                            ],
+                            criteriaOr: [],
+                            groupPermissions: [],
+                            userPermissions: [],
+                        }}
+                    />
+                </MemoryRouter>
+            </RuntimeConfigContext.Provider>
+        );
+        expect(
+            await screen.findByText("This object type is not offered on this deployment")
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                /because the add-on, or the optional add-on feature, that declares it is not enabled\. .*applies again once that add-on or feature is enabled\./
+            )
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText("edhContainer (not offered on this deployment)")
+        ).toBeInTheDocument();
+    });
+
     it("shows no notice for a constraint whose type the API offers (control)", async () => {
         (fetchConstraintPermissionObjects as jest.Mock).mockResolvedValue(
             permissionObjects([ASSET])

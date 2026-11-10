@@ -10,6 +10,12 @@ import * as Config from "../../../config/config";
  * declare (backend common/addonConstants.py), in the DynamoDB attribute-value shape of
  * `dynamodb-authdefaults-admin-construct.ts`. The construct appends them after its core
  * constraints, so the index-based ids of its custom resources stay those of the core items.
+ *
+ * A constraint is seeded only while the deployment offers its type: while the add-on is enabled,
+ * and, for a type of one of its optional features, while that feature is on as well (the switch
+ * `ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES` names). Turning either on seeds the constraint at that
+ * deployment. Turning it off removes the item's custom resource, which, like every seeded item,
+ * has no delete call: the stored row stays, listed as not offered, until an administrator deletes it.
  */
 export function addonAdminDefaultConstraints(config: Config.Config, roleName: string): any[] {
     return [
@@ -231,114 +237,6 @@ export function addonAdminDefaultConstraints(config: Config.Config, roleName: st
                           S: "edhImage",
                       },
                   },
-                  {
-                      entityType: {
-                          S: "constraint",
-                      },
-                      sk: {
-                          S: "initial_admin_allow_all_edhcontainers",
-                      },
-                      constraintId: {
-                          S: "initial_admin_allow_all_edhcontainers",
-                      },
-                      criteriaAnd: {
-                          L: [
-                              {
-                                  M: {
-                                      field: {
-                                          S: "edhJobDefinition",
-                                      },
-                                      id: {
-                                          S: "all_edhcontainers",
-                                      },
-                                      operator: {
-                                          S: "contains",
-                                      },
-                                      value: {
-                                          S: ".*",
-                                      },
-                                  },
-                              },
-                          ],
-                      },
-                      description: {
-                          S: "Allow GET/PUT/POST/DELETE on all EDH container jobs for admin",
-                      },
-                      groupPermissions: {
-                          L: [
-                              {
-                                  M: {
-                                      groupId: {
-                                          S: roleName,
-                                      },
-                                      id: {
-                                          S: "admin-allow-get-all-edhcontainers",
-                                      },
-                                      permission: {
-                                          S: "GET",
-                                      },
-                                      permissionType: {
-                                          S: "allow",
-                                      },
-                                  },
-                              },
-                              {
-                                  M: {
-                                      groupId: {
-                                          S: roleName,
-                                      },
-                                      id: {
-                                          S: "admin-allow-put-all-edhcontainers",
-                                      },
-                                      permission: {
-                                          S: "PUT",
-                                      },
-                                      permissionType: {
-                                          S: "allow",
-                                      },
-                                  },
-                              },
-                              {
-                                  M: {
-                                      groupId: {
-                                          S: roleName,
-                                      },
-                                      id: {
-                                          S: "admin-allow-post-all-edhcontainers",
-                                      },
-                                      permission: {
-                                          S: "POST",
-                                      },
-                                      permissionType: {
-                                          S: "allow",
-                                      },
-                                  },
-                              },
-                              {
-                                  M: {
-                                      groupId: {
-                                          S: roleName,
-                                      },
-                                      id: {
-                                          S: "admin-allow-delete-all-edhcontainers",
-                                      },
-                                      permission: {
-                                          S: "DELETE",
-                                      },
-                                      permissionType: {
-                                          S: "allow",
-                                      },
-                                  },
-                              },
-                          ],
-                      },
-                      name: {
-                          S: "admin-allow-all-edhcontainers",
-                      },
-                      objectType: {
-                          S: "edhContainer",
-                      },
-                  },
                   // Capacity reservations: the admin role may use and see every registered
                   // reservation. The read-only role gets none; an administrator grants each one.
                   {
@@ -447,6 +345,123 @@ export function addonAdminDefaultConstraints(config: Config.Config, roleName: st
                       },
                       objectType: {
                           S: "edhCapacityReservation",
+                      },
+                  },
+              ]
+            : []),
+        // Container jobs are an optional feature of the add-on, and `edhContainer` is offered only
+        // under its switch (EDH_CONTAINERS, backend common/addonConstants.py), so its constraint is
+        // seeded only while the feature is on. It comes last, so turning the feature on or off adds or
+        // removes only the last custom resource and every other seeded item keeps its index.
+        ...(config.app.addons?.useEdhWorkstations?.enabled &&
+        config.app.addons.useEdhWorkstations.containers?.enabled
+            ? [
+                  {
+                      entityType: {
+                          S: "constraint",
+                      },
+                      sk: {
+                          S: "initial_admin_allow_all_edhcontainers",
+                      },
+                      constraintId: {
+                          S: "initial_admin_allow_all_edhcontainers",
+                      },
+                      criteriaAnd: {
+                          L: [
+                              {
+                                  M: {
+                                      field: {
+                                          S: "edhJobDefinition",
+                                      },
+                                      id: {
+                                          S: "all_edhcontainers",
+                                      },
+                                      operator: {
+                                          S: "contains",
+                                      },
+                                      value: {
+                                          S: ".*",
+                                      },
+                                  },
+                              },
+                          ],
+                      },
+                      description: {
+                          S: "Allow GET/PUT/POST/DELETE on all EDH container jobs for admin",
+                      },
+                      groupPermissions: {
+                          L: [
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-get-all-edhcontainers",
+                                      },
+                                      permission: {
+                                          S: "GET",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-put-all-edhcontainers",
+                                      },
+                                      permission: {
+                                          S: "PUT",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-post-all-edhcontainers",
+                                      },
+                                      permission: {
+                                          S: "POST",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-delete-all-edhcontainers",
+                                      },
+                                      permission: {
+                                          S: "DELETE",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                          ],
+                      },
+                      name: {
+                          S: "admin-allow-all-edhcontainers",
+                      },
+                      objectType: {
+                          S: "edhContainer",
                       },
                   },
               ]

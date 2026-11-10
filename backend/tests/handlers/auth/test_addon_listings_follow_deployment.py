@@ -37,6 +37,9 @@ OFF = ""
 EDH_ON = "EDH_WORKSTATIONS"
 EDH_ALL = "EDH_WORKSTATIONS,EDH_CONTAINERS,EDH_AMI_RECIPES"
 
+# The refusal of a new constraint whose add-on type is not offered, the add-on or its feature being off.
+NOT_ENABLED = "'{}' belongs to an add-on, or an optional add-on feature, that is not enabled on this deployment"
+
 _TEMPLATES = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "..", "documentation", "permissionsTemplates"))
 
@@ -256,7 +259,7 @@ def test_a_new_constraint_of_a_disabled_add_on_type_is_refused_with_a_reason(swi
         unknown = svc.lambda_handler(_event("POST", "/auth/constraints/edh_ws_new", {"constraintId": "edh_ws_new"},
                                             _create_body("notAType", "databaseId")), {})
     assert refused["statusCode"] == 400, refused
-    assert "'edhWorkstation' belongs to an add-on that is not enabled on this deployment" in refused["body"]
+    assert NOT_ENABLED.format("edhWorkstation") in refused["body"]
     assert unknown["statusCode"] == 400, unknown
     assert "Allowed values: database, asset" in unknown["body"] and "edh" not in unknown["body"]
     # Control: with the add-on on the same request is stored.
@@ -264,6 +267,22 @@ def test_a_new_constraint_of_a_disabled_add_on_type_is_refused_with_a_reason(swi
     with _api_allowed(svc):
         accepted = svc.lambda_handler(_event("POST", "/auth/constraints/edh_ws_new", {"constraintId": "edh_ws_new"},
                                              _create_body("edhWorkstation", "edhImageId")), {})
+    assert accepted["statusCode"] == 200, accepted
+
+
+def test_a_new_constraint_of_an_optional_feature_that_is_off_is_refused_with_a_reason(switches, stored_edh_constraint):
+    # The add-on is on and its container jobs are off: the message must not say the add-on is off only.
+    switches(EDH_ON)
+    with _api_allowed(svc):
+        refused = svc.lambda_handler(_event("POST", "/auth/constraints/edh_ws_new", {"constraintId": "edh_ws_new"},
+                                            _create_body("edhContainer", "edhJobDefinition")), {})
+    assert refused["statusCode"] == 400, refused
+    assert NOT_ENABLED.format("edhContainer") in refused["body"]
+    # Control: with the feature on the same request is stored.
+    switches(EDH_ALL)
+    with _api_allowed(svc):
+        accepted = svc.lambda_handler(_event("POST", "/auth/constraints/edh_ws_new", {"constraintId": "edh_ws_new"},
+                                             _create_body("edhContainer", "edhJobDefinition")), {})
     assert accepted["statusCode"] == 200, accepted
 
 
@@ -280,6 +299,26 @@ def test_an_edh_permission_template_is_refused_while_the_add_on_is_off(switches,
     switches(OFF)
     with pytest.raises(ValueError) as refused:
         ImportConstraintsTemplateRequestModel(**body)
-    assert "belongs to an add-on that is not enabled on this deployment" in str(refused.value)
+    assert "belongs to an add-on, or an optional add-on feature, that is not enabled on this deployment" in str(
+        refused.value)
+    switches(EDH_ALL)
+    ImportConstraintsTemplateRequestModel(**body)
+
+
+def test_a_template_with_a_constraint_of_an_optional_feature_that_is_off_is_refused_with_a_reason(switches):
+    # The shipped edh-admin template plus a container job constraint, imported with container jobs off.
+    body = _template("edh-admin.json")
+    body["constraints"] = [*body["constraints"], {
+        "name": "{{ROLE_NAME}}-container-jobs",
+        "description": "Allow every EDH container job for {{ROLE_NAME}}",
+        "objectType": "edhContainer",
+        "criteriaAnd": [{"field": "edhJobDefinition", "operator": "contains", "value": ".*"}],
+        "criteriaOr": [],
+        "groupPermissions": [{"action": "GET", "type": "allow"}],
+    }]
+    switches(EDH_ON)
+    with pytest.raises(ValueError) as refused:
+        ImportConstraintsTemplateRequestModel(**body)
+    assert NOT_ENABLED.format("edhContainer") in str(refused.value)
     switches(EDH_ALL)
     ImportConstraintsTemplateRequestModel(**body)

@@ -1064,8 +1064,8 @@ enabled add-on switches, comma-separated, in `ADDON_FEATURES_ENABLED` to the rou
 constraint-template Lambdas only. With a switch absent, `get_public_api_routes()` leaves its routes out
 (`GET /auth/routes/api` lists none, `GET /auth/routes/api/allowed` evaluates and audits none),
 `permissionObjects` leaves its object types out, and `deployed_object_type_error()` (`models/roleConstraints.py`)
-refuses a new constraint or permission template naming one ("belongs to an add-on that is not enabled on this
-deployment"). A constraint already stored with such a type still reads, lists and deletes, and Casbin still
+refuses a new constraint or permission template naming one ("belongs to an add-on, or an optional add-on feature,
+that is not enabled on this deployment"). A constraint already stored with such a type still reads, lists and deletes, and Casbin still
 loads it. Without the variable (local dev server, a test that does not set it) everything is listed. A new
 add-on route or object type gets its tag (`tests/common/test_addon_features.py`;
 `tests/handlers/auth/test_addon_listings_follow_deployment.py` holds the behaviour).

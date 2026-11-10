@@ -188,8 +188,9 @@ export default function CreateConstraint({
 
     const [formState, setFormState] = useState<ConstraintFields>(buildFormState);
 
-    // A stored constraint can name a type the deployment no longer offers, such as one of an add-on
-    // that is not enabled. It is shown by its stored name and kept as it is; the API refuses saving it.
+    // A stored constraint can name a type the deployment no longer offers, such as one of an add-on,
+    // or of an optional add-on feature, that is not enabled. It is shown by its stored name and kept
+    // as it is; the API refuses saving it.
     const objectTypeNotOffered =
         objectTypeData.length > 0 &&
         !!formState.objectType &&
@@ -760,10 +761,10 @@ export default function CreateConstraint({
                             header="This object type is not offered on this deployment"
                         >
                             The object type of this constraint, {formState.objectType}, is not
-                            offered on this deployment, usually because the add-on that declares it
-                            is not enabled. The constraint is kept as stored and takes effect again
-                            once that add-on is enabled. You can delete it from the list; saving
-                            changes to it is refused.
+                            offered on this deployment, usually because the add-on, or the optional
+                            add-on feature, that declares it is not enabled. The constraint is kept
+                            as stored and applies again once that add-on or feature is enabled. You
+                            can delete it from the list; saving changes to it is refused.
                         </Alert>
                     )}
 

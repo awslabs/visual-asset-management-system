@@ -469,7 +469,7 @@ vamscli setup <application URL>
 vamscli auth login -u <app.adminUserId>
 ```
 
-The initial administrator's seeded `admin` role already holds every route and the four EDH object types the add-on checks. Other users need an account to sign in with, and `vamscli role user create` does not check that one exists: in an Amazon Cognito deployment, create each user with `vamscli user cognito create -u <user id> -e <email>` or under **Admin - Auth** → **User Management**, and Amazon Cognito emails the user a temporary password.
+The initial administrator's seeded `admin` role already holds every route and an allow-all constraint on each EDH object type the deployment offers (`edhContainer` only while container jobs are on). Other users need an account to sign in with, and `vamscli role user create` does not check that one exists: in an Amazon Cognito deployment, create each user with `vamscli user cognito create -u <user id> -e <email>` or under **Admin - Auth** → **User Management**, and Amazon Cognito emails the user a temporary password.
 
 For those users, create an EDH user role and an EDH administrator role from the two permission templates and assign the roles. Leave `--mfa-required` off the `edh-admin.json` command unless every EDH administrator signs in with multi-factor authentication (MFA), as the paragraphs after the commands describe:
 

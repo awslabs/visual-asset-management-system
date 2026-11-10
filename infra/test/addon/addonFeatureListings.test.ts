@@ -26,6 +26,7 @@ import {
     synthTemplate,
 } from "../support/templateSynth";
 import { enableEdh } from "./edh/support/edhSynth";
+import { addonObjectTypeFeatures } from "./support/addonBackendConstants";
 import { enableRouteContributingAddons } from "./support/addonTestHooks";
 
 const LISTING_HANDLERS = [
@@ -96,6 +97,69 @@ describe("the add-on switches reach the listing Lambdas", () => {
                 ADDON_APP_FEATURES.EDH_AMI_RECIPES,
             ].join(",")
         );
+    });
+});
+
+/** The object types of the admin role's seeded add-on constraints in a synth, in seeding order. */
+function seededAdminAddonTypes(s: SynthResult): string[] {
+    const addonTypes = addonObjectTypeFeatures();
+    const seeded: { index: number; type: string }[] = [];
+    for (const resource of s.ofType("Custom::AWS")) {
+        const text = SynthResult.flatten(resource.properties.Create ?? resource.properties.Update);
+        if (!text.includes('"constraintId"')) continue;
+        const payload = JSON.parse(text);
+        const item = payload.parameters?.Item;
+        const index = /_initializationadmin_(\d+)$/.exec(String(payload.physicalResourceId?.id));
+        if (!item?.constraintId || !index) continue;
+        if (item.objectType.S in addonTypes) {
+            seeded.push({ index: Number(index[1]), type: item.objectType.S });
+        }
+    }
+    return seeded.sort((a, b) => a.index - b.index).map((s) => s.type);
+}
+
+describe("the admin role's seeded add-on constraints follow the same switches", () => {
+    // A seeded constraint on a type the listings do not offer opens in the editor as not offered,
+    // so the admin role is seeded a type exactly when the deployment publishes its switch
+    // (ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES in backend common/addonConstants.py).
+    const published = (s: SynthResult): Set<string> =>
+        new Set(
+            (listingEnvironment(s).listing[LISTING_HANDLERS[0]] ?? "")
+                .split(",")
+                .filter((feature) => feature !== "")
+        );
+    const offeredTypes = (s: SynthResult): string[] => {
+        const features = addonObjectTypeFeatures();
+        const on = published(s);
+        return Object.keys(features).filter((type) => on.has(features[type]));
+    };
+
+    test.each([
+        ["as shipped", () => synthTemplate("commercial"), []],
+        [
+            "with EDH Workstations on and container jobs off",
+            () =>
+                synthTemplate("commercial", {
+                    mutate: enableEdh,
+                    mutateKey: "edhWorkstationsEnabled",
+                }),
+            ["edhWorkstation", "edhImage", "edhCapacityReservation"],
+        ],
+        [
+            "with every route-contributing add-on and feature on",
+            () =>
+                synthTemplate("commercial", {
+                    mutate: enableRouteContributingAddons,
+                    mutateKey: "routeContributingAddons",
+                }),
+            ["edhWorkstation", "edhImage", "edhCapacityReservation", "edhContainer"],
+        ],
+    ])("%s: each offered type is seeded once, and no other", (_label, synth, expected) => {
+        const s = synth();
+        // Control: the offered set the switches give is the one the case names.
+        expect(offeredTypes(s)).toEqual(expect.arrayContaining(expected as string[]));
+        expect(offeredTypes(s)).toHaveLength((expected as string[]).length);
+        expect(seededAdminAddonTypes(s)).toEqual(expected);
     });
 });
 

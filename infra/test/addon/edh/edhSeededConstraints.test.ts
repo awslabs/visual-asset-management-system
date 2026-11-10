@@ -34,6 +34,7 @@ import {
 import { DynamoDbAuthDefaultsAdminConstructStack } from "../../../lib/nestedStacks/auth/constructs/dynamodb-authdefaults-admin-construct";
 import { DynamoDbAuthDefaultsROConstructStack } from "../../../lib/nestedStacks/auth/constructs/dynamodb-authdefaults-ro-construct";
 import { newTestApp } from "../../support/testApp";
+import { addonObjectTypeFeatures } from "../support/addonBackendConstants";
 
 const BACKEND_COMMON = path.resolve(
     __dirname,
@@ -48,12 +49,15 @@ const BACKEND_COMMON = path.resolve(
 const CONSTANTS_PY = path.join(BACKEND_COMMON, "constants.py");
 const ADDON_CONSTANTS_PY = path.join(BACKEND_COMMON, "addonConstants.py");
 
-/** The constraint ids the add-on appends to the admin role, in order. */
+/** The admin constraint of the container job type, seeded only with container jobs on. */
+const EDH_ADMIN_CONTAINER_CONSTRAINT_ID = "initial_admin_allow_all_edhcontainers#group#admin";
+
+/** The constraint ids the add-on appends to the admin role, in order, with container jobs on. */
 const EDH_ADMIN_CONSTRAINT_IDS = [
     "initial_admin_allow_all_edhworkstations#group#admin",
     "initial_admin_allow_all_edhimages#group#admin",
-    "initial_admin_allow_all_edhcontainers#group#admin",
     "initial_admin_allow_all_edhcapacityreservations#group#admin",
+    EDH_ADMIN_CONTAINER_CONSTRAINT_ID,
 ];
 
 /** The constraint ids the add-on appends to the read-only role, in order. */
@@ -95,14 +99,22 @@ const STORAGE = {
     },
 } as any;
 
-/** The config leaves the constructs and `addonDefaultConstraints.ts` read. */
-const seedConfig = (edhEnabled: boolean): any => ({
+/**
+ * The config leaves the constructs and `addonDefaultConstraints.ts` read. `containersEnabled`
+ * undefined leaves the containers block out, as a config written before the feature existed.
+ */
+const seedConfig = (edhEnabled: boolean, containersEnabled?: boolean): any => ({
     app: {
         adminUserId: "wp02-admin@example.com",
         authProvider: { useCognito: { enabled: false, useSaml: false, useOidc: false } },
         addons: {
             usePhysnaSync: { enabled: false },
-            useEdhWorkstations: { enabled: edhEnabled },
+            useEdhWorkstations: {
+                enabled: edhEnabled,
+                ...(containersEnabled === undefined
+                    ? {}
+                    : { containers: { enabled: containersEnabled } }),
+            },
         },
     },
 });
@@ -158,16 +170,46 @@ function indexedConstraints(payloads: any[], role: string): string[] {
 const isEdhConstraint = (item: any): boolean =>
     /^edh/.test(item.objectType.S) || /edh/i.test(item.constraintId.S);
 
-function synthAdmin(edhEnabled: boolean): Template {
+function synthAdmin(edhEnabled: boolean, containersEnabled = false): Template {
     const app = newTestApp();
-    const stack = new cdk.Stack(app, `Wp02AdminSeedStack${edhEnabled ? "Edh" : "Base"}`);
+    const variant = edhEnabled ? (containersEnabled ? "EdhContainers" : "Edh") : "Base";
+    const stack = new cdk.Stack(app, `Wp02AdminSeedStack${variant}`);
     new DynamoDbAuthDefaultsAdminConstructStack(stack, "AuthDefaultsAdmin", {
         customResourceRole: customResourceRole(stack),
         lambdaCommonBaseLayer: undefined as any,
         storageResources: STORAGE,
-        config: seedConfig(edhEnabled),
+        config: seedConfig(edhEnabled, containersEnabled),
     });
     return Template.fromStack(stack);
+}
+
+/** A seeded constraint row in DynamoDB attribute-value shape, with its physical resource id. */
+interface SeedRow {
+    constraintId: { S: string };
+    objectType: { S: string };
+    [attribute: string]: unknown;
+}
+
+/**
+ * The constraint seed resources of a synthesized construct by logical id: the SDK calls each
+ * carries and the row it writes without its synth-time dates, which change at every synthesis.
+ */
+function constraintSeeds(template: Template): Map<string, { calls: string[]; row: SeedRow }> {
+    const seeds = new Map<string, { calls: string[]; row: SeedRow }>();
+    for (const [logicalId, resource] of Object.entries(template.findResources("Custom::AWS"))) {
+        const props = resource.Properties;
+        const payload = JSON.parse(props.Create ?? props.Update);
+        const item = payload.parameters?.Item;
+        if (item === undefined || !("constraintId" in item)) continue;
+        const { dateCreated, dateModified, ...row } = item;
+        expect([dateCreated, dateModified].every((d) => typeof d?.S === "string")).toBe(true);
+        const calls = ["Create", "Update", "Delete"].filter((call) => call in props);
+        seeds.set(logicalId, {
+            calls,
+            row: { ...row, physicalResourceId: payload.physicalResourceId },
+        });
+    }
+    return seeds;
 }
 
 function synthReadOnly(edhEnabled: boolean): Template {
@@ -200,10 +242,28 @@ describe("the backend object type lists", () => {
 });
 
 describe("addonDefaultConstraints covers the EDH object types while the add-on is on", () => {
-    test("admin: one constraint per EDH object type with the add-on on, none with it off", () => {
-        const on = addonAdminDefaultConstraints(seedConfig(true), "admin");
+    test("admin: one constraint per EDH object type with the add-on and container jobs on, none with it off", () => {
+        const on = addonAdminDefaultConstraints(seedConfig(true, true), "admin");
         expect(on.map((item) => item.objectType.S).sort()).toEqual(edhObjectTypes().sort());
         expect(addonAdminDefaultConstraints(seedConfig(false), "admin")).toEqual([]);
+        // Container jobs need the add-on: on alone they seed nothing.
+        expect(addonAdminDefaultConstraints(seedConfig(false, true), "admin")).toEqual([]);
+    });
+
+    test("admin: the container job type is seeded only while container jobs are on, as the last item", () => {
+        // The backend offers edhContainer only under EDH_CONTAINERS (common/addonConstants.py).
+        expect(addonObjectTypeFeatures()).toEqual({
+            edhWorkstation: "EDH_WORKSTATIONS",
+            edhImage: "EDH_WORKSTATIONS",
+            edhCapacityReservation: "EDH_WORKSTATIONS",
+            edhContainer: "EDH_CONTAINERS",
+        });
+        const typesFor = (config: Parameters<typeof addonAdminDefaultConstraints>[0]) =>
+            addonAdminDefaultConstraints(config, "admin").map((item) => item.objectType.S);
+        const withoutContainers = ["edhWorkstation", "edhImage", "edhCapacityReservation"];
+        expect(typesFor(seedConfig(true, false))).toEqual(withoutContainers);
+        expect(typesFor(seedConfig(true))).toEqual(withoutContainers);
+        expect(typesFor(seedConfig(true, true))).toEqual([...withoutContainers, "edhContainer"]);
     });
 
     test("read-only: GET on the workstation and image types with the add-on on, none with it off", () => {
@@ -212,6 +272,19 @@ describe("addonDefaultConstraints covers the EDH object types while the add-on i
         expect(
             addonReadOnlyDefaultConstraints(seedConfig(false), "basicReadOnly", "basicro")
         ).toEqual([]);
+    });
+
+    test("read-only: container jobs on or off change nothing", () => {
+        const types = (containers: boolean) =>
+            addonReadOnlyDefaultConstraints(
+                seedConfig(true, containers),
+                "basicReadOnly",
+                "basicro"
+            )
+                .map((item) => item.objectType.S)
+                .sort();
+        expect(types(true)).toEqual(["edhImage", "edhWorkstation"]);
+        expect(types(false)).toEqual(["edhImage", "edhWorkstation"]);
     });
 
     test("read-only: no capacity reservation is granted; an administrator grants each one", () => {
@@ -234,15 +307,31 @@ describe("addonDefaultConstraints covers the EDH object types while the add-on i
 });
 
 describe("seeded admin Tier-2 constraints cover every Casbin object type", () => {
-    const withEdhPayloads = putItemPayloads(synthAdmin(true));
+    const withEdhPayloads = putItemPayloads(synthAdmin(true, true));
     const withoutEdhPayloads = putItemPayloads(synthAdmin(false));
+    const noContainersPayloads = putItemPayloads(synthAdmin(true, false));
     const withEdh = constraintItems(withEdhPayloads);
     const withoutEdh = constraintItems(withoutEdhPayloads);
+    const noContainers = constraintItems(noContainersPayloads);
     const typesOf = (items: any[]): string[] => items.map((item) => item.objectType.S);
 
     test("the construct emits the seeded constraints (control)", () => {
         expect(withoutEdh.length).toBeGreaterThanOrEqual(11);
         expect(withEdh.length).toBe(withoutEdh.length + EDH_ADMIN_CONSTRAINT_IDS.length);
+        expect(noContainers.length).toBe(withEdh.length - 1);
+    });
+
+    test("with container jobs off, every EDH type but edhContainer is seeded", () => {
+        expect(new Set(typesOf(noContainers))).toEqual(
+            new Set([...coreObjectTypes(), ...edhObjectTypes().filter((t) => t !== "edhContainer")])
+        );
+        expect(noContainers.map((item) => item.constraintId.S)).not.toContain(
+            EDH_ADMIN_CONTAINER_CONSTRAINT_ID
+        );
+        // Control: the same lookup finds it with container jobs on.
+        expect(withEdh.map((item) => item.constraintId.S)).toContain(
+            EDH_ADMIN_CONTAINER_CONSTRAINT_ID
+        );
     });
 
     test("with the add-on off, the seeded objectType set equals the core types, each once", () => {
@@ -299,6 +388,54 @@ describe("seeded admin Tier-2 constraints cover every Casbin object type", () =>
         expect(base[10]).toBe("initial_admin_allow_all_userroles#group#admin");
         expect(extended.slice(0, base.length)).toEqual(base);
         expect(extended.slice(base.length)).toEqual(EDH_ADMIN_CONSTRAINT_IDS);
+        expect(indexedConstraints(noContainersPayloads, "admin")).toEqual(
+            extended.slice(0, extended.length - 1)
+        );
+    });
+});
+
+describe("turning container jobs on or off on a deployment with the add-on on", () => {
+    // CloudFormation updates a custom resource whose logical id stays and whose properties change,
+    // creates one whose logical id is new, and deletes one that is gone. The seed resources'
+    // properties carry the synth time, so every deployment re-writes every seeded row; the
+    // comparison below leaves those dates out.
+    const off = constraintSeeds(synthAdmin(true, false));
+    const on = constraintSeeds(synthAdmin(true, true));
+    const added = [...on.keys()].filter((id) => !off.has(id));
+    const removed = [...off.keys()].filter((id) => !on.has(id));
+
+    test("turning them on adds one seed resource, which writes the container job constraint on create", () => {
+        expect(off.size).toBeGreaterThanOrEqual(14);
+        expect(removed).toEqual([]);
+        expect(added).toHaveLength(1);
+        const seed = on.get(added[0]);
+        expect(seed?.row.constraintId.S).toBe(EDH_ADMIN_CONTAINER_CONSTRAINT_ID);
+        expect(seed?.row.objectType.S).toBe("edhContainer");
+        // The first deployment with the feature on runs the resource's create call, a putItem.
+        expect(seed?.calls).toEqual(["Create", "Update"]);
+    });
+
+    test("every other seed resource keeps its logical id, physical id and row", () => {
+        for (const [id, seed] of off) {
+            expect(on.get(id)).toEqual(seed);
+        }
+    });
+
+    test("turning them off removes that resource, and no seed resource carries a delete call", () => {
+        // Turning the feature off is the same comparison read the other way: the container job
+        // seed is the one resource that goes. A seed resource has no delete call, core or add-on,
+        // so the row it wrote stays stored, as every seeded row of a disabled add-on does, until
+        // an administrator deletes it.
+        const disabledAddon = constraintSeeds(synthAdmin(false));
+        const gone = [...on.keys()].filter((id) => !disabledAddon.has(id));
+        expect(gone.map((id) => on.get(id)?.row.objectType.S).sort()).toEqual(
+            [...edhObjectTypes()].sort()
+        );
+        for (const seeds of [off, on, disabledAddon]) {
+            for (const seed of seeds.values()) {
+                expect(seed.calls).not.toContain("Delete");
+            }
+        }
     });
 });
 

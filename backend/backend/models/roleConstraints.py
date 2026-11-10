@@ -94,11 +94,12 @@ def deployed_object_type_error(object_type):
     """The message refusing a constraint ``objectType`` this deployment does not offer, or None.
 
     The allowed values named are the ones ``GET /auth/constraints/permissionObjects`` lists: an add-on
-    type only when the deployment enabled its add-on (``common/addonFeatures.py``). A type of an add-on
-    the deployment did not enable is refused with a sentence saying so; its name is echoed only after it
-    matched a declared add-on type, so the message carries no caller text. Constraints already stored
-    with such a type are not touched: they still read, list and delete, and take effect again once the
-    add-on is enabled.
+    type only when the deployment publishes the switch the type is offered under
+    (``common/addonFeatures.py``), the add-on's own or that of one of its optional features. A type
+    whose switch is not published is refused with a sentence saying so, covering both cases; its name
+    is echoed only after it matched a declared add-on type, so the message carries no caller text.
+    Constraints already stored with such a type are not touched: they still read, list and delete, and
+    apply again once the add-on or feature is enabled.
     """
     from common.addonFeatures import constraint_object_type_addon_feature, constraint_object_type_deployed
     from common.constants import ALLOWED_CONSTRAINT_OBJECT_TYPES
@@ -106,8 +107,8 @@ def deployed_object_type_error(object_type):
     if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_deployed(object_type):
         return None
     if object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES and constraint_object_type_addon_feature(object_type):
-        return (f"Invalid objectType. '{object_type}' belongs to an add-on that is not enabled on this "
-                "deployment.")
+        return (f"Invalid objectType. '{object_type}' belongs to an add-on, or an optional add-on feature, "
+                "that is not enabled on this deployment.")
     offered = [name for name in ALLOWED_CONSTRAINT_OBJECT_TYPES if constraint_object_type_deployed(name)]
     return f"Invalid objectType. Allowed values: {', '.join(offered)}"
 
