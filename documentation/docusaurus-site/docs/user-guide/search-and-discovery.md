@@ -24,7 +24,7 @@ Below the page title, the Search view places the query in a band of its own: the
 -   **Keyword** matches asset and file names, descriptions, tags, and metadata. With an empty query it lists everything in scope, so results appear as soon as the view opens or a filter changes; filters narrow the list.
 -   **Natural language** matches on meaning across file contents — including image and video scenes — as well as names, descriptions, tags, and metadata. Nothing is searched until you describe what you are looking for: the table shows "Describe what you are looking for" instead of a result count, and filters take effect once a description is entered. Switching from **Keyword** with an empty box shows the same state; the keyword listing is not carried over.
 
-The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** in the title row resets the query and every filter; the count disappears until the reloaded list arrives. When searches overlap (a page change while a search is still running, for example), the page shows the answer to the newest one and stays in its loading state until that answer arrives.
+The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** appears in the title row once you have changed the search from the page's defaults with a query, a filter, or a metadata filter, and resets them; the count disappears until the reloaded list arrives. It keeps the asset or file choice, and on a database's page it keeps that database. When searches overlap (a page change while a search is still running, for example), the page shows the answer to the newest one and stays in its loading state until that answer arrives.
 
 A search that cannot finish shows a **Search failed** notification with the reason, and the page keeps its previous results and every search control. For example:
 
@@ -180,7 +180,7 @@ The map view plots search hits on an interactive map. A result appears on the ma
 To place an asset on the map, add a `location` metadata field of type `geopoint` or `geojson`, or add `latitude` and `longitude` number fields. See [Metadata Management](metadata-management.md#metadata-value-types) for the available value types.
 :::
 
-When you switch to map view, location-related metadata filters are automatically added so only geolocated results are returned. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
+In keyword mode the map view searches only for results with an indexed geographic shape (the first form above), in addition to your own query and filters. Your filters, metadata filters, metadata mode, and AND or OR choice stay as you set them, on the map and after you leave it, and **Clear all filters** keeps the map to results with a location. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
 
 In natural-language mode the map shows the same page of the natural-language answer as the table, and its page controls move through that answer's top matches without running another search; the results stay natural-language results on every page. In keyword mode each page is fetched from the server.
 
@@ -207,8 +207,8 @@ The **Relation** dropdown controls the spatial relationship between the input sh
 
 The geospatial filter applies in addition to all other filters; results must satisfy every active filter group.
 
-:::note[An asset on the map may still be missing from filtered results]
-The geospatial filter matches only against the indexed geographic shape, so an asset or file whose location has not been indexed as a shape is not returned by the filter. The map view is more forgiving and continues to plot such results using the other location metadata forms listed above. If an asset appears on the map but never satisfies the geospatial filter, ask your administrator to reindex the search data.
+:::note[A location must be indexed as a shape to be found]
+The geospatial filter and a keyword search on the map view both match the indexed geographic shape, so an asset or file whose location has not been indexed as a shape is not returned by either. In natural-language mode the map shows the answer's page as the table does, without narrowing it to results with a location. If an asset has location metadata but never appears on the map in keyword mode or in geospatially filtered results, ask your administrator to reindex the search data.
 :::
 
 ## Preview thumbnails
