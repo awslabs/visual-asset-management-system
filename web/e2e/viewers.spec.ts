@@ -544,6 +544,14 @@ const renderCases: RenderCase[] = [
     { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
     // .ply also matches the Gaussian splat and Three.js viewers.
     { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
+    // #1257: a coloured PLY with no faces draws as coloured points; the info box reports the
+    // sample's `expect.vertexCount` points.
+    {
+        sample: "threejs-ply-points",
+        viewer: "Three.js Viewer",
+        kind: "canvas",
+        select: /Three\.js/i,
+    },
     // Licensed add-on, disabled by default: these cases run only on a build that enables it.
     {
         sample: "vntana-glb-box",
@@ -729,6 +737,15 @@ test.describe("viewer render proof (seeded samples)", () => {
                     caseThresholds(c, sample)
                 );
                 console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+                // A sample may name how many vertices (for a point cloud, points) the viewer's
+                // info box must report, as the Three.js viewer's "▲ N vertices" line does.
+                if (typeof sample.expect?.vertexCount === "number") {
+                    await expect(
+                        page.getByText(
+                            `${sample.expect.vertexCount.toLocaleString("en-US")} vertices`
+                        )
+                    ).toBeVisible({ timeout: 30_000 });
+                }
             } else if (c.kind === "pdf") {
                 const pageCanvas = page.locator(".react-pdf__Page canvas").first();
                 await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
