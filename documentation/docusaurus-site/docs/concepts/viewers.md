@@ -58,13 +58,14 @@ This table is the definitive reference for all built-in viewer plugins. It is al
 
 | Viewer Name                           | Category | Supported Extensions                                                                                                                                                             | Priority | Multi-File | Notes                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Three.js Viewer**                   | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`                                                               | 1        | No         | Primary mesh and CAD viewer. Scene graph, material editing, transform controls. Loads a glTF file's external dependencies, but renders one selected file at a time. CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) require WASM and `ALLOWUNSAFEEVAL`.                                                                                                                                   |
+| **Three.js Viewer**                   | 3D       | `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`                            | 1        | No         | Primary mesh, USD and CAD viewer. Scene graph, material editing, transform controls. Loads the files a model references from the same asset (see [Referenced files](#referenced-files-in-the-threejs-viewer)), but renders one selected file at a time. USD needs no `ALLOWUNSAFEEVAL`. CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) require WASM and `ALLOWUNSAFEEVAL`.               |
 | **Potree Viewer**                     | 3D       | `.e57`, `.las`, `.laz`, `.ply`                                                                                                                                                   | 1        | No         | Octree-based point cloud streaming. Requires the Potree preprocessing pipeline. Shows latest version only.                                                                                                                                                                                                                                                                                        |
-| **BabylonJS Gaussian Splat Viewer**   | 3D       | `.ply`, `.spz`                                                                                                                                                                   | 1        | No         | Gaussian splat visualization with WebXR support.                                                                                                                                                                                                                                                                                                                                                  |
+| **BabylonJS Gaussian Splat Viewer**   | 3D       | `.ply`, `.spz`, `.splat`, `.sog`                                                                                                                                                 | 1        | No         | Gaussian splat visualization with WebXR support. Opens SPZ versions 2 and 3 and bundled `.sog`. An SPZ version 4 file shows a message instead; where `ALLOWUNSAFEEVAL` is enabled, the message points to the SuperSplat Editor.                                                                                                                                                                   |
 | **Needle USD Viewer (Experimental)**  | 3D       | `.usd`, `.usda`, `.usdc`, `.usdz`                                                                                                                                                | 1        | No         | Universal Scene Description via WebAssembly. Requires `ALLOWUNSAFEEVAL`. Experimental -- may not display all USD files correctly or load all dependencies.                                                                                                                                                                                                                                        |
 | **ThatOpen IFC BIM Viewer**           | 3D       | `.ifc`, `.ifczip`                                                                                                                                                                | 1        | No         | Industry Foundation Classes (BIM) via the open-source That Open Engine (web-ifc, WebAssembly). Spatial model tree, element properties, hide/isolate, section planes, and measurements. Uses the multithreaded WASM build when cross-origin isolation is available and falls back to single-thread otherwise. Requires `ALLOWUNSAFEEVAL`.                                                          |
-| **SuperSplat Editor (PlayCanvas)**    | 3D       | `.lcc`, `.ply`, `.sog`, `.splat`                                                                                                                                                 | 1        | No         | Full PlayCanvas SuperSplat Gaussian-splat **editor** UI embedded via iframe (scene panel, transform/selection tools, camera animation, export menus). Default viewer for splat formats. Sole viewer for `.lcc` (XGRIDS multi-LOD). Requires `ALLOWUNSAFEEVAL` and a WebGPU-capable browser. Editing/export is local-only (not saved back to VAMS). Use bundled `.sog` rather than unbundled SOGS. |
-| **Online 3D Viewer**                  | 3D       | `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`                                                                                                                                           | 2        | Yes        | Rhinoceros 3D, AMF, BIM, OFF, and VRML formats.                                                                                                                                                                                                                                                                                                                                                   |
+| **SuperSplat Editor (PlayCanvas)**    | 3D       | `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, `.spz`                                                                                                                              | 1        | No         | Full PlayCanvas SuperSplat Gaussian-splat **editor** UI embedded via iframe (scene panel, transform/selection tools, camera animation, export menus). Default viewer for splat formats. Sole viewer for `.lcc` (XGRIDS multi-LOD). Requires `ALLOWUNSAFEEVAL` and a WebGPU-capable browser. Editing/export is local-only (not saved back to VAMS). Use bundled `.sog` rather than unbundled SOGS. |
+| **Online 3D Viewer**                  | 3D       | `.amf`, `.bim`, `.off`, `.wrl`                                                                                                                                                   | 2        | Yes        | AMF, BIM, OFF, and VRML formats.                                                                                                                                                                                                                                                                                                                                                                  |
+| **Online 3D Viewer (Rhinoceros 3D)**  | 3D       | `.3dm`                                                                                                                                                                           | 2        | Yes        | Rhinoceros 3D models through the same Online3DViewer bundle. Requires `ALLOWUNSAFEEVAL`: the rhino3dm library it loads for `.3dm` compiles with `eval`.                                                                                                                                                                                                                                           |
 | **Cesium 3D Tileset Viewer**          | 3D       | `.json`                                                                                                                                                                          | 2        | No         | 3D Tileset viewing with geospatial capabilities via the CesiumJS engine (`@cesium/engine`) with VAMS custom scene controls.                                                                                                                                                                                                                                                                       |
 | **PlayCanvas Gaussian Splat Viewer**  | 3D       | `.ply`, `.sog`                                                                                                                                                                   | 5        | No         | Gaussian splat visualization with orbit camera and auto-focus.                                                                                                                                                                                                                                                                                                                                    |
 | **VNTANA 3D Viewer**                  | 3D       | `.glb`                                                                                                                                                                           | 2        | No         | Licensed viewer for high-quality GLB rendering. See [Licensed viewers](#licensed-viewers).                                                                                                                                                                                                                                                                                                        |
@@ -88,27 +89,27 @@ This table provides a quick lookup from file extension to the viewer(s) that han
 
 ### 3D model extensions
 
-| Extension        | Default Viewer          | Other Available Viewers |
-| ---------------- | ----------------------- | ----------------------- |
-| `.3dm`           | Online 3D Viewer        | --                      |
-| `.3ds`           | Three.js Viewer         | --                      |
-| `.3mf`           | Three.js Viewer         | --                      |
-| `.amf`           | Online 3D Viewer        | --                      |
-| `.bim`           | Online 3D Viewer        | --                      |
-| `.brep`          | Three.js Viewer         | --                      |
-| `.dae`           | Three.js Viewer         | --                      |
-| `.fbx`           | Three.js Viewer         | --                      |
-| `.glb`           | Three.js Viewer         | VNTANA 3D Viewer        |
-| `.gltf`          | Three.js Viewer         | --                      |
-| `.ifc`           | ThatOpen IFC BIM Viewer | --                      |
-| `.ifczip`        | ThatOpen IFC BIM Viewer | --                      |
-| `.iges`          | Three.js Viewer         | --                      |
-| `.igs`           | Three.js Viewer         | --                      |
-| `.obj`           | Three.js Viewer         | --                      |
-| `.off`           | Online 3D Viewer        | --                      |
-| `.step` / `.stp` | Three.js Viewer         | --                      |
-| `.stl`           | Three.js Viewer         | --                      |
-| `.wrl`           | Online 3D Viewer        | --                      |
+| Extension        | Default Viewer                   | Other Available Viewers |
+| ---------------- | -------------------------------- | ----------------------- |
+| `.3dm`           | Online 3D Viewer (Rhinoceros 3D) | --                      |
+| `.3ds`           | Three.js Viewer                  | --                      |
+| `.3mf`           | Three.js Viewer                  | --                      |
+| `.amf`           | Online 3D Viewer                 | --                      |
+| `.bim`           | Online 3D Viewer                 | --                      |
+| `.brep`          | Three.js Viewer                  | --                      |
+| `.dae`           | Three.js Viewer                  | --                      |
+| `.fbx`           | Three.js Viewer                  | --                      |
+| `.glb`           | Three.js Viewer                  | VNTANA 3D Viewer        |
+| `.gltf`          | Three.js Viewer                  | --                      |
+| `.ifc`           | ThatOpen IFC BIM Viewer          | --                      |
+| `.ifczip`        | ThatOpen IFC BIM Viewer          | --                      |
+| `.iges`          | Three.js Viewer                  | --                      |
+| `.igs`           | Three.js Viewer                  | --                      |
+| `.obj`           | Three.js Viewer                  | --                      |
+| `.off`           | Online 3D Viewer                 | --                      |
+| `.step` / `.stp` | Three.js Viewer                  | --                      |
+| `.stl`           | Three.js Viewer                  | --                      |
+| `.wrl`           | Online 3D Viewer                 | --                      |
 
 The tables in this section list the viewers available in every deployment. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
 
@@ -119,28 +120,50 @@ The tables in this section list the viewers available in every deployment. The P
 | `.e57`    | Potree Viewer                                                                                   | VEERUM 3D Viewer                                   |
 | `.las`    | Potree Viewer                                                                                   | VEERUM 3D Viewer                                   |
 | `.laz`    | Potree Viewer                                                                                   | VEERUM 3D Viewer                                   |
+| `.ksplat` | SuperSplat Editor (PlayCanvas)                                                                  | --                                                 |
 | `.lcc`    | SuperSplat Editor (PlayCanvas)                                                                  | --                                                 |
 | `.ply`    | Potree Viewer, BabylonJS Gaussian Splat Viewer, Three.js Viewer, SuperSplat Editor (PlayCanvas) | PlayCanvas Gaussian Splat Viewer, VEERUM 3D Viewer |
-| `.sog`    | SuperSplat Editor (PlayCanvas)                                                                  | PlayCanvas Gaussian Splat Viewer                   |
-| `.splat`  | SuperSplat Editor (PlayCanvas)                                                                  | --                                                 |
-| `.spz`    | BabylonJS Gaussian Splat Viewer                                                                 | --                                                 |
+| `.sog`    | BabylonJS Gaussian Splat Viewer, SuperSplat Editor (PlayCanvas)                                 | PlayCanvas Gaussian Splat Viewer                   |
+| `.splat`  | BabylonJS Gaussian Splat Viewer, SuperSplat Editor (PlayCanvas)                                 | --                                                 |
+| `.spz`    | BabylonJS Gaussian Splat Viewer (SPZ v2, v3), SuperSplat Editor (PlayCanvas) (SPZ v2-v4)        | --                                                 |
 
 :::info[PLY files and multiple viewers]
-The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. VAMS presents all compatible viewers and you can select the appropriate one for your data type.
+The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. `.spz` likewise matches the BabylonJS Gaussian Splat Viewer, which opens SPZ versions 2 and 3, and, when `ALLOWUNSAFEEVAL` is enabled, the SuperSplat Editor, which also opens SPZ version 4. VAMS presents all compatible viewers and you can select the appropriate one for your data type.
 :::
 
 ### USD extensions
 
-| Extension | Default Viewer                   | Other Available Viewers |
-| --------- | -------------------------------- | ----------------------- |
-| `.usd`    | Needle USD Viewer (Experimental) | --                      |
-| `.usda`   | Needle USD Viewer (Experimental) | --                      |
-| `.usdc`   | Needle USD Viewer (Experimental) | --                      |
-| `.usdz`   | Needle USD Viewer (Experimental) | --                      |
+| Extension | Default Viewer  | Other Available Viewers                                  |
+| --------- | --------------- | -------------------------------------------------------- |
+| `.usd`    | Three.js Viewer | Needle USD Viewer (Experimental), with `ALLOWUNSAFEEVAL` |
+| `.usda`   | Three.js Viewer | Needle USD Viewer (Experimental), with `ALLOWUNSAFEEVAL` |
+| `.usdc`   | Three.js Viewer | Needle USD Viewer (Experimental), with `ALLOWUNSAFEEVAL` |
+| `.usdz`   | Three.js Viewer | Needle USD Viewer (Experimental), with `ALLOWUNSAFEEVAL` |
+
+:::info[USD files and two viewers]
+Without `ALLOWUNSAFEEVAL`, the Three.js Viewer is the only USD viewer and opens USD files directly. With `ALLOWUNSAFEEVAL` enabled, the Needle USD Viewer and the Three.js Viewer both match at priority 1, so VAMS lists both and you choose one. An operator who wants only Needle for USD removes the four USD extensions from the `threejs-viewer` entry in `viewerConfig.json`.
+:::
 
 :::warning[Needle USD Viewer -- Experimental]
-The Needle USD Viewer is experimental. It may not display all USD files correctly or load all file dependencies, particularly with compressed USDC files or complex scene hierarchies with external references. For production workflows requiring reliable USD viewing, consider using a desktop USD viewer such as NVIDIA Omniverse or Pixar's usdview.
+The Needle USD Viewer is experimental. It may not display all USD files correctly or load all file dependencies, particularly with compressed USDC files or complex scene hierarchies with external references. The Three.js Viewer opens the same formats without `ALLOWUNSAFEEVAL`. For production workflows requiring full USD composition, consider using a desktop USD viewer such as NVIDIA Omniverse or Pixar's usdview.
 :::
+
+### Referenced files in the Three.js Viewer
+
+Many 3D formats name other files. The Three.js Viewer downloads those files from the same asset, through the same authenticated route as the model, before it renders:
+
+| Format             | Referenced files the viewer loads                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| glTF (`.gltf`)     | Buffers (`.bin`) and images                                                                       |
+| OBJ                | `mtllib` material libraries (`.mtl`) and the textures they name (`map_*`, `bump`, `disp`, `norm`) |
+| COLLADA (`.dae`)   | Images named in `<library_images>`                                                                |
+| 3DS, FBX           | Textures the model requests (FBX textures embedded in the file need no download)                  |
+| USD (all four)     | References, payloads and asset-valued attributes such as texture files, layer by layer            |
+| GLB, STL, PLY, 3MF | None: these files are self-contained                                                              |
+
+A name resolves relative to the folder of the file that names it, and the file must exist under exactly that key (keys are case-sensitive). The viewer does not download a name that points above the asset's top folder, an absolute path, or a URL with a scheme (`http:`, `https:`, `file:`, `omniverse:`, `//host`); those, and files that are not in the asset, render without their content, and a notice on the viewer lists them. Limits for one model: 256 referenced files, 512 MiB in total, 256 MiB for one file, and 8 levels of references. A `.usdz` is checked before it is opened: it may hold at most 10,000 entries and expand to at most four times its size plus 64 MiB.
+
+For USD, the viewer packages the root layer and every file it loaded into an in-memory `.usdz` and composes that. UDIM texture sets (`<UDIM>`), a `.usdz` referenced from another layer, and references written in a binary (`.usdc`) layer are not composed; a binary layer's textures are. three.js does not compose sublayers (`subLayers`), so the viewer does not download them and lists each one in the notice as not shown by this viewer. Scenes that place their geometry in sublayers or behind variant sets or payloads may compose only in part or not at all; when a scene opens but nothing in it can be drawn, the viewer says so instead of showing an empty view. Flattening such a scene into one layer (for example with `usdcat --flatten`) usually lets it display. Packaging a scene as one `.usdz` keeps every file it needs together.
 
 ### Media extensions
 
@@ -243,10 +266,10 @@ The following viewers use WASM:
 | Robotics Data Viewer (Lichtblick)  | Lichtblick (SQLite for `.db3`, decompression for `.mcap`) | `ALLOWUNSAFEEVAL`     |
 
 :::warning[Content Security Policy]
-Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor, by the Robotics Data Viewer, and by WASM loaders for OpenCascade, Needle USD, and web-ifc (the ThatOpen IFC BIM viewer). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.
+Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor, by the Robotics Data Viewer, and by WASM loaders for OpenCascade, Needle USD, web-ifc (the ThatOpen IFC BIM viewer), and rhino3dm (the Online 3D Viewer's `.3dm` support). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.
 :::
 
-The Three.js Viewer works without `ALLOWUNSAFEEVAL` for standard mesh formats (`.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`). The WASM requirement applies only to CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) which use the OpenCascade library.
+The Three.js Viewer works without `ALLOWUNSAFEEVAL` for standard mesh formats (`.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`) and for USD (`.usd`, `.usda`, `.usdc`, `.usdz`), which it parses in JavaScript. The WASM requirement applies only to CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) which use the OpenCascade library.
 
 The ThatOpen IFC BIM Viewer uses the multithreaded `web-ifc-mt.wasm` build when cross-origin isolation is available (provided by the COI service worker) and transparently falls back to the single-threaded `web-ifc.wasm` otherwise. Both builds require `ALLOWUNSAFEEVAL`: the flag gates whether the viewer registers at all, so the thread mode does not affect it.
 
@@ -283,9 +306,9 @@ The Physna Viewer renders the Physna-hosted 3D/CAD viewer inside VAMS. A VAMS-au
 
 The SuperSplat Editor is VAMS's first iframe-embedded viewer. It hosts the complete PlayCanvas SuperSplat Gaussian-splat editor UI (https://github.com/playcanvas/supersplat, MIT license) as a self-hosted static build served from `/viewers/supersplat/`. The editor provides a full-featured interface with scene panel, transform and selection tools, camera animation controls, and render/export menus.
 
-SuperSplat is the default viewer for all Gaussian splat formats it supports and the sole viewer for `.lcc` files (XGRIDS proprietary multi-LOD Gaussian-splat format). When loading `.lcc` files, SuperSplat automatically selects the highest level-of-detail under 20 million Gaussians.
+SuperSplat is the default viewer for all Gaussian splat formats it supports and the sole viewer for `.ksplat` files and `.lcc` files (XGRIDS proprietary multi-LOD Gaussian-splat format). When loading `.lcc` files, SuperSplat automatically selects the highest level-of-detail under 20 million Gaussians.
 
-The viewer requires the `ALLOWUNSAFEEVAL` feature flag to be enabled in the deployment configuration. Without this flag, the SuperSplat Editor will not register in the viewer system. The editor renders through WebGPU and has no WebGL fallback: it runs in current Chrome and Edge, Safari 26 or later, and Firefox where WebGPU is enabled, and in any other browser it shows a startup message instead of the editor. Supported import formats are `.lcc`, `.ply` (including `.compressed.ply`), `.sog`, and `.splat`.
+The viewer requires the `ALLOWUNSAFEEVAL` feature flag to be enabled in the deployment configuration. Without this flag, the SuperSplat Editor will not register in the viewer system. The editor renders through WebGPU and has no WebGL fallback: it runs in current Chrome and Edge, Safari 26 or later, and Firefox where WebGPU is enabled, and in any other browser it shows a startup message instead of the editor. Supported import formats are `.ksplat`, `.lcc`, `.ply` (including `.compressed.ply`), `.sog`, `.splat`, and `.spz`.
 
 :::warning[Editing is not saved back to VAMS]
 The SuperSplat editor's tools and export/download features operate in the browser. Edited or exported splats download to your local machine; VAMS does not currently persist edits back to the asset. Use a bundled single-file `.sog` for best results — unbundled SOGS (a `meta.json` with sibling `.webp` files) is not supported in the embedded editor.

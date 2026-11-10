@@ -210,6 +210,47 @@ describe("ssm_resource_lookup.py mirrors resourceParamKeys.ts", () => {
     });
 });
 
+describe("the v2.6 to v2.7 migration's terminal statuses mirror the backend's", () => {
+    const BACKEND_WORKFLOWS = path.join(__dirname, "..", "../../backend/backend/common/workflows");
+
+    /** The quoted strings of a Python tuple assignment, with `er.NAME` resolved from executionRecords.py. */
+    function tupleValues(source: string, name: string): string[] {
+        const body = new RegExp(`^${name}\\s*=\\s*\\(([^)]*)\\)`, "m").exec(source)?.[1] ?? "";
+        const records = fs.readFileSync(
+            path.join(BACKEND_WORKFLOWS, "executionRecords.py"),
+            "utf8"
+        );
+        return body
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+            .map((item) => {
+                const quoted = /^["']([^"']+)["']$/.exec(item);
+                if (quoted) return quoted[1];
+                const constant = /^er\.([A-Z0-9_]+)$/.exec(item)?.[1];
+                const value = constant
+                    ? new RegExp(`^${constant}\\s*=\\s*["']([^"']+)["']`, "m").exec(records)?.[1]
+                    : undefined;
+                return value ?? `<unresolved ${item}>`;
+            });
+    }
+
+    it("lists every status the backend treats as finished, SKIPPED included", () => {
+        const backend = tupleValues(
+            fs.readFileSync(path.join(BACKEND_WORKFLOWS, "executionOutputs.py"), "utf8"),
+            "TERMINAL_STATUSES"
+        );
+        const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+        if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+        const migration = tupleValues(
+            readMigrationFile(release, release.script),
+            "TERMINAL_EXECUTION_STATUSES"
+        );
+        expect(backend).toContain("SKIPPED"); // control: the backend tuple was read
+        expect([...migration].sort()).toEqual([...backend].sort());
+    });
+});
+
 /**
  * boto3 call -> the IAM action an operator needs for it. Patterns rather than `name(` literals: the
  * scripts read through `_paginate(client.query, ...)` as well as `client.query(...)`, and a bound-method

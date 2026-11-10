@@ -36,13 +36,40 @@ def send_task_success(output: PipelineExecutionParams):
         raise
 
 
+# SendTaskFailure caps `error` at 256 characters and `cause` at 32,768; a longer value is rejected
+# with a ValidationException, the failure is never reported and the step waits out its timeout.
+TASK_FAILURE_ERROR_MAX_CHARS = 256
+TASK_FAILURE_CAUSE_MAX_CHARS = 32768
+TASK_FAILURE_CAUSE_SUFFIX = 'See AWS cloudwatch logs for full error log and cause.'
+TASK_FAILURE_ERROR_PREFIX = 'Pipeline Failure: '
+
+
+def _bounded(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def task_failure_fields(errorMessage: str = '') -> dict:
+    """The `error` and `cause` this container reports for a failed stage.
+
+    VAMS shows a failed step as "<error>: <cause>", so `cause` must not repeat what `error` already
+    says. It carries the full message only when `error` had to be cut to its 256 characters, and the
+    generic pointer to the logs otherwise (#1216 D1)."""
+    errorMessage = errorMessage or ''
+    full_error = TASK_FAILURE_ERROR_PREFIX + errorMessage
+    error = _bounded(full_error, TASK_FAILURE_ERROR_MAX_CHARS)
+    if error != full_error:
+        cause = f"{errorMessage} {TASK_FAILURE_CAUSE_SUFFIX}"
+    else:
+        cause = TASK_FAILURE_CAUSE_SUFFIX
+    return {"error": error, "cause": _bounded(cause, TASK_FAILURE_CAUSE_MAX_CHARS)}
+
+
 def send_task_failure(errorMessage: str = ''):
     logger.error("Sending Task Failure")
     try:
         return client.send_task_failure(
             taskToken=task_token,
-            error='Pipeline Failure: '+errorMessage,
-            cause='See AWS cloudwatch logs for full error log and cause.'
+            **task_failure_fields(errorMessage)
         )
     except ClientError as e:
         logger.exception(e)

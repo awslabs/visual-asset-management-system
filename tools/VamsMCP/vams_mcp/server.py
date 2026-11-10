@@ -846,6 +846,7 @@ def list_workflow_executions(
     workflow_id: Optional[str] = None,
     workflow_database_id: Optional[str] = None,
     status: Optional[str] = None,
+    exclude_status: Optional[str] = None,
     trigger_type: Optional[str] = None,
     group_id: Optional[str] = None,
     triggered_by_user_id: Optional[str] = None,
@@ -866,10 +867,17 @@ def list_workflow_executions(
     not an absence of history. Widen it with filter_start_date; both dates are UTC timestamps of the
     form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
 
-    The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
-    trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual', 'fileUpload' or
-    'systemReindex' (system reindex runs launched by the vector-search backfill); the stored
+    The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED,
+    SKIPPED), trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual', 'fileUpload'
+    or 'systemReindex' (system reindex runs launched by the vector-search backfill); the stored
     spellings 'Manual', 'File-Upload' and 'System-Reindex' are accepted too.
+
+    A SKIPPED row is not a run: it records the file-upload trigger launches the workflow's concurrency
+    restriction refused while another run held the asset, file or file version. One row covers every
+    launch one blocking run refused; `skippedLaunchCount` is how many, `skipScope` the lock scope and
+    `skipReason` the fixed reason. Do not count SKIPPED rows as runs. exclude_status drops rows of
+    one status or a comma-separated list (e.g. "SKIPPED") on the server, before the page is cut; an
+    unknown status, or excluding the status `status` selects, is a 400.
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
@@ -885,6 +893,7 @@ def list_workflow_executions(
         key: value
         for key, value in (
             ("status", status),
+            ("excludeStatus", exclude_status),
             ("triggerType", trigger_type),
             ("groupId", group_id),
             ("triggeredByUserId", triggered_by_user_id),
@@ -1232,6 +1241,7 @@ def get_workflow_trigger(database_id: str, workflow_id: str, trigger_type: str) 
 @tool_result
 def list_executions(
     status: Optional[str] = None,
+    exclude_status: Optional[str] = None,
     workflow_id: Optional[str] = None,
     workflow_database_id: Optional[str] = None,
     trigger_type: Optional[str] = None,
@@ -1245,10 +1255,15 @@ def list_executions(
     """List workflow executions across every workflow and database the user can see.
 
     Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
-    each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED), workflow_id,
-    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual',
-    'fileUpload' or 'systemReindex' (system reindex runs launched by the vector-search backfill); the
-    stored spellings 'Manual', 'File-Upload' and 'System-Reindex' are accepted too. group_id is how a
+    each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
+    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. A SKIPPED row is not a run:
+    it records the file-upload trigger launches a concurrency restriction refused while another run
+    held the lock, with `skippedLaunchCount`, `skipScope` and `skipReason`; do not count it as a run.
+    exclude_status drops rows of one status or a comma-separated list (e.g. "SKIPPED") on the server,
+    before the page is cut; an unknown status, or excluding the status `status` selects, is a 400.
+    trigger_type is 'manual', 'fileUpload' or 'systemReindex' (system reindex runs launched by the
+    vector-search backfill); the stored spellings 'Manual', 'File-Upload' and 'System-Reindex' are
+    accepted too. group_id is how a
     group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
 
@@ -1279,6 +1294,7 @@ def list_executions(
         key: value
         for key, value in (
             ("status", status),
+            ("excludeStatus", exclude_status),
             ("workflowId", workflow_id),
             ("workflowDatabaseId", workflow_database_id),
             ("triggerType", trigger_type),
@@ -1309,6 +1325,12 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     """Get an execution's full detail: per-pipeline step status, inputs, outputs, and any error.
 
     This is the tool to reach for when asked why a run failed or what it produced.
+
+    A SKIPPED execution never ran: it has no pipelines, outputs or logs. Its `skip` block says why
+    (`reason`, `scope`), how many file-upload launches were refused (`count`), when (`firstSkippedDate`,
+    `lastSkippedDate`) and the first files they named (`files`, `filesTruncated`; `inputFiles` and the
+    details files tool list the rest that were recorded). `blockingExecutionId`, the run that held the
+    lock, is present only when the user may read that run; its absence says nothing about the run.
 
     `workflowVersion` is the published workflow state machine version the run started on, and
     `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,

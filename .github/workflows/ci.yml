@@ -100,7 +100,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Clone automated security helper
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
@@ -279,7 +279,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install VamsCLI dependencies
               working-directory: tools/VamsCLI
@@ -605,7 +605,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install the system packages the group's suites need
               # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner
@@ -650,7 +650,7 @@ jobs:
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v7
               with:
-                  python-version: 3.12.7
+                  python-version: 3.12.16
 
             - name: Install VamsMCP dependencies
               working-directory: tools/VamsMCP

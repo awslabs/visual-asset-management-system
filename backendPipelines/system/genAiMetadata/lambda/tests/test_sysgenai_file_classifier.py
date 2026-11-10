@@ -224,6 +224,7 @@ class TestClassifyMatrix:
         (".xyz", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)),
         (".spz", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)), (".sog", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)),
         (".splat", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)), (".lcc", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)),
+        (".ksplat", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)),
         (".ifc", (fc.CLASS_IFC, fc.BRANCH_RENDER3D)), (".ifczip", (fc.CLASS_IFC, fc.BRANCH_RENDER3D)),
     ])
     def test_table_decided_extensions(self, extension, expected):

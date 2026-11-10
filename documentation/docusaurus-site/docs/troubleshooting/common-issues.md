@@ -285,18 +285,31 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### BabylonJS Gaussian Splat Viewer Reports SPZ Format Version 4
+
+The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3. Babylon.js reads SPZ version 4 only through the `@adobe/spz` WebAssembly module, which the VAMS Content Security Policy does not allow to load.
+
+**Symptoms:**
+
+-   Opening a `.spz` file shows "`<file>` uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer does not support" (or "does not open"), and nothing is drawn
+
+**Resolution:**
+
+-   On a deployment with `ALLOWUNSAFEEVAL` enabled, the message points to the SuperSplat Editor: choose **SuperSplat Editor (PlayCanvas)** in the viewer list.
+-   Otherwise, convert the file to SPZ version 3, `.ply` or `.sog` (for example with `@playcanvas/splat-transform` and `--spz-version 3`) and upload the converted file.
+
 ### SuperSplat Editor Reports That WebGPU Is Required
 
 The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 
 **Symptoms:**
 
--   Opening a `.ply`, `.sog`, `.splat`, or `.lcc` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
--   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files
+-   Opening a `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, or `.spz` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
+-   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files, and the BabylonJS viewer renders the same `.splat` files and SPZ version 2 and 3 `.spz` files
 
 **Resolution:**
 
-Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
+Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` and `.sog` files with the BabylonJS or PlayCanvas Gaussian Splat viewer, and `.splat` files and SPZ version 2 and 3 `.spz` files with the BabylonJS Gaussian Splat viewer instead; `.ksplat`, `.lcc` and SPZ version 4 `.spz` files have no alternative viewer.
 
 ### Point Cloud or 3D Tileset Viewer Reports a Load Failure
 

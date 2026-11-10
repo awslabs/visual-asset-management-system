@@ -2390,7 +2390,12 @@ export async function* fetchAssetS3FilesStreaming({
  * @param {string} params.fileKey - File key/path
  * @param {boolean} params.includeVersions - If to include file version data on the response
  * @param {boolean} [params.showArchived=false] - Also find an archived asset
- * @returns {Promise<any>}
+ * @returns `[true, fileInfo]` on success; `[false, message, status?]` on failure, where `status` is
+ *   the HTTP status when the request itself was rejected, so a caller can tell a missing file or
+ *   asset (400 "File not found.", 404) and a permission denial (403) from a request that may
+ *   succeed when tried again. A request the AWS WAF web ACL blocked carries no status, so its
+ *   message (which names the request ID) is shown. A request whose response the browser never saw
+ *   carries no status and a message saying the service could not be reached.
  */
 export const fetchFileInfo = async ({
     databaseId,
@@ -2398,7 +2403,7 @@ export const fetchFileInfo = async ({
     fileKey,
     includeVersions = false,
     showArchived = false,
-}: any) => {
+}: any): Promise<[boolean, any, number?]> => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
@@ -2430,7 +2435,14 @@ export const fetchFileInfo = async ({
         }
     } catch (error: any) {
         console.log("Error fetching file info:", error);
-        return [false, error?.message || "Failed to fetch file information"];
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
+        return [
+            false,
+            error?.message || "Failed to fetch file information",
+            isRequestBlocked(error) ? undefined : error?.status,
+        ];
     }
 };
 

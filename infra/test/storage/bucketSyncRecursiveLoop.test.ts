@@ -20,7 +20,9 @@
  *
  * The opt-out is scoped as narrowly as the cause. Only the created-events function writes back to its
  * own trigger; the deleted-events function and every other function keep the default, and the property
- * is emitted in the commercial partition only, where the detection exists.
+ * is emitted only in the partitions where the detection exists: commercial and EU Sovereign. GovCloud
+ * documents it as not available and gets no property. The opt-out is a stopgap until the self-write is
+ * removed (#1207).
  */
 
 import * as Config from "../../config/config";
@@ -30,6 +32,13 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 
 const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created";
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
+
+/** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
+const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
+    commercial: "Allow",
+    eusovereign: "Allow",
+    govcloud: undefined,
+};
 
 function functionsWithHandler(synth: SynthResult, handler: string): Resource[] {
     return synth.where("AWS::Lambda::Function", (r) => r.properties.Handler === handler);
@@ -133,8 +142,8 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         expect(functionsWithHandler(synth, DELETED_HANDLER).length).toBeGreaterThan(0);
     });
 
-    test("the created-events function allows recursion in commercial only", () => {
-        const expected = templateName === "commercial" ? "Allow" : undefined;
+    test("the created-events function allows recursion in commercial and EU Sovereign only", () => {
+        const expected = EXPECTED_RECURSIVE_LOOP[templateName];
         for (const fn of functionsWithHandler(synth, CREATED_HANDLER)) {
             expect(fn.properties.RecursiveLoop).toBe(expected);
         }

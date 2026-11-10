@@ -251,10 +251,59 @@ def generate_still_frames(
     return frames
 
 
+# vtkPolyData orders its cells, and so its cell data: vertices, lines, polygons, then strips.
+_CELL_KINDS = (("verts", "GetVerts"), ("lines", "GetLines"), ("faces", "GetPolys"), ("strips", "GetStrips"))
+
+
+def cell_colours_on_corners(pv_data: pv.PolyData) -> pv.PolyData:
+    """The mesh to draw for ``pv_data`` coloured by cell ``RGB``: the same cells, sharing no points, each
+    cell's colour on its own corners as point ``RGB``.
+
+    VTK draws cell scalars from a buffer texture read per primitive, and Mesa 26 draws such a mesh as
+    an empty frame without an error; point colours draw on every Mesa. Each corner keeps the point
+    normal of the shared mesh, computed as ``add_mesh``'s smooth shading computes it, so shading is
+    unchanged and no colour blends across a cell edge. The copy holds one point per cell corner: three
+    per triangle.
+    """
+    shaded = pv_data
+    if pv_data.point_data.active_normals is None and pv_data.n_verts + pv_data.n_lines < pv_data.n_cells:
+        shaded = pv_data.compute_normals(cell_normals=False)
+    rgb = np.asarray(shaded.cell_data["RGB"])
+    normals = shaded.point_data.active_normals
+    cell_arrays = [(keyword, getattr(shaded, getter)()) for keyword, getter in _CELL_KINDS]
+    # 32-bit cell indices when the corners fit (pyvista keeps them 32-bit), half the memory of 64-bit.
+    n_corners = sum(cell_array.GetNumberOfConnectivityIds() for _, cell_array in cell_arrays)
+    index_type = np.int32 if n_corners < 2 ** 31 else np.int64
+    corners, colours, cells = [], [], {}
+    first_cell = first_corner = 0
+    for keyword, cell_array in cell_arrays:
+        n_cells = cell_array.GetNumberOfCells()
+        if not n_cells:
+            continue
+        connectivity = pv.convert_array(cell_array.GetConnectivityArray())
+        offsets = pv.convert_array(cell_array.GetOffsetsArray())
+        corners.append(connectivity)
+        colours.append(np.repeat(rgb[first_cell:first_cell + n_cells], np.diff(offsets), axis=0))
+        cells[keyword] = pv.CellArray.from_arrays(
+            offsets.astype(index_type),
+            np.arange(first_corner, first_corner + len(connectivity), dtype=index_type))
+        first_cell += n_cells
+        first_corner += len(connectivity)
+    corners = np.concatenate(corners)
+    unshared = pv.PolyData(np.asarray(shaded.points)[corners], **cells)
+    unshared.point_data["RGB"] = np.concatenate(colours)
+    if normals is not None:
+        unshared.point_data["Normals"] = np.asarray(normals)[corners]
+        unshared.point_data.active_normals_name = "Normals"
+    logger.info(f"Drawing per-cell colours on cell corners: {first_cell:,} cells, {first_corner:,} corners")
+    return unshared
+
+
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a mesh to the plotter with appropriate styling."""
     texture = getattr(pv_data, '_preview_texture', None)
-    # Per-point colours, or per-cell colours on a mesh decimated to the triangle budget.
+    # Per-point colours, or per-cell colours (STEP and 3MF/COLLADA faces, and a mesh decimated to the
+    # triangle budget), which are drawn on the cells' own corners.
     has_colors = "RGB" in pv_data.point_data or "RGB" in pv_data.cell_data
 
     if texture is not None:
@@ -269,7 +318,7 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
     elif has_colors:
         plotter.add_mesh(
-            pv_data,
+            pv_data if "RGB" in pv_data.point_data else cell_colours_on_corners(pv_data),
             scalars="RGB",
             rgb=True,
             smooth_shading=True,

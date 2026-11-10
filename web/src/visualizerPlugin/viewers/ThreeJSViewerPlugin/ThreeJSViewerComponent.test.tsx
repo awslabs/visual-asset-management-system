@@ -144,4 +144,34 @@ describe("ThreeJSViewerComponent error panel", () => {
         expect(panel.contains(createdCanvases[0])).toBe(false);
         expect(screen.getByText(HINT)).toBeInTheDocument();
     });
+
+    it.each([
+        [403, "You do not have permission to view or download this file."],
+        [401, "Your session has expired. Sign in again to view this file."],
+    ])("names a download the API refused with %s (#1211)", async (status, message) => {
+        global.fetch = jest.fn(() =>
+            Promise.resolve({
+                ok: false,
+                status,
+                arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+            })
+        ) as any;
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(message)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to load: part\.glb/)).not.toBeInTheDocument();
+        // The refused file never reached a loader.
+        expect(mockedLoadFile.mock.calls.some((call) => call[2] === "part.glb")).toBe(false);
+    });
+
+    it("[control] keeps the file's own message for any other status", async () => {
+        global.fetch = jest.fn(() =>
+            Promise.resolve({ ok: false, status: 500, arrayBuffer: () => Promise.resolve(null) })
+        ) as any;
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(/Failed to load: part\.glb \(500\)/)).toBeInTheDocument();
+    });
 });

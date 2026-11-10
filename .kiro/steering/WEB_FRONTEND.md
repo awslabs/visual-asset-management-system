@@ -202,7 +202,7 @@ web/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
         viewerSources.ts    # Merges core + add-on + custom configs and manifests
         StylesheetManager.ts
-        streamFailure.ts    # Names why a streamed file failed to load
+        streamFailure.ts    # Names why a streamed or downloaded file failed to load
         types.ts
       components/           # Shared viewer UI components
       viewers/              # Individual viewer plugins
@@ -368,6 +368,8 @@ npm run build
 yarn install
 ```
 
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
+
 ### Rule 6: HashRouter URLs
 
 All routing uses `HashRouter`, meaning URLs are `/#/path`. When constructing internal links or navigation:
@@ -507,7 +509,8 @@ Key patterns to follow:
 2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
 3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
-5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
+6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`; the asset and file pages)
 
 ### 4.2 Consuming API Results
 
@@ -836,13 +839,14 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
 -   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
--   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
+-   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer adopts it in its own change; Cesium and Potree name stream failures through `describeStreamFailure`.
 
 ### 8.2 Current Viewers (plugins)
 
 | ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
 | ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
+| `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)  | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
 | `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
 | `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
@@ -852,19 +856,19 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
 | `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz, .splat, .sog                                                                                                                 | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .ksplat, .lcc, .ply, .sog, .splat, .spz                                                                                                  | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
 | `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
+| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .usd, .usda, .usdc, .usdz, .stp, .step, .iges, .igs, .brep                        | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor. The install removes the editor's WebMCP tool registration (`registerWebMCP` in upstream `src/main.ts`, v3.7.0+) before building and fails if the built bundle still references `modelContext`: the framed editor is same-origin with VAMS, so its tools must not be offered to a browser agent.
 
 > Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.5). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
@@ -1235,7 +1239,8 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
+-   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
 -   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the search page's Search view and `POST /search/nlp`; with `NOOPENSEARCH` also present the view runs in its reduced (NLP-only) form
 -   Additional flags may exist in deployed configurations
 
@@ -1584,7 +1589,7 @@ Match the comment density and style already present in the file. Describe **what
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID; `isNetworkFailure(error)` recognizes a request whose response never arrived, which services report as `NETWORK_FAILURE_MESSAGE`
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---

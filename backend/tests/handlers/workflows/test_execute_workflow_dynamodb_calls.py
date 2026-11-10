@@ -143,18 +143,26 @@ _METADATA_ROW = {"databaseId": "db1", "assetId": "a1", "filePath": "/", "metadat
                  "scope": "asset"}
 
 
-def _launch(restriction="perAsset", metadata_rows=None):
+def _launch(restriction="perAsset", metadata_rows=None, refused_trigger=False):
     """One launch through lambda_handler; returns (response, recorded calls). `metadata_rows` stands in
-    for the input-metadata rows the launch records for each pipeline."""
+    for the input-metadata rows the launch records for each pipeline. With `refused_trigger` the launch
+    is the trigger dispatcher's (SYSTEM_USER, triggerType fileUpload) and its lock is held by another
+    run, so the handler writes the skip record instead of launching."""
     calls = set()
+    body = dict(_TWO_FILES, triggerType="fileUpload") if refused_trigger else _TWO_FILES
     with contextlib.ExitStack() as stack:
         if metadata_rows is not None:
             stack.enter_context(patch.object(ewv2.er, "pipeline_metadata_envelope_rows",
                                              return_value=list(metadata_rows)))
+        if refused_trigger:
+            stack.enter_context(patch.object(
+                ewv2.el, "acquire_locks",
+                side_effect=ewv2.el.ExecutionLockConflict(f"{WF_DB}:{WF_ID}|asset|db1:a1", "e-holder")))
         for context in (
             patch(f"{MOD}._input_exists_in_s3", return_value=(True, "v-resolved")),
             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_enforcer()),
-            patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}),
+            patch(f"{MOD}.request_to_claims",
+                  return_value={"tokens": ["SYSTEM_USER" if refused_trigger else "user1"]}),
             patch(f"{MOD}.s3c"),
             patch(f"{MOD}._bucket_details_cache", {}),
             patch.object(ewv2.dynamodb, "Table", side_effect=_tables(calls, _rows(restriction))),
@@ -162,7 +170,7 @@ def _launch(restriction="perAsset", metadata_rows=None):
             stack.enter_context(context)
         sfn = stack.enter_context(patch(f"{MOD}.sfn_client"))
         sfn.start_execution.return_value = {"executionArn": "arn:exec"}
-        response = ewv2.lambda_handler(_event(_TWO_FILES), MagicMock())
+        response = ewv2.lambda_handler(_event(body), MagicMock())
     return response, calls
 
 
@@ -211,13 +219,20 @@ class TestTheLaunchCallsOnlyWhatTheRoleGrants:
             ewv2._holder_has_execution_record(WF_DB, WF_ID)("e-holder")
         assert calls == {("main", "GetItem")} == _granted(calls)
 
-    def test_every_grant_but_the_skip_record_write_is_used(self):
-        # The grants are exact: each is made by some launch path above, except the main-row UpdateItem,
-        # which is held for the skip record a launch refused by a concurrency restriction writes.
+    def test_a_refused_trigger_launch_writes_its_skip_record_with_granted_calls(self):
+        response, calls = _launch("perAsset", refused_trigger=True)
+        assert response["statusCode"] == 400, response
+        assert ("main", "UpdateItem") in calls and ("inputs", "PutItem") in calls
+        assert calls == _granted(calls), sorted(calls - _granted(calls))
+
+    def test_every_grant_is_used(self):
+        # The grants are exact: each is made by some launch path above, the main-row UpdateItem by the
+        # skip record a trigger launch refused by a concurrency restriction writes.
         calls = set()
         for restriction in ("none", "perAsset", "perInputFile", "perInputFileVersion"):
             calls |= _launch(restriction)[1]
         calls |= _launch("none", metadata_rows=[_METADATA_ROW])[1]
+        calls |= _launch("perAsset", refused_trigger=True)[1]
         rows = {"templates": {"items": [{"templateId": "t1", "isDefault": True}]}}
         with patch.object(ewv2.dynamodb, "Table", side_effect=_tables(calls, rows)):
             ewv2._get_template_row("db1", "p1", "t1")
@@ -228,4 +243,4 @@ class TestTheLaunchCallsOnlyWhatTheRoleGrants:
                                   ["k"], "e-holder")
         granted = {(table, action) for table, actions in EXECUTE_WORKFLOW_GRANTS.items()
                    for action in actions}
-        assert granted - calls == {("main", "UpdateItem")}
+        assert granted - calls == set()

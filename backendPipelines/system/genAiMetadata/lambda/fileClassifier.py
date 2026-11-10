@@ -112,7 +112,8 @@ ALLOW_LIST: List[str] = [
     ".3dm", ".3ds", ".3mf", ".aac", ".amf", ".asm", ".avi", ".bim", ".brep", ".catpart",
     ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".geojson", ".gif",
     ".glb", ".gltf", ".gpkg", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
-    ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".lyrx", ".m4a",
+    ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".ksplat", ".las", ".laz", ".lcc", ".log", ".lyrx",
+    ".m4a",
     ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
     ".png", ".pptx", ".prt", ".ps1", ".ptx", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
     ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
@@ -153,7 +154,9 @@ for _extension in PROPRIETARY_CAD_EXTENSIONS:
     EXTENSION_CLASSES[_extension] = (CLASS_CAD, BRANCH_NONE)
 for _extension in (".las", ".laz", ".e57") + ADDITIONAL_POINTCLOUD_EXTENSIONS:
     EXTENSION_CLASSES[_extension] = (CLASS_POINTCLOUD, BRANCH_RENDER3D)
-for _extension in (".spz", ".sog", ".splat", ".lcc"):
+# Gaussian splat containers. The 3D render image reads the .spz, .sog and .splat headers; an .lcc or
+# .ksplat has no header reader there and gets file attributes only, but is still a splat to search.
+for _extension in (".spz", ".sog", ".splat", ".lcc", ".ksplat"):
     EXTENSION_CLASSES[_extension] = (CLASS_SPLAT, BRANCH_RENDER3D)
 for _extension in (".ifc", ".ifczip"):
     EXTENSION_CLASSES[_extension] = (CLASS_IFC, BRANCH_RENDER3D)

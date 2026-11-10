@@ -113,8 +113,9 @@ TRIGGER_BASE_TYPES = ('fileUpload',)
 TRIGGERS_BY_BASE_TYPE_GSI = 'TriggersByBaseTypeGSI'
 EXECUTIONS_BY_WORKFLOW_GSI = 'WorkflowExecutionsByWorkflowGSI'
 
-# Mirrors common.workflows.executionOutputs.TERMINAL_STATUSES.
-TERMINAL_EXECUTION_STATUSES = ('SUCCEEDED', 'FAILED', 'ABORTED', 'TIMED_OUT')
+# Mirrors common.workflows.executionOutputs.TERMINAL_STATUSES. SKIPPED is the record of a trigger launch a
+# concurrency restriction refused: it never ran, so it is never in flight.
+TERMINAL_EXECUTION_STATUSES = ('SUCCEEDED', 'FAILED', 'ABORTED', 'TIMED_OUT', 'SKIPPED')
 
 # Config values the shipped template leaves as placeholders are treated as unset.
 _PLACEHOLDER_PREFIXES = ('<', 'YOUR-')

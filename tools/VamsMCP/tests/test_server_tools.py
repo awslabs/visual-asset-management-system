@@ -803,6 +803,46 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     assert result["truncated"] is True
 
 
+def test_list_executions_returns_skipped_rows_with_their_fields(real_paginate_client):
+    # #998: a SKIPPED record arrives under the same Items key as a run, with its optional fields kept,
+    # and the status filter is passed through for equality.
+    skipped = {"workflowExecutionId": "s1", "executionStatus": "SKIPPED", "skippedLaunchCount": 49,
+               "skipScope": "asset", "skipReason": "busy"}
+    real_paginate_client.api.list_executions.side_effect = [{"message": {"Items": [skipped]}}]
+
+    result = server.list_executions(status="SKIPPED")
+
+    assert result["Items"] == [skipped]
+    params = real_paginate_client.api.list_executions.call_args.kwargs.get("params") or \
+        real_paginate_client.api.list_executions.call_args.args[-1]
+    assert params["status"] == "SKIPPED"
+
+
+@pytest.mark.parametrize("tool, api_name, args", [
+    ("list_executions", "list_executions", {}),
+    ("list_workflow_executions", "list_workflow_executions", {"database_id": "db1", "asset_id": "a1"}),
+])
+def test_the_list_tools_send_exclude_status(real_paginate_client, tool, api_name, args):
+    # #998: exclude_status rides as excludeStatus; absent, nothing is sent.
+    api = getattr(real_paginate_client.api, api_name)
+    api.side_effect = [{"message": {"Items": []}}, {"message": {"Items": []}}]
+
+    def _sent():
+        call = api.call_args
+        return call.kwargs.get("params") or call.args[-1]
+
+    getattr(server, tool)(exclude_status="SKIPPED", **args)
+    assert _sent()["excludeStatus"] == "SKIPPED"
+    getattr(server, tool)(**args)
+    assert "excludeStatus" not in _sent()
+
+
+def test_the_execution_tools_describe_skipped_records():
+    for tool in (server.list_executions, server.list_workflow_executions,
+                 server.get_execution_details):
+        assert "SKIPPED" in (tool.__doc__ or "")
+
+
 _WORK_BUDGET_WARNING = (
     "This page stopped at its per-request work budget after reading 20 pages of the execution "
     "index, so executions that match may not be listed."

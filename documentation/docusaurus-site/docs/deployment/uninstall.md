@@ -268,7 +268,7 @@ done
 
 ## Step 4: Delete Amazon CloudWatch log groups
 
-VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
 
 The key named log groups are:
 
@@ -290,7 +290,7 @@ aws logs describe-log-groups \
     --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
     --query 'logGroups[].logGroupName' --output text
 
-# List all VAMS named log groups (audit, API access, workflow, orchestration,
+# List all VAMS named log groups (audit, workflow, orchestration,
 # VPC, CloudTrail, and per-pipeline state machine groups)
 aws logs describe-log-groups \
     --log-group-name-prefix "/aws/vendedlogs/VAMS" \
@@ -308,7 +308,7 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 
-# Delete all VAMS named vendedlogs groups (audit, API access, orchestration bus,
+# Delete all VAMS named vendedlogs groups (audit, orchestration bus,
 # VPC flow logs, per-pipeline state machine logs). Includes the conditional
 # CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
 for LG in $(aws logs describe-log-groups \

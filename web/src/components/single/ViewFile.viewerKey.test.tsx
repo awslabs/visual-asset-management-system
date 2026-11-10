@@ -27,12 +27,15 @@ jest.mock("react-router", () => ({
 }));
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn().mockResolvedValue({
-        assetId: "asset1",
-        databaseId: "db1",
-        assetName: "Seeded Asset",
-        isDistributable: true,
-    }),
+    fetchAssetWithStatus: jest.fn().mockResolvedValue([
+        true,
+        {
+            assetId: "asset1",
+            databaseId: "db1",
+            assetName: "Seeded Asset",
+            isDistributable: true,
+        },
+    ]),
     fetchFileInfo: jest.fn(),
 }));
 jest.mock("../../services/FileOperationsService", () => ({ archiveFile: jest.fn() }));
@@ -97,9 +100,9 @@ beforeEach(() => {
 /** Renders the page and waits for the asset fetch to settle the view type, so later mounts are the file's. */
 const renderSettled = async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { fetchAsset } = require("../../services/APIService");
+    const { fetchAssetWithStatus } = require("../../services/APIService");
     const view = render(<ViewFile />);
-    await waitFor(() => expect(fetchAsset).toHaveBeenCalled());
+    await waitFor(() => expect(fetchAssetWithStatus).toHaveBeenCalled());
     await act(async () => {
         await Promise.resolve();
     });
