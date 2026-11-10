@@ -7,7 +7,7 @@ import React from "react";
 import { useParams } from "react-router";
 import Box from "@cloudscape-design/components/box";
 import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
-import { SearchTabsHost } from "../../searchPlugin";
+import { SearchTabsHost, searchPageTitle } from "../../searchPlugin";
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
@@ -49,19 +49,13 @@ const NewSearchPage: React.FC<NewSearchPageProps> = () => {
 
     return (
         <Box padding={{ top: "s", horizontal: "l" }}>
+            {/* Where the page sits, ending with the page itself (its h1 below), with no step that
+                links back to this page: the all-databases page stands alone, and a database's page
+                sits under Databases. */}
             <BreadcrumbGroup
                 items={[
-                    { text: Synonyms.Databases, href: "#/databases/" },
-                    { text: "Search", href: "#/assets/" },
-                    ...(databaseId
-                        ? [
-                              {
-                                  text: databaseId,
-                                  href: `#/databases/${databaseId}/assets/`,
-                              },
-                          ]
-                        : []),
-                    { text: Synonyms.Assets, href: "" },
+                    ...(databaseId ? [{ text: Synonyms.Databases, href: "#/databases/" }] : []),
+                    { text: searchPageTitle(databaseId), href: "" },
                 ]}
                 ariaLabel="Breadcrumbs"
             />

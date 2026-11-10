@@ -246,8 +246,12 @@ export interface NlpRequestOptions {
     includeOpenSearchConstraints: boolean;
 }
 
-/** The values a multiselect-style filter holds (`values`, else its single `value`). */
-function selectedValues(filter: any): string[] {
+/**
+ * The values a multiselect-style filter holds (`values`, else its single `value`). The filter a
+ * database route locks carries only `value`, so the sidebar panels read their selection through this
+ * too (lockedDatabasePlaceholder in SearchLayout/lockedDatabase.ts).
+ */
+export function selectedValues(filter: any): string[] {
     if (!filter) return [];
     if (Array.isArray(filter.values) && filter.values.length > 0) return filter.values;
     if (filter.value && filter.value !== "all") return [filter.value];
