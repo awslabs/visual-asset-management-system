@@ -781,6 +781,10 @@ Before v2.6.7, AWS Lambda recursive loop detection could stop the bucket-sync La
 -   **The dead-letter queue keeps messages for 14 days.** For files that went missing from search earlier than that, run the [Reindex utility](../developer/utilities/reindex.md).
 -   **No other action is needed.** The update changes one Lambda setting in place and adds the alarms; no resource is replaced.
 
+### v2.6.7 and later: orchestration bus audit log group policy
+
+Earlier releases, from v2.6.0, added an account-level Amazon CloudWatch Logs resource policy per deployment (its name contains `EventsLogGroupPolicy`) so Amazon EventBridge could write to the `/aws/vendedlogs/VAMSOrchestrationBusAudit-<hash>` log group. An account holds at most 10 such policies per Region, so a Region could hold at most 10 deployments. The update attaches the grant to the log group itself, then deletes the deployment's old account-level policy. Audit events keep arriving during the update, and other deployments' policies are untouched. No action is needed. The AWS CloudFormation execution role needs `logs:PutResourcePolicy`, `logs:DescribeResourcePolicies` and `logs:DeleteResourcePolicy`, which the default CDK bootstrap role has. A deployment with a provisioned Amazon OpenSearch Service domain still adds one account-level policy for the domain's logs.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
