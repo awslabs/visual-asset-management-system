@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Literal, Optional
 from aws_lambda_powertools.utilities.parser import BaseModel, Field, root_validator, validator
 
 from common.validators import validate
+from common.vectorsearch.fileClassIntent import FILE_CLASSES
+from models.search import MAX_SEARCH_FILTERS, MAX_SEARCH_TAGS, GeoSearchModel, SearchFilterModel
 
 ENTITY_TYPES = ("file", "asset")
 WARNING_CODES = (
@@ -31,6 +33,11 @@ MAX_QUERY_LENGTH = 1000
 QUERY_TOO_LONG_MESSAGE = "The query is {length} characters; the limit is {limit}."
 QUERY_BLANK_MESSAGE = "The query must not be blank."
 MAX_DATABASE_IDS = 100
+# File extensions one request may name; the web sends the extensions picked in its filter panel.
+MAX_FILE_EXTENSIONS = 100
+# Characters in one tag or file-extension value, the bound the keyword search puts on a tag.
+MAX_FILTER_VALUE_LENGTH = 256
+UNKNOWN_FILE_CLASS_MESSAGE = "fileClasses accepts only these values: " + ", ".join(FILE_CLASSES)
 MAX_SIZE = 100
 DEFAULT_SIZE = 25
 VECTOR_INDEX_LABEL = "vams-vectors"
@@ -54,15 +61,16 @@ class NlpSearchRequestModel(BaseModel):
     databaseIds: List[str] = Field(default_factory=list)
     includeArchived: bool = False
     includeSegments: bool = True
-    fileClasses: List[str] = Field(default_factory=list)
-    fileExtensions: List[str] = Field(default_factory=list)
+    fileClasses: List[str] = Field(default_factory=list, max_items=len(FILE_CLASSES))
+    fileExtensions: List[str] = Field(default_factory=list, max_items=MAX_FILE_EXTENSIONS)
     size: int = Field(DEFAULT_SIZE, ge=1, le=MAX_SIZE)
-    # OpenSearch-only constraints, typed as the /search request models type them.
-    filters: Optional[List[Dict[str, Any]]] = None
+    # OpenSearch-only constraints, typed and bounded as the /search request models type them, so a
+    # malformed constraint is a 400 here rather than a failure of the OpenSearch step.
+    filters: Optional[List[SearchFilterModel]] = Field(None, max_items=MAX_SEARCH_FILTERS)
     metadataQuery: Optional[str] = Field(None, max_length=MAX_QUERY_LENGTH)
     metadataSearchMode: Optional[Literal["key", "value", "both"]] = None
-    geoSearch: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = None
+    geoSearch: Optional[GeoSearchModel] = None
+    tags: Optional[List[str]] = Field(None, max_items=MAX_SEARCH_TAGS)
     enrich: bool = True
 
     class Config:
@@ -88,7 +96,12 @@ class NlpSearchRequestModel(BaseModel):
 
     @validator("fileClasses")
     def _normalise_classes(cls, value):
-        return _normalise_list(value)
+        """Normalised, then checked against the classifier's ids, so an unknown class is a 400 rather than
+        an empty answer. The message lists the accepted ids and never echoes the value sent."""
+        classes = _normalise_list(value)
+        if any(name not in FILE_CLASSES for name in classes):
+            raise ValueError(UNKNOWN_FILE_CLASS_MESSAGE)
+        return classes
 
     @validator("fileExtensions")
     def _normalise_extensions(cls, value):
@@ -105,12 +118,24 @@ class NlpSearchRequestModel(BaseModel):
                 raise ValueError(message)
         return values
 
+    @root_validator(skip_on_failure=True)
+    def _bound_values(cls, values):
+        """Each tag and file extension is at most MAX_FILTER_VALUE_LENGTH characters."""
+        (valid, message) = validate({
+            "tags": {"value": values.get("tags"), "validator": "STRING_256_ARRAY", "optional": True},
+            "fileExtensions": {"value": values.get("fileExtensions"), "validator": "STRING_256_ARRAY",
+                               "optional": True},
+        })
+        if not valid:
+            raise ValueError(message)
+        return values
+
     def opensearch_only_fields(self) -> List[str]:
         """Names of the OpenSearch-only constraints the caller set, in declaration order."""
         return [name for name in OPENSEARCH_ONLY_FIELDS if getattr(self, name)]
 
 
-class SegmentRefModel(BaseModel):
+class SegmentRefModel(BaseModel, extra="ignore"):
     segmentKey: str
     segmentKind: str
     segmentLabel: str
@@ -118,7 +143,7 @@ class SegmentRefModel(BaseModel):
     segmentEndMs: Optional[int] = None
 
 
-class NlpVectorInfoModel(BaseModel):
+class NlpVectorInfoModel(BaseModel, extra="ignore"):
     distance: float
     embeddingModelId: str
     sourceModalities: List[str] = Field(default_factory=list)
@@ -138,9 +163,10 @@ class NlpSearchHitModel(BaseModel):
 
     class Config:
         allow_population_by_field_name = True
+        extra = "ignore"
 
 
-class NlpWarningModel(BaseModel):
+class NlpWarningModel(BaseModel, extra="ignore"):
     code: str
     message: str
 
@@ -151,7 +177,7 @@ class NlpWarningModel(BaseModel):
         return value
 
 
-class NlpSummaryModel(BaseModel):
+class NlpSummaryModel(BaseModel, extra="ignore"):
     query: str
     embeddingModelId: str
     databasesSearched: int
@@ -189,3 +215,4 @@ class NlpSearchResponseModel(BaseModel):
 
     class Config:
         allow_population_by_field_name = True
+        extra = "ignore"

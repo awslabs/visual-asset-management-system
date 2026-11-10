@@ -31,14 +31,15 @@ import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 
 from common.apiRoutes import API_SEARCH_NLP
-from common.constants import STANDARD_JSON_RESPONSE
 from common.databaseAccess import DatabaseAccessManager
 from common.resourceNames import ResourceKeys, get_table_name
 from common.vectorsearch import fileClassIntent
 from common.vectorsearch.embeddings import EmbeddingModelError, embed_text
 from common.vectorsearch.vectorStore import MAX_TOP_K, DynamoDbVectorStore, VectorHit, VectorIndexNotReady
+from customLogging.auditLogging import deferred_authorization_audit
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -48,6 +49,7 @@ from models.common import (
     authorization_error,
     general_error,
     internal_error,
+    service_unavailable,
     success,
     validation_error,
     validation_error_message,
@@ -58,6 +60,13 @@ logger = safeLogger(service_name="VectorSearchService")
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb_client = boto3.client("dynamodb", config=retry_config)
 dynamodb = boto3.resource("dynamodb", config=retry_config)
+# The query embedding has to answer inside API Gateway's 29-second integration timeout, which also covers
+# the database scan, the vector searches and the asset reads. Botocore's default read timeout (60 s) is
+# longer than that limit, so the query client waits at most (connect + read) seconds per attempt, over
+# at most three attempts: 21 seconds when every attempt hangs. A throttled call that outlasts the
+# adaptive retries answers 503 with a try-again message (see lambda_handler).
+BEDROCK_QUERY_CONFIG = Config(retries={"max_attempts": 3, "mode": "adaptive"}, connect_timeout=2, read_timeout=5)
+bedrock_runtime_client = boto3.client("bedrock-runtime", config=BEDROCK_QUERY_CONFIG)
 
 try:
     vector_table_name = get_table_name(ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE)
@@ -73,13 +82,33 @@ opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "true") == "true"
 SEARCH_WORKERS = 16
 MAX_TARGETS = 200
 BATCH_GET_MAX_KEYS = 100
+# Unprocessed asset-row keys are re-sent with exponential back-off (0.05 s doubling); after this many
+# attempts the search answers 503 with a try-again message instead of looping.
+BATCH_GET_MAX_ATTEMPTS = 6
+BATCH_GET_BACKOFF_BASE_SECONDS = 0.05
 # Document ids per OpenSearch query of the constrain/enrich step; each query is sized to its own window.
 OPENSEARCH_ENRICH_WINDOW = 100
 DELETED_PARTITION_SUFFIX = "#deleted"
 INDEX_BUILDING_MESSAGE = "Vector index is being built"
 ROUTE_NOT_SERVED_MESSAGE = "Route is not served by this function"
 INVALID_BODY_MESSAGE = "Request body is not valid JSON"
-ENRICHMENT_FAILED_MESSAGE = "OpenSearch enrichment failed; hits are returned without it"
+# Without OpenSearch-only constraints, a failed OpenSearch step costs only the extra file details: the
+# hits are answered with this warning. With a constraint the step decides which hits qualify, so its
+# failure answers 503 with CONSTRAINTS_FAILED_MESSAGE rather than hits the constraint was not applied to.
+ENRICHMENT_FAILED_MESSAGE = "File details could not be loaded."
+CONSTRAINTS_FAILED_MESSAGE = (
+    "The search filters could not be applied. Try again; if it keeps failing, contact your administrator."
+)
+SEARCH_BUSY_MESSAGE = "Search is busy right now. Try again in a moment."
+# Error codes of a dependency that is throttling the call or briefly unable to serve it.
+BUSY_ERROR_CODES = (
+    "ThrottlingException",
+    "TooManyRequestsException",
+    "ServiceUnavailableException",
+    "ModelNotReadyException",
+    "ProvisionedThroughputExceededException",
+    "RequestLimitExceeded",
+)
 EMBEDDING_FAILED_MESSAGE = (
     "The query could not be prepared for search. Try again; if it keeps failing, contact your administrator."
 )
@@ -96,6 +125,14 @@ AGGREGATION_FIELDS = {
 AGGREGATION_BUCKET_LIMIT = 1000
 _SEGMENT_FIELDS = ("segmentKey", "segmentKind", "segmentLabel", "segmentStartMs", "segmentEndMs")
 _WHOLE_FILE_SEGMENT_KIND = "none"
+
+
+class OpenSearchConstraintsFailed(Exception):
+    """The OpenSearch step could not apply the request's OpenSearch-only constraints."""
+
+
+class SearchBusy(Exception):
+    """A dependency kept refusing the work past the handler's own retries."""
 
 
 def _store() -> DynamoDbVectorStore:
@@ -200,8 +237,9 @@ def _segment_ref(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _collapse_hits(hits: List[VectorHit]) -> List[Dict[str, Any]]:
-    """One entry per (database, asset, path, version): the best item, how many of the file's segment
-    items were candidates, and the winning segment when a segment won. ``hits`` is distance-ascending."""
+    """One entry per (database, asset, path, version): the best item, how many of the file's items and
+    segment items were candidates, and the winning segment when a segment won. ``hits`` is
+    distance-ascending."""
     groups: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     for hit in hits:
         item = hit.item
@@ -209,9 +247,10 @@ def _collapse_hits(hits: List[VectorHit]) -> List[Dict[str, Any]]:
         key = (item["databaseId"], item["assetId"], item["filePath"], item.get("versionId", "null"))
         group = groups.get(key)
         if group is None:
-            group = {"item": item, "distance": hit.distance, "segmentHits": 0,
+            group = {"item": item, "distance": hit.distance, "segmentHits": 0, "items": 0,
                      "bestSegment": _segment_ref(item) if is_segment else None}
             groups[key] = group
+        group["items"] += 1
         if is_segment:
             group["segmentHits"] += 1
     return list(groups.values())
@@ -232,11 +271,19 @@ def _order_by_intent(hits: List[Dict[str, Any]], classes: List[str]) -> List[Dic
 
 
 def _batch_get(keys: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """The asset rows of ``keys``, BATCH_GET_MAX_KEYS per call. Unprocessed keys are re-sent after an
+    exponential back-off; keys still unprocessed after BATCH_GET_MAX_ATTEMPTS calls raise SearchBusy."""
     rows: List[Dict[str, Any]] = []
     for start in range(0, len(keys), BATCH_GET_MAX_KEYS):
         request = {asset_storage_table_name: {"Keys": keys[start:start + BATCH_GET_MAX_KEYS]}}
+        attempt = 0
         while request:
+            if attempt:
+                if attempt >= BATCH_GET_MAX_ATTEMPTS:
+                    raise SearchBusy(f"asset rows still unprocessed after {attempt} BatchGetItem calls")
+                time.sleep(BATCH_GET_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
             response = dynamodb.batch_get_item(RequestItems=request)
+            attempt += 1
             rows.extend(response.get("Responses", {}).get(asset_storage_table_name, []))
             request = response.get("UnprocessedKeys") or {}
     return rows
@@ -455,8 +502,12 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
     /search module here, once OPENSEARCH_DISABLED has been ruled out, so an OpenSearch-less deployment
     never loads opensearch-py. The hits go to OpenSearch in windows of OPENSEARCH_ENRICH_WINDOW ids, each
     query sized to its own window, so every hit is answered: an ``ids`` filter scores every document the
-    same, and one query over more ids than its size would keep an arbitrary subset. Any failure degrades
-    to a warning and the hits stay as they were."""
+    same, and one query over more ids than its size would keep an arbitrary subset. The file index's
+    preview key wins over the one the vector item captured at embedding time, which may be older.
+
+    A failure with no OpenSearch-only constraint in the request degrades to a warning and the hits stay
+    as they were. With a constraint, the failure raises OpenSearchConstraintsFailed: the step decides
+    which hits satisfy the constraint, so the unconstrained hits are never answered in its place."""
     if not file_hits:
         return file_hits
     try:
@@ -490,10 +541,15 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
                     continue
                 merged = dict(source)
                 merged.update(hit["_source"])
+                if source.get("str_previewfilekey"):
+                    merged["str_previewfilekey"] = source["str_previewfilekey"]
                 hit["_source"] = merged
                 kept.append(hit)
         return kept
-    except Exception:
+    except Exception as e:
+        if request.opensearch_only_fields():
+            logger.exception("OpenSearch step failed; the request's constraints could not be applied")
+            raise OpenSearchConstraintsFailed() from e
         logger.exception("OpenSearch enrichment failed")
         warnings.append(_warning("opensearch:enrichment_failed", ENRICHMENT_FAILED_MESSAGE))
         return file_hits
@@ -514,51 +570,59 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
     ignored = request.opensearch_only_fields()
     if opensearch_disabled and ignored:
         warnings.append(_warning("opensearch:fields_ignored", f"OpenSearch is not enabled; ignored: {', '.join(ignored)}"))
-    # includeArchived controls archived assets and files, not deleted databases: the scan is always over
-    # the live database rows (show_deleted=True would return ONLY the `#deleted` rows), as /search does.
-    # Archived items of a live database are reached through the isArchived filter and the `#deleted`
-    # asset partition below.
-    accessible, live_count = DatabaseAccessManager().get_accessible_databases_with_count(
-        claims_and_roles, show_deleted=False
-    )
-    plan = _plan(request, accessible, live_count)
-    class_intent = fileClassIntent.detect(request.query) if not request.fileClasses else []
-    if not plan.targets:
-        # Nothing was searched, so there is nothing approximate to count: the empty answer is exact.
-        warnings.append(_warning("databases:none_accessible", "No searchable database is accessible to the caller"))
-        return success(body=_envelope([], 0, request, 0, 0, 0, class_intent, False, warnings, started,
-                                      total_relation="eq"))
-    vector = embed_text(request.query, model_id=embedding_model_id, dimensions=embedding_dimensions, purpose="query")
-    raw, breadth_full, depth_full = _run_searches(_store(), vector, request, plan)
-    merged = _post_filter(_merge(raw), request)
-    collapsed = _order_by_intent(_collapse_hits(merged), class_intent)
-    truncated = breadth_full or plan.targets_cut
-    if breadth_full:
-        warnings.append(_warning("truncated:window", f"A result window of {plan.top_k} filled; more files may match"))
-    if plan.targets_cut:
-        warnings.append(_warning("truncated:targets", f"Only the first {MAX_TARGETS} accessible databases were searched"))
-    if depth_full and not breadth_full:
-        warnings.append(_warning("segments:window_full", f"A segment window of {plan.top_k} filled; more segments may match"))
-    authorized = _authorize(collapsed, _load_asset_rows(collapsed, request.includeArchived), claims_and_roles)
-    file_hits = [_file_hit(h) for h in authorized]
-    if not opensearch_disabled and (request.enrich or ignored):
-        file_hits = _opensearch_step(request, file_hits, warnings)
+    # Every database the scan refuses and every hit _authorize refuses records an audit entry; inside
+    # this block they are written in batches when the search ends, as keyword search does, instead of
+    # one CloudWatch call each.
+    with deferred_authorization_audit():
+        # includeArchived controls archived assets and files, not deleted databases: the scan is always
+        # over the live database rows (show_deleted=True would return ONLY the `#deleted` rows), as
+        # /search does. Archived items of a live database are reached through the isArchived filter and
+        # the `#deleted` asset partition below.
+        accessible, live_count = DatabaseAccessManager().get_accessible_databases_with_count(
+            claims_and_roles, show_deleted=False
+        )
+        plan = _plan(request, accessible, live_count)
+        class_intent = fileClassIntent.detect(request.query) if not request.fileClasses else []
+        if not plan.targets:
+            # Nothing was searched, so there is nothing approximate to count: the empty answer is exact.
+            warnings.append(_warning("databases:none_accessible", "No searchable database is accessible to the caller"))
+            return success(body=_envelope([], 0, request, 0, 0, 0, class_intent, False, warnings, started,
+                                          total_relation="eq"))
+        vector = embed_text(request.query, model_id=embedding_model_id, dimensions=embedding_dimensions,
+                            purpose="query", client=bedrock_runtime_client)
+        raw, breadth_full, depth_full = _run_searches(_store(), vector, request, plan)
+        merged = _post_filter(_merge(raw), request)
+        collapsed = _order_by_intent(_collapse_hits(merged), class_intent)
+        # The unpartitioned call carries no databaseId filter, so it also reaches the archived items of a
+        # database deleted since; only the live databases the caller reads are answered, as the
+        # per-target calls (which filter on them) and keyword search answer.
+        accessible_set = set(accessible)
+        collapsed = [hit for hit in collapsed if hit["item"]["databaseId"] in accessible_set]
+        # The window signals only say that more may match; they name no count of anything.
+        truncated = breadth_full or plan.targets_cut
+        if breadth_full:
+            warnings.append(_warning("truncated:window", f"A result window of {plan.top_k} filled; more files may match"))
+        if plan.targets_cut:
+            warnings.append(_warning("truncated:targets", f"Only the first {MAX_TARGETS} accessible databases were searched"))
+        if depth_full and not breadth_full:
+            warnings.append(_warning("segments:window_full", f"A segment window of {plan.top_k} filled; more segments may match"))
+        authorized = _authorize(collapsed, _load_asset_rows(collapsed, request.includeArchived), claims_and_roles)
+        # The diagnostics count the vector items of the files the caller may open, never one of a file
+        # _authorize refused.
+        candidates = sum(hit["items"] for hit in authorized)
+        items_collapsed = candidates - len(authorized)
+        file_hits = [_file_hit(h) for h in authorized]
+        if not opensearch_disabled and (request.enrich or ignored):
+            file_hits = _opensearch_step(request, file_hits, warnings)
     result = _asset_hits(file_hits) if request.entityTypes == ["asset"] else file_hits
     return success(
         body=_envelope(
-            result[: request.size], len(result), request, plan.databases_searched, len(merged),
-            len(merged) - len(collapsed), class_intent, truncated, warnings, started,
+            result[: request.size], len(result), request, plan.databases_searched, candidates,
+            items_collapsed, class_intent, truncated, warnings, started,
             total_relation=_total_relation(len(result), truncated),
             aggregations=_aggregations(result, AGGREGATION_FIELDS[request.entityTypes[0]]),
         )
     )
-
-
-def _service_unavailable(message: str) -> APIGatewayProxyResponseV2:
-    response = dict(STANDARD_JSON_RESPONSE)
-    response["statusCode"] = 503
-    response["body"] = json.dumps({"message": message})
-    return response
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -576,11 +640,28 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_nlp_search(event, claims_and_roles)
         return validation_error(body={"message": ROUTE_NOT_SERVED_MESSAGE}, event=event)
     except ValidationError as v:
-        logger.exception(f"Validation error: {v}")
-        return validation_error(body={"message": validation_error_message(v)}, event=event)
+        # A refused request is the caller's mistake, not a fault: no ERROR line and no traceback.
+        message = validation_error_message(v)
+        logger.info(f"Request refused by validation: {message}")
+        return validation_error(body={"message": message}, event=event)
     except VectorIndexNotReady:
         logger.warning("SearchVectors refused: the vector index is not ready")
-        return _service_unavailable(INDEX_BUILDING_MESSAGE)
+        return service_unavailable(body={"message": INDEX_BUILDING_MESSAGE}, event=event)
+    except OpenSearchConstraintsFailed:
+        return service_unavailable(body={"message": CONSTRAINTS_FAILED_MESSAGE}, event=event)
+    except SearchBusy as e:
+        logger.warning(f"Search dependency busy: {e}")
+        return service_unavailable(body={"message": SEARCH_BUSY_MESSAGE}, event=event)
+    except (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError) as e:
+        logger.warning(f"Search dependency did not answer in time: {type(e).__name__}")
+        return service_unavailable(body={"message": SEARCH_BUSY_MESSAGE}, event=event)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in BUSY_ERROR_CODES:
+            logger.warning(f"Search dependency throttled the request: {code}")
+            return service_unavailable(body={"message": SEARCH_BUSY_MESSAGE}, event=event)
+        logger.exception("Internal error")
+        return internal_error(event=event)
     except EmbeddingModelError as e:
         logger.exception(f"Query embedding failed: {e.code}")
         return general_error(body={"message": EMBEDDING_FAILED_MESSAGE}, event=event)

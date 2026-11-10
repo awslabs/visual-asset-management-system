@@ -125,6 +125,14 @@ common_sync_tracking_early = import_module_from_path_early(
 )
 sys.modules['common.syncTracking'] = common_sync_tracking_early
 
+# fileClassIntent is pure stdlib; models/vectorsearch reads its class ids at module level, and the model
+# test modules import that model at collection time.
+common_file_class_intent_early = import_module_from_path_early(
+    'common.vectorsearch.fileClassIntent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'fileClassIntent.py')
+)
+sys.modules['common.vectorsearch.fileClassIntent'] = common_file_class_intent_early
+
 # logRedaction is pure regex logic; load early since executionService imports it at module level.
 common_log_redaction_early = import_module_from_path_early(
     'common.logRedaction',

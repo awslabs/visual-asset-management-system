@@ -129,3 +129,94 @@ class TestResponseModels:
         assert ENTITY_TYPES == ("file", "asset")
         with pytest.raises(ValidationError):
             NlpWarningModel(code="made:up", message="x")
+
+
+class TestOpenSearchConstraintBounds:
+    """The OpenSearch-only constraints are typed and bounded as /search types them (A3): a malformed or
+    oversized constraint is a 400 at the boundary, never a failure inside the OpenSearch step."""
+
+    def test_a_filter_is_a_search_filter_model(self):
+        from models.search import SearchFilterModel
+
+        m = NlpSearchRequestModel(query="x", filters=[{"query_string": {"query": "str_assettype:x"}}])
+        assert isinstance(m.filters[0], SearchFilterModel)
+
+    @pytest.mark.parametrize("bad", [
+        [{"bogus": 1}],
+        [{"query_string": {"query": "a", "boost": "9"}}],
+        [{"query_string": {"query": "q" * 5001}}],
+    ])
+    def test_a_malformed_filter_is_refused(self, bad):
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", filters=bad)
+
+    def test_filters_are_bounded_in_number(self):
+        from models.search import MAX_SEARCH_FILTERS
+
+        one = {"query_string": {"query": "a"}}
+        assert len(NlpSearchRequestModel(query="x", filters=[one] * MAX_SEARCH_FILTERS).filters) == MAX_SEARCH_FILTERS
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", filters=[one] * (MAX_SEARCH_FILTERS + 1))
+
+    def test_geo_search_is_a_geo_search_model(self):
+        from models.search import GeoSearchModel
+
+        m = NlpSearchRequestModel(query="x", geoSearch={"point": {"lat": 1.0, "lon": 2.0, "radiusMeters": 10}})
+        assert isinstance(m.geoSearch, GeoSearchModel)
+
+    @pytest.mark.parametrize("bad", [{}, {"point": {"lat": 91, "lon": 0}}, {"geoJson": "not a shape"}])
+    def test_a_malformed_geo_search_is_refused(self, bad):
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", geoSearch=bad)
+
+    def test_tags_are_bounded_in_number_and_length(self):
+        from models.search import MAX_SEARCH_TAGS
+
+        assert len(NlpSearchRequestModel(query="x", tags=["t"] * MAX_SEARCH_TAGS).tags) == MAX_SEARCH_TAGS
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", tags=["t"] * (MAX_SEARCH_TAGS + 1))
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query="x", tags=["t" * 257])
+        assert "t" * 257 not in validation_error_message(caught.value)
+
+    def test_file_extensions_are_bounded_in_number_and_length(self):
+        from models.vectorsearch import MAX_FILE_EXTENSIONS
+
+        assert len(NlpSearchRequestModel(query="x", fileExtensions=[f"e{i}" for i in range(MAX_FILE_EXTENSIONS)]).fileExtensions) == MAX_FILE_EXTENSIONS
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", fileExtensions=[f"e{i}" for i in range(MAX_FILE_EXTENSIONS + 1)])
+        with pytest.raises(ValidationError):
+            NlpSearchRequestModel(query="x", fileExtensions=["e" * 257])
+
+
+class TestFileClasses:
+    """fileClasses accepts the classifier's ids only (A13), so an unknown class is a clear 400 for every
+    client instead of an empty answer."""
+
+    def test_every_classifier_id_is_accepted(self):
+        from models.vectorsearch import FILE_CLASSES
+
+        assert NlpSearchRequestModel(query="x", fileClasses=list(FILE_CLASSES)).fileClasses == list(FILE_CLASSES)
+
+    @pytest.mark.parametrize("bad", ["3d-model", "model", "pdf"])
+    def test_an_unknown_class_is_refused_without_echoing_it(self, bad):
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query="x", fileClasses=["mesh", bad])
+        message = validation_error_message(caught.value)
+        assert bad not in message
+        assert "mesh" in message and "usd" in message and "cad" in message
+
+
+class TestResponseModelsIgnoreExtraKeys:
+    """Every response model declares extra='ignore' itself (A15, backend Rule 8), rather than leaning on
+    the library default, which a base-class change could move."""
+
+    @pytest.mark.parametrize("model_name", [
+        "SegmentRefModel", "NlpVectorInfoModel", "NlpSearchHitModel", "NlpWarningModel", "NlpSummaryModel",
+        "NlpTermsBucketModel", "NlpTermsAggregationModel", "NlpSearchResponseModel",
+    ])
+    def test_extra_is_declared_ignore(self, model_name):
+        import models.vectorsearch as module
+
+        config = getattr(module, model_name).__config__
+        assert "extra" in vars(config) and config.extra == "ignore"

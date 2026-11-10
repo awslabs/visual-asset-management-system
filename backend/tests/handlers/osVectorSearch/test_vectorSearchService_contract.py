@@ -64,11 +64,11 @@ svc = behaviour.svc  # the behaviour module's fixture: auth surface, embedding a
 
 def _run(svc, ddb, bedrock, body):
     """The handler with the real store on the stubbed DynamoDB client and the real adapter on the stubbed
-    Bedrock client; ``search_vectors`` runs on worker threads, so the calls are made sequential."""
+    Bedrock client, which stands in for the handler's own query client; ``search_vectors`` runs on
+    worker threads, so the calls are made sequential."""
     svc.embed_text = sys.modules["common.vectorsearch.embeddings"].embed_text
-    real_embed = svc.embed_text
     svc.dynamodb_client = ddb
-    svc.embed_text = lambda text, **kw: real_embed(text, client=bedrock, **kw)
+    svc.bedrock_runtime_client = bedrock
     svc.SEARCH_WORKERS = 1
     svc.embedding_dimensions = DIMENSIONS
     resp = svc.lambda_handler(behaviour.event(body), None)
