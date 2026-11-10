@@ -301,7 +301,8 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
         
-        # Validate objectType: a type this deployment offers (an add-on type only with its add-on)
+        # Validate objectType: a type this deployment offers (an add-on type only with its add-on or
+        # optional feature)
         object_type = values.get('objectType')
         message = deployed_object_type_error(object_type)
         if message:
@@ -609,7 +610,8 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             raise ValueError("At least one constraint is required")
 
         for constraint in constraints:
-            # Validate objectType: a type this deployment offers (an add-on type only with its add-on)
+            # Validate objectType: a type this deployment offers (an add-on type only with its add-on or
+            # optional feature)
             message = deployed_object_type_error(constraint.objectType)
             if message:
                 raise ValueError(message)

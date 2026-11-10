@@ -315,7 +315,7 @@ describe("seeded admin Tier-2 constraints cover every Casbin object type", () =>
     const noContainers = constraintItems(noContainersPayloads);
     const typesOf = (items: any[]): string[] => items.map((item) => item.objectType.S);
 
-    test("the construct emits the seeded constraints (control)", () => {
+    test("the construct emits the seeded constraints, one fewer with container jobs off", () => {
         expect(withoutEdh.length).toBeGreaterThanOrEqual(11);
         expect(withEdh.length).toBe(withoutEdh.length + EDH_ADMIN_CONSTRAINT_IDS.length);
         expect(noContainers.length).toBe(withEdh.length - 1);
