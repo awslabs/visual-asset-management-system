@@ -408,15 +408,15 @@ def test_direct_mode_grants_writes_on_the_file_metadata_table_only():
 
     from vra import data as vra_data
     m = yaml.safe_load(vra_data.text("iam-actions", "reindex.yaml"))
-    stack = "vams-core-demo8-us-east-1"
-    tables = {   # CloudFormation-generated names of a real deployment
-        "asset": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
-                 f"AssetStorageTable53D33AD8-RPJ57Q7WXAHJ",
-        "buckets": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
-                   f"S3AssetBucketsStorageTable237D6353-PFF9EHSIQ2L4",
-        "meta": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
-                f"AssetFileMetadataStorageTableV29E304C91-1HW3CC3WPUECX",
-        "auth": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
+    stack = "vams-core-prod-us-east-1"
+    tables = {   # the shape of CloudFormation-generated names in a deployment
+        "asset": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1ABCDEF2GHIJ-"
+                 f"AssetStorageTable0A1B2C3D-ABCDEFGHIJKL",
+        "buckets": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1ABCDEF2GHIJ-"
+                   f"S3AssetBucketsStorageTable4E5F6A7B-MNOPQRSTUVWX",
+        "meta": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1ABCDEF2GHIJ-"
+                f"AssetFileMetadataStorageTableV28C9D0E1F-1YZABCDEFGHI",
+        "auth": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1ABCDEF2GHIJ-"
                 f"AuthEntitiesStorageTable1A2B3C4D-XYZ",
     }
 
