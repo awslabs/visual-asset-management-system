@@ -92,6 +92,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 -   **Web** Fixed the Three.js viewer ignoring an OBJ file's `.mtl` material library; it loads the library and its textures from the asset. ([#923](https://github.com/awslabs/visual-asset-management-system/issues/923))
 -   **Web** Fixed the Three.js viewer requesting COLLADA (`.dae`) and 3DS textures from the web site root, which answered 403; it loads them from the asset. ([#925](https://github.com/awslabs/visual-asset-management-system/issues/925))
 -   **Web** Fixed the Three.js viewer refusing `.igs` CAD files as an unsupported format and showing a script error for a CAD file it cannot read; `.igs` opens like `.iges`, and an unreadable STEP, IGES or BREP file shows that it could not be read. ([#1199](https://github.com/awslabs/visual-asset-management-system/issues/1199))
