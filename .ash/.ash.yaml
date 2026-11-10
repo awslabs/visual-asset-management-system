@@ -91,18 +91,18 @@ global_settings:
         # Documentation code samples (request and response examples).
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 875
-          line_end: 875
+          line_start: 877
+          line_end: 877
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 955
-          line_end: 955
+          line_start: 957
+          line_end: 957
           reason: masked API key placeholder (vams_ followed by x characters) in a response example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 1074
-          line_end: 1074
+          line_start: 1076
+          line_end: 1076
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/files.md
@@ -151,8 +151,8 @@ global_settings:
           reason: username:password placeholder in a proxy URL example, not a credential
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/deployment/configuration-reference.md
-          line_start: 1516
-          line_end: 1517
+          line_start: 1577
+          line_end: 1578
           reason: CDK construct paths and example role names in a configuration example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/developer/physna-integration.md

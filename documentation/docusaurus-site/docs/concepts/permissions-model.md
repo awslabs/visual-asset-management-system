@@ -38,7 +38,7 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
 
-The orchestration UI (Pipelines, Workflows, Executions pages), the database list, the asset page and the asset search list additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled, and a disabled button states why on hover or focus. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
+The orchestration UI (Pipelines, Workflows, Executions pages), the database list, the asset page, the asset search list and the add-on pages that use the same check additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled, and a disabled button states why on hover or focus. That listing checks each `{param}` path segment as a placeholder, so when the user's `api` constraints name a concrete path value (for example `/database/projA/`), an allowed action can be hidden and a refused action can be shown. The check fails closed, so a role that is not allowed `GET` on `/auth/routes/api/allowed` has every such action hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -161,7 +161,7 @@ This object-type and field matrix — along with the criteria operators, the per
 
 ### Extension object types
 
-A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. **A registered type grants nothing by default.** The seeded constraints cover only the core types, so no role, the `admin` role included, can act on an entity of the new type until a constraint on that type allows it.
+A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. An add-on's types appear only while the deployment enables the add-on, and a type of an optional add-on feature only while that feature is on as well: otherwise the editor does not offer them and a new constraint naming one is refused, while a constraint stored earlier is kept, shown with its type as not offered on this deployment, and evaluated again once the add-on or feature is enabled. **A registered type grants nothing by default.** The seeded constraints cover only the core types and the offered types of an enabled add-on that seeds its own, so no role, the `admin` role included, can act on an entity of any other registered type until a constraint on that type allows it.
 
 ## Constraint criteria operators
 
@@ -528,6 +528,8 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
 | ---------------------- | ------- | ------------------ | ---------------------------------------------- |
 | `/addon/physna/viewer` | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+
+Routes of other add-ons are listed on each add-on's page.
 
 ## Performance considerations
 
