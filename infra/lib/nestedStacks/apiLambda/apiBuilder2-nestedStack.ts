@@ -26,7 +26,12 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
-import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import {
+    buildAssetHistoryFunction,
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyViaEngine,
+} from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
     buildExecuteWorkflowV2Function,
@@ -46,11 +51,6 @@ import {
     SystemPipelineCallbackRegistry,
     buildWorkflowStatusChangeRule,
 } from "../../lambdaBuilder/workflowFunctions";
-import {
-    buildLargeObjectCopyEngine,
-    grantLargeObjectCopyCoordination,
-    grantLargeObjectCopyHandOffByParameter,
-} from "../../lambdaBuilder/largeObjectCopyEngine";
 import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
@@ -424,27 +424,20 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
-        grantLargeObjectCopyCoordination(
-            processWorkflowExecutionOutputFunction,
-            storageResources,
-            config,
-            { answersTaskToken: true }
-        );
-        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
-        // finishes; the output step through an SSM parameter (the engine references it already).
-        grantLargeObjectCopyHandOffByParameter(
+        // The output step's copy work (batch, task token, outcomes, cancel) is done by the engine.
+        grantLargeObjectCopyViaEngine(
             this,
             processWorkflowExecutionOutputFunction,
             largeObjectCopyEngine.engineFunction,
             config
         );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes.
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
-            answersTaskToken: false,
             handsOffTo: largeObjectCopyEngine.engineFunction,
         });
         // The details read also hands the engine a copy whose execution ended unreported.
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
-            answersTaskToken: false,
             reconcileWith: largeObjectCopyEngine.engineFunction,
         });
 

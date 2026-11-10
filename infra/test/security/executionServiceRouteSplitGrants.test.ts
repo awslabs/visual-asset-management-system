@@ -104,7 +104,7 @@ const EXECUTION_SERVICE_GRANTS = expand({
     locks: ["DeleteItem"],
     "locks/index/WorkflowExecutionLocksByHolderGSI": ["Query"],
     // The abort route resolves an asset bucket's Region for the copy upload it aborts, when the copy
-    // job row carries none (LargeObjectCopyCoordinationPolicy, #1123 D6).
+    // job row carries none (grantLargeObjectCopyCoordination, inline, #1123 D6).
     "buckets/index/bucketNameGSI": ["Query"],
 });
 
@@ -271,13 +271,11 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
     test("the execution service's table reads are in its managed policy, which its function waits for", () => {
         const role = roleId(synth, stack, "executionService");
         const managed = managedPolicies(synth, role, stack);
-        // Its table reads, and the large object copy coordination policy (the abort route stops a
-        // run's copy jobs: largeObjectCopyEngine.ts grantLargeObjectCopyCoordination).
+        // Its table reads only (the large object copy grants of the abort route are inline).
         expect(managed.map(([id]) => id)).toEqual([
             expect.stringMatching(
                 new RegExp(`^executionService${EXECUTION_SERVICE_TABLE_READ_POLICY_ID}`)
             ),
-            expect.stringMatching(/^executionServiceLargeObjectCopyCoordinationPolicy/),
         ]);
         const fn = functionOf(synth, stack, "executionService");
         expect(fn.raw.DependsOn).toEqual(expect.arrayContaining([managed[0][0]]));

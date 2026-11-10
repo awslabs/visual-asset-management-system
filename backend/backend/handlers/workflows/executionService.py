@@ -4522,7 +4522,8 @@ def _reconcile_main_status(execution_id, main_item, force=False, writer=sp.WRITE
 
 
 # The Step Functions execution status change event (EventBridge default bus) the execution service
-# consumes, and the statuses its rule matches (infra: lambdaBuilder/workflowStatusEvents.ts).
+# consumes, and the statuses its rule matches (infra: lambdaBuilder/workflowFunctions.ts,
+# buildWorkflowStatusChangeRule).
 SFN_STATUS_CHANGE_SOURCE = "aws.states"
 SFN_STATUS_CHANGE_DETAIL_TYPE = "Step Functions Execution Status Change"
 

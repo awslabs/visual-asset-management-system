@@ -3,7 +3,7 @@
 
 """Task Lambda of the large object copy state machines (one function, seven actions).
 
-The state machines (infra: lambdaBuilder/largeObjectCopyEngine.ts) run, per job:
+The state machines (infra: lambdaBuilder/assetFunctions.ts) run, per job:
 
     Prepare -> Map(chunks, one at a time) { child execution: Map(batches) { CopyBatch } }
             -> Complete -> Notify
@@ -931,8 +931,70 @@ ACTIONS = ("prepare", "copyBatch", "complete", "fail", "notify")
 STATUS_CHANGE_DETAIL_TYPE = "Step Functions Execution Status Change"
 
 
+def _required(event, *names):
+    values = []
+    for name in names:
+        value = event.get(name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"The output step operation needs {name}")
+        values.append(value)
+    return values
+
+
+def output_step(event, context=None):
+    """The workflow output step's copy work (loc.call_engine), with the engine's own role. Each
+    operation is safe to repeat, so the output step's retry of a failed call repeats nothing.
+
+    - recordedJobs: the copy jobs every attempt of the run's output step recorded.
+    - recordBatch: record the run's ingestion batch; with ``claim`` (a definition that does not wait)
+      also claim its report, so the output step finalizes at once when every copy already ended.
+    - registerTaskToken: store the waiting state's task token on the batch and, when every copy has
+      already ended, answer it at once (the same claim and report a finishing copy's notify makes).
+    - batchOutcomes: the batch and each of its jobs' outcomes, for finalize.
+    - cancel: stop the run's unfinished copies and abort their uploads (a run that ended while its
+      output step started them).
+    """
+    operation = event.get("operation")
+    if operation == loc.OUTPUT_STEP_RECORDED_JOBS:
+        (execution_id,) = _required(event, "workflowExecutionId")
+        return {"jobs": loc.jsonable(loc.recorded_batch_jobs(jobs_table, execution_id, execution_id))}
+    if operation == loc.OUTPUT_STEP_RECORD_BATCH:
+        (batch_id,) = _required(event, "batchId")
+        job_ids = [j for j in (event.get("jobIds") or []) if isinstance(j, str) and j]
+        batch_context = event.get("context") or {}
+        if not isinstance(batch_context, dict):
+            raise ValueError("The output step operation needs a context object")
+        loc.record_batch(jobs_table, batch_id, job_ids, batch_context)
+        claimed = loc.claim_notification(jobs_table, batch_id) if event.get("claim") else None
+        return {"claimed": bool(claimed)}
+    if operation == loc.OUTPUT_STEP_REGISTER_TOKEN:
+        batch_id, token = _required(event, "batchId", "taskToken")
+        loc.register_task_token(jobs_table, batch_id, token)
+        claimed = loc.claim_notification(jobs_table, batch_id)
+        delivered = False
+        if claimed:
+            delivered = loc.deliver_batch_report(jobs_table, claimed, sfn_client, lambda_client,
+                                                 process_output_function_name)
+        return {"registered": True, "reported": bool(delivered)}
+    if operation == loc.OUTPUT_STEP_BATCH_OUTCOMES:
+        batch_id, execution_id = _required(event, "batchId", "workflowExecutionId")
+        return {"batch": loc.jsonable(loc.get_batch(jobs_table, batch_id)),
+                "outcomes": loc.jsonable(loc.batch_outcomes(jobs_table, batch_id, execution_id))}
+    if operation == loc.OUTPUT_STEP_CANCEL:
+        (execution_id,) = _required(event, "workflowExecutionId")
+        own_name = getattr(context, "function_name", "") or ""
+        warnings = loc.cancel_execution_copy_jobs(jobs_table, sfn_client, s3, execution_id,
+                                                  lambda_client, own_name)
+        return {"warnings": list(warnings or [])}
+    raise ValueError("Unknown output step operation")
+
+
 def lambda_handler(event, context):
     event = event or {}
+    if event.get("action") == loc.ACTION_OUTPUT_STEP:
+        # The workflow output step (synchronous invoke; the engine's resource policy names its role).
+        logger.info(f"Copy engine output step operation {event.get('operation')}")
+        return output_step(event, context)
     if event.get("detail-type") == STATUS_CHANGE_DETAIL_TYPE:
         # The copy state machine's status change rule (FAILED, TIMED_OUT, ABORTED only).
         return reconcile((event.get("detail") or {}).get("executionArn", ""))

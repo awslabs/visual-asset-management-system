@@ -193,27 +193,36 @@ invoke_client = boto3.client('lambda', config=invoke_config)
 logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
-sfn_client = boto3.client('stepfunctions', config=retry_config)
+# Synchronous calls to the copy engine (loc.call_engine). Every engine operation is safe to repeat,
+# so the Rule 6 retries are kept; the read timeout is above the engine's own 15-minute timeout.
+engine_invoke_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'}, read_timeout=960,
+                              connect_timeout=10)
+engine_invoke_client = boto3.client('lambda', config=engine_invoke_config)
 
-_copy_jobs_table = None
 _ssm = None
+# The current invocation's context, for the remaining-time bound of an engine call's retries.
+_invocation_context = None
 
 
 def _ssm_client():
-    """SSM client for the copy engine function name parameter, built on first use (only a run that
-    ended while this step started its copies reads it)."""
+    """SSM client for the copy engine function name parameter (under the deployment's resource-name
+    prefix, which this function may already read), built on first use."""
     global _ssm
     if _ssm is None:
         _ssm = boto3.client('ssm', config=retry_config)
     return _ssm
 
 
-def copy_jobs_table():
-    """The large object copy jobs table, resolved on first use (only runs with large outputs)."""
-    global _copy_jobs_table
-    if _copy_jobs_table is None:
-        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
-    return _copy_jobs_table
+def _engine(operation, **fields):
+    """The copy work of this step, done by the copy engine with its own role: this function holds no
+    grant on the copy jobs table, the copy state machine or its executions. Raises
+    loc.EngineCallFailed, which fails this step like a failed write of its own, so a run is never
+    reported done on a call that did not happen."""
+    context = _invocation_context
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    return loc.call_engine(engine_invoke_client,
+                           lambda: loc.engine_function_name(ssm_client=_ssm_client()),
+                           operation, remaining_ms=remaining, **fields)
 
 
 def _invoke_request_response(function_name, payload):
@@ -1549,7 +1558,7 @@ def _merge_earlier_attempts(execution_id, source_bucket, state_key, pending_jobs
     bytes_done), the last two counting the merged jobs that already finished."""
     pending_jobs = dict(pending_jobs or {})
     collected_output_files = list(collected_output_files or [])
-    recorded = loc.recorded_batch_jobs(copy_jobs_table(), execution_id, execution_id)
+    recorded = _engine(loc.OUTPUT_STEP_RECORDED_JOBS, workflowExecutionId=execution_id).get("jobs") or {}
     if not recorded:
         return pending_jobs, collected_output_files, pending_bytes, 0, 0
     current = {_normalized_relative(rel) for rel in pending_jobs}
@@ -1589,7 +1598,8 @@ def _earlier_attempt_started_copies(event):
     if attempt <= 0 or not event.get('awaitOutputIngestion'):
         return False
     execution_id = event.get('workflowExecutionId', '')
-    return bool(execution_id and loc.recorded_batch_jobs(copy_jobs_table(), execution_id, execution_id))
+    return bool(execution_id and _engine(loc.OUTPUT_STEP_RECORDED_JOBS,
+                                         workflowExecutionId=execution_id).get("jobs"))
 
 
 def _descriptor_from_job(row):
@@ -1637,8 +1647,7 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
     if not _mark_ingesting(event, len(pending_jobs), pending_bytes, files_done, bytes_done):
         # Ended while this step ran (an abort or the error path): stop the copies it just started.
         logger.warning(f"Execution {execution_id} is already terminal; cancelling its output copies")
-        loc.cancel_execution_copy_jobs(copy_jobs_table(), sfn_client, s3c, execution_id,
-                                       client, loc.engine_function_name(ssm_client=_ssm_client()))
+        _engine(loc.OUTPUT_STEP_CANCEL, workflowExecutionId=execution_id)
         return _ingest_response(pending=False)
 
     context = {
@@ -1649,12 +1658,12 @@ def _begin_waiting_for_ingestion(event, bucket_name, source_bucket, collected_ou
         "stateKey": state_key,
         "legacy": not waits,
     }
-    loc.record_batch(copy_jobs_table(), execution_id, list(pending_jobs.values()), context)
+    recorded = _engine(loc.OUTPUT_STEP_RECORD_BATCH, batchId=execution_id,
+                       jobIds=list(pending_jobs.values()), context=context, claim=not waits)
     logger.info(f"Execution {execution_id}: {len(pending_jobs)} output file(s) handed to copy jobs; "
                 f"{'waiting' if waits else 'the copy engine finalizes the run'}")
     if not waits:
-        claimed = loc.claim_notification(copy_jobs_table(), execution_id)
-        if claimed:
+        if recorded.get("claimed"):
             # Every copy finished before the batch was recorded: finalize now.
             _finalize_ingestion({"batchId": execution_id, "workflowExecutionId": execution_id})
         return _ingest_response(pending=False)
@@ -1669,10 +1678,10 @@ def _await_ingestion(event):
     token = event.get('taskToken', '')
     if not batch_id or not token:
         raise VAMSGeneralErrorResponse("Output ingestion wait requires a batch and a task token")
-    loc.register_task_token(copy_jobs_table(), batch_id, token)
-    claimed = loc.claim_notification(copy_jobs_table(), batch_id)
-    if claimed:
-        loc.deliver_batch_report(copy_jobs_table(), claimed, sfn_client)
+    # The engine stores the token and, when every copy already ended, answers it at once; otherwise
+    # the last copy's notify answers it. Either way the token is answered only once every copy job of
+    # the batch is counted terminal (loc.claim_notification).
+    _engine(loc.OUTPUT_STEP_REGISTER_TOKEN, batchId=batch_id, taskToken=token)
     return {"registered": True}
 
 
@@ -1682,16 +1691,20 @@ def _finalize_ingestion(event):
     left out of the output rows and named in the run's error, so the run ends FAILED; the outputs
     that landed are kept."""
     batch_id = event.get('batchId') or event.get('workflowExecutionId') or ''
-    table = copy_jobs_table()
-    batch = loc.get_batch(table, batch_id)
+    answer = _engine(loc.OUTPUT_STEP_BATCH_OUTCOMES, batchId=batch_id,
+                     workflowExecutionId=event.get('workflowExecutionId') or batch_id)
+    batch = answer.get("batch") or {}
     if not batch:
         raise VAMSGeneralErrorResponse("No output ingestion batch is recorded for this execution")
     context = batch.get("context") or {}
     state = json.loads(s3c.get_object(Bucket=context["stateBucket"], Key=context["stateKey"])['Body']
                        .read().decode("utf-8"))
     state_event = state.get("event") or {}
-    outcomes = {_normalized_relative(rel): row for rel, row in loc.batch_outcomes(
-        table, batch_id, context.get("workflowExecutionId", "")).items()}
+    if context.get("workflowExecutionId") and context["workflowExecutionId"] != (
+            event.get('workflowExecutionId') or batch_id):
+        answer = _engine(loc.OUTPUT_STEP_BATCH_OUTCOMES, batchId=batch_id,
+                         workflowExecutionId=context["workflowExecutionId"])
+    outcomes = {_normalized_relative(rel): row for rel, row in (answer.get("outcomes") or {}).items()}
 
     succeeded = {}
     failed = {}
@@ -1753,6 +1766,8 @@ def _finalize_ingestion(event):
 
 
 def lambda_handler(event, context):
+    global _invocation_context
+    _invocation_context = context
     logger.info(event)
 
     try:

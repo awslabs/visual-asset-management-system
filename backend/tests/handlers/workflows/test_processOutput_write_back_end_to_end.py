@@ -34,6 +34,7 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
+from backend.tests.copyEngineRouting import route_to_engine  # noqa: E402
 from backend.tests.handlers.workflows import test_processOutput_ingestion_outcome as base  # noqa: E402
 from backend.backend.handlers.assets import uploadFile as uf  # noqa: E402
 
@@ -92,7 +93,7 @@ def _run(workflow_database_id, objects):
         stack.enter_context(patch.object(po, "_stamp_output_objects", return_value=True))
         stack.enter_context(patch.object(po, "_lambda_file_ingestion", side_effect=file_ingestion))
         m["record"] = stack.enter_context(patch.object(po, "record_execution_outputs"))
-        stack.enter_context(patch.object(po, "copy_jobs_table", return_value=MagicMock()))
+        stack.enter_context(route_to_engine(po, MagicMock()))
         m["mark"] = stack.enter_context(patch.object(po, "_mark_ingesting", return_value=True))
         m["batch"] = stack.enter_context(patch.object(po.loc, "record_batch"))
         stack.enter_context(patch.object(po.loc, "claim_notification", return_value=None))

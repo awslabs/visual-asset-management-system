@@ -36,6 +36,7 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
+from backend.tests.copyEngineRouting import route_to_engine  # noqa: E402
 from backend.tests.handlers.workflows import test_processOutput_ingestion_outcome as base  # noqa: E402
 from backend.backend.handlers.assets import uploadFile as uf  # noqa: E402
 
@@ -131,7 +132,7 @@ class _Harness:
             m["stamp"] = p(po, "_stamp_output_objects", return_value=True)
             p(po, "_lambda_file_ingestion", side_effect=self.invoke_upload)
             m["record"] = p(po, "record_execution_outputs")
-            p(po, "copy_jobs_table", return_value=MagicMock())
+            stack.enter_context(route_to_engine(po, MagicMock()))
             m["mark"] = p(po, "_mark_ingesting", return_value=True)
             m["batch"] = p(po.loc, "record_batch")
             p(po.loc, "claim_notification", return_value=None)

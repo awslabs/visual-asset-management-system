@@ -53,7 +53,7 @@ MAX_PLANNED_PARTS = 9000
 # Batches one copy job is planned into at most. Bounds the execution's state size; the planner
 # widens batches rather than exceed it.
 MAX_BATCHES = 1000
-# Batches one child execution of the copy copies (infra largeObjectCopyEngine.ts BATCHES_PER_CHUNK,
+# Batches one child execution of the copy copies (infra assetFunctions.ts BATCHES_PER_CHUNK,
 # which carries the history arithmetic). Each child execution has its own 25,000-event history, so
 # throttling retries of one chunk can never exhaust the history of the job's own execution.
 DEFAULT_BATCHES_PER_CHUNK = 50
@@ -133,7 +133,7 @@ MIN_PART_SIZE_BYTES = 256 * MIB
 PARTS_PER_BATCH = 16
 THREADS_PER_BATCH = 8
 # Lambda tasks one copy runs at the same time: the MaxConcurrency of the copy-parts state machine's
-# Map (infra largeObjectCopyEngine.ts MAX_CONCURRENT_BATCHES, a fixed value in the definition).
+# Map (infra assetFunctions.ts MAX_CONCURRENT_BATCHES, a fixed value in the definition).
 MAX_CONCURRENT_BATCHES = 10
 # How long a workflow execution waits for its large outputs (the AwaitOutputIngestion timeout baked
 # into each generated definition; workflowAslBuilder DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS).
@@ -208,6 +208,101 @@ def request_reconcile(lambda_client, function_name, execution_arns):
             logger.warning(f"Could not hand an ended copy execution to the copy engine (its status "
                            f"change event still reconciles it): {e}")
     return handed
+
+
+# The workflow output step's copy work, done by the copy engine with its own role: the output step
+# holds no grant on the jobs table, the copy state machine or the copy executions; it invokes the
+# engine synchronously (the engine's resource policy names the output step's role). The engine
+# answers each operation with JSON (jsonable). Not an API route: the engine has no API Gateway trigger.
+ACTION_OUTPUT_STEP = "outputStep"
+OUTPUT_STEP_RECORDED_JOBS = "recordedJobs"
+OUTPUT_STEP_RECORD_BATCH = "recordBatch"
+OUTPUT_STEP_REGISTER_TOKEN = "registerTaskToken"
+OUTPUT_STEP_BATCH_OUTCOMES = "batchOutcomes"
+OUTPUT_STEP_CANCEL = "cancel"
+OUTPUT_STEP_OPERATIONS = (OUTPUT_STEP_RECORDED_JOBS, OUTPUT_STEP_RECORD_BATCH,
+                          OUTPUT_STEP_REGISTER_TOKEN, OUTPUT_STEP_BATCH_OUTCOMES, OUTPUT_STEP_CANCEL)
+# While a deployment moves the output step's copy work to the engine, the new output step code can run
+# a few seconds before the engine's resource permission, or the parameter naming the engine, exists.
+# AccessDenied and an engine name that cannot be read yet are retried for about this long (bounded
+# further by the invocation's remaining time) before the call fails.
+ENGINE_CALL_DEPLOY_WAIT_SECONDS = 120
+ENGINE_CALL_DEPLOY_DELAYS = (5, 10, 15, 20, 30, 40)
+
+
+class EngineCallFailed(Exception):
+    """The copy engine could not do an operation the workflow output step asked for. Raised to the
+    output step, which fails like any failed write of its own (the run is not reported done)."""
+
+
+def jsonable(value):
+    """A DynamoDB item (Decimals, sets) as plain JSON values."""
+    from decimal import Decimal
+    if isinstance(value, dict):
+        return {k: jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [jsonable(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(jsonable(v) for v in value)
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    return value
+
+
+def call_engine(lambda_client, function_name, operation, sleep=None, remaining_ms=None, **fields):
+    """Invoke the copy engine synchronously for one output-step operation and return its answer.
+
+    ``function_name`` is the engine's name, or a callable returning it ("" while it cannot be read).
+    Raises EngineCallFailed when there is no engine, the engine raised, or the call was refused;
+    only the two deployment-window conditions (AccessDenied, a name not readable yet) are retried."""
+    import time
+    if operation not in OUTPUT_STEP_OPERATIONS:
+        raise ValueError(f"Unknown output step operation {operation}")
+    if lambda_client is None:
+        raise EngineCallFailed("The copy engine function is not known to this function")
+    resolve = function_name if callable(function_name) else (lambda: function_name)
+    sleep = sleep or time.sleep
+    payload = json.dumps({"action": ACTION_OUTPUT_STEP, "operation": operation, **fields}, default=str)
+    waited = 0
+    delays = list(ENGINE_CALL_DEPLOY_DELAYS)
+
+    def _wait(reason):
+        nonlocal waited
+        can_wait = (delays and waited + delays[0] <= ENGINE_CALL_DEPLOY_WAIT_SECONDS
+                    and (remaining_ms is None or remaining_ms() > (delays[0] + 60) * 1000))
+        if not can_wait:
+            return False
+        delay = delays.pop(0)
+        logger.warning(f"The {operation} call to the copy engine is waiting {delay} s: {reason} "
+                       f"(the deployment may still be applying)")
+        sleep(delay)
+        waited += delay
+        return True
+
+    while True:
+        name = resolve() or ""
+        if not name:
+            if _wait("the engine function name cannot be read yet"):
+                continue
+            raise EngineCallFailed("The copy engine function is not known to this function")
+        try:
+            response = lambda_client.invoke(FunctionName=name, InvocationType="RequestResponse",
+                                            Payload=payload)
+            break
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "AccessDeniedException" and _wait("the engine refused the call"):
+                continue
+            raise EngineCallFailed(f"The copy engine refused the {operation} call ({code})") from e
+    body = response.get("Payload")
+    raw = body.read() if hasattr(body, "read") else (body or b"")
+    if response.get("FunctionError"):
+        logger.error(f"The copy engine failed the {operation} call: {raw[:500]!r}")
+        raise EngineCallFailed(f"The copy engine failed the {operation} call")
+    try:
+        return json.loads(raw or b"{}") or {}
+    except ValueError as e:
+        raise EngineCallFailed(f"The copy engine answered the {operation} call unreadably") from e
 
 
 def state_machine_arn(environ=None):
@@ -973,7 +1068,7 @@ def abort_until_gone(s3_client, bucket, key, upload_id, attempts=ABORT_SWEEP_ATT
 # had been accepted before the stop; one later abort removed it for good. So no immediate answer is
 # final: every stopped or failed job with an upload also gets a delayed sweep, an execution of the
 # copy state machine itself (its sweep branch: Wait SWEEP_FIRST_WAIT_SECONDS, sweep, Wait
-# SWEEP_SECOND_WAIT_SECONDS, sweep; infra lambdaBuilder/largeObjectCopyEngine.ts). The second pass
+# SWEEP_SECOND_WAIT_SECONDS, sweep; infra lambdaBuilder/assetFunctions.ts). The second pass
 # runs about 16 minutes after the stop, a minute past the longest a copy task alive at the stop can
 # still run (the engine's 15-minute timeout).
 SWEEP_EXECUTION_PREFIX = "locsweep-"

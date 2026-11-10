@@ -4,7 +4,7 @@
  */
 
 /**
- * The large object copy engine (lib/lambdaBuilder/largeObjectCopyEngine.ts) in every partition
+ * The large object copy engine (lib/lambdaBuilder/assetFunctions.ts) in every partition
  * template, with the Lambdas in the VPC, and with a deployment config that still carries the removed
  * app.largeFileIngestion block (ignored).
  *
@@ -44,7 +44,7 @@ import {
     S3_ASSET_BUCKETS_NAME_INDEX,
     THROTTLE_RETRY,
     worstCaseTaskEvents,
-} from "../../lib/lambdaBuilder/largeObjectCopyEngine";
+} from "../../lib/lambdaBuilder/assetFunctions";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
 import { nestedTemplateKeyFor } from "../support/iamPolicySize";
 
@@ -427,6 +427,25 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
             ).includes(`"${id}"`);
             return viaPolicy || viaRole;
         });
+    const inlineDocsOf = (roleId: string) =>
+        Object.values(resources)
+            .filter(
+                (r: any) =>
+                    r.Type === "AWS::IAM::Policy" &&
+                    JSON.stringify(r.Properties.Roles ?? []).includes(`"${roleId}"`)
+            )
+            .map((r: any) => r.Properties.PolicyDocument);
+    // A resource-based permission on the engine for this role (the engine's invoke grant).
+    const enginePermitsRole = (roleId: string) =>
+        Object.values(resources).some(
+            (r: any) =>
+                r.Type === "AWS::Lambda::Permission" &&
+                r.Properties.Action === "lambda:InvokeFunction" &&
+                JSON.stringify(r.Properties.FunctionName) ===
+                    JSON.stringify({ "Fn::GetAtt": [engineFunctionId, "Arn"] }) &&
+                JSON.stringify(r.Properties.Principal) ===
+                    JSON.stringify({ "Fn::GetAtt": [roleId, "Arn"] })
+        );
 
     test.each([
         ["executionService.lambda_handler", "the abort route and the status change handler"],
@@ -436,10 +455,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(fn.Properties.Environment.Variables.LARGE_OBJECT_COPY_FUNCTION_NAME).toEqual({
             Ref: engineFunctionId,
         });
-        const docs = managedPoliciesOf(roleIdOf(fn)).map(
-            ([, r]: [string, any]) => r.Properties.PolicyDocument
-        );
-        expect(docs.some(invokesEngine)).toBe(true);
+        // A resource-based permission on the engine, not an identity statement on the role.
+        expect(enginePermitsRole(roleIdOf(fn))).toBe(true);
+        expect(inlineDocsOf(roleIdOf(fn)).some(invokesEngine)).toBe(false);
     });
 
     // #1123 D6: every function that runs the cancel path signs its abort for the asset bucket's
@@ -448,12 +466,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
     test.each([
         ["executionService.lambda_handler", "the abort route and the status change handler"],
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
-        ["sfn.processWorkflowExecutionOutput.lambda_handler", "the output step"],
     ])("%s (%s) may query the asset buckets table's bucket-name index", (handler) => {
         const [, fn] = functionByHandler(handler);
-        const docs = managedPoliciesOf(roleIdOf(fn)).map(
-            ([, r]: [string, any]) => r.Properties.PolicyDocument
-        );
+        const docs = inlineDocsOf(roleIdOf(fn));
         const queriesBucketIndex = (doc: any) =>
             (doc.Statement as any[]).some(
                 (s) =>
@@ -570,13 +585,9 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
     test.each([
         ["executionService.lambda_handler", "the abort route and the status change handler"],
         ["sfn.handleExecutionError.lambda_handler", "the error handler"],
-        ["sfn.processWorkflowExecutionOutput.lambda_handler", "the output step"],
     ])("%s (%s) may start the delayed sweep on the copy state machine only", (handler) => {
         const [, fn] = functionByHandler(handler);
-        const docs = managedPoliciesOf(roleIdOf(fn)).map(
-            ([, r]: [string, any]) => r.Properties.PolicyDocument
-        );
-        expect(docs.some(startsOnlyTheCopyMachine)).toBe(true);
+        expect(inlineDocsOf(roleIdOf(fn)).some(startsOnlyTheCopyMachine)).toBe(true);
     });
 
     test("the engine may start the delayed sweep on its own state machine only", () => {
@@ -593,14 +604,14 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(JSON.stringify(docs)).not.toContain(stateMachineId);
     });
 
-    test("the output step reads the engine name from SSM and may invoke it, with no cycle", () => {
+    test("the output step reads the engine name under the resource-name prefix and may invoke it, with no cycle", () => {
         const [fnId, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
         const vars = fn.Properties.Environment.Variables;
         // A plain string, not a reference: the engine already references the output step.
         expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME).toBeUndefined();
         expect(typeof vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toBe("string");
-        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toMatch(
-            /^\/[^/]+\/largeObjectCopy\/engineFunctionName$/
+        expect(vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER).toBe(
+            `${vars.VAMS_RESOURCE_PARAM_PREFIX}/lambdaFunctions/largeObjectCopyEngine`
         );
         const params = Object.entries(resources).filter(
             ([, r]: [string, any]) =>
@@ -608,37 +619,83 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
                 r.Properties.Name === vars.LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER
         );
         expect(params).toHaveLength(1);
-        const [paramId, param] = params[0] as [string, any];
+        const [, param] = params[0] as [string, any];
         expect(param.Properties.Type).toBe("String");
         expect(param.Properties.Value).toEqual({ Ref: engineFunctionId });
         const roleId = roleIdOf(fn);
-        const handOff = Object.entries(resources).filter(
-            ([, r]: [string, any]) =>
-                r.Type === "AWS::IAM::ManagedPolicy" &&
-                JSON.stringify(r.Properties.Roles ?? []) === JSON.stringify([{ Ref: roleId }]) &&
-                invokesEngine(r.Properties.PolicyDocument)
-        );
-        expect(handOff).toHaveLength(1);
-        const [handOffId, policy] = handOff[0] as [string, any];
-        const statements = policy.Properties.PolicyDocument.Statement as any[];
-        expect(statements).toHaveLength(2);
-        expect(statements).toContainEqual(
-            expect.objectContaining({
-                Action: "ssm:GetParameter",
-                Effect: "Allow",
-                Resource: expect.anything(),
-            })
-        );
-        expect(
-            JSON.stringify(statements.find((s) => s.Action === "ssm:GetParameter").Resource)
-        ).toContain(paramId);
-        // Not attached through the role and not awaited by the function: either would close a
-        // dependency cycle with the engine (which references the output step).
-        expect(JSON.stringify(resources[roleId].Properties.ManagedPolicyArns ?? [])).not.toContain(
-            handOffId
-        );
-        expect(JSON.stringify(fn.DependsOn ?? [])).not.toContain(handOffId);
+        // The read is covered by the resource-name grant every VAMS function holds: the role gains
+        // no statement for it.
+        const ssmStatements = inlineDocsOf(roleId)
+            .flatMap((d: any) => d.Statement as any[])
+            .filter((st) => JSON.stringify(st.Action).includes("ssm:"));
+        expect(ssmStatements).toHaveLength(1);
+        expect(JSON.stringify(ssmStatements[0].Resource)).toContain("/resourceNames/*");
+        expect(enginePermitsRole(roleId)).toBe(true);
+        expect(managedPoliciesOf(roleId)).toEqual([]);
         expect(JSON.stringify(engineFunction)).toContain(fnId);
+    });
+
+    test("the output step holds no copy grant: the engine does its copy work", () => {
+        const [, fn] = functionByHandler("sfn.processWorkflowExecutionOutput.lambda_handler");
+        const statements = inlineDocsOf(roleIdOf(fn)).flatMap((d: any) => d.Statement as any[]);
+        const text = JSON.stringify(statements);
+        expect(text).not.toContain("LargeObjectCopyJobsStorageTable");
+        expect(text).not.toContain("LargeObjectCopy-");
+        expect(text).not.toContain("states:SendTaskSuccess");
+        expect(text).not.toContain("states:StopExecution");
+        expect(text).not.toContain("states:StartExecution");
+        expect(text).not.toContain("/index/" + S3_ASSET_BUCKETS_NAME_INDEX);
+        expect(invokesEngine({ Statement: statements })).toBe(false);
+    });
+
+    test("the engine can stop its own executions and reconcile them (the output step's cancel)", () => {
+        const roleId = roleIdOf(engineFunction);
+        const stops = inlineDocsOf(roleId)
+            .flatMap((d: any) => d.Statement as any[])
+            .filter((st) => [st.Action].flat().includes("states:StopExecution"));
+        expect(stops).toHaveLength(1);
+        expect(SynthResult.flatten(stops[0].Resource)).toMatch(
+            /:execution:LargeObjectCopy-[^*]+:\*$/
+        );
+        expect(enginePermitsRole(roleId)).toBe(true);
+    });
+
+    test("the engine is invoked by roles and by its own rule only, never through an API route", () => {
+        const permissions = Object.values(resources).filter(
+            (r: any) =>
+                r.Type === "AWS::Lambda::Permission" &&
+                JSON.stringify(r.Properties.FunctionName).includes(engineFunctionId)
+        ) as any[];
+        expect(permissions.length).toBeGreaterThanOrEqual(4);
+        for (const permission of permissions) {
+            const principal = JSON.stringify(permission.Properties.Principal);
+            expect(principal).not.toContain("apigateway");
+            expect(
+                principal.includes("events.amazonaws.com") || principal.includes("ServiceRole")
+            ).toBe(true);
+        }
+    });
+
+    test("this PR's functions carry no customer managed policy and no overflow policy", () => {
+        const handlers = [
+            "sfn.processWorkflowExecutionOutput.lambda_handler",
+            "sfn.handleExecutionError.lambda_handler",
+        ];
+        const roles = [
+            ...handlers.map((h) => roleIdOf(functionByHandler(h)[1])),
+            roleIdOf(engineFunction),
+        ];
+        for (const roleId of roles) {
+            const managed = managedPoliciesOf(roleId).map(([id]) => id);
+            // The system pipeline callback policy comes from #1122, the execution lock policies are
+            // AWS::IAM::Policy resources; nothing named for the copy engine, no overflow.
+            expect(managed.filter((id) => /LargeObjectCopy|OverflowPolicy/.test(id))).toEqual([]);
+        }
+        const copyManaged = Object.entries(resources).filter(
+            ([id, r]: [string, any]) =>
+                r.Type === "AWS::IAM::ManagedPolicy" && /LargeObjectCopy/.test(id)
+        );
+        expect(copyManaged).toEqual([]);
     });
 
     test("a notify that exhausted its retries gets a longer last attempt", () => {

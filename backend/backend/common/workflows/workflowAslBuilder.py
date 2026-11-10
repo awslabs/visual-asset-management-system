@@ -53,7 +53,7 @@ INGESTION_TIMEOUT_ERROR = "OutputIngestionTimeout"
 # capacity with long jittered backoff instead of failing the run, whose error handler
 # would then cancel the run's copies. A throttled invoke never ran the handler, so retrying it repeats
 # nothing. It is listed first: Step Functions uses the first retrier whose errors match. The copy
-# engine's tasks use the same values (infra largeObjectCopyEngine.ts THROTTLE_RETRY). With full
+# engine's tasks use the same values (infra assetFunctions.ts THROTTLE_RETRY). With full
 # jitter each delay is uniform between 0 and its computed value (10 s doubling to a 300 s cap), so 99
 # attempts wait about 4 hours on average and at most about 7.9 hours.
 THROTTLE_RETRIER = {

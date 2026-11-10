@@ -70,7 +70,7 @@ EXECUTION_SERVICE_WRITES = {
     ("pipelineExecutions", "UpdateItem"),
     ("locks", "DeleteItem"),
     # The abort route marks the run's unfinished large object copy jobs CANCELLED (its managed
-    # LargeObjectCopyCoordinationPolicy: GetItem, UpdateItem, Query on the jobs table and its index).
+    # grantLargeObjectCopyCoordination, inline: GetItem, UpdateItem, Query on the jobs table and its index).
     ("copyJobs", "UpdateItem"),
 }
 
@@ -112,7 +112,7 @@ EXECUTION_SERVICE_READS = {
     *{f"{table}/index/{index}" for table, indexes in EXECUTION_SERVICE_READ_INDEXES.items()
       for index in indexes},
     "locks/index/WorkflowExecutionLocksByHolderGSI",
-    # The abort route lists the run's copy jobs (LargeObjectCopyCoordinationPolicy; the index is
+    # The abort route lists the run's copy jobs (grantLargeObjectCopyCoordination, inline; the index is
     # queried by common.largeObjectCopy, not spelled in this module).
     "copyJobs", "copyJobs/index/WorkflowExecutionIdIndex",
     # The abort's Region lookup for a copy job row without destRegion (common.s3, #1123 D6).
