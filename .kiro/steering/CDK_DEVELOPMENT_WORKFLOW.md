@@ -566,6 +566,33 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 
 `IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
 
+#### **CloudWatch Logs Resource Policies: Log-Group Scoped Only**
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (hard limit), so one per stack caps how many VAMS deployments fit in a Region (#1266). `aws-events-targets` `CloudWatchLogGroup`, `logs.LogGroup.addToResourcePolicy()`, `logs.ResourcePolicy` and a `putResourcePolicy` custom resource each create one; do not use them. Grant the service through the log group's own policy (mirrors `infra/CLAUDE.md` anti-pattern 14):
+
+```typescript
+// ✅ CORRECT - log-group-scoped policy; the log group name is a literal, not a Ref to itself (circular)
+(logGroup.node.defaultChild as logs.CfnLogGroup).resourcePolicyDocument = new iam.PolicyDocument({
+    statements: [
+        new iam.PolicyStatement({
+            principals: [Service("EVENTS").Principal],
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [`${logGroupArn}:*`],
+            conditions: {
+                StringEquals: { "aws:SourceAccount": stack.account },
+                ArnLike: { "aws:SourceArn": ruleArnPatternOnThisDeploymentsBus },
+            },
+        }),
+    ],
+});
+rule.addTarget({ bind: () => ({ arn: logGroupArn }) });
+
+// ❌ INCORRECT - adds a Custom::CloudwatchLogResourcePolicy (account-level) per stack
+rule.addTarget(new targets.CloudWatchLogGroup(logGroup));
+```
+
+The worked example is the orchestration bus audit rule in `storageBuilder-nestedStack.ts`, pinned by `infra/test/storage/orchestrationBusAuditLogPolicy.test.ts`. The CDK OpenSearch `Domain` still creates one account-level policy per provisioned domain for its logs.
+
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
