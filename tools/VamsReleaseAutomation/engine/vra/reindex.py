@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -243,6 +244,41 @@ def _direct_argv(ctx, env: str, build_id: str, clear_indexes: bool, base: str | 
     return script, argv
 
 
+# The reindexer's handler returns statusCode 200 with a non-empty `failures` list when records failed or the index
+# clearing did not complete, and `reindex_utility.py --mode direct` then exits 0 (upstream VAMS issue #1296). vra
+# reads the handler's own report from the utility's output instead of trusting the exit code: the handler's
+# "Reindexing did not complete: <reasons>" error line, and the utility's per-part "Failed: <n>" result lines.
+DIRECT_INCOMPLETE = re.compile(r"Reindexing did not complete: ([^\n\"]*)")
+DIRECT_PART = re.compile(r"^.*?(Asset|File) Reindexing Results:", re.M)
+DIRECT_FAILED = re.compile(r"Failed: (\d+)")
+DIRECT_COUNT = re.compile(r"(Total|Success|Failed): (\d+)")
+
+
+def direct_failures(out: str) -> list[str]:
+    """The failures a direct-mode run reported in its output (see DIRECT_INCOMPLETE); empty = none reported."""
+    reasons = [m.group(1).strip() for m in DIRECT_INCOMPLETE.finditer(out or "") if m.group(1).strip()]
+    if reasons:
+        return list(dict.fromkeys(reasons))
+    parts = list(DIRECT_PART.finditer(out or ""))
+    for i, m in enumerate(parts):
+        seg = out[m.end(): parts[i + 1].start() if i + 1 < len(parts) else len(out)]
+        f = DIRECT_FAILED.search(seg)
+        if f and int(f.group(1)):
+            reasons.append(f"{f.group(1)} {m.group(1).lower()}s failed to reindex")
+    return reasons
+
+
+def direct_counts(out: str) -> dict:
+    """The per-part Total / Success / Failed counts the utility logged."""
+    parts = list(DIRECT_PART.finditer(out or ""))
+    res: dict[str, dict] = {}
+    for i, m in enumerate(parts):
+        seg = out[m.end(): parts[i + 1].start() if i + 1 < len(parts) else len(out)]
+        key = {"Asset": "assets", "File": "files"}[m.group(1)]
+        res[key] = {k.lower() + "_count": int(v) for k, v in DIRECT_COUNT.findall(seg)[:3]}
+    return res
+
+
 def direct_reindex(ctx, env: str, build_id: str, sc, clear_indexes: bool = False, base: str | None = None,
                    cfg: dict | None = None) -> dict:
     """Run the bundle's reindex utility in direct mode (local process, no 15-minute limit)."""
@@ -258,7 +294,13 @@ def direct_reindex(ctx, env: str, build_id: str, sc, clear_indexes: bool = False
             raise PermissionDenied(f"direct reindex of {env} was denied", denials, env=env)
         return {"mode": "direct", "status": "failed", "error": f"exit {p.returncode}",
                 "tail": util.redact(out[-1500:])}
-    return {"mode": "direct", "status": "succeeded"}
+    # exit 0 is not enough (upstream #1296): read the failures the handler reported
+    failures = direct_failures(out)
+    counts = direct_counts(out)
+    if failures:
+        return {"mode": "direct", "status": "failed", "error": util.redact("; ".join(failures))[:500],
+                "counts": counts, "tail": util.redact(out[-1500:])}
+    return {"mode": "direct", "status": "succeeded", "counts": counts}
 
 
 def run(ctx, env: str, sc, mode: str | None = None, clear_indexes: bool = True, build_id: str | None = None,

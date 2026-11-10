@@ -329,3 +329,72 @@ def test_dry_run_lambda_names_the_reindexer(ctx, monkeypatch):
     assert out.exit_code == 0, out.message
     assert out.run.find_step("reindex.run")["result"]["function"] == "dev-reindexer"
     assert ctx.ledger.history("dev") == []
+
+
+# ----------------------------------------------------------------- D32: direct mode reads the reported failures
+DIRECT_OK = """\
+INFO DIRECT REINDEXER RUN SUCCESSFUL
+INFO Asset Reindexing Results:
+INFO   Total: 22
+INFO   Success: 22
+INFO   Failed: 0
+INFO File Reindexing Results:
+INFO   Buckets Processed: 1
+INFO   Objects Scanned: 91
+INFO   Total: 60
+INFO   Success: 60
+INFO   Failed: 0
+INFO Reindexing completed successfully
+"""
+# the handler's error line, as its JSON logger writes it, then the utility still exits 0 (upstream #1296)
+DIRECT_FAILED_RECORDS = DIRECT_OK.replace("Success: 60\nINFO   Failed: 0", "Success: 57\nINFO   Failed: 3") \
+    .replace("INFO DIRECT", '{"level":"ERROR","message":"Reindexing did not complete: 3 files failed to reindex",'
+                            '"service":"CrReindexer"}\nINFO DIRECT')
+
+
+def _direct_bundle(ctx, monkeypatch, tmp_path, output, rc=0):
+    import subprocess
+    from types import SimpleNamespace
+
+    from vra import vams_resources
+    from conftest import fake_shell_cls
+    monkeypatch.setattr(vams_resources, "discover", lambda *a, **kw: {
+        "prefix": "/vams-dev-us-east-1/resourceNames", "lambdas": {}, "buckets": {}, "all": {}, "tables": {
+            "dynamoTables/assetStorage": "A", "dynamoTables/s3AssetBucketsStorage": "B",
+            "dynamoTables/assetFileMetadataStorage": "C"}})
+    bdir = build_mod.build_dir(ctx, "cust-v2.7.0-1")
+    (bdir / "migrations" / "tools").mkdir(parents=True)
+    (bdir / "migrations" / "tools" / "reindex_utility.py").write_text("")
+    (bdir / "reindexer" / "backend" / "backend").mkdir(parents=True)
+    monkeypatch.setenv("VRA_MIGRATION_PYTHON", "utility-python")
+    calls: list = []
+    ctx.shell_cls = fake_shell_cls(calls, lambda argv, cwd, env: subprocess.CompletedProcess(argv, rc, output, ""))
+    return SimpleNamespace(log_path=tmp_path / "direct.log"), calls
+
+
+def test_direct_mode_reports_the_counts(ctx, monkeypatch, tmp_path):
+    sc, calls = _direct_bundle(ctx, monkeypatch, tmp_path, DIRECT_OK)
+    res = reindex.direct_reindex(ctx, "dev", "cust-v2.7.0-1", sc)
+    assert res["status"] == "succeeded", res
+    assert res["counts"]["files"] == {"total_count": 60, "success_count": 60, "failed_count": 0}
+    assert calls[0]["argv"][2:4] == ["--mode", "direct"]
+
+
+def test_direct_mode_exit_0_with_reported_failures_is_failed(ctx, monkeypatch, tmp_path):
+    sc, _ = _direct_bundle(ctx, monkeypatch, tmp_path, DIRECT_FAILED_RECORDS)
+    res = reindex.direct_reindex(ctx, "dev", "cust-v2.7.0-1", sc)
+    assert res["status"] == "failed" and "3 files failed to reindex" in res["error"], res
+
+
+def test_direct_mode_failed_counts_without_the_error_line_are_failed(ctx, monkeypatch, tmp_path):
+    out = DIRECT_OK.replace("Success: 22\nINFO   Failed: 0", "Success: 20\nINFO   Failed: 2")
+    sc, _ = _direct_bundle(ctx, monkeypatch, tmp_path, out)
+    res = reindex.direct_reindex(ctx, "dev", "cust-v2.7.0-1", sc)
+    assert res["status"] == "failed" and "2 assets failed" in res["error"], res
+
+
+def test_direct_mode_index_clearing_failure_is_failed(ctx, monkeypatch, tmp_path):
+    out = '{"message":"Reindexing did not complete: index clearing did not complete for asset_index"}\n' + DIRECT_OK
+    sc, _ = _direct_bundle(ctx, monkeypatch, tmp_path, out)
+    res = reindex.direct_reindex(ctx, "dev", "cust-v2.7.0-1", sc, clear_indexes=True)
+    assert res["status"] == "failed" and "index clearing" in res["error"], res
