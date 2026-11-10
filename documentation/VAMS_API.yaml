@@ -15473,6 +15473,10 @@ components:
                     items:
                         $ref: "#/components/schemas/aggregationBucket"
                     description: "Aggregation buckets"
+                sum_other_doc_count:
+                    type: integer
+                    nullable: true
+                    description: "Records whose value is not among the returned buckets (each facet returns at most 1,000 buckets per index); 0 when every value is listed, so a value above 0 means the bucket list is cut. Counted the same way as the buckets."
         
         searchResponse:
             type: object

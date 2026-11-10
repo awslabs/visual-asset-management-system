@@ -794,7 +794,7 @@ All search endpoints return the same response structure.
 | `aggregations`            | object  | Faceted aggregation buckets (if requested). Bucket keys and counts cover only records the caller can open; see [Counts and permissions](#counts-and-permissions).                            |
 | `aggregationTotal`        | integer | Sum of the `str_databaseid` aggregation buckets (or `str_assetid` when that aggregation is absent), counted the same way as `aggregations`; `null` when no aggregation buckets are returned. |
 
-Each aggregation returns at most 1,000 buckets, the values with the most records first. `aggregationTotal` also counts the records whose database is not among the returned buckets, so a search whose results span more than 1,000 databases is counted whole.
+Each aggregation returns at most 1,000 buckets per index, the values with the most records first, and `sum_other_doc_count`: the number of records whose value is not among the returned buckets, counted the same way as the buckets. It is `0` when every value is listed, so a value above `0` means the bucket list is cut. `aggregationTotal` also counts the records whose database is not among the returned buckets, so a search whose results span more than 1,000 databases is counted whole.
 
 ### Counts and permissions
 
