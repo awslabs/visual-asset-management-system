@@ -235,6 +235,11 @@ Executes a simplified search with basic parameters for easy API integration. The
 | `from`            | integer       | `0`     | Starting offset (0-10,000).                              |
 | `size`            | integer       | `100`   | Number of results (1-2,000).                             |
 
+A field filter narrows the results, so a value of several words asks for every word:
+
+-   `assetName`, `assetId`, `assetType`, `fileKey` and each `tags` entry: a value without `*` or `?` matches the field's exact value. A value with `*` or `?` matches a record whose field contains every word, each word with its own wildcards: `gearbox hous*` finds `gearbox housing`, and `gearbox zzz*` does not find `gearbox`.
+-   `metadataValue`: a value without wildcards matches a record whose metadata (and, on files, attribute) values contain every word, each anywhere inside a value; the words may sit in different keys. A value with wildcards is one pattern for a whole value: `Line 3*` matches a value that starts with `Line 3`.
+
 :::tip[When to Use Simple Search]
 Use simple search when you need basic filtering by known fields. Use [Advanced Search](#advanced-search) when you need structured tokens, custom filters, or fine-grained control over query behavior.
 :::
@@ -748,6 +753,10 @@ Three separate things are worth keeping apart when reading the rest of this page
 -   **What the index stores** — the `MD_` and `AB_` objects above.
 -   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as `MD_._value` (plus `AB_._value` on the file index), the `flat_object` subfield holding every value in the object.
 -   **What a request may submit** — see below. The submitted spelling is normalized before the query is built, so it need not match either of the above.
+
+#### Values of Several Words
+
+A `metadataQuery` term is one value. In `both` mode a `key:value` term with a value without wildcards matches that key's exact value (`Plant:Line 3`), and a value with `*` or `?` is one pattern for the key's whole value (`Plant:Line 3*` matches `Line 3` and `Line 30`); a bare term without wildcards matches an exact value. In `value` mode a term without wildcards matches a record whose values contain every word, each anywhere inside a value, and a term with wildcards is one pattern for a whole value. Unlike the general `query`, no word of a value is matched on its own.
 
 #### Metadata Key Spellings a Request May Use
 

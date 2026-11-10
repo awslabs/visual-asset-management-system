@@ -73,7 +73,7 @@ Identifier fields such as `str_databaseid` are analyzed text: the index splits a
 
 ### Metadata search
 
-`--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default). `field:value` terms are parsed only in `both` mode; in `key` and `value` mode each `AND`/`OR` term is a field name or a value.
+`--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default). `field:value` terms are parsed only in `both` mode; in `key` and `value` mode each `AND`/`OR` term is a field name or a value. A value of several words is one value: `Plant:Line 3` matches that exact value, `Plant:Line 3*` a value starting with `Line 3`, and a `value`-mode term without wildcards a record whose values contain every word. In `search simple`, a wildcard value of `--asset-name`, `--asset-id`, `--asset-type`, `--file-key` or `--tags` matches a record whose field holds every word (`--asset-name "gearbox hous*"`).
 
 The key may be given bare, with the `MD_` / `AB_` entity prefix, or with a type prefix; all three address the same field. See [Search field reference](#search-field-reference).
 

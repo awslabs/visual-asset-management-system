@@ -570,6 +570,53 @@ class FieldClassifier:
             return "*"
         return " ".join(f"*{FieldClassifier.escape_opensearch_query_string(word)}*" for word in words)
 
+    # query_string reads these words as operators wherever they stand; the escaping cannot make a word
+    # literal, so such a word is quoted
+    OPERATOR_WORDS = ("AND", "OR", "NOT")
+
+    # A field filter or metadata value is one value to narrow the results by, so a value of several
+    # words asks for every word (#1282). query_string splits its text at unescaped whitespace and, with
+    # default_operator OR, a record matched when ANY word did; a word after the first even lost the
+    # field it was scoped to and was searched in every field. The three forms below keep the words in
+    # the field and require them all.
+
+    @staticmethod
+    def every_word_in_field_query(field_name: str, value: str) -> str:
+        """query_string text for a value with the caller's `*`/`?` wildcards on an analyzed text field:
+        ``field:(w1 AND w2 ...)``, so the field must hold every word, each word keeping its own
+        wildcards. The explicit AND joins the words only; a word the analyzer splits further keeps
+        default_operator OR inside itself, as before. One word stays ``field:w``."""
+        words = []
+        for word in dict.fromkeys(value.split()):
+            escaped = FieldClassifier.escape_opensearch_query_string(word, preserve_wildcards=True)
+            words.append(f'"{escaped}"' if escaped in FieldClassifier.OPERATOR_WORDS else escaped)
+        if len(words) == 1:
+            return f"{field_name}:{words[0]}"
+        if not words:
+            return f"{field_name}:*"
+        return f"{field_name}:({' AND '.join(words)})"
+
+    @staticmethod
+    def every_word_anywhere_in_values_query(value: str) -> str:
+        """query_string text for a contains search of the metadata or attribute values (no wildcards of
+        the caller's): ``*w1* AND *w2* ...``, a record whose values contain every word, each anywhere
+        inside a value. The `_value` subfield collects all of a record's values, so the words may sit in
+        different keys. One word stays ``*w*``; a blank value is ``*``, any value, as before."""
+        words = list(dict.fromkeys(value.split()))
+        if not words:
+            return "*"
+        return " AND ".join(f"*{FieldClassifier.escape_opensearch_query_string(word)}*" for word in words)
+
+    @staticmethod
+    def whole_value_pattern(value: str) -> str:
+        """``value`` with the caller's `*`/`?` wildcards as ONE query_string term for a keyword-typed
+        field (metadata and attribute values, a metadata key path): the inner whitespace is escaped, so
+        the pattern is matched against each whole value, as a one-word pattern always was. ``Line 3*``
+        matches a value starting with "Line 3". A keyword value holds a sentence as one term, so
+        requiring each word as its own term would match no value that has a space in it."""
+        escaped = FieldClassifier.escape_opensearch_query_string(value.strip(), preserve_wildcards=True)
+        return re.sub(r'(\s)', r'\\\1', escaped)
+
 #######################
 # Geo Filter Helper
 #######################
@@ -923,11 +970,11 @@ class SimpleSearchQueryBuilder:
         has_wildcards = '*' in value or '?' in value
         
         if has_wildcards:
-            # User wants wildcard search - use query_string with their wildcards
-            escaped_value = self.field_classifier.escape_opensearch_query_string(value, preserve_wildcards=True)
+            # User wants wildcard search - use query_string with their wildcards; a value of several
+            # words asks for every word in this field (FieldClassifier.every_word_in_field_query)
             return {
                 "query_string": {
-                    "query": f"{field_name}:{escaped_value}",
+                    "query": self.field_classifier.every_word_in_field_query(field_name, value),
                     "default_operator": "OR",
                     "analyze_wildcard": True,
                     "lenient": True
@@ -1172,10 +1219,10 @@ class SimpleSearchQueryBuilder:
             fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
             
             if has_wildcards:
-                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=True)
+                # The caller's pattern, matched against each whole value
                 search_queries.append({
                     "query_string": {
-                        "query": escaped_value,
+                        "query": self.field_classifier.whole_value_pattern(request.metadataValue),
                         "fields": fields,
                         "default_operator": "OR",
                         "analyze_wildcard": True,
@@ -1183,11 +1230,10 @@ class SimpleSearchQueryBuilder:
                     }
                 })
             else:
-                # Exact value match across all metadata/attribute values
-                escaped_value = self.field_classifier.escape_opensearch_query_string(request.metadataValue, preserve_wildcards=False)
+                # Contains search across all metadata/attribute values: every word, each anywhere
                 search_queries.append({
                     "query_string": {
-                        "query": f"*{escaped_value}*",
+                        "query": self.field_classifier.every_word_anywhere_in_values_query(request.metadataValue),
                         "fields": fields,
                         "default_operator": "OR",
                         "analyze_wildcard": True,
@@ -1608,7 +1654,9 @@ class DualIndexQueryBuilder:
 
         # Build flat object query
         if has_wildcards:
-            query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
+            # The caller's pattern, matched against the key's whole value (#1282): unescaped, the
+            # space ended the term and every word after it was searched in every field
+            query_str = f"{prefix}.{escaped_field_name}:{self.field_classifier.whole_value_pattern(value_part)}"
         else:
             # Exact match - quote the value for phrase matching
             query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
@@ -1655,10 +1703,11 @@ class DualIndexQueryBuilder:
         elif search_mode == "value":
             # Search only metadata field values across all values in flat objects
             if has_wildcards:
-                query_str = escaped_query
+                # The caller's pattern, matched against each whole value (#1282)
+                query_str = self.field_classifier.whole_value_pattern(term)
             else:
-                # For value-only search, use wildcards to find partial matches
-                query_str = f"*{escaped_query}*"
+                # For value-only search, use wildcards to find partial matches: every word (#1282)
+                query_str = self.field_classifier.every_word_anywhere_in_values_query(term)
             
             # Search across all values in flat objects
             fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
@@ -1676,7 +1725,8 @@ class DualIndexQueryBuilder:
         else:  # search_mode == "both"
             # Search both field names and values in flat objects
             if has_wildcards:
-                query_str = escaped_query
+                # The caller's pattern, matched against each whole value (#1282)
+                query_str = self.field_classifier.whole_value_pattern(term)
             else:
                 # Exact match for "both" mode
                 query_str = f'"{escaped_query}"'
