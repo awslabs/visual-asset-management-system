@@ -891,12 +891,6 @@ class TestMetadataOutput:
         _run(_state(), s3, h.FakeBedrock([_reply()]))
         assert ("abkt", ASSET_METADATA_KEY) not in s3.puts
 
-    @pytest.mark.temporary  # pins the removal of the asset keyword union's constants and merge helper
-    def test_the_retired_asset_keyword_union_is_gone(self):
-        mod = h.load_handler("generateMetadata")
-        for name in ("ASSET_KEYWORDS_KEY", "ASSET_CATEGORIES_KEY", "_merge_list_value"):
-            assert not hasattr(mod, name), name
-
     def test_summary_on_success(self):
         s3 = _seed(h.FakeS3())
         _mod, state = _run(_state(), s3, h.FakeBedrock([_reply()]))

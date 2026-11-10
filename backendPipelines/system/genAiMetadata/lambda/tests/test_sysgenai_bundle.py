@@ -160,10 +160,6 @@ class TestAllowLists:
         wildcard admits, and no unit test of the handlers would notice."""
         assert _cdk_allow_list_literal() == "*"
 
-    @pytest.mark.temporary  # pins the drop of .fls/.fws relative to the thumbnail allow list
-    def test_the_faro_formats_have_no_dedicated_handling(self):
-        assert ".fls" not in fc.ALLOW_LIST and ".fws" not in fc.ALLOW_LIST
-
 
 @pytest.mark.unit
 class TestPipelineRecord:
@@ -282,17 +278,6 @@ class TestTemplate:
                           "extractGeoLocation": True, "videoSegmentSeconds": 0, "contentChunking": True,
                           "fieldMapping": kr.FIELD_MAPPING_DEFAULT,
                           "classificationVocabulary": cv.DEFAULT_VOCABULARY}
-
-    @pytest.mark.temporary  # pins the rename of INCLUDE_SIBLING_FILES / WRITE_ASSET_KEYWORDS out of the bodies
-    def test_the_retired_tags_and_keys_are_gone(self):
-        """INCLUDE_SIBLING_FILES became RESOLVE_DEPENDENCIES and WRITE_ASSET_KEYWORDS became the write target;
-        both were unreleased, so no alias is kept."""
-        for body in (template["configBody"], scene_template["configBody"]):
-            for retired in ("INCLUDE_SIBLING_FILES", "includeSiblingFiles", "WRITE_ASSET_KEYWORDS",
-                            "writeAssetKeywords"):
-                assert retired not in body, retired
-        for retired in ("includeSiblingFiles", "writeAssetKeywords", "genai_asset_categories"):
-            assert retired not in template["inputInstructions"], retired
 
     def test_the_write_target_tag(self):
         field = {field["tagKey"]: field for field in template["tagSchema"]}["METADATA_WRITE_TARGET"]
