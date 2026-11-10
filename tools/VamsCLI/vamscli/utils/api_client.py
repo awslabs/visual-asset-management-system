@@ -1,10 +1,11 @@
 """API client for VamsCLI."""
 
 import json
+import re
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -81,6 +82,17 @@ def _is_cognito_unavailable(error_message: str) -> bool:
     """
     text = (error_message or "").lower()
     return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
+def _api_error_code(response) -> Optional[str]:
+    """The machine-readable `code` an HTTP error body carries (a handler-defined string such as
+    `SOME_CODE`), or None. Never raises, for the reason `_api_error_message` gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _api_error_message(response, fallback: str) -> str:
@@ -262,9 +274,10 @@ from .exceptions import (
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
-from .exceptions import GlobalInfrastructureError
+from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
 
 
@@ -297,10 +310,28 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     )
 
 
-class APIClient(CustomAPIClientMixin):
+def _request_path(endpoint: str) -> str:
+    """The endpoint as it is joined onto the base URL, refused before any request when its path has an
+    empty, '.' or '..' segment, raw or percent-encoded: the join drops an empty segment and resolves a dot
+    segment (requests decodes an encoded dot first), so a path value carrying one would address another
+    route."""
+    path = endpoint.lstrip('/')
+    for segment in re.split(r'[?#]', path, maxsplit=1)[0].split('/'):
+        decoded = segment
+        while unquote(decoded) != decoded:
+            decoded = unquote(decoded)
+        # A dot segment behind an encoded slash, or before a ';' parameter, is refused too.
+        if not segment or any(part.split(';', 1)[0] in ('.', '..') for part in decoded.split('/')):
+            raise InvalidRequestPathError(
+                "A request path may not have an empty, '.' or '..' segment: it would address another route")
+    return path
+
+
+class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     """HTTP client for VAMS API Gateway.
 
-    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    Inherits the methods the optional add-ons add (``addon_api_client.AddonAPIClientMixin``) and
+    the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
     """
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
@@ -349,7 +380,8 @@ class APIClient(CustomAPIClientMixin):
 
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
-        response body onto their own domain exception.
+        response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
+        segment raises `InvalidRequestPathError` before anything is sent (`_request_path`).
 
         A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
         ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
@@ -370,7 +402,7 @@ class APIClient(CustomAPIClientMixin):
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
-        url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
+        url = urljoin(self.base_url + '/', _request_path(endpoint))
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
         # The bearer token this request carries — passed to _try_refresh_token so concurrent 401/403
@@ -498,8 +530,10 @@ class APIClient(CustomAPIClientMixin):
                 if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
                     raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
                 if include_auth and forbidden == FORBIDDEN_HANDLER:
-                    raise PermissionDeniedError(
-                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}")
+                    code = _api_error_code(response)
+                    raise PermissionDeniedError.for_code(code)(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
+                        code=code)
                 if include_auth and retry_count < MAX_AUTH_RETRIES:
                     # For override tokens, check if expired
                     if self.profile_manager.is_override_token():

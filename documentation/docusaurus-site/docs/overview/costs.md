@@ -44,6 +44,7 @@ VAMS cost varies based on the deployment features you enable. The following conf
 | **C-3: AWS Lambda in VPC**       | Deploy all AWS Lambda functions inside VPC (optional)                                                                             | Included in VPC endpoint costs                                                                                                                               |
 | **C-4: Amazon Location Service** | Map tile retrieval for database location views (default in commercial)                                                            | ~$40 per month for 1,000 tile retrievals                                                                                                                     |
 | **C-5: Processing Pipelines**    | Use-case specific pipelines (optional). Requires VPC.                                                                             | Variable based on pipeline usage (see pipeline costs below)                                                                                                  |
+| **C-6: Add-ons**                 | Optional integrations with external solutions (see [Add-ons Overview](../developer/addons-overview.md))                           | Variable; each add-on's page lists the costs it adds                                                                                                         |
 
 ---
 
@@ -136,7 +137,7 @@ The choice between Amazon OpenSearch Serverless and Provisioned significantly af
 
 ### VPC Endpoint Count
 
-Each VPC interface endpoint costs approximately $7.30 per month per Availability Zone. Enabling more pipelines and services increases the number of required VPC endpoints. A deployment that creates its own endpoints starts with 9 interface endpoints, and one with every pipeline and service enabled can require up to 24 (22 in GovCloud) in each of up to 3 Availability Zones. A private Amazon OpenSearch Serverless collection and the Application Load Balancer web distribution each add one endpoint outside this count, and the Application Load Balancer creates its Amazon S3 endpoint even when `addVpcEndpoints` is disabled, unless `app.useAlb.addAlbS3SpecialVpcEndpoint` is `false`. Each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled.
+Each VPC interface endpoint costs approximately $7.30 per month per Availability Zone. Enabling more pipelines, services, and add-ons increases the number of required VPC endpoints. A deployment that creates its own endpoints starts with 9 interface endpoints, and one with every pipeline and service enabled can require up to 24 (22 in GovCloud) in each of up to 3 Availability Zones. A private Amazon OpenSearch Serverless collection and the Application Load Balancer web distribution each add one endpoint outside this count, and the Application Load Balancer creates its Amazon S3 endpoint even when `addVpcEndpoints` is disabled, unless `app.useAlb.addAlbS3SpecialVpcEndpoint` is `false`. Each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled.
 
 ---
 
