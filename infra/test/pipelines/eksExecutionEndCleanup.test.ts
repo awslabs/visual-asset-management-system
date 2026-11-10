@@ -149,11 +149,11 @@ describe.each(TEMPLATES)("%s: EKS execution-end cleanup", (name) => {
             .ofType("AWS::Events::Rule")
             .filter((r) => (r.properties.EventPattern?.source ?? []).includes("aws.states"))
             .filter((r) => r.logicalId !== handlerRules()[0].logicalId);
-        // The workflow execution status change rule (lib/lambdaBuilder/workflowStatusEvents.ts)
-        // matches the backend's `vams-` workflow state machines and invokes the execution service;
-        // the large object copy status change rule (lib/lambdaBuilder/largeObjectCopyEngine.ts)
-        // matches only the copy state machine and invokes the copy engine. Neither invokes this
-        // handler.
+        // The workflow execution status change rule (`buildWorkflowStatusChangeRule` in
+        // lib/lambdaBuilder/workflowFunctions.ts) matches the backend's `vams-` workflow state
+        // machines and invokes the execution service; the large object copy status change rule
+        // (lib/lambdaBuilder/assetFunctions.ts) matches only the copy state machine and invokes the
+        // copy engine. Neither invokes this handler.
         expect(others.map((r) => r.logicalId.replace(/[0-9A-F]{8}$/, "")).sort()).toEqual([
             "LargeObjectCopyStatusChangeRule",
             "WorkflowExecutionStatusChangeRule",

@@ -179,14 +179,15 @@ class TestTheWaitIsPartOfTheDeployment:
         return record
 
     def test_a_changed_wait_does_not_match(self, monkeypatch):
-        monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "72")
+        monkeypatch.setattr(wa, "MAX_OUTPUT_INGESTION_WAIT_HOURS", 72)
         assert wa.deployment_matches(self._record("48"), [self.PIPELINE]) is False
         assert wa.deployment_matches(self._record(None), [self.PIPELINE]) is False
         assert wa.deployment_matches(self._record("72"), [self.PIPELINE]) is True
 
-    def test_a_function_without_the_setting_does_not_compare_it(self, monkeypatch):
-        monkeypatch.delenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", raising=False)
-        assert wa.deployment_matches(self._record("72"), [self.PIPELINE]) is True
+    def test_the_current_wait_matches_and_a_stale_variable_is_ignored(self, monkeypatch):
+        monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "72")
+        assert wa.deployment_matches(self._record("48"), [self.PIPELINE]) is True
+        assert wa.deployment_matches(self._record("72"), [self.PIPELINE]) is False
 
 
 @pytest.mark.unit
@@ -198,6 +199,7 @@ class TestExistingWorkflowsMoveAtNextLaunch:
                   "pipelineFingerprints": wa.workflow_pipeline_fingerprints([self.PIPELINE])}
         if schema is not None:
             record["aslSchemaVersion"] = schema
+        record["outputIngestionWaitHours"] = str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)
         return record
 
     @pytest.mark.parametrize("schema", [None, "", "1", 1])
@@ -210,10 +212,10 @@ class TestExistingWorkflowsMoveAtNextLaunch:
     def test_the_current_schema_matches(self, schema):
         assert wa.deployment_matches(self._deployed(schema), [self.PIPELINE]) is True
 
-    def test_the_max_wait_comes_from_the_environment_within_bounds(self, monkeypatch):
+    def test_the_max_wait_is_the_fixed_constant(self, monkeypatch):
         monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "12")
-        assert wa._max_wait_hours() == 12
-        monkeypatch.setenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS", "999")
         assert wa._max_wait_hours() == 48
-        monkeypatch.delenv("LARGE_OBJECT_COPY_MAX_WAIT_HOURS")
-        assert wa._max_wait_hours() == 48
+        from common import largeObjectCopy as loc
+        from common.workflows import workflowAslBuilder
+        # The builder keeps its own default (import-free module); the two stay equal.
+        assert workflowAslBuilder.DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS == loc.MAX_OUTPUT_INGESTION_WAIT_HOURS

@@ -28,6 +28,9 @@ import {
 } from "../../lambdaBuilder/authFunctions";
 import {
     buildAssetHistoryFunction,
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyViaEngine,
     buildZipDownloadServiceFunction,
     buildZipDownloadSweep,
     grantZipDownloadLaunch,
@@ -48,18 +51,8 @@ import {
     buildRegisterPipelineExecutionFunction,
     buildWorkflowRole,
     grantWorkflowServiceInternalInvoke,
+    buildWorkflowStatusChangeRule,
 } from "../../lambdaBuilder/workflowFunctions";
-import {
-    attachSystemPipelineCallbacks,
-    SystemPipelineCallbackRegistry,
-} from "../../lambdaBuilder/systemPipelineCallbacks";
-import { buildWorkflowStatusChangeRule } from "../../lambdaBuilder/workflowStatusEvents";
-import {
-    buildLargeObjectCopyEngine,
-    grantLargeObjectCopyCoordination,
-    grantLargeObjectCopyHandOffByParameter,
-    largeObjectCopyEnvironment,
-} from "../../lambdaBuilder/largeObjectCopyEngine";
 import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
@@ -396,15 +389,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             subnets
         );
 
-        // Terminal callbacks of system pipelines (runs VAMS launches for a feature under a system
-        // trigger value). The three functions that run the five terminal writers (end state, error
-        // handler, and the execution service's abort, group abort and read-path reconcile) get the
-        // registry and an invoke grant on exactly the registered callback functions, as one managed
-        // policy attached to all three roles (kept out of their inline policies, which are near IAM's
-        // quota). A feature that launches system pipelines adds its stored trigger value and callback
-        // function here. Empty until one does, which adds no variable and no policy.
-        const systemPipelineCallbacks: SystemPipelineCallbackRegistry = {};
-
         // Download as Zip: one function, the zip download service, serves the six routes and the
         // delayed sweep's passes. It deploys whatever app.zipDownloads.enabled says, so turning the
         // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
@@ -431,18 +415,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
             buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
         }
 
-        attachSystemPipelineCallbacks(
-            this,
-            [
-                processWorkflowExecutionOutputFunction,
-                handleExecutionErrorFunction,
-                executionServiceFunction,
-            ],
-            systemPipelineCallbacks
-        );
         // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
         // state machine level) is reconciled when Step Functions reports it, through the execution
-        // service's read-path reconcile, so its terminal callback does not wait for a read.
+        // service's read-path reconcile, so its execution row does not wait for a read. A feature that
+        // launched the run tracks it from that row by its stored workflowExecutionId.
         buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
 
         // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
@@ -460,27 +436,20 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
-        grantLargeObjectCopyCoordination(
-            processWorkflowExecutionOutputFunction,
-            storageResources,
-            config,
-            { answersTaskToken: true }
-        );
-        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
-        // finishes; the output step through an SSM parameter (the engine references it already).
-        grantLargeObjectCopyHandOffByParameter(
+        // The output step's copy work (batch, task token, outcomes, cancel) is done by the engine.
+        grantLargeObjectCopyViaEngine(
             this,
             processWorkflowExecutionOutputFunction,
             largeObjectCopyEngine.engineFunction,
             config
         );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes.
         grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
-            answersTaskToken: false,
             handsOffTo: largeObjectCopyEngine.engineFunction,
         });
         // The details read also hands the engine a copy whose execution ended unreported.
         grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
-            answersTaskToken: false,
             reconcileWith: largeObjectCopyEngine.engineFunction,
         });
 
@@ -593,11 +562,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
-        // The generated definitions wait this long for a run's large outputs (AwaitOutputIngestion).
-        workflowServiceV2.addEnvironment(
-            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
-            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
-        );
         // List all workflows (Casbin-filtered).
         attachFunctionToApi(this, workflowServiceV2, {
             routePath: "/workflows",
@@ -636,11 +600,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
-        );
-        // The launch-time deployment check compares the wait a workflow was deployed with to this.
-        executeWorkflowV2.addEnvironment(
-            "LARGE_OBJECT_COPY_MAX_WAIT_HOURS",
-            largeObjectCopyEnvironment(config).LARGE_OBJECT_COPY_MAX_WAIT_HOURS
         );
         attachFunctionToApi(this, executeWorkflowV2, {
             routePath: "/workflows/{workflowDatabaseId}/{workflowId}/execute",

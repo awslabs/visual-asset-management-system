@@ -1,18 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The abort route with open copy jobs (#1123) and a stop-independent system trigger (#1122).
+"""The abort route with open copy jobs (#1123) when the run's own StopExecution cannot be confirmed.
 
-An abort whose main StopExecution cannot be confirmed still stops the run's large output copies,
-hands the stops it could not decide to the copy engine, writes ABORTED with the terminal callback
-held, and only then gives an opted-in trigger its status at once (notify_unconfirmed_abort). The
-order matters: the hand-over must see a run whose copies were already stopped and decided, so its
-callback never reports ABORTED while a copy is still being written into the asset.
+Such an abort still stops the run's large output copies, decides the ones it can, hands the stops
+it could not decide to the copy engine and writes ABORTED. The repeat abort that confirms the main
+stop stops, cancels or hands over no copy again.
 
 Driven through the real abort route, the real cancel path against moto's DynamoDB and S3, and the
 real copy engine reconcile. Each copy job is finalized once across the unconfirmed abort, the
-engine's reconcile and the confirming repeat abort, and the hook fires once; the held callback is
-sent once on confirmation."""
+engine's reconcile and the confirming repeat abort."""
 
 import contextlib
 import json
@@ -32,12 +29,11 @@ from backend.tests.handlers.assets.test_largeObjectCopy_race_prior_object import
 from backend.tests.handlers.workflows import test_system_pipeline_hooks as hooks
 
 le = hooks.le  # executionService: the abort route
-sp = hooks.sp
 
 ENGINE_FUNCTION = "vams-largeObjectCopy-engine"
 RUN_ID = "e2"  # the workflow execution _Run's copy job belongs to
 SECOND_ARN = "arn:aws:states:r:1:execution:LargeObjectCopy-x:loc-second"
-TRIGGER = "Zip-Download"
+TRIGGER = "System-Example"
 
 
 def _main_row():
@@ -74,8 +70,6 @@ class _Calls:
         self.main_arn = main_arn
         self.events = []
         self.confirm_main_stop = False
-        self.callback = MagicMock()
-        self.callback.invoke.side_effect = self._callback
         self.handoff = MagicMock()
         self.handoff.invoke.side_effect = self._handoff
 
@@ -89,18 +83,9 @@ class _Calls:
         self.events.append(("stopCopy", executionArn))
         return {}
 
-    def _callback(self, **kwargs):
-        payload = json.loads(kwargs["Payload"].decode("utf-8"))
-        self.events.append(("callback", payload["writer"]))
-        return {}
-
     def _handoff(self, **kwargs):
         self.events.append(("handoff", json.loads(kwargs["Payload"])["executionArn"]))
         return {}
-
-    def callback_payloads(self):
-        return [json.loads(c.kwargs["Payload"].decode("utf-8"))
-                for c in self.callback.invoke.call_args_list]
 
     def handoff_payloads(self):
         return [json.loads(c.kwargs["Payload"]) for c in self.handoff.invoke.call_args_list]
@@ -134,10 +119,7 @@ def _abort_route(env, main_table, calls, read_row):
             patch.object(le.el, "release_locks_for_execution"), \
             patch.object(le, "_copy_s3_client", return_value=_DeniedHead(env["s3"])), \
             patch.object(le, "lambda_client", calls.handoff), \
-            patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: json.dumps({TRIGGER: "vams-zip-cb"}),
-                                    loc.ENV_ENGINE_FUNCTION_NAME: ENGINE_FUNCTION}), \
-            patch.object(sp, "_default_lambda_client", return_value=calls.callback), \
-            patch.object(sp, "STOP_INDEPENDENT_CALLBACK_TRIGGERS", frozenset({TRIGGER})):
+            patch.dict(os.environ, {loc.ENV_ENGINE_FUNCTION_NAME: ENGINE_FUNCTION}):
         yield lambda: le.abort_execution({"requestContext": {"http": {}}}, RUN_ID)
 
 
@@ -148,7 +130,7 @@ def _stored(main_table):
 
 @pytest.mark.unit
 @pytest.mark.aws
-def test_an_unconfirmed_abort_finalizes_each_copy_once_and_fires_the_hook_once(env, machine):
+def test_an_unconfirmed_abort_finalizes_each_copy_once(env, machine):
     assert le.loc is loc  # the route's cancel path and the engine share one module
     first = _Run(env, VERSIONED)  # open multipart upload, every part copied
     first.complete_by_hand()  # ... and its Complete already landed the object
@@ -169,35 +151,30 @@ def test_an_unconfirmed_abort_finalizes_each_copy_once_and_fires_the_hook_once(e
 
         stored = _stored(main_table)
         assert stored["executionStatus"] == "ABORTED"
-        assert stored[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
         # Both copies stopped; the one whose landing the route cannot read is handed to the engine,
         # the one Prepare never reached is CANCELLED here.
         assert loc.get_job_row(env["jobs"], second["jobId"])["status"] == loc.STATUS_CANCELLED
         assert first.row()["status"] == loc.STATUS_RUNNING
         assert calls.handoff_payloads() == [{"action": "reconcile", "executionArn": EXEC_ARN}]
-        # Order: main stop, every copy stopped and decided, then the hook last.
+        # Order: the main stop first, then every copy stopped and decided, the hand-over last.
         kinds = [kind for kind, _ in calls.events]
         assert kinds[0] == "stopMain"
         assert sorted(arn for kind, arn in calls.events if kind == "stopCopy") == sorted(
             [EXEC_ARN, SECOND_ARN])
-        assert kinds[-1] == "callback"
-        assert kinds.index("handoff") < kinds.index("callback")
-        assert max(i for i, k in enumerate(kinds) if k == "stopCopy") < kinds.index("callback")
-        assert [p["writer"] for p in calls.callback_payloads()] == ["abortUnconfirmed"]
+        assert kinds[-1] == "handoff"
 
         # 2) Lambda delivers the hand-over: the engine decides the first copy (it had landed).
         for payload in calls.handoff_payloads():
             engine.lambda_handler(payload, None)
         first.assert_landed()
 
-        # 3) The repeated abort that confirms the stop: the held callback goes out once, and no
-        # copy job is stopped, cancelled or handed over again.
+        # 3) The repeated abort that confirms the stop: no copy job is stopped, cancelled or handed
+        # over again.
         calls.confirm_main_stop = True
         events_before = len(calls.events)
         with _abort_route(env, main_table, calls, lambda: _stored(main_table)) as abort:
             assert abort()["statusCode"] == 200
-        assert [kind for kind, _ in calls.events[events_before:]] == ["stopMain", "callback"]
-        assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(main_table)
+        assert [kind for kind, _ in calls.events[events_before:]] == ["stopMain"]
 
     # Each copy finalized once: one CANCELLED write for the second, one hand-over for the first
     # (whose single completion audit entry and email assert_landed already pinned).
@@ -205,8 +182,3 @@ def test_an_unconfirmed_abort_finalizes_each_copy_once_and_fires_the_hook_once(e
     assert [c.args[2] for c in handed.call_args_list] == [[EXEC_ARN]]
     first.assert_landed()
     assert loc.get_job_row(env["jobs"], second["jobId"])["status"] == loc.STATUS_CANCELLED
-    # The hook fired once; the held callback once on confirmation, with the same idempotency key.
-    payloads = calls.callback_payloads()
-    assert [(p["writer"], p["executionStatus"]) for p in payloads] == [
-        ("abortUnconfirmed", "ABORTED"), ("abort", "ABORTED")]
-    assert len({p["idempotencyKey"] for p in payloads}) == 1

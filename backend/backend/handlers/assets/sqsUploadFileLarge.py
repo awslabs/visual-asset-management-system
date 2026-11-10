@@ -1079,7 +1079,7 @@ def hand_off_to_copy_engine(file_info: Dict[str, Any], source_bucket: str, temp_
         return False
     head = s3.head_object(Bucket=source_bucket, Key=temp_s3_key)
     size = int(head.get('ContentLength', 0) or 0)
-    if size <= loc.settings()['apiUploadEngineThresholdBytes']:
+    if size <= loc.API_UPLOAD_ENGINE_THRESHOLD_BYTES:
         return False
     job = loc.build_job(
         kind=loc.KIND_UPLOAD,

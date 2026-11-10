@@ -24,6 +24,7 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
+from backend.tests.copyEngineRouting import route_to_engine  # noqa: E402
 from backend.tests.handlers.workflows import test_processOutput_ingestion_outcome as base  # noqa: E402
 
 po = base.po
@@ -53,7 +54,7 @@ def _run(answer, **event_overrides):
             patch.object(po, "_stamp_output_objects", return_value=True), \
             patch.object(po, "process_external_upload", return_value=answer), \
             patch.object(po, "record_execution_outputs") as record, \
-            patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+            route_to_engine(po, MagicMock()), \
             patch.object(po, "_mark_ingesting", return_value=True), \
             patch.object(po.loc, "record_batch"), \
             patch.object(po.loc, "claim_notification", return_value=None), \

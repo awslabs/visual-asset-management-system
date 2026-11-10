@@ -3,19 +3,21 @@
 
 """Workflow-core hooks for system pipelines (common/workflows/systemPipelines.py).
 
-A system pipeline run is one VAMS launches for a feature. Three things hold it apart from an ordinary
-execution, and each is pinned here:
+A system pipeline run is one VAMS launches for a feature. What holds it apart from an ordinary
+execution, and what the core deliberately does NOT do, is pinned here:
 
 1. Trigger and context are SERVER-ONLY. The system trigger value and the system execution context are
    accepted only from a lambdaCrossCall carrying SYSTEM_USER and the system-pipeline source marker. A
    public execute request (or a trigger dispatch, a re-run or the schema importer) can never set either:
    the request model refuses a system trigger value, and a body or unmarked event carrying the context
    is ignored.
-2. Terminal callback. Each of the five terminal writers (end state, error handler, abort, group abort,
-   read-path reconcile in the list and details views) sends it exactly once per transition, and only
-   when its own guarded write WON the shared terminal guard. A raising callback never changes the run's
-   own terminal record. Non-system runs never touch an AWS client for it.
-3. Re-run of a system run is refused with a 400.
+2. The trigger value is GENERIC. Core accepts any value in the documented format (the System- prefix
+   plus a safe identifier, bounded length) and stores it as given; it keeps no list of features.
+3. There is NO terminal callback. Every terminal writer (end state, error handler, abort, group abort,
+   read-path reconcile, the status change push) writes a system run's row exactly as it writes an
+   ordinary run's. A feature tracks its run by the workflowExecutionId it stored.
+4. Re-run of a system run is refused with a 400.
+5. Core workflow code names no specific pipeline or feature (a source scan).
 
 The race tests run the real guarded writes against a moto DynamoDB table, so the condition is exercised
 rather than pattern-matched.
@@ -24,6 +26,8 @@ rather than pattern-matched.
 import contextlib
 import json
 import os
+import pathlib
+import re
 import sys
 import types
 
@@ -75,48 +79,36 @@ from backend.backend.handlers.workflows.sfn import processWorkflowExecutionOutpu
 # Every handler holds the SAME helper module object (imported as common.workflows.systemPipelines);
 # take it from a handler so a patch reaches the module the handlers call.
 sp = le.sp
-assert ewv2.sp is sp and heh.sp is sp and po.sp is sp
+assert ewv2.sp is sp
 
 ES = "backend.backend.handlers.workflows.executionService"
 EW = "backend.backend.handlers.workflows.executeWorkflow"
 WF_DB, WF_ID = "wdb", "wf1"
 EXEC = "e1000000000000000000000000000001"
 EXEC2 = "e2000000000000000000000000000002"
-CONTEXT = {"requestId": "r-1", "manifestKey": "vams.preparedDownloads/x/manifest.json"}
-CALLBACK_FN = "vams-zip-callback"
-REGISTRY = json.dumps({"Zip-Download": CALLBACK_FN})
+# A placeholder system trigger value: core treats every well-formed value alike.
+SYSTEM_TRIGGER = "System-TestFeature"
+CONTEXT = {"requestId": "r-1", "objectKey": "feature/x/object.json"}
+
+# The main-row attribute the removed callback design used to hold an unconfirmed abort's callback.
+REMOVED_PENDING_ATTRIBUTE = "systemCallbackPending"
 
 
-@pytest.fixture(autouse=True)
-def _callbacks_depend_on_the_stop():
-    """These tests pin the generic contract: a system trigger's callback that depends on the stop
-    (the default) is held until the stop is confirmed. The trigger used here is also the zip download
-    one, whose callback opts out (sp.STOP_INDEPENDENT_CALLBACK_TRIGGERS); that opt-out is pinned in
-    test_zip_callback_exactly_once.py, which does not import this fixture."""
-    with patch.object(sp, "STOP_INDEPENDENT_CALLBACK_TRIGGERS", frozenset()):
-        yield
-
-
-def _ccf():
-    return ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "c"}},
-                       "UpdateItem")
-
-
-def _row(execution_id=EXEC, trigger="Zip-Download", status="RUNNING", context=CONTEXT):
+def _row(execution_id=EXEC, trigger=SYSTEM_TRIGGER, status="RUNNING", context=CONTEXT):
     row = {"workflowExecutionId": execution_id,
            "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}",
            "workflowDatabaseId": WF_DB, "workflowId": WF_ID,
            "workflow_execution_arn": f"arn:aws:states:us-east-1:1:execution:wf:{execution_id}",
            "executionStatus": status, "executionStopDate": "", "triggerType": trigger,
            "triggeredByUserId": "SYSTEM_USER", "executionStartDate": "2026-11-05T00:00:00Z"}
-    if context is not None and trigger in sp.SYSTEM_TRIGGER_TYPES:
+    if context is not None and sp.is_system_trigger(trigger):
         row["systemExecutionContext"] = sp.serialize_context(context)
     return row
 
 
 @contextlib.contextmanager
 def _main_table(*rows):
-    """A moto-backed V2 main execution table seeded with `rows`; yields (name, table)."""
+    """A moto-backed V2 main execution table seeded with `rows`; yields the table."""
     from moto import mock_aws
     import boto3
     with mock_aws():
@@ -140,23 +132,12 @@ def _stored(table, execution_id=EXEC):
                                "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}"})["Item"]
 
 
-@contextlib.contextmanager
-def _callback(registry=REGISTRY, invoke_error=None):
-    """Install the registry and a recording Lambda client; yields the client mock."""
-    client = MagicMock()
-    if invoke_error is not None:
-        client.invoke.side_effect = invoke_error
-    with patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: registry}), \
-            patch.object(sp, "_default_lambda_client", return_value=client):
-        yield client
-
-
-def _payloads(client):
-    return [json.loads(c.kwargs["Payload"].decode("utf-8")) for c in client.invoke.call_args_list]
+def _without(item, *keys):
+    return {k: v for k, v in item.items() if k not in keys}
 
 
 # ---------------------------------------------------------------------------------------------------
-# 1) The helper: who may set the system trigger, and how the callback is sent
+# 1) The helper: who may set the system trigger, and the generic trigger value contract
 # ---------------------------------------------------------------------------------------------------
 
 def _marked(spec=None, user="SYSTEM_USER", source=sp.SYSTEM_PIPELINE_SOURCE_MARKER):
@@ -167,29 +148,55 @@ def _marked(spec=None, user="SYSTEM_USER", source=sp.SYSTEM_PIPELINE_SOURCE_MARK
 
 
 @pytest.mark.unit
+class TestSystemTriggerFormat:
+    @pytest.mark.parametrize("value", [
+        "System-A", "System-TestFeature", "System-Feature-2", "System-x1-y2-z3",
+        "System-" + "a" * (sp.MAX_SYSTEM_TRIGGER_LENGTH - len("System-")),  # the bound is inclusive
+    ])
+    def test_a_well_formed_value_is_a_system_trigger(self, value):
+        assert sp.is_system_trigger(value) is True
+
+    @pytest.mark.parametrize("value", [
+        "Manual", "File-Upload", "manual", "fileUpload",           # the public values
+        "System-", "System", "system-Feature", "SYSTEM-Feature",  # prefix exact, identifier required
+        "System--Feature", "System-Feature-", "System-Fe ature",  # one hyphen between words, no space
+        "System-Feat_ure", "System-Feat:ure", "System-Feat/ure",  # no separators beyond the hyphen
+        "System-Feät", "System-Feature\n",                        # ASCII only, no trailing newline
+        "System-" + "a" * (sp.MAX_SYSTEM_TRIGGER_LENGTH - len("System-") + 1),  # over the bound
+        "", None, 7, ["System-A"],
+    ])
+    def test_anything_else_is_not(self, value):
+        assert sp.is_system_trigger(value) is False
+
+    def test_core_keeps_no_list_of_system_trigger_values(self):
+        # The contract is the format; a registry of features would make core name them.
+        assert not [name for name in vars(sp) if re.search(r"TRIGGER_TYPES|TRIGGER_TYPE_TO_STORED", name)]
+
+
+@pytest.mark.unit
 class TestResolveSystemExecution:
-    def test_a_marked_call_resolves_the_stored_trigger_and_compact_context(self):
+    def test_a_marked_call_stores_the_trigger_as_given_and_compact_context(self):
         stored, text = sp.resolve_system_execution(
-            _marked({"triggerType": "zipDownload", "context": {"b": 2, "a": 1}}))
-        assert stored == "Zip-Download"
+            _marked({"triggerType": SYSTEM_TRIGGER, "context": {"b": 2, "a": 1}}))
+        assert stored == SYSTEM_TRIGGER
         assert text == '{"a":1,"b":2}'
 
     def test_an_absent_context_is_stored_as_the_empty_object(self):
-        assert sp.resolve_system_execution(_marked({"triggerType": "zipDownload"})) == (
-            "Zip-Download", "{}")
+        assert sp.resolve_system_execution(_marked({"triggerType": SYSTEM_TRIGGER})) == (
+            SYSTEM_TRIGGER, "{}")
 
     @pytest.mark.parametrize("event", [
         # An API Gateway event: the context can only ride in the body, which is never read here.
         {"requestContext": {"http": {"method": "POST"}},
-         "body": json.dumps({"systemExecution": {"triggerType": "zipDownload", "context": {"x": 1}}})},
+         "body": json.dumps({"systemExecution": {"triggerType": SYSTEM_TRIGGER, "context": {"x": 1}}})},
         # A top-level system object WITHOUT the marker (e.g. riding a trigger-dispatch envelope).
         {"lambdaCrossCall": {"userName": "SYSTEM_USER"},
-         sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": "zipDownload", "context": {}}},
+         sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": SYSTEM_TRIGGER, "context": {}}},
         # The schema importer's marker is a different marker.
         {"lambdaCrossCall": {"userName": "SYSTEM_USER", "source": "vamsSchemaImport"},
-         sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": "zipDownload"}},
+         sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": SYSTEM_TRIGGER}},
         # The marker under a real user's identity (a re-run cross-call carries the caller's name).
-        _marked({"triggerType": "zipDownload"}, user="alice@example.com"),
+        _marked({"triggerType": SYSTEM_TRIGGER}, user="alice@example.com"),
         # The source marker inside the body is just body data.
         {"body": json.dumps({"lambdaCrossCall": {"userName": "SYSTEM_USER",
                                                  "source": sp.SYSTEM_PIPELINE_SOURCE_MARKER}})},
@@ -199,91 +206,28 @@ class TestResolveSystemExecution:
         assert sp.resolve_system_execution(event) is None
 
     @pytest.mark.parametrize("spec", [
-        None,                                              # marker without the system object
-        "zipDownload",                                     # not an object
-        {"triggerType": "Zip-Download"},                   # the STORED spelling is not a request value
-        {"triggerType": "manual"},                         # a public trigger is not a system trigger
-        {"triggerType": "zipDownload", "context": ["a"]},  # context must be an object
-        {"triggerType": "zipDownload", "context": "text"},
-        {"triggerType": "zipDownload",
+        None,                                                  # marker without the system object
+        SYSTEM_TRIGGER,                                        # not an object
+        {},                                                    # no trigger
+        {"triggerType": "manual"},                             # a public trigger is not a system one
+        {"triggerType": "Manual"},
+        {"triggerType": "TestFeature"},                        # the prefix is required
+        {"triggerType": "System-bad value"},                   # outside the format
+        {"triggerType": SYSTEM_TRIGGER, "context": ["a"]},     # context must be an object
+        {"triggerType": SYSTEM_TRIGGER, "context": "text"},
+        {"triggerType": SYSTEM_TRIGGER,
          "context": {"k": "x" * sp.MAX_SYSTEM_EXECUTION_CONTEXT_BYTES}},  # over the bound
     ])
     def test_a_malformed_marked_call_is_refused(self, spec):
         with pytest.raises(sp.SystemExecutionError):
             sp.resolve_system_execution(_marked(spec))
 
-    def test_the_bound_is_inclusive(self):
+    def test_the_context_bound_is_inclusive(self):
         # '{"k":"' + value + '"}' is 8 bytes of structure.
         value = "x" * (sp.MAX_SYSTEM_EXECUTION_CONTEXT_BYTES - 8)
-        _stored, text = sp.resolve_system_execution(
-            _marked({"triggerType": "zipDownload", "context": {"k": value}}))
+        _stored_value, text = sp.resolve_system_execution(
+            _marked({"triggerType": SYSTEM_TRIGGER, "context": {"k": value}}))
         assert len(text.encode("utf-8")) == sp.MAX_SYSTEM_EXECUTION_CONTEXT_BYTES
-
-
-@pytest.mark.unit
-class TestCallbackRegistryAndNotify:
-    @pytest.mark.parametrize("raw, expected", [
-        ("", {}),
-        ("not json", {}),
-        ('["Zip-Download"]', {}),
-        ('{"Manual": "fn", "Zip-Download": ""}', {}),
-        (REGISTRY, {"Zip-Download": CALLBACK_FN}),
-    ])
-    def test_registry_parsing(self, raw, expected):
-        with patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: raw}):
-            assert sp.callback_registry() == expected
-
-    @pytest.mark.parametrize("trigger", ["Manual", "File-Upload", "", None])
-    def test_a_non_system_run_creates_no_client(self, trigger):
-        row = _row(trigger=trigger)
-        with patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: REGISTRY}), \
-                patch.object(sp, "_default_lambda_client",
-                             side_effect=AssertionError("client created for a non-system run")):
-            assert sp.notify_terminal_transition(row, "SUCCEEDED", writer="endState") is False
-
-    def test_an_unregistered_system_trigger_sends_nothing(self):
-        with _callback(registry="") as client:
-            assert sp.notify_terminal_transition(_row(), "FAILED") is False
-        client.invoke.assert_not_called()
-
-    def test_a_non_terminal_status_sends_nothing(self):
-        with _callback() as client:
-            assert sp.notify_terminal_transition(_row(), "RUNNING") is False
-        client.invoke.assert_not_called()
-
-    def test_a_registered_callback_is_sent_once_asynchronously_with_the_contract(self):
-        with _callback() as client:
-            assert sp.notify_terminal_transition(
-                _row(), "ABORTED", stop_date="2026-11-05T01:00:00Z", writer=sp.WRITER_ABORT) is True
-        client.invoke.assert_called_once()
-        kwargs = client.invoke.call_args.kwargs
-        assert kwargs["FunctionName"] == CALLBACK_FN
-        assert kwargs["InvocationType"] == "Event"
-        payload = _payloads(client)[0]
-        assert payload == {
-            "callbackType": "systemPipelineTerminal", "schemaVersion": 1,
-            "idempotencyKey": f"{EXEC}:ABORTED", "workflowExecutionId": EXEC,
-            "workflowDatabaseId": WF_DB, "workflowId": WF_ID, "triggerType": "Zip-Download",
-            "executionStatus": "ABORTED", "executionStopDate": "2026-11-05T01:00:00Z",
-            "executionError": "", "writer": "abort", "systemExecutionContext": CONTEXT,
-        }
-
-    def test_the_error_text_is_bounded(self):
-        with _callback() as client:
-            sp.notify_terminal_transition(_row(), "FAILED", execution_error="e" * 10000)
-        assert len(_payloads(client)[0]["executionError"]) == sp.MAX_CALLBACK_ERROR_CHARS
-
-    def test_a_raising_invoke_never_raises(self):
-        with _callback(invoke_error=ClientError(
-                {"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Invoke")):
-            assert sp.notify_terminal_transition(_row(), "SUCCEEDED") is False
-
-    def test_an_unreadable_stored_context_reads_as_empty(self):
-        row = _row()
-        row["systemExecutionContext"] = "{broken"
-        with _callback() as client:
-            sp.notify_terminal_transition(row, "SUCCEEDED")
-        assert _payloads(client)[0]["systemExecutionContext"] == {}
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -292,7 +236,7 @@ class TestCallbackRegistryAndNotify:
 
 @pytest.mark.unit
 class TestPublicRequestModel:
-    @pytest.mark.parametrize("trigger", ["zipDownload", "Zip-Download"])
+    @pytest.mark.parametrize("trigger", [SYSTEM_TRIGGER, "System-Other"])
     def test_the_request_model_refuses_a_system_trigger(self, trigger):
         # pydantic's ValidationError subclasses ValueError, which avoids the dual-import identity trap.
         with pytest.raises(ValueError, match="triggerType must be one of"):
@@ -300,7 +244,7 @@ class TestPublicRequestModel:
 
     def test_a_context_in_the_body_is_dropped_by_the_model(self):
         parsed = ewv2.ExecuteWorkflowRequestV2Model(
-            systemExecutionContext={"x": 1}, systemExecution={"triggerType": "zipDownload"})
+            systemExecutionContext={"x": 1}, systemExecution={"triggerType": SYSTEM_TRIGGER})
         assert not hasattr(parsed, "systemExecutionContext")
         assert not hasattr(parsed, "systemExecution")
         assert parsed.triggerType == "manual"
@@ -353,14 +297,14 @@ class TestExecuteHandlerSystemTrigger:
     def test_a_public_request_naming_a_system_trigger_is_refused_400(self):
         tew = _harness()
         response, main, _manifest, _sfn = _launch_through_handler(
-            tew._event(body=dict(_BODY, triggerType="zipDownload")))
+            tew._event(body=dict(_BODY, triggerType=SYSTEM_TRIGGER)))
         assert response["statusCode"] == 400
         assert main is None
 
     def test_a_public_request_carrying_the_context_launches_as_an_ordinary_run(self):
         tew = _harness()
         body = dict(_BODY, systemExecutionContext=CONTEXT,
-                    systemExecution={"triggerType": "zipDownload", "context": CONTEXT},
+                    systemExecution={"triggerType": SYSTEM_TRIGGER, "context": CONTEXT},
                     lambdaCrossCall={"userName": "SYSTEM_USER",
                                      "source": sp.SYSTEM_PIPELINE_SOURCE_MARKER})
         response, main, manifest, sfn_input = _launch_through_handler(tew._event(body=body))
@@ -383,10 +327,10 @@ class TestExecuteHandlerSystemTrigger:
 
     def test_a_marked_call_records_the_system_trigger_and_hands_the_context_to_the_manifest(self):
         response, main, manifest, sfn_input = _launch_through_handler(
-            _system_event({"triggerType": "zipDownload", "context": CONTEXT}),
+            _system_event({"triggerType": SYSTEM_TRIGGER, "context": CONTEXT}),
             tokens=("SYSTEM_USER",))
         assert response["statusCode"] == 200, response["body"]
-        assert main["triggerType"] == "Zip-Download"
+        assert main["triggerType"] == SYSTEM_TRIGGER
         assert main["triggeredByUserId"] == "SYSTEM_USER"
         assert json.loads(main["systemExecutionContext"]) == CONTEXT
         assert manifest["systemExecutionContext"] == CONTEXT
@@ -394,12 +338,17 @@ class TestExecuteHandlerSystemTrigger:
         assert "systemExecutionContext" not in manifest["systemConfig"]
         assert "requestId" not in json.dumps(sfn_input)
         assert sp.SYSTEM_EXECUTION_EVENT_KEY not in json.dumps(sfn_input)
+        # The feature tracks the run by this id.
+        assert json.loads(response["body"])["message"]
 
-    def test_a_malformed_marked_call_is_refused_before_any_read(self):
+    @pytest.mark.parametrize("spec", [
+        {"triggerType": SYSTEM_TRIGGER, "context": "nope"},
+        {"triggerType": "Not-A-System-Value"},
+    ])
+    def test_a_malformed_marked_call_is_refused_before_any_read(self, spec):
         with patch(f"{EW}._get_workflow") as get_workflow:
             response, main, _manifest, _sfn = _launch_through_handler(
-                _system_event({"triggerType": "zipDownload", "context": "nope"}),
-                tokens=("SYSTEM_USER",))
+                _system_event(spec), tokens=("SYSTEM_USER",))
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == sp.SYSTEM_EXECUTION_INVALID_MESSAGE
         get_workflow.assert_not_called()
@@ -407,7 +356,7 @@ class TestExecuteHandlerSystemTrigger:
 
 
 # ---------------------------------------------------------------------------------------------------
-# 3) The five terminal writers: once per transition, only on a won guard, never failing the write
+# 3) The terminal writers: a system run's row is written exactly like an ordinary run's
 # ---------------------------------------------------------------------------------------------------
 
 class _Dynamo:
@@ -429,40 +378,80 @@ def _end_state(dynamo, status="SUCCEEDED", error=""):
         status, error)
 
 
+def _end_state_row(trigger):
+    with _main_table(_row(trigger=trigger)) as table:
+        _end_state(_Dynamo(po.workflow_execution_database_v2, table))
+        return _stored(table)
+
+
 @pytest.mark.unit
 @pytest.mark.aws
-class TestWriter1EndState:
-    def test_a_won_completion_sends_one_callback(self):
-        with _main_table(_row()) as table, _callback() as client:
-            _end_state(_Dynamo(po.workflow_execution_database_v2, table))
-            assert _stored(table)["executionStatus"] == "SUCCEEDED"
-        assert [p["writer"] for p in _payloads(client)] == ["endState"]
-        assert _payloads(client)[0]["systemExecutionContext"] == CONTEXT
+class TestTerminalWritersTreatSystemRunsAlike:
+    def test_the_end_state_writes_a_system_run_like_a_manual_run(self):
+        system, manual = _end_state_row(SYSTEM_TRIGGER), _end_state_row("Manual")
+        assert system["executionStatus"] == manual["executionStatus"] == "SUCCEEDED"
+        assert _without(system, "executionStopDate", "lastSfnSyncCheckDate", "triggerType",
+                        "systemExecutionContext") == \
+            _without(manual, "executionStopDate", "lastSfnSyncCheckDate", "triggerType")
+        assert system["systemExecutionContext"] == sp.serialize_context(CONTEXT)
 
-    def test_a_lost_race_sends_nothing_and_keeps_the_other_writers_status(self):
-        with _main_table(_row(status="ABORTED")) as table, _callback() as client:
+    def test_the_end_state_losing_the_race_keeps_the_other_writers_status(self):
+        with _main_table(_row(status="ABORTED")) as table:
             _end_state(_Dynamo(po.workflow_execution_database_v2, table))
             assert _stored(table)["executionStatus"] == "ABORTED"
-        client.invoke.assert_not_called()
 
-    def test_a_raising_callback_does_not_change_the_terminal_write(self):
-        with _main_table(_row()) as table, _callback(invoke_error=RuntimeError("boom")):
-            _end_state(_Dynamo(po.workflow_execution_database_v2, table), status="FAILED",
-                       error="x failed")
+    def test_the_error_handler_fails_a_system_run_like_any_run(self):
+        with _main_table(_row()) as table:
+            assert _error_handler(table) == {"handled": True}
             stored = _stored(table)
         assert stored["executionStatus"] == "FAILED"
-        assert stored["executionError"] == "x failed"
+        assert "step failed" in stored.get("executionError", "")
 
-    def test_a_manual_run_writes_exactly_what_it_wrote_before(self):
-        with _main_table(_row(trigger="Manual")) as table, \
-                patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: REGISTRY}), \
-                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")):
-            _end_state(_Dynamo(po.workflow_execution_database_v2, table))
+    def test_the_error_handler_keeps_an_already_terminal_row(self):
+        with _main_table(_row(status="SUCCEEDED")) as table:
+            _error_handler(table)
+            assert _stored(table)["executionStatus"] == "SUCCEEDED"
+
+    def test_an_abort_writes_aborted(self):
+        with _main_table(_row()) as table:
+            with _abort(table, [_row()]) as drive:
+                assert drive["single"](EXEC)["statusCode"] == 200
+            assert _stored(table)["executionStatus"] == "ABORTED"
+
+    def test_an_abort_losing_to_the_end_state_keeps_its_status(self):
+        with _main_table(_row(status="SUCCEEDED")) as table:
+            with _abort(table, [_row(status="RUNNING")]) as drive:
+                assert drive["single"](EXEC)["statusCode"] == 200
+            assert _stored(table)["executionStatus"] == "SUCCEEDED"
+
+    def test_a_group_abort_aborts_every_member(self):
+        rows = [_row(EXEC), _row(EXEC2)]
+        with _main_table(*rows) as table:
+            with _abort(table, rows) as drive:
+                assert drive["group"]()["statusCode"] == 200
+            assert {_stored(table, e)["executionStatus"] for e in (EXEC, EXEC2)} == {"ABORTED"}
+
+    @pytest.mark.parametrize("trigger", [SYSTEM_TRIGGER, "Manual"])
+    def test_an_unconfirmed_stop_writes_aborted_and_nothing_else(self, trigger):
+        with _main_table(_row(trigger=trigger)) as table:
+            with _abort(table, [_row(trigger=trigger)], stop_confirmed=False) as drive:
+                assert drive["single"](EXEC)["statusCode"] == 200
             stored = _stored(table)
-        expected = dict(_row(trigger="Manual"), executionStatus="SUCCEEDED", executionLog="log")
-        stored.pop("executionStopDate")
-        expected.pop("executionStopDate")
-        assert stored == expected
+        assert stored["executionStatus"] == "ABORTED"
+        assert REMOVED_PENDING_ATTRIBUTE not in stored
+
+    def test_no_writer_invokes_another_lambda_for_a_system_run(self):
+        # The removed callback was an asynchronous Lambda invoke; no terminal path makes one now.
+        with _main_table(_row()) as table, \
+                patch.object(le.lambda_client, "invoke",
+                             side_effect=AssertionError("lambda invoke")) as invoke, \
+                _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
+            le._reconcile_main_status(EXEC, _row())
+            le.lambda_handler(_status_event(), MagicMock())
+            with _abort(table, [_stored(table)]) as drive:
+                drive["single"](EXEC)
+        invoke.assert_not_called()
 
 
 def _error_handler(table):
@@ -477,54 +466,6 @@ def _error_handler(table):
         return heh.lambda_handler(
             {"body": {"workflowExecutionId": EXEC, "workflowDatabaseId": WF_DB, "workflowId": WF_ID},
              "errorInfo": {"Error": "States.TaskFailed", "Cause": "step failed"}}, MagicMock())
-
-
-@pytest.mark.unit
-@pytest.mark.aws
-class TestWriter2ErrorHandler:
-    def test_a_won_failure_sends_one_callback_with_the_error(self):
-        with _main_table(_row()) as table, _callback() as client:
-            assert _error_handler(table) == {"handled": True}
-            assert _stored(table)["executionStatus"] == "FAILED"
-        payloads = _payloads(client)
-        assert [p["writer"] for p in payloads] == ["errorHandler"]
-        assert payloads[0]["executionStatus"] == "FAILED"
-        assert "step failed" in payloads[0]["executionError"]
-
-    def test_an_already_terminal_row_sends_nothing(self):
-        with _main_table(_row(status="SUCCEEDED")) as table, _callback() as client:
-            _error_handler(table)
-            assert _stored(table)["executionStatus"] == "SUCCEEDED"
-        client.invoke.assert_not_called()
-
-    def test_the_guard_losing_between_read_and_write_sends_nothing(self):
-        # The handler reads RUNNING, then another writer finishes the row before its write lands.
-        with _main_table(_row()) as table, _callback() as client:
-            real_update = table.update_item
-
-            def _finish_first(**kwargs):
-                table.put_item(Item=_row(status="ABORTED"))
-                return real_update(**kwargs)
-
-            with patch.object(table, "update_item", side_effect=_finish_first):
-                _error_handler(table)
-            assert _stored(table)["executionStatus"] == "ABORTED"
-        client.invoke.assert_not_called()
-
-    def test_a_raising_callback_still_answers_handled_and_keeps_failed(self):
-        with _main_table(_row()) as table, _callback(invoke_error=RuntimeError("boom")):
-            assert _error_handler(table) == {"handled": True}
-            assert _stored(table)["executionStatus"] == "FAILED"
-
-    def test_a_missing_main_row_is_written_failed_without_a_finalize_error(self):
-        # The guarded update creates the row; there is no trigger to send a callback for, and the
-        # write that landed is not reported as a failure.
-        with _main_table() as table, _callback() as client, \
-                patch.object(heh.logger, "exception") as logged_exception:
-            assert _error_handler(table) == {"handled": True}
-            assert _stored(table)["executionStatus"] == "FAILED"
-        client.invoke.assert_not_called()
-        logged_exception.assert_not_called()
 
 
 @contextlib.contextmanager
@@ -553,190 +494,6 @@ def _abort(table, rows, stop_confirmed=True):
         }
 
 
-@pytest.mark.unit
-@pytest.mark.aws
-class TestWriter3And4Abort:
-    def test_an_abort_sends_one_aborted_callback(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()]) as drive:
-                assert drive["single"](EXEC)["statusCode"] == 200
-            assert _stored(table)["executionStatus"] == "ABORTED"
-        payloads = _payloads(client)
-        assert [(p["writer"], p["executionStatus"]) for p in payloads] == [("abort", "ABORTED")]
-
-    def test_an_abort_losing_to_the_end_state_sends_nothing(self):
-        # The abort read RUNNING; the end state finished the row before the abort's write.
-        with _main_table(_row(status="SUCCEEDED")) as table, _callback() as client:
-            with _abort(table, [_row(status="RUNNING")]) as drive:
-                assert drive["single"](EXEC)["statusCode"] == 200
-            assert _stored(table)["executionStatus"] == "SUCCEEDED"
-        client.invoke.assert_not_called()
-
-    def test_a_raising_callback_does_not_fail_the_abort(self):
-        with _main_table(_row()) as table, _callback(invoke_error=RuntimeError("boom")):
-            with _abort(table, [_row()]) as drive:
-                assert drive["single"](EXEC)["statusCode"] == 200
-            assert _stored(table)["executionStatus"] == "ABORTED"
-
-    def test_a_group_abort_sends_one_callback_per_member(self):
-        rows = [_row(EXEC), _row(EXEC2)]
-        with _main_table(*rows) as table, _callback() as client:
-            with _abort(table, rows) as drive:
-                assert drive["group"]()["statusCode"] == 200
-        assert sorted(p["workflowExecutionId"] for p in _payloads(client)) == sorted([EXEC, EXEC2])
-        assert {p["writer"] for p in _payloads(client)} == {"abort"}
-
-    def test_a_second_abort_of_the_same_run_sends_nothing_more(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()]) as drive:
-                drive["single"](EXEC)
-            with _abort(table, [_stored(table)]) as drive:
-                drive["single"](EXEC)
-        assert client.invoke.call_count == 1
-
-    def test_an_unconfirmed_stop_writes_aborted_but_holds_the_callback(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                response = drive["single"](EXEC)
-            assert response["statusCode"] == 200
-            stored = _stored(table)
-        assert stored["executionStatus"] == "ABORTED"
-        assert stored[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-        client.invoke.assert_not_called()
-
-    def test_the_repeated_abort_that_confirms_the_stop_sends_the_held_callback_once(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            # Still unconfirmed: nothing yet.
-            with _abort(table, [_stored(table)], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            client.invoke.assert_not_called()
-            # Confirmed: the held callback goes out and the marker is cleared.
-            with _abort(table, [_stored(table)]) as drive:
-                drive["single"](EXEC)
-            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
-            # Any further abort sends nothing more.
-            with _abort(table, [_stored(table)]) as drive:
-                drive["single"](EXEC)
-        payloads = _payloads(client)
-        assert [(p["writer"], p["executionStatus"]) for p in payloads] == [("abort", "ABORTED")]
-
-    def test_two_concurrent_confirming_aborts_send_the_held_callback_once(self):
-        # Both read the row while it still held the marker; only the first removal wins.
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            held = _stored(table)
-            with _abort(table, [held]) as drive:
-                drive["single"](EXEC)
-            with _abort(table, [held]) as drive:
-                drive["single"](EXEC)
-        assert client.invoke.call_count == 1
-
-    def test_an_unconfirmed_stop_of_an_ordinary_run_writes_exactly_what_it_wrote_before(self):
-        with _main_table(_row(trigger="Manual")) as table, _callback() as client:
-            with _abort(table, [_row(trigger="Manual")], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            stored = _stored(table)
-        assert stored["executionStatus"] == "ABORTED"
-        assert sp.CALLBACK_PENDING_ATTRIBUTE not in stored
-        client.invoke.assert_not_called()
-
-
-@contextlib.contextmanager
-def _stop_independent(*triggers):
-    """Opt the given stored system triggers in to the unconfirmed-abort hand-over."""
-    with patch.object(sp, "STOP_INDEPENDENT_CALLBACK_TRIGGERS", frozenset(triggers)):
-        yield
-
-
-@pytest.mark.unit
-@pytest.mark.aws
-class TestUnconfirmedAbortHandOver:
-    """A trigger whose callback does not depend on the stop (STOP_INDEPENDENT_CALLBACK_TRIGGERS) gets
-    the ABORTED status from an abort that could not confirm the stop, and the held callback still goes
-    out once on confirmation. Every other trigger keeps the hold."""
-
-    def test_no_trigger_opts_in_by_default(self):
-        assert sp.STOP_INDEPENDENT_CALLBACK_TRIGGERS == frozenset()
-
-    def test_an_opted_in_trigger_gets_the_status_at_once_and_the_hold_stays(self):
-        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
-                _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                assert drive["single"](EXEC)["statusCode"] == 200
-            stored = _stored(table)
-        assert stored["executionStatus"] == "ABORTED"
-        assert stored[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-        payloads = _payloads(client)
-        assert [(p["writer"], p["executionStatus"]) for p in payloads] == [
-            ("abortUnconfirmed", "ABORTED")]
-        assert payloads[0]["systemExecutionContext"] == CONTEXT
-
-    def test_the_confirming_abort_still_sends_the_held_callback_once_with_the_same_key(self):
-        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
-                _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            # A repeated unconfirmed abort lost nothing new: the row is already terminal.
-            with _abort(table, [_stored(table)], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            with _abort(table, [_stored(table)]) as drive:
-                drive["single"](EXEC)
-            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
-        payloads = _payloads(client)
-        assert [p["writer"] for p in payloads] == ["abortUnconfirmed", "abort"]
-        assert len({p["idempotencyKey"] for p in payloads}) == 1
-
-    def test_the_status_event_still_confirms_the_hold_after_the_hand_over(self):
-        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
-                _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            with _reconcile_env(table):
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
-        assert [p["writer"] for p in _payloads(client)] == ["abortUnconfirmed", "abort"]
-
-    def test_a_confirmed_stop_sends_only_the_ordinary_callback(self):
-        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
-                _callback() as client:
-            with _abort(table, [_row()]) as drive:
-                drive["single"](EXEC)
-        assert [p["writer"] for p in _payloads(client)] == ["abort"]
-
-    def test_an_abort_losing_the_terminal_guard_hands_nothing_over(self):
-        # The abort read RUNNING; the end state finished the row before the abort's write.
-        with _stop_independent("Zip-Download"), _main_table(_row(status="SUCCEEDED")) as table, \
-                _callback() as client:
-            with _abort(table, [_row(status="RUNNING")], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            assert _stored(table)["executionStatus"] == "SUCCEEDED"
-        client.invoke.assert_not_called()
-
-    def test_a_raising_hand_over_does_not_fail_the_abort(self):
-        with _stop_independent("Zip-Download"), _main_table(_row()) as table, \
-                _callback(invoke_error=RuntimeError("boom")):
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                assert drive["single"](EXEC)["statusCode"] == 200
-            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-
-    def test_the_helper_ignores_triggers_that_did_not_opt_in(self):
-        with _stop_independent("Zip-Download"), \
-                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")):
-            assert sp.notify_unconfirmed_abort(_row(trigger="Manual"), "ABORTED") is False
-            assert sp.notify_unconfirmed_abort(None, "ABORTED") is False
-        with _stop_independent(), \
-                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")):
-            assert sp.notify_unconfirmed_abort(_row(), "ABORTED") is False
-
-    def test_an_opted_in_value_that_is_not_a_system_trigger_sends_nothing(self):
-        with _stop_independent("Manual"), _callback() as client:
-            assert sp.notify_unconfirmed_abort(_row(trigger="Manual"), "ABORTED") is False
-        client.invoke.assert_not_called()
-
-
 def _stopped(status="ABORTED"):
     from datetime import datetime, timezone
     return {"status": status, "stopDate": datetime(2026, 11, 5, 2, 0, tzinfo=timezone.utc),
@@ -755,61 +512,32 @@ def _reconcile_env(table):
 
 @pytest.mark.unit
 @pytest.mark.aws
-class TestWriter5Reconcile:
-    def test_the_details_reconcile_of_a_run_stopped_outside_vams_sends_one_callback(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+class TestReadPathReconcile:
+    def test_the_details_reconcile_records_a_run_stopped_outside_vams(self):
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("TIMED_OUT")):
             le._reconcile_main_status(EXEC, _row())
             assert _stored(table)["executionStatus"] == "TIMED_OUT"
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("reconcileDetails", "TIMED_OUT")]
 
-    def test_the_details_reconcile_losing_the_race_sends_nothing(self):
-        with _main_table(_row(status="FAILED")) as table, _callback() as client, \
-                _reconcile_env(table), \
+    def test_the_details_reconcile_losing_the_race_keeps_the_other_writers_status(self):
+        with _main_table(_row(status="FAILED")) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
             le._reconcile_main_status(EXEC, _row())  # the read saw RUNNING
             assert _stored(table)["executionStatus"] == "FAILED"
-        client.invoke.assert_not_called()
 
-    def test_a_still_running_poll_sends_nothing(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
-                patch.object(le.sfn, "describe_execution", return_value={"status": "RUNNING"}):
+    def test_a_terminal_row_is_never_polled(self):
+        done = dict(_row(status="ABORTED"), executionStopDate="2026-11-05T02:00:00Z")
+        with _main_table(done) as table, _reconcile_env(table), \
+                patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
+                patch.object(le.sfn, "describe_execution") as describe:
+            le._reconcile_main_status(EXEC, dict(done))
+        describe.assert_not_called()
+
+    def test_the_details_read_swallows_a_throttled_describe(self):
+        with _main_table(_row()) as table, _reconcile_env(table), \
+                patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
             le._reconcile_main_status(EXEC, _row())
-        client.invoke.assert_not_called()
-
-    def test_the_list_reconcile_sends_one_callback_through_build_execution_items(self):
-        main = _row()
-        with _main_table(main) as table, _callback() as client, _reconcile_env(table):
-            le.build_execution_items(
-                input_items=[{"workflowExecutionId": EXEC}],
-                fetch_main_row=lambda eid: main,
-                describe_execution=lambda arn: _stopped("ABORTED"),
-                persist_main_row=lambda item: le._persist_list_reconcile(
-                    table, item, lambda eid: main),
-                workflow_id_filter="", workflow_database_id="")
-            assert _stored(table)["executionStatus"] == "ABORTED"
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("reconcileList", "ABORTED")]
-
-    def test_the_list_reconcile_losing_the_race_sends_nothing(self):
-        main = _row()
-        with _main_table(_row(status="SUCCEEDED")) as table, _callback() as client, \
-                _reconcile_env(table):
-            le._persist_list_reconcile(
-                table, {"workflowExecutionId": EXEC, "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}",
-                        "executionStatus": "ABORTED", "executionStopDate": "2026-11-05T02:00:00Z"},
-                lambda eid: main)
-            assert _stored(table)["executionStatus"] == "SUCCEEDED"
-        client.invoke.assert_not_called()
-
-    def test_a_sync_stamp_only_write_sends_nothing(self):
-        main = _row()
-        with _main_table(main) as table, _callback() as client:
-            le._persist_list_reconcile(
-                table, {"workflowExecutionId": EXEC, "workflowDatabaseId:workflowId": f"{WF_DB}:{WF_ID}",
-                        "lastSfnSyncCheckDate": "2026-11-05T02:00:00Z"}, lambda eid: main)
-        client.invoke.assert_not_called()
+            assert _stored(table)["executionStatus"] == "RUNNING"
 
 
 def _status_event(status="ABORTED", execution_id=EXEC, execution_arn=None,
@@ -829,92 +557,85 @@ def _status_event(status="ABORTED", execution_id=EXEC, execution_arn=None,
     }
 
 
+def _throttled(operation="DescribeExecution"):
+    return ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+                       operation)
+
+
 @pytest.mark.unit
 @pytest.mark.aws
-class TestWriter6StatusEvent:
-    """The push: the execution service handling a Step Functions execution status change event."""
+class TestStatusChangeEvent:
+    """The push: the execution service handling a Step Functions execution status change event, for
+    every workflow run (system or not)."""
 
+    @pytest.mark.parametrize("trigger", [SYSTEM_TRIGGER, "Manual"])
     @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
-    def test_each_terminal_status_reconciles_and_sends_one_callback(self, status):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+    def test_each_terminal_status_is_reconciled(self, status, trigger):
+        with _main_table(_row(trigger=trigger)) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped(status)):
             assert le.lambda_handler(_status_event(status), MagicMock()) == {
                 "handled": True, "reconciled": True}
             assert _stored(table)["executionStatus"] == status
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("statusEvent", status)]
 
     def test_the_status_recorded_is_step_functions_own_not_the_events(self):
-        with _main_table(_row()) as table, _callback(), _reconcile_env(table), \
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("TIMED_OUT")):
             le.lambda_handler(_status_event("SUCCEEDED"), MagicMock())
             assert _stored(table)["executionStatus"] == "TIMED_OUT"
 
     def test_the_poll_interval_does_not_delay_the_push(self):
         recent = dict(_row(), lastSfnSyncCheckDate=le.er.iso_now())
-        with _main_table(recent) as table, _callback() as client, _reconcile_env(table), \
+        with _main_table(recent) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
             le.lambda_handler(_status_event(), MagicMock())
             assert _stored(table)["executionStatus"] == "ABORTED"
-        assert client.invoke.call_count == 1
 
-    def test_a_duplicate_event_sends_nothing_more(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+    def test_a_duplicate_event_does_nothing_more(self):
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")) as d:
             le.lambda_handler(_status_event(), MagicMock())
             assert le.lambda_handler(_status_event(), MagicMock()) == {
                 "handled": True, "reconciled": False}
-        assert client.invoke.call_count == 1
         assert d.call_count == 1
 
-    def test_the_read_path_reconcile_winning_first_leaves_the_push_nothing_to_send(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
-                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
-            le._reconcile_main_status(EXEC, _row())
-            le.lambda_handler(_status_event(), MagicMock())
-        assert [p["writer"] for p in _payloads(client)] == ["reconcileDetails"]
-
-    def test_the_push_racing_a_read_between_its_read_and_write_sends_nothing(self):
+    def test_the_push_racing_a_read_keeps_the_first_writers_status(self):
         # The push read RUNNING; a read-path reconcile finished the row before the push's write.
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
                 patch(f"{ES}.get_execution_main_row", return_value=_row()):
             le._reconcile_main_status(EXEC, _row())
-            le.lambda_handler(_status_event(), MagicMock())
+            assert le.lambda_handler(_status_event(), MagicMock()) == {
+                "handled": True, "reconciled": True}
             assert _stored(table)["executionStatus"] == "ABORTED"
-        assert [p["writer"] for p in _payloads(client)] == ["reconcileDetails"]
 
     def test_a_run_finished_through_the_state_machine_costs_one_read(self):
-        with _main_table(_row(status="SUCCEEDED")) as table, _callback() as client, \
-                _reconcile_env(table), \
+        done = dict(_row(status="SUCCEEDED"), executionStopDate="2026-11-05T02:00:00Z")
+        with _main_table(done) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution") as describe:
-            done = dict(_row(status="SUCCEEDED"), executionStopDate="2026-11-05T02:00:00Z")
-            table.put_item(Item=done)
             le.lambda_handler(_status_event("SUCCEEDED"), MagicMock())
         describe.assert_not_called()
-        client.invoke.assert_not_called()
+
+    def test_an_unconfirmed_abort_needs_nothing_from_the_event(self):
+        with _main_table(_row()) as table:
+            with _abort(table, [_row()], stop_confirmed=False) as drive:
+                drive["single"](EXEC)
+            with _reconcile_env(table), \
+                    patch.object(le.sfn, "describe_execution") as describe:
+                assert le.lambda_handler(_status_event("ABORTED"), MagicMock()) == {
+                    "handled": True, "reconciled": False}
+            describe.assert_not_called()
+            assert _stored(table)["executionStatus"] == "ABORTED"
 
     def test_a_missing_row_is_ignored(self):
-        with _main_table() as table, _callback() as client, _reconcile_env(table), \
+        with _main_table() as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution") as describe:
             assert le.lambda_handler(_status_event(), MagicMock())["handled"] is False
         describe.assert_not_called()
-        client.invoke.assert_not_called()
-
-    def test_another_deployments_execution_with_a_different_arn_is_ignored(self):
-        foreign = "arn:aws:states:us-east-1:1:execution:vams-other:" + EXEC
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
-                patch.object(le.sfn, "describe_execution") as describe:
-            assert le.lambda_handler(_status_event(execution_arn=foreign), MagicMock())[
-                "handled"] is False
-            assert _stored(table)["executionStatus"] == "RUNNING"
-        describe.assert_not_called()
-        client.invoke.assert_not_called()
 
     # The rule matches every VAMS deployment's workflow state machines in the account and Region, so
     # most events it delivers belong to another deployment. Each must end quietly: a raise would make
     # Lambda retry the event and spend this deployment's reads on executions it does not own (in-dev
-    # D2, #1135). No Step Functions call, no write, no callback.
+    # D2, #1135). No Step Functions call and no write.
     @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"])
     @pytest.mark.parametrize("event", [
         # Another deployment's run, an execution id this deployment never stored.
@@ -936,7 +657,7 @@ class TestWriter6StatusEvent:
             _status_event(status)["detail"], executionArn=None)),
     ], ids=["unknown-execution", "same-id-other-arn", "non-guid-name", "no-execution-arn"])
     def test_another_deployments_event_ends_without_raising_or_any_side_effect(self, event, status):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution",
                              side_effect=AssertionError("describe")) as describe:
             result = le.lambda_handler(event(status), MagicMock())
@@ -945,7 +666,6 @@ class TestWriter6StatusEvent:
             assert stored["executionStatus"] == "RUNNING"
             assert not stored.get("executionStopDate")
         describe.assert_not_called()
-        client.invoke.assert_not_called()
 
     @pytest.mark.parametrize("event", [
         {"source": "aws.states", "detail-type": "Step Functions Execution Status Change",
@@ -957,28 +677,8 @@ class TestWriter6StatusEvent:
         with patch(f"{ES}.get_execution_main_row", side_effect=AssertionError("read")):
             assert le.lambda_handler(event, MagicMock())["handled"] is False
 
-    def test_an_ordinary_run_gets_the_same_finalization_and_no_client(self):
-        with _main_table(_row(trigger="Manual")) as table, _reconcile_env(table), \
-                patch.dict(os.environ, {sp.CALLBACK_REGISTRY_ENV: REGISTRY}), \
-                patch.object(sp, "_default_lambda_client", side_effect=AssertionError("client")), \
-                patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
-            le.lambda_handler(_status_event(), MagicMock())
-            assert _stored(table)["executionStatus"] == "ABORTED"
-
-    def test_the_event_confirms_a_held_abort_and_sends_its_callback_once(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            client.invoke.assert_not_called()
-            with _reconcile_env(table):
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-            assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("abort", "ABORTED")]
-
     def test_the_event_is_never_logged_and_never_reaches_the_api_dispatch(self):
-        with _main_table(_row()) as table, _callback(), _reconcile_env(table), \
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
                 patch.object(le.logger, "info") as info, \
                 patch(f"{ES}.request_to_claims", side_effect=AssertionError("api path")):
@@ -1001,26 +701,6 @@ class TestWriter6StatusEvent:
         assert le.is_sfn_status_change_event(event) is False
 
 
-def _throttled(operation="DescribeExecution"):
-    return ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
-                       operation)
-
-
-class _FailingRemoveTable:
-    """The real moto table, except that the held-callback REMOVE fails with a non-conditional error."""
-
-    def __init__(self, table):
-        self._table = table
-
-    def __getattr__(self, name):
-        return getattr(self._table, name)
-
-    def update_item(self, **kwargs):
-        if kwargs.get("UpdateExpression", "").startswith("REMOVE"):
-            raise _throttled("UpdateItem")
-        return self._table.update_item(**kwargs)
-
-
 @pytest.mark.unit
 @pytest.mark.aws
 class TestStatusEventRetriesOnFailure:
@@ -1028,12 +708,11 @@ class TestStatusEventRetriesOnFailure:
     event again; a read path stays best-effort; a lost guard is never a failure."""
 
     def test_a_throttled_describe_raises_and_the_retry_reconciles_once(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table):
+        with _main_table(_row()) as table, _reconcile_env(table):
             with patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
                 with pytest.raises(ClientError):
                     le.lambda_handler(_status_event(), MagicMock())
             assert _stored(table)["executionStatus"] == "RUNNING"
-            client.invoke.assert_not_called()
             # Lambda's retry of the same event, now that Step Functions answers.
             with patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
                 assert le.lambda_handler(_status_event(), MagicMock()) == {
@@ -1042,16 +721,13 @@ class TestStatusEventRetriesOnFailure:
                 assert le.lambda_handler(_status_event(), MagicMock()) == {
                     "handled": True, "reconciled": False}
             assert _stored(table)["executionStatus"] == "ABORTED"
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("statusEvent", "ABORTED")]
 
     def test_a_failed_guarded_write_raises(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
+        with _main_table(_row()) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
                 patch(f"{ES}._persist_reconciled_main_row", side_effect=_throttled("UpdateItem")):
             with pytest.raises(ClientError):
                 le.lambda_handler(_status_event(), MagicMock())
-        client.invoke.assert_not_called()
 
     def test_a_failed_main_row_read_raises(self):
         with patch(f"{ES}.get_execution_main_row", side_effect=_throttled("Query")):
@@ -1060,151 +736,16 @@ class TestStatusEventRetriesOnFailure:
 
     def test_a_lost_guard_returns_without_raising(self):
         # The push read RUNNING; another writer finished the row before the push's guarded write.
-        with _main_table(_row(status="FAILED")) as table, _callback() as client, \
-                _reconcile_env(table), \
+        with _main_table(_row(status="FAILED")) as table, _reconcile_env(table), \
                 patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
                 patch(f"{ES}.get_execution_main_row", return_value=_row()):
             assert le.lambda_handler(_status_event(), MagicMock()) == {
                 "handled": True, "reconciled": True}
             assert _stored(table)["executionStatus"] == "FAILED"
-        client.invoke.assert_not_called()
-
-    def test_a_failed_held_callback_removal_raises_and_the_retry_sends_it_once(self):
-        with _main_table(_row()) as table, _callback() as client:
-            with _abort(table, [_row()], stop_confirmed=False) as drive:
-                drive["single"](EXEC)
-            failing = _FailingRemoveTable(table)
-            with patch.object(le.dynamodb, "Table", return_value=failing):
-                with pytest.raises(ClientError):
-                    le.lambda_handler(_status_event("ABORTED"), MagicMock())
-            client.invoke.assert_not_called()
-            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-            with _reconcile_env(table):
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("abort", "ABORTED")]
-
-    def test_the_details_read_still_swallows_a_throttled_describe(self):
-        with _main_table(_row()) as table, _callback() as client, _reconcile_env(table), \
-                patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
-            le._reconcile_main_status(EXEC, _row())
-            assert _stored(table)["executionStatus"] == "RUNNING"
-        client.invoke.assert_not_called()
-
-    def test_a_read_path_held_callback_removal_failure_is_swallowed(self):
-        held = dict(_row(status="ABORTED"), executionStopDate="2026-11-05T02:00:00Z",
-                    **{sp.CALLBACK_PENDING_ATTRIBUTE: "ABORTED"})
-        table = MagicMock()
-        table.update_item.side_effect = _throttled("UpdateItem")
-        with _callback() as client:
-            le._send_held_abort_callback(table, held)
-            with pytest.raises(ClientError):
-                le._send_held_abort_callback(table, held, raise_on_failure=True)
-        client.invoke.assert_not_called()
-
-
-@pytest.mark.unit
-@pytest.mark.aws
-class TestDetailsReadSendsHeldAbort:
-    """A held ABORTED callback does not depend on a second abort when the status event is lost: the
-    details read sends it once Step Functions confirms the execution ended."""
-
-    def _held(self, table, client):
-        with _abort(table, [_row()], stop_confirmed=False) as drive:
-            drive["single"](EXEC)
-        client.invoke.assert_not_called()
-        return _stored(table)
-
-    def test_a_details_read_after_the_stop_sends_the_held_callback_once(self):
-        with _main_table(_row()) as table, _callback() as client:
-            held = self._held(table, client)
-            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
-                    patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")):
-                le._reconcile_main_status(EXEC, dict(held))
-                assert sp.CALLBACK_PENDING_ATTRIBUTE not in _stored(table)
-                # Later reads (they still hold the read-time copy) and the late event send nothing.
-                le._reconcile_main_status(EXEC, dict(held))
-                le.lambda_handler(_status_event("ABORTED"), MagicMock())
-            assert _stored(table)["executionStatus"] == "ABORTED"
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("abort", "ABORTED")]
-
-    def test_a_details_read_while_the_execution_still_runs_keeps_it_held(self):
-        with _main_table(_row()) as table, _callback() as client:
-            held = self._held(table, client)
-            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
-                    patch.object(le.sfn, "describe_execution", return_value={"status": "RUNNING"}):
-                le._reconcile_main_status(EXEC, dict(held))
-            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-        client.invoke.assert_not_called()
-
-    def test_a_failed_describe_keeps_it_held_and_does_not_raise(self):
-        with _main_table(_row()) as table, _callback() as client:
-            held = self._held(table, client)
-            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
-                    patch.object(le.sfn, "describe_execution", side_effect=_throttled()):
-                le._reconcile_main_status(EXEC, dict(held))
-            assert _stored(table)[sp.CALLBACK_PENDING_ATTRIBUTE] == "ABORTED"
-        client.invoke.assert_not_called()
-
-    def test_a_read_inside_the_poll_interval_does_not_describe(self):
-        with _main_table(_row()) as table, _callback() as client:
-            held = self._held(table, client)  # the abort stamped lastSfnSyncCheckDate just now
-            with _reconcile_env(table), \
-                    patch.object(le.sfn, "describe_execution") as describe:
-                le._reconcile_main_status(EXEC, dict(held))
-            describe.assert_not_called()
-        client.invoke.assert_not_called()
-
-    def test_a_terminal_row_without_a_held_callback_is_never_polled(self):
-        done = dict(_row(status="SUCCEEDED"), executionStopDate="2026-11-05T02:00:00Z")
-        with _main_table(done) as table, _callback() as client, _reconcile_env(table), \
-                patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
-                patch.object(le.sfn, "describe_execution") as describe:
-            le._reconcile_main_status(EXEC, dict(done))
-        describe.assert_not_called()
-        client.invoke.assert_not_called()
-
-    def test_the_details_route_sends_it(self):
-        with _main_table(_row()) as table, _callback() as client:
-            held = self._held(table, client)
-            with _reconcile_env(table), patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0), \
-                    patch.object(le.sfn, "describe_execution", return_value=_stopped("ABORTED")), \
-                    patch(f"{ES}.get_execution_main_row", return_value=dict(held)), \
-                    patch(f"{ES}.get_workflow_execution_configuration_row", return_value={}), \
-                    patch(f"{ES}.authorize_execution_access", return_value=(True, "")), \
-                    patch(f"{ES}.assemble_execution_details", return_value={}), \
-                    patch(f"{ES}._enforce_detail_payload_ceiling"):
-                le.get_execution_details({"requestContext": {"http": {}}}, EXEC)
-        assert [(p["writer"], p["executionStatus"]) for p in _payloads(client)] == [
-            ("abort", "ABORTED")]
-
-
-@pytest.mark.unit
-class TestWriterReturnValues:
-    """The won/lost signal each guarded write now returns (the callback keys on it)."""
-
-    def test_finalize_main_row_reports_win_and_loss(self):
-        table = MagicMock()
-        dynamo = MagicMock(Table=MagicMock(return_value=table))
-        assert le.eo.finalize_main_row(dynamo, "t", EXEC, WF_DB, WF_ID, "FAILED", "now") is True
-        table.update_item.side_effect = _ccf()
-        assert le.eo.finalize_main_row(dynamo, "t", EXEC, WF_DB, WF_ID, "FAILED", "now") is False
-
-    def test_persist_reconciled_main_row_reports_win_loss_and_nothing_to_write(self):
-        table = MagicMock()
-        assert le._persist_reconciled_main_row(table, {}, ("executionStatus",)) is False
-        item = dict(_row(), executionStatus="ABORTED")
-        assert le._persist_reconciled_main_row(
-            table, item, ("executionStatus",), only_if_not_terminal=True) is True
-        table.update_item.side_effect = _ccf()
-        assert le._persist_reconciled_main_row(
-            table, item, ("executionStatus",), only_if_not_terminal=True) is False
 
 
 # ---------------------------------------------------------------------------------------------------
-# 4) Re-run of a system run is refused
+# 4) Re-run of a system run is refused; the list filter and record model take the value as given
 # ---------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit
@@ -1225,8 +766,9 @@ class TestRerunGuard:
                                           MagicMock(executionGroupId=None))
         return response, invoke
 
-    def test_a_system_run_is_refused_400_and_launches_nothing(self):
-        response, invoke = self._rerun(_row())
+    @pytest.mark.parametrize("trigger", [SYSTEM_TRIGGER, "System-Another-Feature"])
+    def test_a_system_run_is_refused_400_and_launches_nothing(self, trigger):
+        response, invoke = self._rerun(_row(trigger=trigger))
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == sp.SYSTEM_RERUN_REFUSED_MESSAGE
         invoke.assert_not_called()
@@ -1246,14 +788,74 @@ class TestRerunGuard:
 @pytest.mark.unit
 class TestTriggerFilterSpelling:
     @pytest.mark.parametrize("value, stored", [
-        ("manual", "Manual"), ("fileUpload", "File-Upload"), ("zipDownload", "Zip-Download"),
-        ("Zip-Download", "Zip-Download"), ("Other", "Other"),
+        ("manual", "Manual"), ("fileUpload", "File-Upload"),
+        (SYSTEM_TRIGGER, SYSTEM_TRIGGER), (" " + SYSTEM_TRIGGER + " ", SYSTEM_TRIGGER),
+        ("Other", "Other"),
     ])
     def test_request_spellings_map_to_stored_values(self, value, stored):
         assert le._stored_trigger_type(value) == stored
 
-    def test_the_stored_record_model_accepts_the_system_value(self):
+    @pytest.mark.parametrize("trigger", ["Manual", "File-Upload", SYSTEM_TRIGGER, "System-X"])
+    def test_the_stored_record_model_accepts_public_and_system_values(self, trigger):
         from models.executions import WorkflowExecutionRecord
         record = WorkflowExecutionRecord(workflowExecutionId=EXEC, workflowId=WF_ID,
-                                         workflowDatabaseId=WF_DB, triggerType="Zip-Download")
-        assert record.triggerType == "Zip-Download"
+                                         workflowDatabaseId=WF_DB, triggerType=trigger)
+        assert record.triggerType == trigger
+
+    @pytest.mark.parametrize("trigger", ["Other", "manual", "System-", "System-bad value"])
+    def test_the_stored_record_model_refuses_anything_else(self, trigger):
+        from models.executions import WorkflowExecutionRecord
+        with pytest.raises(ValueError, match="triggerType must be one of"):
+            WorkflowExecutionRecord(workflowExecutionId=EXEC, workflowId=WF_ID,
+                                    workflowDatabaseId=WF_DB, triggerType=trigger)
+
+
+# ---------------------------------------------------------------------------------------------------
+# 5) Core workflow code names no specific pipeline or feature, and has no callback registry
+# ---------------------------------------------------------------------------------------------------
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_CORE_SOURCES = [
+    _REPO_ROOT / "backend" / "backend" / "common" / "workflows",
+    _REPO_ROOT / "backend" / "backend" / "handlers" / "workflows",
+    _REPO_ROOT / "infra" / "lib" / "lambdaBuilder" / "workflowFunctions.ts",
+]
+# Feature-specific trigger or pipeline names (any spelling: Zip-Download, zipDownload, zip_archive,
+# utility-zip-archive, ...) and the removed terminal-callback registry.
+_FORBIDDEN = re.compile(
+    r"zip[-_ ]?(download|archive)"
+    r"|CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER|SystemPipelineCallback|notify_terminal_transition"
+    r"|SYSTEM_TRIGGER_TYPE_TO_STORED|SYSTEM_PIPELINE_TRIGGER_TYPES",
+    re.IGNORECASE)
+
+
+def _core_files():
+    for source in _CORE_SOURCES:
+        if source.is_file():
+            yield source
+        else:
+            yield from sorted(p for p in source.rglob("*") if p.suffix in (".py", ".ts"))
+
+
+@pytest.mark.unit
+class TestCoreNamesNoPipeline:
+    def test_the_scanned_sources_exist(self):
+        missing = [str(s) for s in _CORE_SOURCES if not s.exists()]
+        if missing == [str(_CORE_SOURCES[-1])]:
+            pytest.skip("infra sources are not present in this checkout")
+        assert not missing, missing
+
+    def test_no_feature_specific_trigger_or_callback_name_in_core(self):
+        hits = []
+        for path in _core_files():
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if _FORBIDDEN.search(line):
+                    hits.append(f"{path.relative_to(_REPO_ROOT)}:{number}: {line.strip()}")
+        assert not hits, "core workflow code must not name a specific pipeline:\n" + "\n".join(hits)
+
+    def test_the_guard_catches_each_spelling(self):
+        for sample in ("Zip-Download", "zipDownload", "zip_archive", "utility-zip-archive",
+                       "ZipArchiveBuilder", "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER"):
+            assert _FORBIDDEN.search(sample), sample
+        # Ordinary Python is not a false hit.
+        assert not _FORBIDDEN.search("for n, v in zip(names, values)")

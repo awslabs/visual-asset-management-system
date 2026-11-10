@@ -52,6 +52,7 @@ def _redeploy_response(outcome, pipelines=None, version_arn=NEW_VERSION_ARN, rea
             "jobNames": ["job-p1"],
             "pipelineFingerprints": workflowAsl.workflow_pipeline_fingerprints(pipelines or []),
             "aslSchemaVersion": str(workflowAsl.ASL_SCHEMA_VERSION),
+            "outputIngestionWaitHours": str(workflowAsl.MAX_OUTPUT_INGESTION_WAIT_HOURS),
         })
     if reason:
         message["reason"] = reason

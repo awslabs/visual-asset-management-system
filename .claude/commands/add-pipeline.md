@@ -39,6 +39,8 @@ vamsExecute (Lambda) -> openPipeline (Lambda) -> constructPipeline (Lambda) -> [
 
 All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
+**Do not hook the pipeline into the workflow core.** A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. Never add the pipeline's name to `backend/backend/common/workflows/`, `backend/backend/handlers/workflows/` or `infra/lib/lambdaBuilder/workflowFunctions.ts` (`backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline").
+
 #### Pipeline S3 Output Paths (critical)
 
 Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):

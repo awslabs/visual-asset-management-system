@@ -29,6 +29,7 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
+from backend.tests.copyEngineRouting import route_to_engine  # noqa: E402
 from backend.tests.handlers.workflows import test_processOutput_ingestion_outcome as base  # noqa: E402
 
 po = base.po
@@ -76,7 +77,7 @@ def _ingest(event_overrides=None, ingestion=None, claim=None):
                          return_value=ingestion or _ingestion_result()) as mocks["upload"], \
             patch.object(po, "process_metadata_file", return_value=APPLIED) as mocks["metadata"], \
             patch.object(po, "record_execution_outputs") as mocks["record"], \
-            patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+            route_to_engine(po, MagicMock()), \
             patch.object(po, "_mark_ingesting", return_value=True) as mocks["mark"], \
             patch.object(po.loc, "record_batch") as mocks["batch"], \
             patch.object(po.loc, "claim_notification", return_value=claim) as mocks["claim"], \
@@ -182,6 +183,7 @@ class TestIngestWithLargeOutputsWaits:
         m["batch"].assert_not_called()
 
     def test_a_run_ended_meanwhile_cancels_the_copies_it_started(self):
+        calls = []
         lookup, bucket, logs = base._asset_patches()
         with lookup, bucket, logs, \
                 patch.object(po, "verify_get_path_objects", side_effect=_listing), \
@@ -190,21 +192,24 @@ class TestIngestWithLargeOutputsWaits:
                 patch.object(po, "process_external_upload", return_value=_ingestion_result()), \
                 patch.object(po, "process_metadata_file", return_value=APPLIED), \
                 patch.object(po, "record_execution_outputs") as record, \
-                patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+                route_to_engine(po, MagicMock(), calls=calls), \
                 patch.object(po, "_mark_ingesting", return_value=False), \
                 patch.object(po.loc, "record_batch") as batch, \
                 patch.object(po.loc, "cancel_execution_copy_jobs", return_value=[]) as cancel, \
-                patch.object(po.loc, "engine_function_name", return_value="engine-fn") as engine_name, \
-                patch.object(po, "_ssm_client", return_value="ssm-client"), \
                 patch.object(po, "s3c"):
             resp = po.lambda_handler(base._event(filesPathKey=FILES_PREFIX, awaitOutputIngestion=True),
                                      MagicMock())
+            from backend.tests.copyEngineRouting import engine
+            engine_lambda_client = engine.lambda_client
+        # The output step asks the copy engine to cancel; the engine stops the copies with its own
+        # role and hands the stops to its own reconcile (#1123 M11 round 6): its Lambda client and
+        # its own function name.
+        # (It first folds in any copies an earlier attempt recorded, also through the engine.)
+        assert [op for op, _ in calls] == [po.loc.OUTPUT_STEP_RECORDED_JOBS, po.loc.OUTPUT_STEP_CANCEL]
+        assert calls[1][1] == {"workflowExecutionId": base._event()["body"]["workflowExecutionId"]}
         cancel.assert_called_once()
-        # The stops it makes are handed to the copy engine's reconcile (#1123 M11 round 6): its
-        # Lambda client and the engine name, which the output step reads from SSM.
-        assert cancel.call_args.args[4] is po.client
-        assert cancel.call_args.args[5] == "engine-fn"
-        engine_name.assert_called_once_with(ssm_client="ssm-client")
+        assert cancel.call_args.args[4] is engine_lambda_client
+        assert cancel.call_args.args[5] == "largeObjectCopyEngine"
         batch.assert_not_called()
         record.assert_not_called()
         assert resp["outputIngestionPending"] is False
@@ -238,7 +243,7 @@ def _finalize(outcome, state=None):
                                               "stateKey": "k"}}
     s3 = MagicMock()
     s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(state or _state()).encode())}
-    with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+    with route_to_engine(po, MagicMock()), \
             patch.object(po.loc, "get_batch", return_value=batch), \
             patch.object(po.loc, "batch_outcomes", return_value=outcome), \
             patch.object(po, "s3c", s3), \
@@ -285,7 +290,7 @@ class TestFinalize:
         assert failures[0] == "PipelineReportedFailure: boom"
 
     def test_a_missing_batch_raises_for_the_error_handler(self):
-        with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+        with route_to_engine(po, MagicMock()), \
                 patch.object(po.loc, "get_batch", return_value={}):
             with pytest.raises(Exception):
                 po.lambda_handler({"body": {"mode": "finalize", "batchId": "E1"}}, MagicMock())
@@ -305,7 +310,7 @@ class TestRetriedOutputStep:
     def test_an_earlier_attempt_s_finished_job_is_folded_into_the_batch(self):
         prior = _state(collectedOutputFiles=[{"fileType": "file", "relativeFilePath": "big/early.e57",
                                                "s3Key": EARLIER_JOB["sourceKey"], "contentType": "x/e57"}])
-        with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+        with route_to_engine(po, MagicMock()), \
                 patch.object(po.loc, "recorded_batch_jobs",
                              return_value={"E1#aaa": EARLIER_JOB, "E1#abc": {
                                  "jobId": "E1#abc", "batchId": "E1", "relativeKey": "big/cloud.e57",
@@ -337,7 +342,7 @@ class TestRetriedOutputStep:
                 patch.object(po, "process_external_upload", return_value={
                     "overallSuccess": True, "fileResults": [{"relativeKey": "small.glb", "success": True}]}), \
                 patch.object(po, "record_execution_outputs") as record, \
-                patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+                route_to_engine(po, MagicMock()), \
                 patch.object(po.loc, "recorded_batch_jobs", return_value={"E1#aaa": EARLIER_JOB}), \
                 patch.object(po, "_read_ingestion_state", return_value={}), \
                 patch.object(po, "_mark_ingesting", return_value=True), \
@@ -376,7 +381,7 @@ class TestRetriedOutputStep:
 @pytest.mark.unit
 class TestAwait:
     def test_await_registers_the_token_and_reports_when_copies_are_done(self):
-        with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+        with route_to_engine(po, MagicMock()), \
                 patch.object(po.loc, "register_task_token") as register, \
                 patch.object(po.loc, "claim_notification", return_value={"jobId": "batch#E1",
                                                                          "taskToken": "t"}), \
@@ -386,7 +391,7 @@ class TestAwait:
         deliver.assert_called_once()
 
     def test_await_with_copies_still_running_only_registers(self):
-        with patch.object(po, "copy_jobs_table", return_value=MagicMock()), \
+        with route_to_engine(po, MagicMock()), \
                 patch.object(po.loc, "register_task_token"), \
                 patch.object(po.loc, "claim_notification", return_value=None), \
                 patch.object(po.loc, "deliver_batch_report") as deliver:

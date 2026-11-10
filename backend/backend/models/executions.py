@@ -14,14 +14,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
-from common.workflows.systemPipelines import SYSTEM_TRIGGER_TYPES
+from common.workflows.systemPipelines import is_system_trigger, SYSTEM_TRIGGER_PREFIX
 
 logger = safeLogger()
 
-# Stored trigger values. The system values (common.workflows.systemPipelines) are set only by a marked
-# system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below, which does
-# not list them.
-TRIGGER_TYPES = ("Manual", "File-Upload") + SYSTEM_TRIGGER_TYPES
+# Stored trigger values. A stored row may also hold a system trigger value
+# (common.workflows.systemPipelines.is_system_trigger: a fixed prefix plus a safe identifier), set only
+# by a marked system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below,
+# which does not include them.
+TRIGGER_TYPES = ("Manual", "File-Upload")
 
 
 class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -58,8 +59,8 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
     # Server-only system execution context (serialized JSON object), written only on a system-trigger
-    # run launched by a marked cross-call. Read by the terminal callback; never projected by the list
-    # or details APIs.
+    # run launched by a marked cross-call (also handed to the first step's manifest); never projected
+    # by the list or details APIs.
     systemExecutionContext: Optional[str] = ""
     # Copied from the launched workflow's isSystem at launch. A row written before the flag existed
     # has no attribute and reads as a user run; the execution lists hide system runs by default.
@@ -76,8 +77,9 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
-        if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
+        if v not in TRIGGER_TYPES and not is_system_trigger(v):
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}, "
+                             f"or a {SYSTEM_TRIGGER_PREFIX}<identifier> system trigger value")
         return v
 
 

@@ -455,15 +455,6 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         },
-        largeFileIngestion: {
-            apiUploadEngineThresholdBytes: 5368709120,
-            minPartSizeBytes: 268435456,
-            partsPerBatch: 16,
-            threadsPerBatch: 8,
-            maxConcurrentBatches: 10,
-            engineReservedConcurrency: 0,
-            maxOutputIngestionWaitHours: 48,
-        },
         zipDownloads: {
             enabled: false,
             retentionDays: 7,

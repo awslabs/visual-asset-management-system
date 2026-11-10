@@ -31,6 +31,7 @@ import {
     buildAssetVersionsFunction,
     buildSqsUploadFileLargeFunction,
     buildAssetExportService,
+    grantLargeObjectCopyStart,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -55,7 +56,6 @@ import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFu
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
-import { grantLargeObjectCopyStart } from "../../lambdaBuilder/largeObjectCopyEngine";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
