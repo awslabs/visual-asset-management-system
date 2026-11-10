@@ -640,10 +640,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_nlp_search(event, claims_and_roles)
         return validation_error(body={"message": ROUTE_NOT_SERVED_MESSAGE}, event=event)
     except ValidationError as v:
-        # A refused request is the caller's mistake, not a fault: no ERROR line and no traceback.
-        message = validation_error_message(v)
-        logger.info(f"Request refused by validation: {message}")
-        return validation_error(body={"message": message}, event=event)
+        # A refused request is the caller's mistake, not a fault: WARNING, not ERROR, and no traceback.
+        logger.warning(f"Request refused by validation: {v}")
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VectorIndexNotReady:
         logger.warning("SearchVectors refused: the vector index is not ready")
         return service_unavailable(body={"message": INDEX_BUILDING_MESSAGE}, event=event)

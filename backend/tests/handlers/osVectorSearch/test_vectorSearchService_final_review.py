@@ -218,10 +218,12 @@ class TestDeletedDatabasesOnTheUnpartitionedCall:
         store = self._store()
         status, body = call(svc, store, {"query": "tractor", "includeArchived": True, "includeSegments": False})
         assert status == 200
+        assert store.calls, "the search made no SearchVectors call"
         assert all("databaseId" not in c for c in store.calls)  # the one unpartitioned call
         assert [h["_source"]["str_databaseid"] for h in body["hits"]["hits"]] == ["db1"]
         keys = [k for c in svc.dynamodb.batch_get_item.call_args_list
                 for k in c.kwargs["RequestItems"][svc.asset_storage_table_name]["Keys"]]
+        assert keys, "no asset row was read"
         assert all(not k["databaseId"].startswith("gone") for k in keys)
 
     def test_a_partial_reach_caller_answers_the_same(self, svc):
