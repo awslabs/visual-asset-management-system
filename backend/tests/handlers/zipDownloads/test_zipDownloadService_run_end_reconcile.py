@@ -186,6 +186,36 @@ class TestOutcomeOrder:
         assert _row(env) == before
 
 
+class TestTriggerValueIsNotRead:
+    """The job follows its run by the stored workflowExecutionId only. A run recorded under the earlier
+    trigger value (Zip-Download, on test stacks before the generic System- contract) or the current
+    one (System-ZipDownload) reconciles the same way."""
+
+    @pytest.mark.parametrize("trigger", ["Zip-Download", "System-ZipDownload", None])
+    @pytest.mark.parametrize("status", ["ABORTED", "TIMED_OUT"])
+    def test_a_run_under_any_trigger_value_reconciles(self, env, trigger, status):
+        h.set_run_status(env, "exec-1", status)
+        main = env.executions.items[("exec-1", h.MAIN_SORT_KEY)]
+        main["isSystem"] = True
+        if trigger:
+            main["triggerType"] = trigger
+        env.svc._reconcile(dict(_row(env)))
+        assert _row(env)["status"] == "FAILED"
+        expected = (env.zd.MSG_CANCELLED_FROM_EXECUTIONS if status == "ABORTED"
+                    else env.zd.MSG_JOB_TIMED_OUT)
+        assert _row(env)["errorMessage"] == expected
+
+    def test_the_service_never_reads_a_trigger_value(self):
+        import os
+        here = os.path.dirname(__file__)
+        for rel in (("..", "..", "..", "backend", "handlers", "assets", "zipDownloadService.py"),
+                    ("..", "..", "..", "backend", "common", "zipDownloads.py")):
+            with open(os.path.join(here, *rel), encoding="utf-8") as source:
+                text = source.read()
+            assert 'get("triggerType")' not in text and "['triggerType']" not in text
+            assert '["triggerType"]' not in text
+
+
 class TestThroughTheRoutes:
     def test_a_get_of_the_job_finalizes_it(self, env):
         h.put_asset(env)

@@ -34,7 +34,7 @@ jest.setTimeout(900_000);
 
 const SERVICE_HANDLER = "handlers.assets.zipDownloadService.lambda_handler";
 const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteZipArchivePipeline.lambda_handler";
-/** The terminal writers' callback registry variable (lambdaBuilder/systemPipelineCallbacks.ts). */
+/** The terminal writers' callback registry variable, removed with the registry (#1135). */
 const CALLBACK_REGISTRY_ENV = "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER";
 
 function enabledMutate(retentionDays: number) {
@@ -95,21 +95,18 @@ function expectOneZipFunction(synth: SynthResult): void {
 }
 
 /**
- * No terminal writer names the zip download service (no callback registry variable mentions it or
- * the Zip-Download trigger), and the only IAM policy that grants lambda:InvokeFunction on the service
- * is the one on the sweep state machine's role (`sweepRoleId`, or none when the sweep is not deployed).
+ * No function carries a terminal-callback registry variable (the workflow core keeps none since #1135,
+ * and the zip download service never registers one), and the only IAM policy that grants
+ * lambda:InvokeFunction on the service is the one on the sweep state machine's role (`sweepRoleId`,
+ * or none when the sweep is not deployed).
  */
 function expectNoZipCallback(synth: SynthResult, sweepRoleId?: string): void {
     const service = functionByHandler(synth, SERVICE_HANDLER);
     const serviceId = service.logicalId;
-    const naming = synth.where("AWS::Lambda::Function", (r) => {
-        const registry = envOf(r)[CALLBACK_REGISTRY_ENV];
-        if (registry === undefined) {
-            return false;
-        }
-        const flat = SynthResult.flatten(registry);
-        return flat.includes(serviceId) || flat.includes("Zip-Download");
-    });
+    const naming = synth.where(
+        "AWS::Lambda::Function",
+        (r) => envOf(r)[CALLBACK_REGISTRY_ENV] !== undefined
+    );
     expect(naming).toEqual([]);
     const invokers = [
         ...synth.ofType("AWS::IAM::Policy"),

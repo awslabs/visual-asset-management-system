@@ -149,13 +149,14 @@ class TestLaunchThroughTheExecuteHandler:
         row, main = _launched(env, SELECTIONS[selection])
         assert main["workflowDatabaseId"] == GLOBAL and main["workflowId"] == WORKFLOW_ID
         assert main["workflowDatabaseId:workflowId"] == SORT_KEY
-        assert main["triggerType"] == "Zip-Download"
+        # The core stores the zip's own system trigger value exactly as the launch sent it.
+        assert main["triggerType"] == "System-ZipDownload"
         assert main["isSystem"] is True
         context = json.loads(main["systemExecutionContext"])
         assert context["requestId"] == row["requestId"] and context["databaseId"] == "db1"
         # The zip service reads the run's main row by the same GLOBAL sort key (_main_row).
         env.executions.items[(main["workflowExecutionId"], main["workflowDatabaseId:workflowId"])] = main
-        assert env.svc._main_row(main["workflowExecutionId"])["triggerType"] == "Zip-Download"
+        assert env.svc._main_row(main["workflowExecutionId"])["triggerType"] == "System-ZipDownload"
 
 
 @pytest.mark.unit

@@ -50,7 +50,7 @@ flowchart LR
 
 The container decides its mode from the run manifest:
 
--   **Zip download** -- A run that VAMS launched for a Download as Zip job (system trigger `Zip-Download`) carries a server-only context naming the job and its request manifest under `vams.preparedDownloads/` in the auxiliary bucket. The request manifest, written by the API when the job was created, is the authority for what is archived. The archive is written to the job's key under `vams.preparedDownloads/`, the container records the job's progress and outcome in `ZipDownloadRequestsStorageTable`, and nothing is written to the asset.
+-   **Zip download** -- A run that VAMS launched for a Download as Zip job (system trigger `System-ZipDownload`) carries a server-only context naming the job and its request manifest under `vams.preparedDownloads/` in the auxiliary bucket. The request manifest, written by the API when the job was created, is the authority for what is archived. The archive is written to the job's key under `vams.preparedDownloads/`, the container records the job's progress and outcome in `ZipDownloadRequestsStorageTable`, and nothing is written to the asset.
 -   **Zip Archive run** -- Any other run archives the run's input files and writes the archive to the run's outputs, so the output step ingests it into the asset as a new file version. Outputs over 1 GiB are copied into the asset by the large object copy engine, so the archive size is not capped below 5 TiB. This mode never reads or writes the zip download table.
 
 ### Processing Flow

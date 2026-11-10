@@ -7,7 +7,7 @@ Note: Lambda function name must start with "vams" to allow invoke permissioning.
 
 Two modes, decided from the run manifest:
 - zipDownload: the manifest carries the server-only system execution context of a Download as Zip
-  job (VAMS writes it only for a run it launched under the Zip-Download system trigger). The job's
+  job (VAMS writes it only for a system run it launched, under the System-ZipDownload trigger). The job's
   request manifest in the auxiliary bucket says what to archive and where.
 - archiveRun: any other run (an ordinary workflow run of this pipeline). The run's input files are
   archived into its outputs files prefix and ingested into the asset as a new file version.

@@ -183,7 +183,8 @@ class TestCreate:
         function, invocation, event = env.lam.calls[0]
         assert function == "executeFn" and invocation == "RequestResponse"
         assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER", "source": "vamsSystemPipeline"}
-        assert event["systemExecution"]["triggerType"] == "zipDownload"
+        assert event["systemExecution"]["triggerType"] == "System-ZipDownload"
+        assert env.zd.ZIP_SYSTEM_TRIGGER == "System-ZipDownload"
         context = event["systemExecution"]["context"]
         assert set(context) == {"v", "requestId", "userId", "databaseId", "assetId", "manifestKey"}
         assert len(json.dumps(context)) < 4096

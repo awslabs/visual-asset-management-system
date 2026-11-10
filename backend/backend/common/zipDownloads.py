@@ -80,11 +80,15 @@ CANCELLED_BY_EXECUTION = "execution"
 # container (zip_archive_pipeline/runner.py), pinned by its tests.
 ARCHIVE_UPLOAD_TOKEN_METADATA = VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 
-# The zipArchive system workflow, and the system trigger a zip-download run is launched with
-# (stored by common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
+# The zipArchive system workflow every zip download job runs.
 ZIP_ARCHIVE_WORKFLOW_ID_DEFAULT = "utility-zip-archive"
 ZIP_ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT = "GLOBAL"
-ZIP_DOWNLOAD_REQUEST_TRIGGER = "zipDownload"
+# The system trigger value a zip download run is launched under. Download as Zip owns it: the
+# workflow core only checks its format (common.workflows.systemPipelines.is_system_trigger) and
+# stores it as given, so the run's execution rows carry this exact value. Nothing in the zip
+# feature reads it back: a job follows its run by the stored workflowExecutionId, so a run
+# recorded under an earlier value (Zip-Download) still reconciles.
+ZIP_SYSTEM_TRIGGER = "System-ZipDownload"
 
 # Version of the system execution context and of the request manifest the container reads.
 CONTEXT_VERSION = 1

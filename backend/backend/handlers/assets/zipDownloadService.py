@@ -541,7 +541,7 @@ def _launch(row, request_entries, pinned):
         "body": json.dumps(body),
         "lambdaCrossCall": {"userName": sp.SYSTEM_PIPELINE_USER_NAME,
                             "source": sp.SYSTEM_PIPELINE_SOURCE_MARKER},
-        sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": zd.ZIP_DOWNLOAD_REQUEST_TRIGGER,
+        sp.SYSTEM_EXECUTION_EVENT_KEY: {"triggerType": zd.ZIP_SYSTEM_TRIGGER,
                                         "context": context},
     }
     response = _invoke_request_response(EXECUTE_FUNCTION, invoke_event)
