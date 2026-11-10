@@ -317,11 +317,13 @@ def extract_metadata(input_asset_relative_path, input_path, output_path, input_v
         if handler_type == 'mesh':
             check_input_text(temp_file, file_extension, os.path.basename(input_key))
 
-        # Extract metadata based on file type
+        # Extract metadata based on file type. Both extractors are given the input's path within
+        # its asset, because temp_file is this invocation's own copy: a failure reported from the
+        # local path reads "input.step" whatever the operator selected.
         if handler_type == 'cad':
-            metadata = extract_cad_metadata(temp_file)
+            metadata = extract_cad_metadata(temp_file, input_asset_relative_path)
         elif handler_type == 'mesh':
-            metadata = extract_mesh_metadata(temp_file)
+            metadata = extract_mesh_metadata(temp_file, input_asset_relative_path)
         else:
             raise ValueError(f"Unknown handler type: {handler_type}")
 

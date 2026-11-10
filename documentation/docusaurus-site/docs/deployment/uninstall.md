@@ -103,6 +103,10 @@ aws bedrock-agentcore-control list-agent-runtimes \
     --output text > vams-cad-agent-runtimes.txt
 ```
 
+## Pre-uninstall: add-ons
+
+An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
@@ -737,7 +741,7 @@ aws logs describe-log-groups \
     --query 'logGroups[].logGroupName'
 ```
 
-All of the above commands should return empty results when the uninstall is complete.
+All of the above commands should return empty results when the uninstall is complete. An add-on can leave resources of its own that these checks do not cover; the pages of each add-on the deployment enabled list the checks for them.
 
 ## Cost impact after uninstall
 

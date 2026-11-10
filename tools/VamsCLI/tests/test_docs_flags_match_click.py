@@ -53,10 +53,12 @@ from vamscli.main import cli
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _DOCS_CLI = os.path.join(_REPO_ROOT, "documentation", "docusaurus-site", "docs", "cli")
 
-# Pages outside docs/cli/ that carry runnable `vamscli` examples: the developer setup guide and the
-# CLI package's own README and docs, which a reader installing from the package sees first.
+# Pages outside docs/cli/ that carry runnable `vamscli` examples: the developer setup guide, each
+# add-on's CLI pages (kept with its other pages under docs/developer/<addon>/), and the CLI package's
+# own README and docs, which a reader installing from the package sees first.
 _EXTRA_PAGE_GLOBS = (
     os.path.join(_REPO_ROOT, "documentation", "docusaurus-site", "docs", "developer", "setup.md"),
+    os.path.join(_REPO_ROOT, "documentation", "docusaurus-site", "docs", "developer", "*", "cli-*.md"),
     os.path.join(_REPO_ROOT, "tools", "VamsCLI", "README.md"),
     os.path.join(_REPO_ROOT, "tools", "VamsCLI", "docs", "*.md"),
 )
