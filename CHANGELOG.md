@@ -58,6 +58,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the Columnar Data Viewer showing only one of the columns that share a CSV header name; each is shown, labelled `value`, `value (2)` and so on. ([#1185](https://github.com/awslabs/visual-asset-management-system/issues/1185))
 -   **Backend** Fixed the Image Viewer and asset previews showing nothing for SVG files: download and stream links for a `.svg` file now return it as `image/svg+xml` with an attachment disposition, so the viewer renders it and opening the link directly downloads it. Stored files are unchanged. ([#1201](https://github.com/awslabs/visual-asset-management-system/issues/1201))
 -   **Web** Fixed the Three.js Viewer drawing every PLY file as a grey mesh: a PLY with no faces now draws as a point cloud, and a PLY's per-vertex colours are used for points and meshes. ([#1257](https://github.com/awslabs/visual-asset-management-system/issues/1257))
+-   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 
 ### Chores
 
