@@ -197,7 +197,8 @@ databases = connector.list_databases()
 assets = connector.list_assets(databases[0].database_id)
 files = connector.list_files(databases[0].database_id, assets[0].asset_id)
 
-# Download (a file that does not download raises VamsCliError naming the download's error)
+# Download (a file that does not download raises VamsCliError naming the download's error;
+# a credential VAMS refuses raises VamsAccessDeniedError, a VamsCliError)
 connector.download_file("my-db", "my-asset", "/model.usd", "/tmp/downloads")
 result = connector.download_asset("my-db", "my-asset", "/tmp/full_asset")
 

@@ -301,7 +301,8 @@ for f in files:
 #### Download Files & Assets
 
 ```python
-# Download a single file; one that does not download raises VamsCliError naming the download's error
+# Download a single file; one that does not download raises VamsCliError naming the download's error,
+# and a credential VAMS refuses raises VamsAccessDeniedError, a VamsCliError
 connector.download_file("my-db", "my-asset", "/model.usd", "/tmp/downloads")
 
 # Download an entire asset (all files, recursively)
