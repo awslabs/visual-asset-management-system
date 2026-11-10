@@ -19,9 +19,11 @@ from common.s3MetadataKeys import (
     COPY_PRESERVED_HEADER_FIELDS,
     DATABASE_ID_METADATA_KEY,
     UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     replace_metadata_copy_args,
 )
-from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS, EXECUTION_STATUS_RESULTS_FILENAME
+from common.s3PathPatterns import (
+    ALLOWED_PREVIEW_FILE_EXTENSIONS, EXECUTION_STATUS_RESULTS_FILENAME, PREVIEW_PREFIX)
 from common.apiRoutes import (
     API_ASSET_METADATA,
     API_FILE_METADATA,
@@ -468,6 +470,74 @@ def _settle_ingest_ledger(workflow_execution_id, descriptors, landed, holder=Non
     _drop_ingest_ledger_rows(
         workflow_execution_id,
         [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
+
+
+def _destination_key(descriptor, asset, base_assets_prefix):
+    """Where the upload handler writes an output in the asset (mirrors uploadFile.complete_external_upload):
+    a file under the asset's location at its relative path, a preview under the previews prefix by
+    basename."""
+    asset_id = asset.get('assetId', '')
+    relative = (descriptor.get("relativeFilePath") or "").lstrip("/")
+    if descriptor.get("fileType") == "preview":
+        return f"{base_assets_prefix}{PREVIEW_PREFIX}{asset_id}/{os.path.basename(relative)}"
+    base = (asset.get('assetLocation') or {}).get('Key') or f"{base_assets_prefix}{asset_id}/"
+    if not base.endswith('/'):
+        base += '/'
+    return relative if relative.startswith(base) else base + relative
+
+
+def _written_by_execution(bucket, key, workflow_execution_id):
+    """Whether the current version at `key` was written by this run (its change provenance names it),
+    the same evidence the upload handler uses to skip a second copy. Unreadable counts as no."""
+    if not workflow_execution_id:
+        return False
+    try:
+        head = s3c.head_object(Bucket=bucket, Key=key)
+    except Exception as e:
+        if not (isinstance(e, ClientError)
+                and e.response.get('Error', {}).get('Code') in _GONE_ERROR_CODES):
+            logger.warning(f"Could not read destination {key} (non-critical): {e}")
+        return False
+    return (head.get('Metadata') or {}).get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY) \
+        == workflow_execution_id
+
+
+def _landed_takeovers(claimed, prior_ledger, holder, asset, bucket_name, base_assets_prefix,
+                      workflow_execution_id):
+    """Split claimed outputs into (already landed, still to ingest).
+
+    An output this attempt took over from another holder (its row was `moving` under someone else)
+    may have been written by that holder's ingestion before it was killed: when one ingestion call
+    outlasts the function timeout, every attempt dies mid-call and re-running it would never finish.
+    When the destination's current version carries this run's provenance, the output landed; it is
+    recorded from that evidence instead of being handed to ingestion again. Outputs with no such
+    evidence, and outputs no one held before, are ingested."""
+    landed, to_ingest = [], []
+    for d in claimed:
+        row = prior_ledger.get(eo.ingest_ledger_sort_key(d)) or {}
+        taken_over = (row.get("ingestState") == eo.INGEST_STATE_MOVING
+                      and row.get("ingestHolder") != holder)
+        if taken_over and _written_by_execution(
+                bucket_name, _destination_key(d, asset, base_assets_prefix), workflow_execution_id):
+            # The holder listed the version it stamped; delete that one too once it is not current.
+            prior_version = row.get("s3VersionId") or ""
+            landed.append({**d, "_priorStagedVersionId": prior_version})
+        else:
+            to_ingest.append(d)
+    if landed:
+        logger.info(f"{len(landed)} taken-over outputs had already landed; recorded without re-ingesting")
+    return landed, to_ingest
+
+
+def _finish_landed_takeovers(landed, workflow_execution_id, holder, source_bucket):
+    """Remove the staged versions of taken-over outputs that already landed, then settle them
+    `ingested` (the order the normal path uses, see D2). Returns the descriptors to record."""
+    clean = [{k: v for k, v in d.items() if k != "_priorStagedVersionId"} for d in landed]
+    extra = [{**c, "s3VersionId": d["_priorStagedVersionId"]} for c, d in zip(clean, landed)
+             if d.get("_priorStagedVersionId") and d["_priorStagedVersionId"] != c.get("s3VersionId")]
+    _remove_listed_staged_versions(clean + extra, source_bucket)
+    _settle_ingest_ledger(workflow_execution_id, clean, clean, holder=holder)
+    return clean
 
 
 def _remove_listed_staged_versions(descriptors, default_bucket):
@@ -1772,6 +1842,14 @@ def lambda_handler(event, context):
                                 if not claimed:
                                     held_by_other_attempt.extend(preview_to_claim)
                                     raise _NothingClaimed()
+                                landed_before, claimed = _landed_takeovers(
+                                    claimed, ingest_ledger, attempt_holder, asset, bucket_name,
+                                    bucketDetails.get('baseAssetsPrefix', ''), ledger_execution_id)
+                                if landed_before:
+                                    collected_output_files.extend(_finish_landed_takeovers(
+                                        landed_before, ledger_execution_id, attempt_holder, source_bucket))
+                                if not claimed:
+                                    raise _NothingClaimed()
 
                                 # Stamp the staged file (in the source bucket) with its provenance. An
                                 # unstamped object would be ingested carrying no asset/upload identity,
@@ -1883,6 +1961,14 @@ def lambda_handler(event, context):
                             claimed_keys = {d["s3Key"] for d in claimed}
                             held_by_other_attempt.extend(
                                 d for d in file_descriptors if d["s3Key"] not in claimed_keys)
+                            # A taken-over output whose write already landed is recorded, not re-ingested.
+                            landed_before, claimed = _landed_takeovers(
+                                claimed, ingest_ledger, attempt_holder, asset, bucket_name,
+                                bucketDetails.get('baseAssetsPrefix', ''), ledger_execution_id)
+                            if landed_before:
+                                collected_output_files.extend(_finish_landed_takeovers(
+                                    landed_before, ledger_execution_id, attempt_holder, source_bucket))
+                            claimed_keys = {d["s3Key"] for d in claimed}
                             file_descriptors = claimed
                             file_objects = [x for x in file_objects if x['Key'] in claimed_keys]
                             files = [x['Key'] for x in file_objects]

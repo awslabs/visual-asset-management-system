@@ -141,7 +141,8 @@ class _Never(Exception):
 
 
 def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False, real_stamp=False,
-         run_bucket_versioned=True, fail_upload_of=None, retry_remaining_ms=900_000):
+         run_bucket_versioned=True, fail_upload_of=None, retry_remaining_ms=900_000,
+         kill_every_ingestion=False):
     """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
 
     'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
@@ -161,13 +162,36 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
     clock = [time.time()]
     go, in_upload = threading.Event(), threading.Event()
     first = {}
+    handed = []
+    killed = [0]
 
     def invoke_upload(payload):
         context = MagicMock(**{"get_remaining_time_in_millis.return_value": 900_000})
         ingestion_calls.append(threading.current_thread().name)
+        handed.append((attempt[0], sorted(f["relativeKey"] for f in json.loads(payload["body"])["files"])))
+        if attempt[0] == 0 and first_attempt == "before_upload":
+            # Killed after it claimed its outputs, before the upload handler wrote anything.
+            raise _Killed()
         if first_attempt == "overlap" and threading.current_thread().name == "attempt-0":
             in_upload.set()
             assert go.wait(20)
+        if attempt[0] == 0 and first_attempt == "mixed":
+            # SMALL[0]'s copy lands and its staged source stays; SMALL[1] is never copied.
+            real_delete, real_copy = uf.delete_s3_object, uf.copy_s3_object
+
+            def delete_or_die(bucket, key):
+                if key.endswith(SMALL[0]):
+                    raise _Killed()
+                return real_delete(bucket, key)
+
+            def copy_or_die(source_bucket, source_key, *args, **kwargs):
+                if source_key.endswith(SMALL[1]):
+                    raise _Killed()
+                return real_copy(source_bucket, source_key, *args, **kwargs)
+
+            with patch.object(uf, "delete_s3_object", side_effect=delete_or_die), \
+                    patch.object(uf, "copy_s3_object", side_effect=copy_or_die):
+                uf.lambda_handler(json.loads(json.dumps(payload)), context)
         if attempt[0] == 0 and first_attempt == "mid_move":
             # The first output's copy lands; the attempt is killed before its staged source is deleted.
             real_delete = uf.delete_s3_object
@@ -180,7 +204,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             with patch.object(uf, "delete_s3_object", side_effect=delete_then_die):
                 uf.lambda_handler(json.loads(json.dumps(payload)), context)
         response = uf.lambda_handler(json.loads(json.dumps(payload)), context)
-        if attempt[0] == 0 and first_attempt == "after_ingest":
+        if (attempt[0] == 0 and first_attempt == "after_ingest") or kill_every_ingestion:
+            # The ingestion call outlasts the function timeout: its writes landed, the attempt died.
             raise _Killed()
         return {"Payload": io.BytesIO(json.dumps(response).encode("utf-8"))}
 
@@ -278,6 +303,10 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
                 refusals += 1
                 attempt[0] = i + 1
                 clock[0] += getattr(po.eo, "INGEST_TAKEOVER_SECONDS", 0) + 60
+            except _Killed:
+                # This retry was killed too (only with kill_every_ingestion): the next one follows.
+                killed[0] += 1
+                attempt[0] = i + 1
         go.set()
 
         versions = {}
@@ -293,7 +322,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", []))
     return {"answer": answer, "versions": versions, "recorded": recorded, "queued": queued,
             "staged": staged, "staged_versions": staged_versions, "ingestion_calls": ingestion_calls,
-            "refusals": refusals, "slept": sleep.call_count,
+            "refusals": refusals, "slept": sleep.call_count, "handed": handed,
+            "killed_retries": killed[0],
             "first_answer": first.get("answer")}
 
 
@@ -338,10 +368,11 @@ class TestRetryAfterAMidMoveTimeout:
         with mock_aws():
             landed = _run("mid_move")
         # Attempt 1 cannot tell the killed holder from a live one: it refuses rather than ingest beside
-        # it; the attempt after the takeover age takes the rows over and completes.
+        # it; the attempt after the takeover age takes the rows over and completes. Both outputs' writes
+        # had landed (the copy of the second ran on in the upload's pool), so nothing is re-ingested.
         assert landed["refusals"] == 1
         assert landed["answer"]["statusCode"] == 200
-        assert landed["ingestion_calls"].count("MainThread") == 2
+        assert landed["ingestion_calls"].count("MainThread") == 1
 
 
 @pytest.mark.unit
@@ -372,6 +403,53 @@ class TestAShortFunctionTimeout:
         assert landed["answer"]["statusCode"] == 200
         assert landed["recorded"] == sorted(
             [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestTakingOverALandedWrite:
+    """A taken-over output whose write already landed is recorded from that evidence, not re-ingested
+    (owner decision 2026-11-10). Without it, an ingestion call that always outlasts the function
+    timeout kills every attempt mid-call and the run never finishes."""
+
+    def test_an_ingestion_that_always_exceeds_the_timeout_still_finishes(self):
+        with mock_aws():
+            # Every ingestion call is killed after its writes land. Attempt 0 lands the preview (written
+            # first) and dies; attempt 1 records the preview from that evidence, hands over the files
+            # and dies too; attempt 2 has evidence for everything and finishes without ingesting.
+            landed = _run("after_ingest", with_preview=True, real_stamp=True,
+                          retry_remaining_ms=30_000, kill_every_ingestion=True)
+        assert landed["answer"] is not None and landed["answer"]["statusCode"] == 200
+        assert landed["handed"] == [(0, [PREVIEW]), (1, sorted(SMALL))]
+        assert landed["killed_retries"] == 1
+        assert landed["recorded"] == sorted(
+            [("file", name) for name in SMALL] + [("preview", PREVIEW)])
+        assert len(landed["versions"][f"assets/previews/{ASSET_ID}/{PREVIEW}"]) == 1
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+        assert landed["staged_versions"] == []
+
+    def test_a_holder_killed_before_its_upload_wrote_is_re_ingested_once(self):
+        with mock_aws():
+            landed = _run("before_upload", retry_remaining_ms=30_000)
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["handed"] == [(0, sorted(SMALL)), (1, sorted(SMALL))]
+        assert landed["recorded"] == sorted(("file", name) for name in SMALL)
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+        assert landed["staged"] == []
+
+    def test_mixed_only_the_output_without_a_landed_write_is_re_ingested(self):
+        with mock_aws():
+            # Attempt 0 copied SMALL[0] and was killed before deleting its staged source; SMALL[1]
+            # was never written. The retry past the takeover age hands over only SMALL[1].
+            landed = _run("mixed")
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["handed"][-1] == (landed["handed"][-1][0], [SMALL[1]])
+        assert landed["recorded"] == sorted(("file", name) for name in SMALL)
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+        assert landed["staged"] == []
 
 
 @pytest.mark.unit
