@@ -22,6 +22,7 @@ import {
     LONE_FILE_COMPARE_CONTEXT,
 } from "./viewerSelection";
 import { CompareContext } from "./compareShape";
+import { NO_EXTENSION } from "./extensionMatching";
 import { CompareModeConfig, ViewerConfig, ViewerPluginConfig } from "./types";
 import shippedConfig from "../config/viewerConfig.json";
 import shippedAddonConfig from "../config/addonViewerConfig.json";
@@ -424,5 +425,66 @@ describe("shipped viewerConfig.json compare contract", () => {
             compare: false,
         });
         expect(availableViewerModes(shipped, [".glb"], false).compare).toBe(false);
+    });
+});
+
+describe("shipped viewerConfig.json: files without an extension (#1198)", () => {
+    const shipped = [
+        ...(shippedConfig as ViewerConfig).viewers,
+        ...(shippedAddonConfig as ViewerConfig).viewers,
+    ];
+    const regular = shipped.filter((v) => !v.isPreviewViewer && v.enabled !== false);
+    const idsAdmitting = (exts: string[], isMultiFile: boolean) =>
+        regular.filter((v) => admitsVisualizeSelection(v, exts, isMultiFile)).map((v) => v.id);
+
+    it("offers exactly the Text Viewer for one extensionless file, so it auto-opens", () => {
+        expect(idsAdmitting([NO_EXTENSION], false)).toEqual(["text-viewer"]);
+    });
+
+    it("offers both modes for one extensionless file (the differ diffs its versions)", () => {
+        expect(availableViewerModes(shipped, [NO_EXTENSION], false)).toEqual({
+            visualize: true,
+            compare: true,
+        });
+        expect(
+            regular
+                .filter((v) => admitsCompareSelection(v, [NO_EXTENSION], LONE_FILE_COMPARE_CONTEXT))
+                .map((v) => v.id)
+        ).toEqual(["text-diff-viewer"]);
+    });
+
+    it("compares an extensionless file with a text file (LICENSE vs LICENSE.txt) in the differ only", () => {
+        const ctx: CompareContext = { fileCount: 2, shape: "different-files", crossAsset: false };
+        expect(availableViewerModes(shipped, [NO_EXTENSION, ".txt"], true, ctx)).toEqual({
+            visualize: false,
+            compare: true,
+        });
+    });
+
+    it("keeps an extensionless file out of every multi-file 3D viewer", () => {
+        // Before #1198 the extensionless file was dropped from the set, so README + x.3dm was judged
+        // as [".3dm"] and the multi-file Online 3D Viewer took a file it never checked.
+        expect(idsAdmitting([NO_EXTENSION, ".3dm"], true)).toEqual([]);
+        expect(idsAdmitting([NO_EXTENSION, ".glb"], true)).toEqual([]);
+        expect(
+            availableViewerModes(shipped, [NO_EXTENSION, ".glb"], true, {
+                fileCount: 2,
+                shape: "different-files",
+            })
+        ).toEqual({ visualize: false, compare: false });
+    });
+
+    it("lists the token only on the two text viewers", () => {
+        expect(
+            shipped
+                .filter((v) => v.supportedExtensions.includes(NO_EXTENSION))
+                .map((v) => v.id)
+                .sort()
+        ).toEqual(["text-diff-viewer", "text-viewer"]);
+    });
+
+    it("leaves files with an extension exactly as before", () => {
+        expect(idsAdmitting([".txt"], false)).toEqual(["text-viewer"]);
+        expect(idsAdmitting([".json"], false).sort()).toEqual(["cesium-viewer", "text-viewer"]);
     });
 });
