@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Migration audit 2026-11-10 (#1244 D18, D19): the post-deploy reindex decision and a reindex whose result is
-confirmed (Lambda RequestResponse, direct mode)."""
+"""Search reindex: the post-deploy decision and a reindex whose result is confirmed (Lambda RequestResponse,
+direct mode), with the permissions direct mode asks for."""
 
 import io
 import json
@@ -398,3 +398,41 @@ def test_direct_mode_index_clearing_failure_is_failed(ctx, monkeypatch, tmp_path
     sc, _ = _direct_bundle(ctx, monkeypatch, tmp_path, out)
     res = reindex.direct_reindex(ctx, "dev", "cust-v2.7.0-1", sc, clear_indexes=True)
     assert res["status"] == "failed" and "index clearing" in res["error"], res
+
+
+# ----------------------------------------------------------------- D33: direct mode writes one table only
+def test_direct_mode_grants_writes_on_the_file_metadata_table_only():
+    import fnmatch
+
+    import yaml
+
+    from vra import data as vra_data
+    m = yaml.safe_load(vra_data.text("iam-actions", "reindex.yaml"))
+    stack = "vams-core-demo8-us-east-1"
+    tables = {   # CloudFormation-generated names of a real deployment
+        "asset": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
+                 f"AssetStorageTable53D33AD8-RPJ57Q7WXAHJ",
+        "buckets": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
+                   f"S3AssetBucketsStorageTable237D6353-PFF9EHSIQ2L4",
+        "meta": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
+                f"AssetFileMetadataStorageTableV29E304C91-1HW3CC3WPUECX",
+        "auth": f"{stack}-StorageResourcesBuilderNestedStackStorageResourcesBuilderNes-1JBBM6TVUCCJ-"
+                f"AuthEntitiesStorageTable1A2B3C4D-XYZ",
+    }
+
+    def hits(sid_actions, name):
+        arn = f"arn:aws:dynamodb:us-east-1:111111111111:table/{name}"
+        return [s["sid"] for s in m["statements"] if any(a.startswith("dynamodb:") for a in s["actions"])
+                and set(s["actions"]) & sid_actions
+                and any(fnmatch.fnmatchcase(arn, r.replace("${Partition}", "aws").replace("${Region}", "us-east-1")
+                                            .replace("${Account}", "111111111111").replace("${CoreStack}", stack))
+                        for r in s["resources"])]
+    writes = {"dynamodb:BatchWriteItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"}
+    assert hits(writes, tables["meta"]) == ["ReindexDirectFileMetadataWrite"]
+    for k in ("asset", "buckets", "auth"):
+        assert hits(writes, tables[k]) == [], k
+    reads = {"dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem"}
+    for k in ("asset", "buckets", "meta"):
+        assert hits(reads, tables[k]) == ["ReindexDirectTablesRead"], k
+    assert hits(reads, tables["auth"]) == []
+    assert hits({"dynamodb:Query"}, tables["asset"] + "/index/BucketIdGSI") == ["ReindexDirectTablesRead"]

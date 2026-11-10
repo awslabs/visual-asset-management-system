@@ -9,7 +9,7 @@ description: >-
     Rebuild the VAMS OpenSearch indexes. Lambda mode (reindex.mode lambda, the default) invokes the deployed
     reindexer synchronously and reads its result. Direct mode runs the bundle's
     tools/reindex_utility.py --mode direct locally with the reindexer Lambda's own permissions: read the asset and
-    bucket tables, touch the asset file metadata table, list and read the asset buckets, and read the index-name
+    bucket tables, touch (batch-write) the asset file metadata table and no other table, list and read the asset buckets, and read the index-name
     and endpoint parameters.
 statements:
     - sid: CallerIdentity
@@ -45,23 +45,35 @@ statements:
           - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmRoot}/aos/*
       note: Direct mode reads the asset and file index names and the OpenSearch endpoint.
 
-    - sid: ReindexDirectTables
+    # The three tables the reindexer uses, by their CloudFormation-generated names
+    # (<core stack>-<storage nested stack>-<logical id><hash>-<suffix>; VAMS names no table itself).
+    - sid: ReindexDirectTablesRead
       feature: reindexDirect
       actions:
           - dynamodb:DescribeTable
           - dynamodb:Scan
           - dynamodb:Query
           - dynamodb:GetItem
-          - dynamodb:PutItem
-          - dynamodb:UpdateItem
-          - dynamodb:DeleteItem
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}-*-AssetStorageTable*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}-*-AssetStorageTable*/index/*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}-*-S3AssetBucketsStorageTable*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}-*-AssetFileMetadataStorageTable*
+      note: >-
+          Direct mode scans the asset table (and queries its BucketIdGSI and reads asset records to place each
+          object), scans the asset buckets table, and reads the asset file metadata table, as the reindexer Lambda
+          does (crReindexer.py; the reindex utility README's permission list).
+
+    - sid: ReindexDirectFileMetadataWrite
+      feature: reindexDirect
+      actions:
           - dynamodb:BatchWriteItem
       resources:
-          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
-          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*/index/*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}-*-AssetFileMetadataStorageTable*
       note: >-
-          Direct mode reads the asset and bucket tables and touches (writes and deletes) the asset file metadata
-          records that re-trigger indexing, as the reindexer Lambda does.
+          The only table the reindexer writes: it touches (batch-writes and deletes) asset file metadata records so
+          VAMS's own stream re-indexes them. No other core-stack table, and no access, auth or permission table, is
+          written.
 
     - sid: ReindexDirectBucketsRead
       feature: reindexDirect
