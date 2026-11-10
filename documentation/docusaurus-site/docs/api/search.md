@@ -83,6 +83,8 @@ Executes a search query across the asset and file indexes with full control over
 | `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                                                                                                                                                                                    |
 | `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                                                                                                                                                                                        |
 
+The `query` text is split at whitespace into words. Each word matches anywhere inside a value, so `pump` finds `hydraulic-pump-housing`, and a record matches when at least one of the words does: `maintenance log` finds a file whose metadata reads `night shift, maintenance log` as well as one whose file name contains `log`. `*`, `?`, quotes and the words `AND`, `OR` and `NOT` are matched as literal text. `POST /search/simple` reads its `query` the same way.
+
 :::warning[Pagination Limits]
 The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearch limitation. For deep pagination, use more specific search criteria to narrow results.
 :::

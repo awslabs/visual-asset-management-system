@@ -551,6 +551,25 @@ class FieldClassifier:
             escaped = escaped.replace(char, f'\\{char}')
         return escaped
 
+    @staticmethod
+    def any_word_anywhere_query(query: str) -> str:
+        """query_string text for a keyword search: a value matches when it contains any of the query's
+        whitespace-separated words anywhere inside it (#1273).
+
+        Each word is escaped, so `*`, `?` and the other query_string operators stay literal (the words
+        AND, OR and NOT too, once wrapped), and wrapped in `*...*`. The words are joined by spaces, which
+        query_string, with default_operator OR, reads as alternatives. Wrapping the whole text instead
+        (`*maintenance log*`) left query_string to split it at the space into `*maintenance` and `log*`:
+        a value ending in the first word or starting with the last. A keyword-typed value (the metadata
+        and attribute values, every `.keyword` subfield) holds a whole sentence as one term, so a phrase
+        found no record by its metadata while each of its words alone did. A query with no word is `*`,
+        any value, as the wrapped blank text was.
+        """
+        words = list(dict.fromkeys(query.split()))
+        if not words:
+            return "*"
+        return " ".join(f"*{FieldClassifier.escape_opensearch_query_string(word)}*" for word in words)
+
 #######################
 # Geo Filter Helper
 #######################
@@ -1018,9 +1037,10 @@ class SimpleSearchQueryBuilder:
         # Build search queries based on parameters
         search_queries = []
 
-        # General keyword search with hyphen support (ALWAYS uses wildcards for discovery)
+        # General keyword search with hyphen support (ALWAYS uses wildcards for discovery):
+        # any word of the query, anywhere inside a value
         if request.query:
-            escaped_query = self.field_classifier.escape_opensearch_query_string(request.query)
+            words_query = self.field_classifier.any_word_anywhere_query(request.query)
             searchable_fields = self._get_simple_searchable_fields(index_type)
             
             # Build dual-field search for hyphen support
@@ -1029,7 +1049,7 @@ class SimpleSearchQueryBuilder:
             # 1. Search analyzed text fields
             query_should_clauses.append({
                 "query_string": {
-                    "query": f"*{escaped_query}*",
+                    "query": words_query,
                     "fields": searchable_fields,
                     "default_operator": "OR",
                     "analyze_wildcard": True,
@@ -1044,7 +1064,7 @@ class SimpleSearchQueryBuilder:
             if keyword_fields:
                 query_should_clauses.append({
                     "query_string": {
-                        "query": f"*{escaped_query}*",
+                        "query": words_query,
                         "fields": keyword_fields,
                         "default_operator": "OR",
                         "analyze_wildcard": True,
@@ -1463,8 +1483,9 @@ class DualIndexQueryBuilder:
         # Get searchable fields based on index type and metadata inclusion
         searchable_fields = self._get_searchable_fields(include_metadata, index_type)
         
-        # Use query_string for better special character handling
-        escaped_query = self.field_classifier.escape_opensearch_query_string(query)
+        # Use query_string for better special character handling: any word of the query, anywhere
+        # inside a value (FieldClassifier.any_word_anywhere_query)
+        words_query = self.field_classifier.any_word_anywhere_query(query)
         
         # Build dual-field search: text fields + keyword fields for hyphen support
         should_clauses = []
@@ -1472,7 +1493,7 @@ class DualIndexQueryBuilder:
         # 1. Search analyzed text fields (for partial matches and tokenized terms)
         should_clauses.append({
             "query_string": {
-                "query": f"*{escaped_query}*",
+                "query": words_query,
                 "fields": searchable_fields,
                 "default_operator": "OR",
                 "analyze_wildcard": True,
@@ -1488,7 +1509,7 @@ class DualIndexQueryBuilder:
         if keyword_fields:
             should_clauses.append({
                 "query_string": {
-                    "query": f"*{escaped_query}*",
+                    "query": words_query,
                     "fields": keyword_fields,
                     "default_operator": "OR",
                     "analyze_wildcard": True,
