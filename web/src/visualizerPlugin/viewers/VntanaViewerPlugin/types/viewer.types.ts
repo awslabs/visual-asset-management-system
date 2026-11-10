@@ -52,6 +52,8 @@ export interface VntanaLoadEvent extends Event {
  */
 export interface VntanaErrorEvent extends Event {
     detail?: {
+        /** What failed to load (@vntana/viewer 3.x). */
+        type?: string;
         message?: string;
     };
 }

@@ -36,9 +36,9 @@ jest.mock("../../../visualizerPlugin/core/useViewerRegistryReady", () => ({
     useViewerRegistryReady: () => false,
 }));
 jest.mock("../../../visualizerPlugin/core/viewableExtensions", () => ({
-    isViewableExtension: () => false,
+    isViewableFilename: () => false,
     areFilenamesViewableTogether: () => false,
-    extensionOfFilename: () => undefined,
+    areFilesComparableTogether: () => false,
 }));
 jest.mock("../../../visualizerPlugin/components/EyeIconSvg", () => ({ EYE_ICON_SVG: null }));
 jest.mock("../../metadata/FileMetadata", () => ({ __esModule: true, default: () => null }));
