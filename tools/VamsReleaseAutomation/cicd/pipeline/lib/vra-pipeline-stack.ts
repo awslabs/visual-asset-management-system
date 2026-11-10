@@ -17,6 +17,7 @@ import {
     StackProps,
     Tags,
     TimeZone,
+    Validations,
     aws_codebuild as codebuild,
     aws_codecommit as codecommit,
     aws_codeconnections as codeconnections,
@@ -64,7 +65,15 @@ class RoleNamePrefix implements IAspect {
     constructor(private readonly rolePrefix: string, private readonly stackPrefix: string) {}
 
     visit(node: IConstruct): void {
+        // The synth-time CloudFormation validation reads a role name that is built from tokens as its literal
+        // part only (the prefix), so every prefixed role looks like the same name (E3019). The names are unique
+        // by construction (the construct path hash below); acknowledge exactly this rule on the roles, so any
+        // other CloudFormation-Validate warning still shows.
         if (!(node instanceof iam.CfnRole)) return;
+        Validations.of(node).acknowledge({
+            id: "CloudFormation-Validate::E3019",
+            reason: "prefixed role names are unique by construct path hash; the validator sees only the literal prefix",
+        });
         const current = node.roleName;
         if (current === undefined) {
             const parent = node.node.scope?.node.id ?? "role";
@@ -76,6 +85,22 @@ class RoleNamePrefix implements IAspect {
                 .slice(0, Math.max(room, 1))}-${hash}`;
         } else if (!current.startsWith(this.rolePrefix)) {
             node.roleName = `${this.rolePrefix}${current}`;
+        }
+    }
+}
+
+/**
+ * iamRoles.mode "report" (the IT package synth, never deployed): roles are referenced by name and render as
+ * `arn:<partition>:iam::<account>:role` without one, which the synth-time CloudFormation validation reports as
+ * a malformed RoleArn (E1156) on every pipeline and schedule. Acknowledge exactly that rule there.
+ */
+class ReportModeRoleArns implements IAspect {
+    visit(node: IConstruct): void {
+        if (node instanceof codepipeline.CfnPipeline || node instanceof scheduler.CfnSchedule) {
+            Validations.of(node).acknowledge({
+                id: "CloudFormation-Validate::E1156",
+                reason: "report-mode synth for the IT package: role ARNs carry no name and it is never deployed",
+            });
         }
     }
 }
@@ -143,6 +168,7 @@ export class VraPipelineStack extends Stack {
         const iamMode = this.cfg.iamRoles?.mode ?? "create";
         if (iamMode === "report") {
             iam.Role.customizeRoles(this, { preventSynthesis: false });
+            Aspects.of(this).add(new ReportModeRoleArns());
         } else if (iamMode === "precreated") {
             iam.Role.customizeRoles(this, {
                 usePrecreatedRoles: this.cfg.iamRoles?.precreatedRoles ?? {},
