@@ -317,10 +317,13 @@ def tools(cfg: Config, runner: Callable[[list[str], Config], tuple[int, str, str
                  *_opt("--source-approval", source_approval), *_opt("--databases", databases))
 
     def migrate(env: str, build: str | None = None, from_version: str | None = None,
-                to_version: str | None = None) -> dict:
-        """Chain the VAMS data migrations between two versions."""
+                to_version: str | None = None, approval: str | None = None) -> dict:
+        """Chain the VAMS data migrations between two versions (gated envs: approval record, written by a
+        person; the engine verifies it)."""
+        if gated_check(env):
+            need_approval(approval, "migrate")
         return c("migrate", "--env", env, *_opt("--build", build), *_opt("--from", from_version),
-                 *_opt("--to", to_version))
+                 *_opt("--to", to_version), *_opt("--approval", approval))
 
     def pipeline_deploy(plan: str | None = None, approval: str | None = None) -> dict:
         """Deploy a planned pipeline stack. The engine refuses it for an agent when the plan is human-only (first

@@ -85,6 +85,20 @@ def test_gated_env_needs_the_gated_flag_and_an_approval():
     assert calls[-1][-2:] == ["--approval", "approvals/prod/b1.yaml"]
 
 
+def test_migrate_on_a_gated_env_passes_the_approval_record():
+    calls = []
+    runner = lambda argv, cfg: (calls.append(argv), (0, "{}", ""))[1]  # noqa: E731
+    gated = {t.name: t for t in mcp_server.tools(Config(enable_writes=True, enable_gated=True), runner=runner,
+                                                  gated_check=lambda env: env == "prod")}
+    with pytest.raises(VraToolError, match="needs `approval`"):
+        gated["migrate"].fn(env="prod", from_version="2.6.6", to_version="2.7.0")
+    gated["migrate"].fn(env="prod", from_version="2.6.6", to_version="2.7.0", approval="approvals/prod/m1.yaml")
+    assert calls[-1][-2:] == ["--approval", "approvals/prod/m1.yaml"]
+    # an ungated env needs none, and no human-only flag can be passed through the tool
+    gated["migrate"].fn(env="dev", build="b1")
+    assert "--approval" not in calls[-1] and "--human-approval" not in calls[-1]
+
+
 def test_server_registers_the_tools_with_the_sdk():
     pytest.importorskip("mcp")
     srv = mcp_server.create_server(Config(enable_writes=True))
