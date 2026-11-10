@@ -349,7 +349,7 @@ VAMS uses a custom Lambda authorizer for all API Gateway endpoints. Never use bu
 
 ### **Rule 6: Feature Switches Must Be Defined**
 
-New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally. An add-on's switch goes in `infra/common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`) and is pushed by `AddonBuilderNestedStack.enabledFeatures`. In a fork, the switch goes in `infra/common/customAppFeatures.ts` and is returned from `buildCustomResources()`, gated on the fork's settings in `infra/config/custom/customConfig.json`.
+New features must have a feature switch in `vamsAppFeatures.ts` and be gated by config in the core stack. Never deploy features unconditionally. An add-on's switch goes in `infra/common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`) and is pushed by `AddonBuilderNestedStack.enabledFeatures`. Each add-on API route, permission object type, web route and navigation entry names the switch it is deployed under (`ApiRoute.addon_feature` and `ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES` in the backend, `featuresEnabledRestriction` in the web app), so a deployment without the add-on neither lists, offers nor mounts it (`backend/CLAUDE.md`, `web/CLAUDE.md`). In a fork, the switch goes in `infra/common/customAppFeatures.ts` and is returned from `buildCustomResources()`, gated on the fork's settings in `infra/config/custom/customConfig.json`.
 
 ### **Rule 7: All CLI API Endpoints in Constants**
 

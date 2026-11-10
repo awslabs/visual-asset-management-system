@@ -41,7 +41,11 @@ Ensure the CLI is available and authenticated **for the current user/session**.
       (recommended). Ask the user to provide a scoped **user** API key.
     - **Interactive login** (Cognito username/password) as a fallback.
     - **Optional bootstrap**: on request, walk the user through creating a
-      profile and a new user API key, then registering it.
+      profile and a new user API key, then registering it. A profile signed in
+      with a temporary session key (an API key whose name starts with the
+      reserved prefix `temporary-session-`, minted by a VAMS component for one
+      session) cannot create or update API keys (`403`), and no key name may
+      start with that prefix (`400`); ask the user for a key instead.
 4. Never echo, log, or persist API keys or tokens — treat them as secrets. Your
    effective permissions are exactly the authenticated user's VAMS permissions.
 
