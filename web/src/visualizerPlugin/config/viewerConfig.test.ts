@@ -22,6 +22,7 @@ import {
     USD_FORMATS,
 } from "../viewers/ThreeJSViewerPlugin/utils/fileLoaders";
 import { admitsCompareSelection, admitsVisualizeSelection } from "../core/viewerSelection";
+import { NO_EXTENSION, WILDCARD_EXTENSION } from "../core/extensionMatching";
 import { VIEWER_COMPONENTS } from "../viewers/manifest";
 import { ADDON_DEPENDENCY_MANAGERS, ADDON_VIEWER_COMPONENTS } from "../viewers/addonManifest";
 import {
@@ -138,6 +139,36 @@ describe("viewerConfig vs the selection paths", () => {
             ).toBe(true);
         }
     );
+});
+
+describe("viewerConfig supportedExtensions values", () => {
+    // Matching compares lowercased file tokens against these strings exactly, so a value that is not
+    // a lowercase ".ext", the "*" wildcard or the "(none)" no-extension token never matches anything.
+    // A dotfile name declared as an extension (".gitignore") is a case in point: the dotfile rule
+    // gives `.gitignore` no extension, so it is matched by "(none)", never by ".gitignore".
+    it.each(viewers.map((viewer) => [viewer.id, viewer]))(
+        "%s declares only '.ext', '*' or '(none)'",
+        (_id, viewer) => {
+            const invalid = (viewer.supportedExtensions as string[]).filter(
+                (ext) =>
+                    !(
+                        ext === WILDCARD_EXTENSION ||
+                        ext === NO_EXTENSION ||
+                        /^\.[a-z0-9_]+$/.test(ext)
+                    )
+            );
+            expect(invalid).toEqual([]);
+        }
+    );
+
+    it("lists the no-extension token only on the two text viewers (#1198)", () => {
+        expect(
+            viewers
+                .filter((viewer) => viewer.supportedExtensions.includes(NO_EXTENSION))
+                .map((viewer) => viewer.id)
+                .sort()
+        ).toEqual(["text-diff-viewer", "text-viewer"]);
+    });
 });
 
 describe("viewerConfig vs the browser's media element", () => {
@@ -325,6 +356,14 @@ describe("visualizerPlugin/CLAUDE.md catalog", () => {
             if (!/etc\./.test(row.extensions)) {
                 expect(configured.filter((ext) => !documented.includes(ext))).toEqual([]);
             }
+        }
+    );
+
+    it.each(rows.map((row) => [row.id, row] as [string, Row]))(
+        "%s documents files with no extension exactly when it lists the token",
+        (id, row) => {
+            const configured: string[] = byId(id).supportedExtensions;
+            expect(/no extension/.test(row.extensions)).toBe(configured.includes(NO_EXTENSION));
         }
     );
 

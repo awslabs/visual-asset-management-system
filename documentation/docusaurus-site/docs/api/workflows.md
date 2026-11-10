@@ -732,6 +732,8 @@ A filter therefore only ever narrows eligibility, never grants it.
 
 A match-everything pattern in an `exclude` list is **rejected** when the pipeline, template, workflow, or trigger is saved: because `exclude` is applied last, it would remove every file and leave the pipeline or workflow permanently unable to run. Leave the list empty to exclude nothing.
 
+Extension patterns do not apply to a whole-asset (`/`) or folder (`/folder/`) selection. Such a selection names a container rather than a file, so the `*.ext` and `.ext` forms are dropped from both lists for it, while path and name globs and exact keys still apply. An `allow` list made up only of extension patterns therefore admits a container selection, and the `assetScope` booleans `wholeAssetAllowed` and `folderAllowed` decide whether it is accepted.
+
 Filters resolve down a three-level chain, and an open list defers to the next level:
 
 1. **Workflow** — when its `allow` list names specific types, that list bounds the whole execution and no pipeline can widen it. When it is open, eligibility comes from the pipelines instead, where a file is eligible if **any** step accepts it.

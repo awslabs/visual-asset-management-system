@@ -42,19 +42,24 @@ Seeds the public sample files the viewer render cases in `web/e2e/viewers.spec.t
 `web/e2e/fixtures/viewer-samples-seed.json` for `E2E_VIEWER_SAMPLES`. The samples, with their source,
 licence, size and SHA-256, are listed in `web/e2e/fixtures/viewer-samples.json`; the script downloads
 each one, refuses any that does not match, writes the generated and derived samples (a coloured OFF
-cube, a text file, a CSV with a UTF-8 byte order mark) and uploads them all to one distributable asset.
+cube, a text file, a CSV with a UTF-8 byte order mark, a PLY point cloud written from a LAS file) and uploads them all to one distributable asset.
 Files the asset already holds are not uploaded again. The manifest schema (downloads, generated samples,
-`prepend-utf8-bom` / `zip` / `splat-transform` / `ply-to-splat` derivations, `requiresFeature`) is described in
+`prepend-utf8-bom` / `copy` / `utf16le-bom` / `utf16be-bom` / `utf16le` / `zip` / `splat-transform`
+/ `ply-to-splat` / `ksplat` / `las-to-ply` derivations, `requiresFeature`) is described in
 `web/e2e/CLAUDE.md`, "Viewer render proof"; the script validates it before it downloads anything.
 
 ```bash
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> --cache /tmp/vams-samples   # keep downloads between runs
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> --samples splat-ply,online3d-amf   # only these
+python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> --asset-version   # + one snapshot, then a 2nd README version
 
 export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
 cd web && E2E_BASE_URL=https://<host> E2E_USERNAME=<user> E2E_PASSWORD=<pass> \
     npx playwright test e2e/viewers.spec.ts
 ```
 
-It creates `e2e-viewers-db` / `e2e-viewers-samples` (override the prefix with `--prefix`).
+It creates `e2e-viewers-db` / `e2e-viewers-samples` (override the prefix with `--prefix`). With
+`--asset-version` it also takes one asset-version snapshot (when the asset has none) and uploads the
+extensionless `/noext/README` once more, so the Versions tab offers that row's Compare
+(`web/e2e/seeded.compare.spec.ts`, #1198); this adds versions, so run it only on a sandbox.

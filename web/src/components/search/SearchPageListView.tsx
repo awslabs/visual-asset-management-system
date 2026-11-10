@@ -47,7 +47,7 @@ import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
 import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 import {
     searchRowToFileInfo,
-    isViewableExtension,
+    isViewableSearchRow,
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
 import { isFileHitSource } from "./utils/recordType";
@@ -458,10 +458,7 @@ function columnRender(
         // file mode when a viewer plugin can render the file's extension.
         const viewLabel = `Visualize File ${value || e.str_fileext || ""}`.trim();
         const viewButton =
-            isFileMode &&
-            onViewFile &&
-            viewerRegistryReady &&
-            isViewableExtension(e.str_fileext) ? (
+            isFileMode && onViewFile && viewerRegistryReady && isViewableSearchRow(e) ? (
                 <Button
                     variant="icon"
                     iconSvg={EYE_ICON_SVG}

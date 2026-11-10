@@ -5,7 +5,8 @@
 
 ``ALLOW_LIST`` is every ``supportedExtensions`` entry of every viewer with ``enabled: true`` in
 ``web/src/visualizerPlugin/config/viewerConfig.json`` and ``addonViewerConfig.json`` — viewers gated by
-``featuresEnabledRestriction`` included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
+``featuresEnabledRestriction`` included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``
+(which also holds the catalog's ``"(none)"`` token for a file without an extension), plus
 ``ADDITIONAL_EXTENSIONS`` (formats no viewer renders, admitted for their extracted content) and
 ``ADDITIONAL_POINTCLOUD_EXTENSIONS`` (point-cloud formats no viewer renders, read by the 3D render image). It is stored
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
@@ -79,10 +80,15 @@ BRANCH_FARGATE = "FARGATE"
 BRANCH_NONE = "NONE"
 RENDER_BRANCHES = (BRANCH_BLENDER, BRANCH_RENDER3D, BRANCH_MEDIA, BRANCH_FARGATE, BRANCH_NONE)
 
+# The token the viewer catalog lists for a file without an extension (NO_EXTENSION in
+# web/src/visualizerPlugin/core/extensionMatching.ts); the text viewers serve it.
+NO_EXTENSION_TOKEN = "(none)"
+
 # Viewer extensions withheld from dedicated handling: they classify `other` and take the generic probe.
 # The robotics logs the Robotics Data Viewer plays (MCAP, ROS 1 bag, ROS 2 SQLite bag, PX4 ULog) have no
-# extractor in the MEDIA image.
-EXCLUDED_EXTENSIONS: Set[str] = {".mcap", ".bag", ".db3", ".ulg", ".ulog"}
+# extractor in the MEDIA image. NO_EXTENSION_TOKEN is no extension at all: a file without one reaches
+# classify() with an empty extension, classifies `other`, and the generic probe reads it as text.
+EXCLUDED_EXTENSIONS: Set[str] = {".mcap", ".bag", ".db3", ".ulg", ".ulog", NO_EXTENSION_TOKEN}
 
 # Formats no viewer renders, admitted for their extracted content: the office formats for their text
 # (document, data and document on the MEDIA branch, never rasterised), the video containers ffmpeg

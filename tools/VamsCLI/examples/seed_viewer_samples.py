@@ -47,6 +47,7 @@ from seed_compare_smoke import (  # noqa: E402  (sibling example script, same CL
     Cli,
     SeedError,
     ensure_asset,
+    ensure_asset_version,
     ensure_authenticated,
     ensure_database,
     version_count,
@@ -57,6 +58,8 @@ MANIFEST = REPO_ROOT / "web" / "e2e" / "fixtures" / "viewer-samples.json"
 DEFAULT_OUT = REPO_ROOT / "web" / "e2e" / "fixtures" / "viewer-samples-seed.json"
 DOWNLOAD_TIMEOUT_SECONDS = 120
 UTF8_BOM = b"\xef\xbb\xbf"
+# The extensionless sample `--asset-version` gives a second version (#1198 version-row Compare).
+VERSIONED_SAMPLE = "noext-readme"
 
 
 def off_cube() -> bytes:
@@ -142,6 +145,65 @@ def splat_transform(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], 
                 f"stdout: {proc.stdout.strip()}\nstderr: {proc.stderr.strip()}"
             )
         return out.read_bytes()
+
+
+def utf16(sources: List[Tuple[Dict[str, Any], bytes]], encoding: str, bom: bytes) -> bytes:
+    """The source's UTF-8 text re-encoded as UTF-16 (`utf-16-le` / `utf-16-be`) after `bom`."""
+    return bom + sources[0][1].decode("utf-8").encode(encoding)
+
+
+# Byte offset of red/green/blue (uint16 each) within a point record, per LAS point data format that
+# carries colour (ASPRS LAS 1.4 R15, section 2.6). X, Y, Z are int32 at offsets 0, 4 and 8 in all.
+LAS_RGB_OFFSET = {2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30}
+
+
+def las_to_ply(sample: Dict[str, Any], sources: List[Tuple[Dict[str, Any], bytes]]) -> bytes:
+    """An uncompressed LAS point cloud with colour, written as binary little-endian PLY vertices
+    (x, y, z as double; red, green, blue as uchar). Point clouds only: no faces. A `.laz` source is
+    refused, since decompressing LAZ needs a native library."""
+    ((source, data),) = sources
+    if data[:4] != b"LASF":
+        raise SeedError(f"{sample['id']}: {source['id']} is not an uncompressed LAS file")
+    major, minor = data[24], data[25]
+    point_offset = struct.unpack_from("<I", data, 96)[0]
+    point_format = data[104] & 0x3F  # bits 6-7 flag LAZ compression
+    if data[104] & 0xC0:
+        raise SeedError(
+            f"{sample['id']}: {source['id']} is LAZ-compressed; use an uncompressed LAS"
+        )
+    record_length = struct.unpack_from("<H", data, 105)[0]
+    count = struct.unpack_from("<I", data, 107)[0]
+    if (major, minor) >= (1, 4) and count == 0:
+        count = struct.unpack_from("<Q", data, 247)[0]
+    scale = struct.unpack_from("<3d", data, 131)
+    offset = struct.unpack_from("<3d", data, 155)
+    rgb_offset = LAS_RGB_OFFSET.get(point_format)
+    if rgb_offset is None:
+        raise SeedError(f"{sample['id']}: LAS point format {point_format} carries no colour")
+    if point_offset + count * record_length > len(data):
+        raise SeedError(f"{sample['id']}: {source['id']} is shorter than its header says")
+
+    rows = []
+    colours = []
+    for i in range(count):
+        base = point_offset + i * record_length
+        x, y, z = struct.unpack_from("<3i", data, base)
+        rows.append((x * scale[0] + offset[0], y * scale[1] + offset[1], z * scale[2] + offset[2]))
+        colours.append(struct.unpack_from("<3H", data, base + rgb_offset))
+    # LAS colour is 16-bit by convention, but some writers store 8-bit values; scale only then.
+    shift = 8 if any(channel > 255 for colour in colours for channel in colour) else 0
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        f"comment derived from {source['path'].rsplit('/', 1)[-1]} by seed_viewer_samples.py\n"
+        f"element vertex {count}\n"
+        "property double x\nproperty double y\nproperty double z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "end_header\n"
+    ).encode("ascii")
+    body = io.BytesIO()
+    for (x, y, z), (r, g, b) in zip(rows, colours):
+        body.write(struct.pack("<3d3B", x, y, z, r >> shift, g >> shift, b >> shift))
+    return header + body.getvalue()
 
 
 # The steps of util/create-ksplat.js in mkkellogg/GaussianSplats3D (MIT), against the npm build:
@@ -262,10 +324,25 @@ TRANSFORMS: Dict[str, Callable[[Dict[str, Any], List[Tuple[Dict[str, Any], bytes
     "prepend-utf8-bom": lambda sample, sources: UTF8_BOM + sources[0][1],
     "zip": zip_sources,
     "splat-transform": splat_transform,
+    "las-to-ply": las_to_ply,
     "ply-to-splat": ply_to_splat,
     "ksplat": ksplat,
+    "copy": lambda sample, sources: sources[0][1],
+    "utf16le-bom": lambda sample, sources: utf16(sources, "utf-16-le", b"\xff\xfe"),
+    "utf16be-bom": lambda sample, sources: utf16(sources, "utf-16-be", b"\xfe\xff"),
+    "utf16le": lambda sample, sources: utf16(sources, "utf-16-le", b""),
 }
-SINGLE_SOURCE_TRANSFORMS = {"prepend-utf8-bom", "splat-transform", "ply-to-splat", "ksplat"}
+SINGLE_SOURCE_TRANSFORMS = {
+    "prepend-utf8-bom",
+    "splat-transform",
+    "las-to-ply",
+    "ply-to-splat",
+    "ksplat",
+    "copy",
+    "utf16le-bom",
+    "utf16be-bom",
+    "utf16le",
+}
 REQUIRED_KEYS = {"id", "viewer", "path", "licence", "source"}
 
 
@@ -360,10 +437,14 @@ def sample_bytes(sample: Dict[str, Any], by_id: Dict[str, Dict[str, Any]], cache
     return TRANSFORMS[sample["transform"]](sample, sources)
 
 
-def upload(cli: Cli, database_id: str, asset_id: str, key: str, data: bytes) -> None:
-    """Upload `data` to `key` (asset-relative, leading slash) unless the asset already has it."""
+def upload(
+    cli: Cli, database_id: str, asset_id: str, key: str, data: bytes, force: bool = False
+) -> None:
+    """Upload `data` to `key` (asset-relative, leading slash) unless the asset already has it;
+    `force` uploads it anyway, as a new version."""
     folder, _, filename = key.rpartition("/")
-    if not cli.dry_run and version_count(cli, database_id, asset_id, key.lstrip("/")) is not None:
+    check_existing = not cli.dry_run and not force
+    if check_existing and version_count(cli, database_id, asset_id, key.lstrip("/")) is not None:
         print(f"  = {key} exists")
         return
     with tempfile.TemporaryDirectory(prefix="vams-seed-") as tmp:
@@ -385,6 +466,26 @@ def upload(cli: Cli, database_id: str, asset_id: str, key: str, data: bytes) -> 
     print(f"  ^ uploaded {key} ({len(data)} bytes)")
 
 
+def ensure_second_version(
+    cli: Cli,
+    database_id: str,
+    asset_id: str,
+    sample: Dict[str, Any],
+    by_id: Dict[str, Dict[str, Any]],
+    cache: Path,
+) -> None:
+    """Snapshot the asset once (the Versions tab lists a snapshot's files), then give `sample` a
+    second S3 version after it, so the snapshot's row diffs an older version against latest."""
+    data = sample_bytes(sample, by_id, cache)
+    upload(cli, database_id, asset_id, sample["path"], data)
+    ensure_asset_version(cli, database_id, asset_id)
+    count = None if cli.dry_run else version_count(cli, database_id, asset_id, sample["path"][1:])
+    if count is not None and count >= 2:
+        print(f"  = {sample['path']} has {count} versions")
+        return
+    upload(cli, database_id, asset_id, sample["path"], data, force=True)
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--profile", required=True, help="vamscli profile to seed")
@@ -395,6 +496,14 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "--samples",
         help="comma-separated sample ids to seed (default: all); their sources are fetched too",
+    )
+    parser.add_argument(
+        "--asset-version",
+        action="store_true",
+        help=(
+            "also take one asset-version snapshot and then upload the "
+            f"{VERSIONED_SAMPLE} sample once more, so the Versions tab offers its per-row Compare"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="print the CLI calls only")
     args = parser.parse_args(argv)
@@ -428,6 +537,9 @@ def main(argv: List[str]) -> int:
             for sample in samples:
                 data = sample_bytes(sample, by_id, cache)
                 upload(cli, database_id, asset_id, sample["path"], data)
+            if args.asset_version and VERSIONED_SAMPLE in by_id:
+                versioned = by_id[VERSIONED_SAMPLE]
+                ensure_second_version(cli, database_id, asset_id, versioned, by_id, cache)
     except SeedError as exc:
         print(f"seed failed: {exc}", file=sys.stderr)
         return 1
@@ -437,6 +549,7 @@ def main(argv: List[str]) -> int:
         "profile": args.profile,
         "databaseId": database_id,
         "assetId": asset_id,
+        "assetVersion": bool(args.asset_version),
         "samples": {
             sample["id"]: {
                 "key": sample["path"],

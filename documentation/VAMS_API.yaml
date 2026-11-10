@@ -11251,6 +11251,13 @@ components:
                 (workflow -> pipeline -> the chosen template's overrides); an omitted or empty exclude
                 list excludes nothing. A filter therefore only ever narrows eligibility, never grants it.
                 The same rules apply to a workflow trigger's filters.
+
+
+                Extension patterns do not apply to a whole-asset ("/") or folder ("/folder/")
+                selection, which names a container rather than a file: the "*.ext" and ".ext" forms
+                are dropped from both lists for such a selection, while path and name globs and exact
+                keys still apply. The assetScope booleans wholeAssetAllowed and folderAllowed decide
+                whether a container selection is accepted.
             properties:
                 allow:
                     type: array
