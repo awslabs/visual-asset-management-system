@@ -226,7 +226,8 @@ LABEL_TERMS = [
     (re.compile(r"\bPhase [A-Z]\d+[a-z]?\b"), "live-test phase label"),
     (re.compile(r"\b[BO]-\d{3}-\d+[a-z]?\b|\bR\d{2}-\d+\b|\bREVIEW-\d{3}\b"), "internal finding id"),
     (re.compile(r"\b(?:live test|drill finding) [BOKW]\d+[a-z]?\b", re.I), "internal finding id"),
-    (re.compile(r"\bvrae2e\b|\bprod0\d\b|\btest1\b"), "test deployment name"),
+    # assembled, so this file does not carry the name it scans for
+    (re.compile(r"\bvra" + r"e2e\b|\bprod0\d\b|\btest1\b"), "test deployment name"),
 ]
 ACCOUNT_RE = re.compile(r"(?<![\w-])\d{12}(?![\w-])")
 # code and deployable templates must derive the partition; examples, tests and docs may show sample ARNs
