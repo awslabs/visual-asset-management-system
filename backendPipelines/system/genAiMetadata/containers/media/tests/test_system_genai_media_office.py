@@ -12,7 +12,12 @@ import datetime
 import pytest
 
 from media_extractors import office
-from system_genai_media_fixtures import ENGLISH_TEXT, docx_bytes, make_ctx, pptx_bytes, write, xlsx_bytes
+from system_genai_media_fixtures import (
+    ENGLISH_TEXT, _rewrite_zip, docx_bytes, make_ctx, pptx_bytes, write, xlsx_bytes,
+)
+
+# common.ZIP_MEMBER_READ_MAX_BYTES, written out so a test of the limit does not move with it.
+_ZIP_MEMBER_READ_LIMIT_BYTES = 4 * 1024 * 1024
 
 
 @pytest.mark.unit
@@ -38,6 +43,25 @@ class TestDocx:
         path = write(tmp_path, "brief.docx", docx_bytes(pages=None))
         result = office.extract_docx(path, make_ctx(tmp_path, "brief.docx"))
         assert "pageCount" not in result.attributes["sys_document"] and "pages" not in result.facts
+
+    def test_an_extended_properties_part_over_the_read_limit_is_not_read(self, tmp_path):
+        # The part's central-directory size is over the limit, so it is never decompressed: no page count, and the
+        # document's text still comes through python-docx.
+        padding = b" " * (_ZIP_MEMBER_READ_LIMIT_BYTES + 1)
+        oversized = (b'<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
+                     b"<Pages>7</Pages>" + padding + b"</Properties>")
+        path = write(tmp_path, "brief.docx", _rewrite_zip(docx_bytes(pages=None), {"docProps/app.xml": oversized}))
+        assert office.app_page_count(path) is None
+        result = office.extract_docx(path, make_ctx(tmp_path, "brief.docx"))
+        assert "pageCount" not in result.attributes["sys_document"]
+        assert result.attributes["sys_document"]["decodable"] is True
+
+    def test_an_extended_properties_part_that_declares_entities_is_refused(self, tmp_path):
+        expanding = (b'<?xml version="1.0"?><!DOCTYPE Properties [<!ENTITY n "7">]>'
+                     b'<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
+                     b"<Pages>&n;</Pages></Properties>")
+        path = write(tmp_path, "brief.docx", _rewrite_zip(docx_bytes(pages=None), {"docProps/app.xml": expanding}))
+        assert office.app_page_count(path) is None
 
     def test_excerpt_is_bounded_and_full_text_is_whole(self, tmp_path):
         path = write(tmp_path, "long.docx", docx_bytes(paragraphs=tuple([ENGLISH_TEXT.strip()] * 20), table=None))

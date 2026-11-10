@@ -23,6 +23,13 @@ import test_system_genai_media_handler as handler_suite
 # What ffmpeg prints for a file that is not a media container: no `Input #0`, no streams, exit 1.
 NOT_MEDIA = FakeFfmpeg(header="blob: Invalid data found when processing input\n", probe_returncode=1)
 
+# common.ZIP_MEMBER_READ_MAX_BYTES, written out so a test of the limit does not move with it.
+_ZIP_MEMBER_READ_LIMIT_BYTES = 4 * 1024 * 1024
+_CORE_XML_HEAD = (b'<?xml version="1.0"?><cp:coreProperties '
+                  b'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+                  b'xmlns:dc="http://purl.org/dc/elements/1.1/">')
+_CORE_XML_TAIL = b"</cp:coreProperties>"
+
 
 def _ctx(tmp_path, name, **over):
     ctx = make_ctx(tmp_path, name)
@@ -79,6 +86,38 @@ class TestGenericProbeChain:
         assert archive_facts["coreProperties"] == {"title": "Bundle", "creator": "QA"}
         assert result.facts["container"] == "zip archive" and result.facts["entries"] == "4 entries"
         assert result.render_skipped is None and result.render_images == []
+
+    def test_an_opc_part_over_the_read_limit_is_not_read(self, tmp_path):
+        # A docProps part whose central-directory size is over the limit: the archive is still described, the
+        # part is never decompressed, and the result says why its properties are missing.
+        padding = b" " * (_ZIP_MEMBER_READ_LIMIT_BYTES + 1)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("docProps/core.xml", _CORE_XML_HEAD + b"<dc:title>Big</dc:title>" + padding + _CORE_XML_TAIL)
+            archive.writestr("docProps/app.xml", b"<Properties><Pages>3</Pages></Properties>")
+        path = write(tmp_path, "bundle.pkg", buffer.getvalue())
+        result = generic.extract_generic(path, _ctx(tmp_path, "bundle.pkg"), run=NOT_MEDIA)
+        archive_facts = result.attributes["sys_archive"]
+        assert archive_facts["entryCount"] == 2
+        assert "coreProperties" not in archive_facts
+        assert archive_facts["appProperties"] == {"Pages": "3"}
+        assert any("docProps/core.xml was not read" in w and "read limit" in w for w in result.warnings)
+
+    def test_an_opc_part_that_declares_entities_is_refused(self, tmp_path):
+        # Internal entities that expand in the parser: the part is refused rather than expanded.
+        expanding = (b'<?xml version="1.0"?><!DOCTYPE cp:coreProperties [<!ENTITY a "aaaaaaaaaa">'
+                     b'<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+                     + _CORE_XML_HEAD.split(b"?>", 1)[1] + b"<dc:title>&b;</dc:title>" + _CORE_XML_TAIL)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("docProps/core.xml", expanding)
+        path = write(tmp_path, "bundle.pkg", buffer.getvalue())
+        result = generic.extract_generic(path, _ctx(tmp_path, "bundle.pkg"), run=NOT_MEDIA)
+        archive_facts = result.attributes["sys_archive"]
+        assert archive_facts["containerFormat"] == "zip"
+        assert "coreProperties" not in archive_facts
+        assert "a" * 100 not in json.dumps(result.attributes)
+        assert any("docProps/core.xml was not read" in w and "declares entities" in w for w in result.warnings)
 
     def test_a_tar_container_is_described(self, tmp_path):
         buffer = io.BytesIO()

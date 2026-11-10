@@ -14,10 +14,11 @@ The probes run in order and the first that recognises the file decides: Pillow, 
 import os
 import subprocess
 import tarfile
-import xml.etree.ElementTree as ElementTree
 import zipfile
 from typing import Callable, Dict, List, Optional
 
+import defusedxml
+from defusedxml import ElementTree
 from PIL import Image, UnidentifiedImageError
 
 from . import audio, images, text, video
@@ -27,8 +28,10 @@ from .common import (
     CLASS_OTHER,
     BranchResult,
     ExtractContext,
+    ZipMemberTooLarge,
     bounded_tags,
     other_fallback,
+    read_zip_member,
 )
 
 _TEXT_SAMPLE_BYTES = 64 * 1024
@@ -44,6 +47,9 @@ def _strip_namespace(tag: str) -> str:
 
 
 def _xml_leaf_values(payload: bytes) -> List[tuple]:
+    """The (tag, text) pairs of the root's leaf children. Parsed through defusedxml, which raises
+    DefusedXmlException for a document that declares entities or references external ones; a malformed
+    document yields nothing."""
     try:
         root = ElementTree.fromstring(payload)
     except ElementTree.ParseError:
@@ -124,6 +130,20 @@ def _archive_entries(names: List[str], sizes: List[int]) -> Dict[str, object]:
     return section
 
 
+def _opc_part_properties(archive: zipfile.ZipFile, part: str, ctx: ExtractContext,
+                         result: BranchResult) -> Dict[str, object]:
+    """The bounded leaf values of one OPC properties part. A part over the read limit, or one that declares
+    entities, is not parsed and is noted on the result instead."""
+    try:
+        return bounded_tags(_xml_leaf_values(read_zip_member(archive, part)))
+    except ZipMemberTooLarge as exc:
+        result.warnings.append(f"{ctx.file_name}: {part} was not read: {exc}")
+    except defusedxml.DefusedXmlException as exc:
+        result.warnings.append(f"{ctx.file_name}: {part} was not read: it declares entities or external "
+                               f"references ({type(exc).__name__})")
+    return {}
+
+
 def _probe_zip(path: str, ctx: ExtractContext) -> Optional[BranchResult]:
     if not zipfile.is_zipfile(path):
         return None
@@ -135,11 +155,11 @@ def _probe_zip(path: str, ctx: ExtractContext) -> Optional[BranchResult]:
             section = _archive_entries(names, [info.file_size for info in infos])
             section["containerFormat"] = "zip"
             if _OPC_CORE_PART in archive.namelist():
-                core = bounded_tags(_xml_leaf_values(archive.read(_OPC_CORE_PART)))
+                core = _opc_part_properties(archive, _OPC_CORE_PART, ctx, result)
                 if core:
                     section["coreProperties"] = core
             if _OPC_APP_PART in archive.namelist():
-                app = bounded_tags(_xml_leaf_values(archive.read(_OPC_APP_PART)))
+                app = _opc_part_properties(archive, _OPC_APP_PART, ctx, result)
                 if app:
                     section["appProperties"] = app
     except (zipfile.BadZipFile, OSError, RuntimeError) as exc:

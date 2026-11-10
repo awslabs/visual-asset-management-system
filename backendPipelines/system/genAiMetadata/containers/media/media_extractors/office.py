@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import docx
 import openpyxl
-from defusedxml import ElementTree
+from defusedxml import DefusedXmlException, ElementTree
 from defusedxml.ElementTree import ParseError
 from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
 from docx.table import Table
@@ -33,7 +33,9 @@ from .common import (
     DATA_SAMPLE_ROWS,
     BranchResult,
     ExtractContext,
+    ZipMemberTooLarge,
     human_count,
+    read_zip_member,
     truncate_text,
 )
 
@@ -121,13 +123,14 @@ def _core_properties(core) -> Dict[str, object]:
 
 
 def app_page_count(path: str) -> Optional[int]:
-    """The ``Pages`` count of the package's extended properties, or None when the package records none."""
+    """The ``Pages`` count of the package's extended properties, or None when the package records none, its
+    properties part is over the zip member read limit, or the part declares entities."""
     try:
         with zipfile.ZipFile(path) as package:
             if _APP_PROPERTIES_PART not in package.namelist():
                 return None
-            root = ElementTree.fromstring(package.read(_APP_PROPERTIES_PART))
-    except (zipfile.BadZipFile, ParseError, KeyError, OSError):
+            root = ElementTree.fromstring(read_zip_member(package, _APP_PROPERTIES_PART))
+    except (zipfile.BadZipFile, ParseError, DefusedXmlException, ZipMemberTooLarge, KeyError, OSError):
         return None
     node = root.find(f"{_APP_PROPERTIES_NS}Pages")
     try:
