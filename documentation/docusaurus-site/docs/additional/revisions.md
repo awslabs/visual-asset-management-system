@@ -84,6 +84,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
 -   **Three.js Viewer PLY point clouds and colours** — A PLY file with no faces draws as a point cloud instead of grey streaks, and a PLY's per-vertex colours are used for points and meshes; a PLY without colours stays grey. (issue #1257)
 -   **More than 10 deployments per Region** — The orchestration bus audit log group carries its own resource policy instead of adding an account-level Amazon CloudWatch Logs resource policy per deployment, which limited an account to 10 VAMS deployments per Region. The update removes the old policy. A provisioned Amazon OpenSearch Service domain still adds one account-level policy for its logs. (issue #1266)
+-   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 
 **Other changes:**
 
