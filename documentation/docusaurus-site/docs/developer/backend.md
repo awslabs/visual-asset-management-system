@@ -246,7 +246,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
 -   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
--   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
+-   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, MFA status, and how the caller authenticated: `authMethod` (`AUTH_METHOD_API_KEY`, `"apiKey"`, for an API key, otherwise `AUTH_METHOD_JWT`, `"jwt"`) and `apiKeyId` (the key's ID for an API-key caller, otherwise `None`). A handler that issues a credential compares `authMethod` with `AUTH_METHOD_API_KEY` from `handlers.auth`, never a bare string, to refuse a caller that authenticated with an API key
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
 
 ## Pydantic v1 Model Patterns

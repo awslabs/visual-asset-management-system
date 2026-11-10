@@ -788,7 +788,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: "Invalid parameters, missing required criteria, or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
+                    description: "Invalid parameters, missing required criteria, an object type the deployment does not offer (such as one of an add-on it has not enabled, which the message says), or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
                     content:
                         application/json:
                             schema:
@@ -831,7 +831,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/constraintOperationResponse'
                 "400":
-                    description: "Invalid parameters, missing required criteria, or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
+                    description: "Invalid parameters, missing required criteria, an object type the deployment does not offer (such as one of an add-on it has not enabled, which the message says), or role does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request."
                     content:
                         application/json:
                             schema:
@@ -1057,7 +1057,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/importConstraintsTemplateResponse"
                 "400":
-                    description: Invalid template
+                    description: "Invalid template: a required variable without a value, an unknown object type or criteria field, an object type of an add-on the deployment has not enabled, or no constraints."
                     content:
                         application/json:
                             schema:
@@ -11514,6 +11514,8 @@ components:
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
+                        An add-on's types are accepted only while the deployment enables the
+                        add-on.
                 criteriaAnd:
                     type: array
                     maxItems: 100
@@ -11586,6 +11588,8 @@ components:
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
+                        An add-on's types are accepted only while the deployment enables the
+                        add-on.
                 criteriaAnd:
                     type: array
                     maxItems: 100

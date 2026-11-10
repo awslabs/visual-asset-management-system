@@ -1,6 +1,6 @@
 # Command Reference
 
-This page provides an overview of all VamsCLI command groups with links to detailed documentation for each. All commands support the global options `--profile`, `--verbose`, and `--help`. Most commands that produce output also support `--json-output` for machine-readable JSON.
+This page provides an overview of all VamsCLI command groups with links to detailed documentation for each. All commands support the global options `--profile`, `--verbose`, and `--help`. `vamscli --help` lists an add-on's command group only when the feature switches the profile stored at its last `vamscli auth login` include the add-on's; on a deployment without the add-on, its commands still run and refuse, naming the add-on. Most commands that produce output also support `--json-output` for machine-readable JSON.
 
 :::info[Common Options]
 The following options appear on nearly every command and are not repeated in individual pages:

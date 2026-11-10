@@ -24,7 +24,7 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
 :::note[Extension object types]
-A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types and the types an enabled add-on seeds constraints for. An add-on's object types appear only while the deployment enables the add-on. A constraint stored earlier with a type the deployment no longer offers opens with the notice **This object type is not offered on this deployment**: it is kept as stored, applies again once the add-on is enabled, and can be deleted, but saving changes to it is refused. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
 :::
 
 ## Roles
