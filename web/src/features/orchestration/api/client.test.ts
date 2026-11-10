@@ -1,7 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { unwrapMessage, toTuple, toTupleWithWarnings, pageAll, PAGE_ALL_MAX_PAGES } from "./client";
+import {
+    unwrapMessage,
+    toTuple,
+    toTupleWithWarnings,
+    pageAll,
+    PAGE_ALL_MAX_PAGES,
+    failureStatus,
+    ServiceCallError,
+} from "./client";
 
 describe("orchestration api client helpers", () => {
     it("unwrapMessage returns .message when present", () => {
@@ -19,6 +27,31 @@ describe("orchestration api client helpers", () => {
         });
         expect(r[0]).toBe(false);
         expect(r[1]).toBe("boom");
+    });
+    it("a failed tuple carries the call's HTTP status without changing its shape", async () => {
+        const denied = await toTuple(async () => {
+            throw Object.assign(new Error("Not Authorized"), { status: 403 });
+        });
+        expect(denied).toEqual([false, "Not Authorized"]);
+        expect(Object.keys(denied)).toEqual(["0", "1"]);
+        expect(failureStatus(denied)).toBe(403);
+
+        const warned = await toTupleWithWarnings(async () => {
+            throw Object.assign(new Error("Not Found"), { status: 404 });
+        });
+        expect(failureStatus(warned)).toBe(404);
+    });
+    it("a failure with no response has no status", async () => {
+        const offline = await toTuple(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        expect(failureStatus(offline)).toBeUndefined();
+        expect(failureStatus([false, "rebuilt by a service"])).toBeUndefined();
+    });
+    it("ServiceCallError keeps the plain Error text", () => {
+        const e = new ServiceCallError("Not Authorized", 403);
+        expect(String(e)).toBe("Error: Not Authorized");
+        expect(e.status).toBe(403);
     });
     it("toTupleWithWarnings keeps warnings and only the named siblings of message", async () => {
         const resp = {

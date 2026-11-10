@@ -1055,3 +1055,43 @@ test.describe("Executions board — skipped trigger launches", () => {
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 });
+
+// #1270: a 403 on the details read is the API's authorization decision, so a deep link to an
+// execution the role may not read shows the error at once rather than after a re-send. The details
+// response is served here (for an id no environment holds), so the spec runs against any deployment
+// and any role; the live denial for a restricted role is covered by the sandbox smoke.
+test.describe("Execution detail — denied deep link", () => {
+    const DENIED_ID = "e2e-denied-1270";
+    const DENIED_DETAILS = new RegExp(`/workflows/executions/${DENIED_ID}/details(\\?|$)`);
+
+    for (const [status, message] of [
+        [403, "Not Authorized"],
+        [404, "Execution not found"],
+    ] as const) {
+        test(`a ${status} shows the error at once after one request`, async ({ page }) => {
+            const errors = collectPageErrors(page);
+            let calls = 0;
+            await page.route(DENIED_DETAILS, (route) => {
+                calls += 1;
+                return route.fulfill({ status, json: { message } });
+            });
+            // Load the app shell first, so the timing below is the details page alone.
+            await gotoOrchestration(page, "executions", /Executions/i);
+
+            const started = Date.now();
+            await page.evaluate((id) => {
+                window.location.hash = `#/executions/${id}`;
+            }, DENIED_ID);
+            await expect(page.getByText("Error Loading Execution")).toBeVisible({
+                timeout: 5_000,
+            });
+            await expect(page.getByText(message)).toBeVisible();
+            const elapsed = Date.now() - started;
+            // Give a re-send time to happen: the query client's retry waits one second.
+            await page.waitForTimeout(1_500);
+            expect(calls, "the details read is not re-sent").toBe(1);
+            expect(elapsed, "the error does not wait on a retry").toBeLessThan(5_000);
+            expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+        });
+    }
+});
