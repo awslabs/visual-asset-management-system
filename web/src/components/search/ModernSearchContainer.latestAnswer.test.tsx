@@ -110,6 +110,12 @@ const nlpAnswer = (label: string) => ({
 
 const shownIds = () => (mockListState?.result?.hits?.hits ?? []).map((hit: any) => hit._id);
 
+/** An action the list view raises, as a page change or a refresh after a row action does. */
+const listDispatch = (action: any) => {
+    if (!mockListDispatch) throw new Error("the list view has not rendered");
+    mockListDispatch(action);
+};
+
 const renderContainer = () =>
     render(
         <MemoryRouter>
@@ -146,10 +152,10 @@ describe("ModernSearchContainer keeps the newest search's answer", () => {
         const page3 = deferred<any>();
         mockExecuteSearch.mockReturnValueOnce(page2.promise).mockReturnValueOnce(page3.promise);
         await act(async () => {
-            mockListDispatch!({ type: "query-paginate", pagination: { from: 25, size: 25 } });
+            listDispatch({ type: "query-paginate", pagination: { from: 25, size: 25 } });
         });
         await act(async () => {
-            mockListDispatch!({ type: "query-paginate", pagination: { from: 50, size: 25 } });
+            listDispatch({ type: "query-paginate", pagination: { from: 50, size: 25 } });
         });
         expect(mockExecuteSearch).toHaveBeenCalledTimes(3);
 
@@ -176,10 +182,10 @@ describe("ModernSearchContainer keeps the newest search's answer", () => {
         const newer = deferred<any>();
         mockExecuteSearch.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
 
         await act(async () => {
@@ -208,10 +214,10 @@ describe("ModernSearchContainer keeps the newest search's answer", () => {
         const newer = deferred<any>();
         mockExecuteSearch.mockReturnValueOnce(older).mockReturnValueOnce(newer.promise);
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
             newer.resolve(keywordAnswer("newer", 2));
@@ -241,10 +247,10 @@ describe("ModernSearchContainer keeps the newest search's answer", () => {
         const newer = deferred<any>();
         mockExecuteNlpSearch.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
             newer.resolve(nlpAnswer("newer"));
@@ -296,7 +302,7 @@ describe("ModernSearchContainer count after Clear all filters", () => {
         const reload = deferred<any>();
         mockExecuteSearch.mockReturnValueOnce(running.promise).mockReturnValueOnce(reload.promise);
         await act(async () => {
-            mockListDispatch!({ type: "refresh" });
+            listDispatch({ type: "refresh" });
         });
         await act(async () => {
             mockTopBarProps.onClearAll();

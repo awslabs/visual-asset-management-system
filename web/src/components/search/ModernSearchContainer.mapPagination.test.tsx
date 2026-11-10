@@ -107,6 +107,12 @@ const nlpAnswer = (count: number) => ({
 
 const mapHitIds = () => (mockMapState?.result?.hits?.hits ?? []).map((hit: any) => hit._id);
 
+/** An action the map view raises, as its page control does. */
+const mapDispatch = (action: any) => {
+    if (!mockMapDispatch) throw new Error("the map view has not rendered");
+    mockMapDispatch(action);
+};
+
 beforeEach(() => {
     jest.clearAllMocks();
     mockMapDispatch = undefined;
@@ -136,7 +142,7 @@ describe("ModernSearchContainer map pagination", () => {
         const before = mockExecuteSearch.mock.calls.length;
 
         await act(async () => {
-            mockMapDispatch!({
+            mapDispatch({
                 type: "query-paginate",
                 pagination: { from: 25, size: 25 },
             });
@@ -174,7 +180,7 @@ describe("ModernSearchContainer map pagination", () => {
         expect(mockMapState.result.nlp).toBeDefined();
 
         await act(async () => {
-            mockMapDispatch!({ type: "query-paginate", pagination: { from: 25, size: 25 } });
+            mapDispatch({ type: "query-paginate", pagination: { from: 25, size: 25 } });
         });
         await act(async () => {
             await new Promise((resolve) => setTimeout(resolve, 700));
