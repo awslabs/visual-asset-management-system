@@ -1103,7 +1103,10 @@ def hand_off_to_copy_engine(file_info: Dict[str, Any], source_bucket: str, temp_
         workflow_execution_id=file_info.get('workflowExecutionId') or "",
         delete_source_on_success=True,
     )
-    loc.start_copy_job(copy_jobs_table(), sfn_client, machine_arn, job)
+    # A throttle or the deploy window's AccessDenied is waited out (#1123 L1); a message that still
+    # fails is redelivered.
+    loc.start_copy_job(copy_jobs_table(), sfn_client, machine_arn, job,
+                       max_wait_seconds=loc.ENGINE_CALL_DEPLOY_WAIT_SECONDS)
     file_info['copyJobId'] = job['jobId']
     logger.info(f"File {file_info['relativeKey']} ({size} bytes) handed to copy job {job['jobId']}")
     return True

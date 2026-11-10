@@ -250,7 +250,9 @@ The engine runs with fixed values; they are not deployment configuration.
 
 The copy engine function is unreserved: it draws on the account's unreserved Lambda concurrency, like
 the VAMS API functions. When the account runs out, a copy task is throttled, and throttling slows a copy
-rather than failing it. A throttled task waits with jittered backoff, about 4 hours on average and at
+rather than failing it. The same holds for a run's own calls to the copy engine (recording its copies, registering
+its wait, reading the outcomes): a throttled call waits, and the workflow step is retried if the throttle
+outlasts it, so a run with copies still alive never ends `FAILED` because of a throttle. A throttled task waits with jittered backoff, about 4 hours on average and at
 most about 8 hours, before its copy fails.
 
 | Parameter                                  | Value                          | Exceeding it                                   |
