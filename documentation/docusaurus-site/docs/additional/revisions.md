@@ -274,6 +274,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
 -   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
 -   **SSM prefix comments and MCP tier table** — The data-migration tooling comments include the Region in the resource-name SSM parameter prefix, and the MCP tool tier table drops a stray "Adds" from each row. (issue #1149)
+-   **Deterministic exclusion test** — The backend test that compares an asset execution listing with and without `excludeStatus` pins the listing start date, so it no longer fails intermittently on the time-derived `filterStartDate` echo. (issue #1227)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 
