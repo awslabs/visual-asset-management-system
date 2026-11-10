@@ -171,13 +171,6 @@ class TestAllowList:
             assert extension == extension.lower(), extension
             assert "*" not in extension and "/" not in extension, extension
 
-    @pytest.mark.temporary  # pins the drop of .fls/.fws relative to the thumbnail allow list
-    def test_the_two_never_loading_faro_extensions_are_absent(self):
-        # .fls/.fws were advertised by the thumbnail pipeline and never loaded; they are not viewer
-        # extensions. test_allow_list_equals_the_catalog_minus_the_exclusions already forbids them
-        # today; this pin exists only until the release that retires the thumbnail list.
-        assert ".fls" not in fc.ALLOW_LIST and ".fws" not in fc.ALLOW_LIST
-
     def test_every_allow_listed_extension_has_a_class_and_branch(self):
         for extension in fc.ALLOW_LIST:
             if extension in fc.SNIFFED_EXTENSIONS:

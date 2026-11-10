@@ -22,10 +22,16 @@ re-invokes itself asynchronously with a `continuation` token (the reserved sixth
 read only by this function) carrying the scan cursor or the enumeration marker, the run id, and the
 running counts. The response reports where the run stands after this invocation.
 
-A failure in the first invocation is returned as a 500 to its caller. A failure in a continuation raises
-ReindexContinuationFailed, so AWS Lambda sends that asynchronous invocation to the function's on-failure
-dead-letter queue once (its async config retries nothing); the error message carries the payload that
-resumes the run after the last file the failed invocation sent.
+AWS Lambda's recursive-loop detection would stop that chain after about 16 invocations, so it is turned
+off for this function (`recursiveLoop: ALLOW` in the partitions that have it); the chain is bounded here
+instead: a run makes at most MAX_RUN_INVOCATIONS invocations, and the one that reaches the cap with work
+left stops rather than continuing itself (ReindexHopLimitReached).
+
+A failure in the first invocation is returned as a 500 to its caller. A failure in a continuation, the
+invocation cap included, raises ReindexContinuationFailed, so AWS Lambda sends that asynchronous
+invocation to the function's on-failure dead-letter queue once (its async config retries nothing); the
+error message carries the payload that resumes the run after the last file the failed invocation sent.
+A resume payload from the cap starts the invocation count again, so the resumed run gets a full budget.
 """
 
 import json
@@ -70,6 +76,10 @@ MIN_REMAINING_MS = 90000
 FILES_PER_CHUNK = 1000
 SEND_BATCH_SIZE = 10
 SCAN_PAGE_SIZE = 1000
+# The most invocations one run (or one resume of it) makes: about 50 hours of 15-minute invocations. With
+# recursive-loop detection off this is the bound on a chain that never finishes; the invocation that
+# reaches it with work left sends its resume payload to the dead-letter queue instead of continuing.
+MAX_RUN_INVOCATIONS = 200
 
 try:
     vector_table_name = get_table_name(ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE)
@@ -97,6 +107,10 @@ vector_store = DynamoDbVectorStore(
 
 class SystemWorkflowNotFound(Exception):
     pass
+
+
+class ReindexHopLimitReached(Exception):
+    """The run reached MAX_RUN_INVOCATIONS with work left, so it stops instead of continuing itself."""
 
 
 class ReindexContinuationFailed(Exception):
@@ -299,6 +313,10 @@ def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = 
                 state['phase'] = PHASE_DONE
         continued = state['phase'] != PHASE_DONE
         if continued:
+            if state['invocations'] >= MAX_RUN_INVOCATIONS:
+                raise ReindexHopLimitReached(
+                    f"the run reached {MAX_RUN_INVOCATIONS} invocations with phase {state['phase']} "
+                    f"unfinished; resume it with the resumePayload")
             _self_invoke(params, state)
         body: Dict[str, Any] = {
             'operation': params['operation'], 'reindexRunId': state['runId'], 'phase': state['phase'],
@@ -313,11 +331,13 @@ def _run_reindex(params: Dict[str, Any], context: Any, raise_on_failure: bool = 
         return {'statusCode': 200, 'body': json.dumps(body)}
     except Exception as e:
         logger.exception(f"vector reindex run {state['runId']} failed in phase {state['phase']}: {e}")
+        # A resume after the cap starts a fresh invocation budget; any other resume keeps the count.
+        resume_state = dict(state, invocations=0) if isinstance(e, ReindexHopLimitReached) else state
         if raise_on_failure:
             raise ReindexContinuationFailed(json.dumps({
                 'reindexRunId': state['runId'], 'phase': state['phase'],
                 'error': f"{type(e).__name__}: {e}"[:1000],
-                'resumePayload': continuation_payload(params, state),
+                'resumePayload': continuation_payload(params, resume_state),
             })) from e
         return {'statusCode': 500, 'body': json.dumps(
             {'error': 'vector reindex failed', 'reindexRunId': state['runId'], 'phase': state['phase']})}

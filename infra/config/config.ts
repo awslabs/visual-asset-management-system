@@ -472,6 +472,9 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 export const VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS = 4096;
 export const VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY = 2;
 export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
+// The partitions vector search may be enabled in: DynamoDB vector search and the Amazon Bedrock embedding
+// models are offered in both. Any other partition is refused in getConfig() until its support is verified.
+export const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
 // The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
 // answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
 // app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
@@ -1362,53 +1365,22 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = true;
     }
     //Every Bedrock model the pipeline and the vector index use is named in one block, so a model is
-    //upgraded or swapped in one place. The two superseded locations (bedrockAnalysisModelId beside the
-    //block, embeddingModelId/embeddingDimensions under app.vectorSearch) are read when the block omits a
-    //value, with a warning, so a configuration written against them keeps its models and its index name.
+    //upgraded or swapped in one place.
     {
         const pipeline = config.app.pipelines.useSystemGenAiMetadata as Record<string, any>;
-        const vectorSearchBlock = (config.app.vectorSearch ?? {}) as Record<string, any>;
         if (pipeline.bedrockModels == undefined) {
             pipeline.bedrockModels = {};
         }
         const models = pipeline.bedrockModels as Record<string, any>;
         if (models.analysisModelId == undefined) {
-            if (pipeline.bedrockAnalysisModelId != undefined) {
-                console.warn(
-                    "Configuration Warning: pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId is " +
-                        "superseded by pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId; " +
-                        "move the value there."
-                );
-                models.analysisModelId = pipeline.bedrockAnalysisModelId;
-            } else {
-                models.analysisModelId = "";
-            }
+            models.analysisModelId = "";
         }
         if (models.embeddingModelId == undefined) {
-            if (vectorSearchBlock.embeddingModelId != undefined) {
-                console.warn(
-                    "Configuration Warning: app.vectorSearch.embeddingModelId is superseded by " +
-                        "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId; move the value there."
-                );
-                models.embeddingModelId = vectorSearchBlock.embeddingModelId;
-            } else {
-                models.embeddingModelId = VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID;
-            }
+            models.embeddingModelId = VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID;
         }
         if (models.embeddingDimensions == undefined) {
-            if (vectorSearchBlock.embeddingDimensions != undefined) {
-                console.warn(
-                    "Configuration Warning: app.vectorSearch.embeddingDimensions is superseded by " +
-                        "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions; move the value there."
-                );
-                models.embeddingDimensions = vectorSearchBlock.embeddingDimensions;
-            } else {
-                models.embeddingDimensions = VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS;
-            }
+            models.embeddingDimensions = VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS;
         }
-        delete pipeline.bedrockAnalysisModelId;
-        delete vectorSearchBlock.embeddingModelId;
-        delete vectorSearchBlock.embeddingDimensions;
         //The text model answers the text-only requests; unset, those requests go to the analysis model.
         //A null is the ConfigBuilder's cleared text field.
         if (models.textModelId == undefined) {
@@ -1540,32 +1512,23 @@ export function getConfig(app: cdk.App): Config {
                     "guardrailVersion to use the guardrail the deployment creates."
             );
         }
-        //Organizational Bedrock guardrail guidance is a guardrail with prompt-attack filtering on every
-        //invocation. A pipeline that neither creates one nor names one deploys, with this warning as
-        //the record of the deviation.
-        if (
-            config.app.pipelines.useSystemGenAiMetadata.enabled &&
-            !guardrail.create.enabled &&
-            !identifierSet
-        ) {
-            console.warn(
-                "Configuration Warning: pipelines.useSystemGenAiMetadata is enabled without a " +
-                    "bedrockGuardrail. The analysis prompts (file content, rendered views, operator " +
-                    "vocabulary) are sent to Amazon Bedrock with no guardrail; set " +
-                    "bedrockGuardrail.create.enabled to true, or create one with prompt-attack " +
-                    "and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier " +
-                    "and guardrailVersion."
-            );
-        }
     }
 
     //Natural-language file search over the embeddings the system GenAI metadata pipeline produces.
-    //Keyed on that pipeline and on the restricted-partition flag: a config.json without the block
-    //follows the pipeline it depends on outside GovCloud/EU Sovereign, and stays off inside them.
+    //Keyed on that pipeline and on the restricted-partition flag: a config.json without the block (or
+    //without its enabled) follows the pipeline outside GovCloud/EU Sovereign, and stays off inside them.
+    //It turns on only when every setting the vector checks below require is on, as the register flags
+    //resolve further down (an absent autoRegisterWithVAMS registers, an absent upload trigger is
+    //disarmed); otherwise it resolves to disabled with the warning that names the settings to add,
+    //rather than failing on a setting the operator never wrote.
     const vectorSearchEnabledWasUnset =
         config.app.vectorSearch == undefined || config.app.vectorSearch.enabled == undefined;
+    const systemPipelineForVector = config.app.pipelines.useSystemGenAiMetadata;
     const vectorSearchDefaultEnabled =
-        config.app.pipelines.useSystemGenAiMetadata.enabled === true &&
+        systemPipelineForVector.enabled === true &&
+        (systemPipelineForVector.autoRegisterWithVAMS == undefined ||
+            systemPipelineForVector.autoRegisterWithVAMS === true) &&
+        systemPipelineForVector.autoRegisterAutoTriggerOnFileUpload === true &&
         !(config.app.govCloud.enabled === true);
     if (config.app.vectorSearch == undefined) {
         config.app.vectorSearch = {
@@ -1606,6 +1569,38 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId,
         config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions
     );
+
+    //Every Amazon Bedrock call the system GenAI metadata pipeline makes carries a guardrail with a
+    //prompt-attack input filter: the analysis Converse calls (file content, rendered views, operator
+    //vocabulary) when the GenAI layer is on, and the ApplyGuardrail screen of the text it embeds when
+    //vector search is on. A configuration that makes either call with no guardrail, neither created nor
+    //named, is refused in every partition; there is no opt-out. Checked after the vector search backfill
+    //because an unset vectorSearch.enabled follows the pipeline.
+    {
+        const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+        const guardrail = pipeline.bedrockGuardrail;
+        const guardrailSet =
+            guardrail.create?.enabled === true ||
+            String(guardrail.guardrailIdentifier ?? "").trim() !== "";
+        // Both calls are the pipeline's; vector search on with the pipeline off fails on its own rule below.
+        const analysisOn = pipeline.enabled === true && pipeline.useGenAiAnalysis === true;
+        const vectorOn = pipeline.enabled === true && config.app.vectorSearch.enabled === true;
+        if ((analysisOn || vectorOn) && !guardrailSet) {
+            const callers = [
+                analysisOn ? "the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)" : "",
+                vectorOn ? "vector search (app.vectorSearch.enabled)" : "",
+            ].filter((caller) => caller !== "");
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail creates no " +
+                    `guardrail and names none, while ${callers.join(
+                        " and "
+                    )} sends file content to Amazon Bedrock. ` +
+                    "Set bedrockGuardrail.create.enabled to true, or create a guardrail with a " +
+                    "prompt-attack input filter in this account and Region and set " +
+                    "bedrockGuardrail.guardrailIdentifier and guardrailVersion."
+            );
+        }
+    }
 
     // Cosmos Predict defaults
     if (config.app.pipelines.useNvidiaCosmos == undefined) {
@@ -4091,12 +4086,20 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    //Amazon DynamoDB vector search is not offered in the European Sovereign Cloud. Keyed on the partition
-    //rather than app.govCloud.enabled because GovCloud does offer it.
-    if (config.app.vectorSearch.enabled && config.env.partition === "aws-eusc") {
+    //Vector search runs on Amazon DynamoDB vector search and an Amazon Bedrock embedding model, offered
+    //together only in the commercial and AWS GovCloud (US) partitions VAMS supports it in. Written as an
+    //allow-list keyed on the partition rather than app.govCloud.enabled (GovCloud offers it): the European
+    //Sovereign Cloud does not offer DynamoDB vector search, and China and the ISO partitions are
+    //unverified, so each is refused here instead of failing at the first index create or Bedrock call.
+    if (
+        config.app.vectorSearch.enabled &&
+        !VECTOR_SEARCH_PARTITIONS.includes(config.env.partition)
+    ) {
         throw new Error(
-            "Configuration Error: DynamoDB vector search is not available in the European Sovereign " +
-                `Cloud (partition '${config.env.partition}'). Set app.vectorSearch.enabled to false.`
+            "Configuration Error: vector search (DynamoDB vector search with an Amazon Bedrock " +
+                `embedding model) is not available in the '${config.env.partition}' partition; it is ` +
+                `supported in ${VECTOR_SEARCH_PARTITIONS.map((p) => `'${p}'`).join(" and ")}. ` +
+                "Set app.vectorSearch.enabled to false."
         );
     }
 

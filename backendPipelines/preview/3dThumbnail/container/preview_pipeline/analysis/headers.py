@@ -24,6 +24,10 @@ SPLAT_RECORD_BYTES = 32
 SPZ_MAGIC = 0x5053474E
 SPZ_HEADER_BYTES = 16
 
+# A SOG meta.json is a few kilobytes of JSON read whole into memory; one larger than this, as a bundle member
+# (by its central-directory size, before decompressing) or as a bare file, is refused.
+SOG_META_MAX_BYTES = 16 * 1024 ** 2
+
 
 class HeaderError(ValueError):
     """The file does not carry the header the reader expects."""
@@ -102,16 +106,29 @@ def read_spz_header(path: str) -> dict:
 
 
 def read_sog_meta(path: str) -> dict:
-    """The ``meta.json`` of a SOG bundle (a zip) or of a bare SOG ``meta.json`` written as the file."""
+    """The ``meta.json`` of a SOG bundle (a zip) or of a bare SOG ``meta.json`` written as the file. The
+    meta.json is checked against SOG_META_MAX_BYTES, and a bundle member also against the zip-bomb ratio
+    (``utils/archive.check_member``), before it is read."""
+    from ..utils.archive import ArchiveLimitError, check_member
+
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
             meta_name = next((n for n in names if n.rsplit("/", 1)[-1] == "meta.json"), None)
             if meta_name is None:
                 raise HeaderError("SOG bundle carries no meta.json")
-            meta = json.loads(archive.read(meta_name).decode("utf-8"))
+            info = archive.getinfo(meta_name)
+            try:
+                check_member(info, SOG_META_MAX_BYTES)
+            except ArchiveLimitError as exc:
+                raise HeaderError(f"SOG meta.json was not read: {exc}") from exc
+            meta = json.loads(archive.read(info).decode("utf-8"))
             members = len(names)
     else:
+        size = os.path.getsize(path)
+        if size > SOG_META_MAX_BYTES:
+            raise HeaderError(f"SOG meta.json was not read: it is {size:,} bytes, over the "
+                              f"{SOG_META_MAX_BYTES:,}-byte limit")
         with open(path, "rb") as handle:
             try:
                 meta = json.loads(handle.read().decode("utf-8"))

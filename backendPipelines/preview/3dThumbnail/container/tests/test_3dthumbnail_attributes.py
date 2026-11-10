@@ -464,6 +464,35 @@ class TestIfc:
         assert out[attrs.SYS_IFC]["projectName"] is None and out[attrs.SYS_IFC]["site"] is None
         assert out[attrs.SYS_FORMAT]["extension"] == ".ifczip"
 
+    def test_an_ifczip_member_larger_than_the_free_disk_is_not_extracted(self, tmp_path, monkeypatch):
+        from preview_pipeline import resources
+        from preview_pipeline.utils.archive import ArchiveLimitError
+
+        archive = tmp_path / "model.ifczip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("model.ifc", "ISO-10303-21;" + " " * 4096)
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        # 1 KiB of disk left after the output headroom: the 4 KiB member does not fit.
+        monkeypatch.setattr(resources, "free_disk_bytes", lambda path: resources.OUTPUT_DISK_HEADROOM_BYTES + 1024)
+        _module(monkeypatch, "ifcopenshell", open=lambda path: pytest.fail("an oversized member was opened"))
+        with pytest.raises(ArchiveLimitError, match="over the 1,024-byte limit"):
+            attrs.ifc_attributes(str(archive), str(work_dir))
+        assert list(work_dir.iterdir()) == []
+
+    def test_an_ifczip_member_with_a_zip_bomb_ratio_is_not_extracted(self, tmp_path, monkeypatch):
+        from preview_pipeline.utils.archive import ArchiveLimitError
+
+        archive = tmp_path / "model.ifczip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("model.ifc", b"\0" * (65 * 1024 ** 2))
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        _module(monkeypatch, "ifcopenshell", open=lambda path: pytest.fail("a zip-bomb member was opened"))
+        with pytest.raises(ArchiveLimitError, match="compression ratio"):
+            attrs.ifc_attributes(str(archive), str(work_dir))
+        assert list(work_dir.iterdir()) == []
+
     def test_an_ifczip_without_an_ifc_member_is_refused(self, tmp_path, monkeypatch):
         archive = tmp_path / "model.ifczip"
         with zipfile.ZipFile(archive, "w") as zf:

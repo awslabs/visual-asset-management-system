@@ -263,9 +263,10 @@ export class VectorIndexingConstruct extends Construct {
                 "VectorReindexerAsyncDLQAlarm",
                 "vectorReindexerAsyncDLQ",
                 "Asynchronous invocations of the VAMS vector reindexer that failed are in this " +
-                    "dead-letter queue: each is a reindex run that stopped part-way. After fixing the " +
-                    "cause, resume the run by invoking the reindexer asynchronously with the resumePayload " +
-                    "in the message's error, or its requestPayload when the error has none.",
+                    "dead-letter queue: each is a reindex run that stopped part-way, on an error or at " +
+                    "its 200-invocation cap. After fixing any cause, resume the run by invoking the " +
+                    "reindexer asynchronously with the resumePayload in the message's error, or its " +
+                    "requestPayload when the error has none.",
                 reindexerAsyncDlq,
             ],
         ];

@@ -42,6 +42,7 @@ import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
+import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { oidcSettings } from "../../config/oidc-config";
 import { newTestApp } from "../support/testApp";
 
@@ -490,6 +491,14 @@ function euSovereignPartition(c: any) {
     c.env.region = "eusc-de-east-1";
 }
 
+/** The IL6 control set an ISO partition requires before any feature rule is reached. */
+function isoControls(c: any) {
+    c.app.govCloud.il6Compliant = true;
+    c.app.authProvider.useCognito.enabled = false;
+    c.app.useWaf = false;
+    c.app.useKmsCmkEncryption.enabled = true;
+}
+
 /** Vector search on, with an analysis model id every partition accepts (a bare in-Region id). */
 function vectorSearchOn(c: any) {
     c.app.vectorSearch.enabled = true;
@@ -514,7 +523,63 @@ describe("vector search validation", () => {
                 euSovereignPartition(c);
                 vectorSearchOn(c);
             })
-        ).toThrow(/DynamoDB vector search is not available in the European Sovereign Cloud/);
+        ).toThrow(/vector search .*is not available in the 'aws-eusc' partition/);
+    });
+
+    test.each([
+        ["aws-cn", "cn-north-1"],
+        ["aws-iso", "us-iso-east-1"],
+        ["aws-iso-b", "us-isob-east-1"],
+    ])(
+        "is rejected in %s, where neither DynamoDB vector search nor the embedding model is verified",
+        (partition, region) => {
+            // An allow-list of the partitions it runs in, so a partition nobody named is refused too.
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    c.env.region = region;
+                    if (partition.startsWith("aws-iso")) isoControls(c);
+                    vectorSearchOn(c);
+                })
+            ).toThrow(
+                new RegExp(
+                    `vector search .*is not available in the '${partition}' partition; it is ` +
+                        "supported in 'aws' and 'aws-us-gov'"
+                )
+            );
+        }
+    );
+
+    test("the ConfigBuilder mirrors the allow-list for every partition its Region names", () => {
+        const flagged = (region: string, enabled = true) => {
+            const c = makeDefaultConfig("commercial");
+            c.env.region = region;
+            c.app.vectorSearch.enabled = enabled;
+            return evaluateRules(c).some((r) => r.id === "vector-search-partition");
+        };
+        for (const region of ["eusc-de-east-1", "cn-north-1", "us-iso-east-1", "us-isob-east-1"]) {
+            expect([region, flagged(region)]).toEqual([region, true]);
+            expect([region, flagged(region, false)]).toEqual([region, false]);
+        }
+        expect(flagged("us-east-1")).toBe(false);
+        expect(flagged("us-gov-west-1")).toBe(false);
+        // An unset Region names no partition, so the rule stays silent.
+        expect(flagged("")).toBe(false);
+    });
+
+    test("the same configurations deploy with vector search off", () => {
+        // Control for the three refusals above: it is the vector flag that each one rejects.
+        for (const region of ["eusc-de-east-1", "cn-north-1", "us-iso-east-1"]) {
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    c.env.region = region;
+                    if (region.startsWith("us-iso")) isoControls(c);
+                    vectorSearchOn(c);
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow(/vector search/);
+        }
     });
 
     test("is accepted in GovCloud, with a warning about manual model access", () => {
@@ -968,40 +1033,137 @@ describe("system GenAI metadata pipeline validation", () => {
             ).toThrow(/guardrailIdentifier must be the guardrail's 12-character id/);
         });
 
-        test("an enabled pipeline that neither creates nor names a guardrail deploys with a warning that records the deviation", () => {
-            resolve((c) => {
-                withGuardrail("", "")(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
-                    enabled: false,
-                    promptAttackInputStrength: "LOW",
-                    piiFilter: "anonymize",
-                };
+        const noGuardrail = (c: any) => {
+            withGuardrail("", "")(c);
+            c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
+                enabled: false,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            };
+        };
+        const NO_GUARDRAIL = /bedrockGuardrail creates no guardrail and names none/;
+
+        test("the GenAI analysis with no guardrail created or named is refused, with no opt-out", () => {
+            const message = (() => {
+                try {
+                    resolve((c) => {
+                        noGuardrail(c);
+                        c.app.vectorSearch.enabled = false;
+                    })();
+                } catch (e) {
+                    return (e as Error).message;
+                }
+                return "";
             })();
-            expect(warnings()).toContain(
-                "pipelines.useSystemGenAiMetadata is enabled without a bedrockGuardrail"
-            );
-            expect(warnings()).toContain("prompt-attack");
-            expect(warnings()).toContain("bedrockGuardrail.create.enabled");
+            expect(message).toMatch(NO_GUARDRAIL);
+            expect(message).toContain("the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)");
+            expect(message).not.toContain("vector search (app.vectorSearch.enabled)");
+            expect(message).toContain("prompt-attack input filter");
+            expect(message).toContain("bedrockGuardrail.create.enabled to true");
         });
 
-        test("no such warning with a created or an operator-owned guardrail, or on a disabled pipeline without one", () => {
+        test("vector search on an attributes-only pipeline with no guardrail is refused: the embedded text is screened", () => {
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = true;
+                })
+            ).toThrow(/names none, while vector search \(app\.vectorSearch\.enabled\) sends/);
+        });
+
+        test("an unset vectorSearch that follows the pipeline on is refused the same way", () => {
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    delete c.app.vectorSearch;
+                })
+            ).toThrow(NO_GUARDRAIL);
+        });
+
+        test("is refused in GovCloud too, which gets no partition exemption", () => {
+            expect(
+                resolve((c) => {
+                    restrictedPartition(c);
+                    vectorSearchOn(c);
+                    noGuardrail(c);
+                    c.app.vectorSearch.enabled = true;
+                })
+            ).toThrow(NO_GUARDRAIL);
+        });
+
+        test("accepted with a created or an operator-owned guardrail, on an attributes-only pipeline with vector search off, or on a disabled pipeline", () => {
             // An empty pair with no create block: the guardrail is created by default.
-            resolve(withGuardrail("", ""))();
-            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
-            warn.mockClear();
-            resolve(withGuardrail("kb4v3hkqvi6f", "1"))();
-            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
-            warn.mockClear();
-            resolve((c) => {
-                withGuardrail("", "")(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create = {
-                    enabled: false,
-                    promptAttackInputStrength: "LOW",
-                    piiFilter: "anonymize",
-                };
-                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
-            })();
-            expect(warnings()).not.toContain("enabled without a bedrockGuardrail");
+            expect(resolve(withGuardrail("", ""))).not.toThrow();
+            expect(resolve(withGuardrail("kb4v3hkqvi6f", "1"))).not.toThrow();
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow();
+            expect(
+                resolve((c) => {
+                    noGuardrail(c);
+                    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toThrow();
+        });
+
+        test("the GovCloud template and its ConfigBuilder preset create the guardrail", () => {
+            // Turning the pipeline on in GovCloud then needs no further guardrail setting.
+            const govcloud = JSON.parse(
+                fs.readFileSync(
+                    path.join(__dirname, "../../config/config.template.govcloud.json"),
+                    "utf8"
+                )
+            );
+            expect(govcloud.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create).toEqual({
+                enabled: true,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            });
+            expect(
+                makeDefaultConfig("govcloud").app.pipelines.useSystemGenAiMetadata.bedrockGuardrail
+                    .create.enabled
+            ).toBe(true);
+            // The EU Sovereign preset ships the attributes-only pipeline and creates none.
+            expect(
+                makeDefaultConfig("eusovereign").app.pipelines.useSystemGenAiMetadata
+                    .bedrockGuardrail.create.enabled
+            ).toBe(false);
+        });
+
+        test("the ConfigBuilder mirrors the refusal as an error rule", () => {
+            const ids = (mutate: (c: any) => void) => {
+                const c = makeDefaultConfig("commercial");
+                mutate(c);
+                return evaluateRules(c)
+                    .filter((r) => r.severity === "error")
+                    .map((r) => r.id);
+            };
+            const off = (c: any) => {
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier = "";
+            };
+            expect(ids(off)).toContain("system-genai-guardrail-required");
+            expect(
+                ids((c) => {
+                    off(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                })
+            ).toContain("system-genai-guardrail-required");
+            expect(
+                ids((c) => {
+                    off(c);
+                    c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+                    c.app.vectorSearch.enabled = false;
+                })
+            ).not.toContain("system-genai-guardrail-required");
+            expect(ids(() => undefined)).not.toContain("system-genai-guardrail-required");
         });
     });
 });

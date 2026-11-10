@@ -6,6 +6,7 @@ size and text budgets, and the result shape every extractor hands back to the ha
 
 import json
 import re
+import zipfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -105,6 +106,9 @@ AUDIO_TAG_VALUE_MAX_CHARS = 500
 EMBEDDED_TAGS_MAX_KEYS = 200
 EMBEDDED_TAG_VALUE_MAX_CHARS = 500
 ARCHIVE_MAX_LISTED_ENTRIES = 50
+# A zip member an extractor reads whole into memory (an OPC package's docProps parts, a few kilobytes in practice)
+# is refused above this uncompressed size, which read_zip_member checks from the central directory first.
+ZIP_MEMBER_READ_MAX_BYTES = 4 * 1024 * 1024
 # Tabular data.
 DATA_SAMPLE_ROWS = 5
 DATA_MAX_COLUMNS = 200
@@ -314,6 +318,21 @@ def other_fallback(ctx: ExtractContext, reason: str) -> BranchResult:
         render_skipped=RENDER_SKIPPED_UNSUPPORTED,
         warnings=[f"{ctx.file_name}: {reason}; sys_file attributes only"],
     )
+
+
+class ZipMemberTooLarge(ValueError):
+    """A zip member whose central-directory size is over the read limit."""
+
+
+def read_zip_member(archive: zipfile.ZipFile, name: str, max_bytes: int = ZIP_MEMBER_READ_MAX_BYTES) -> bytes:
+    """The member's bytes, after checking its uncompressed size in the central directory against `max_bytes`;
+    nothing is decompressed for a member over the limit. zipfile stops a read at that declared size, so the
+    check bounds what the read allocates."""
+    info = archive.getinfo(name)
+    if info.file_size > max_bytes:
+        raise ZipMemberTooLarge(f"zip member {name!r} is {info.file_size:,} bytes uncompressed, over the "
+                                f"{max_bytes:,}-byte read limit")
+    return archive.read(info)
 
 
 def bounded_tags(items, max_keys: int = EMBEDDED_TAGS_MAX_KEYS,

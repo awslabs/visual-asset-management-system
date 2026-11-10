@@ -20,6 +20,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 
 import numpy as np
 
+from .. import resources
 from ..format_handlers import cad_handler, pcd_reader
 from . import headers
 
@@ -487,13 +488,20 @@ def dxf_attributes(file_path: str) -> dict:
 
 def _unzip_first_member(archive_path: str, work_dir: str, suffix: str) -> str:
     """Extract the first member ending in ``suffix`` into ``work_dir`` (by basename, so member paths
-    cannot escape it) and return its path."""
+    cannot escape it) and return its path. Before anything is decompressed, the member's size in the
+    central directory is checked against the free disk of ``work_dir`` less the output headroom, and its
+    compression ratio against the zip-bomb bound (``utils/archive.check_member``); zipfile stops the copy
+    at that declared size."""
+    from ..utils.archive import check_member
+
     with zipfile.ZipFile(archive_path) as archive:
         names = [n for n in archive.namelist() if n.lower().endswith(suffix) and not n.endswith("/")]
         if not names:
             raise ValueError(f"{os.path.basename(archive_path)} contains no {suffix} member")
+        info = archive.getinfo(names[0])
+        check_member(info, resources.free_disk_bytes(work_dir) - resources.OUTPUT_DISK_HEADROOM_BYTES)
         target = os.path.join(work_dir, os.path.basename(names[0]))
-        with archive.open(names[0]) as source, open(target, "wb") as destination:
+        with archive.open(info) as source, open(target, "wb") as destination:
             shutil.copyfileobj(source, destination)
     return target
 

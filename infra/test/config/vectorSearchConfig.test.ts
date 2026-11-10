@@ -197,6 +197,53 @@ describe("app.vectorSearch backfill", () => {
         expect(warnings()).not.toContain("app.vectorSearch is not set");
     });
 
+    test("an absent block with the pipeline's upload trigger unset resolves to disabled, naming the settings to add", () => {
+        // The trigger flag resolves to false when absent (defaultAutoRegisterFlags), so the default must
+        // not turn vector search on and then fail on a flag the operator never wrote.
+        const resolveIt = commercial((c) => {
+            delete c.app.vectorSearch;
+            delete c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload;
+        });
+        expect(resolveIt).not.toThrow();
+        const config = resolveIt();
+        expect(config.app.vectorSearch.enabled).toBe(false);
+        expect(
+            config.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload
+        ).toBe(false);
+        expect(warnings()).toContain("Configuration Warning: app.vectorSearch is not set");
+        expect(warnings()).toContain("autoRegisterAutoTriggerOnFileUpload to true");
+    });
+
+    test("an absent enabled on an unregistered pipeline resolves to disabled, not an error", () => {
+        const config = commercial((c) => {
+            delete c.app.vectorSearch.enabled;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = false;
+        })();
+        expect(config.app.vectorSearch.enabled).toBe(false);
+        expect(warnings()).toContain("Configuration Warning: app.vectorSearch is not set");
+    });
+
+    test("an absent block with the pipeline registered and its trigger armed resolves to enabled", () => {
+        const config = commercial((c) => {
+            delete c.app.vectorSearch;
+            delete c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = true;
+        })();
+        expect(config.app.vectorSearch.enabled).toBe(true);
+        expect(warnings()).not.toContain("app.vectorSearch is not set");
+    });
+
+    test("an explicit enabled with the trigger off still fails, naming the flags", () => {
+        // The operator wrote vectorSearch.enabled, so the error is about a setting they set.
+        expect(
+            commercial((c) => {
+                c.app.vectorSearch.enabled = true;
+                c.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload = false;
+            })
+        ).toThrow(/app\.vectorSearch\.enabled requires .*autoRegisterAutoTriggerOnFileUpload/);
+    });
+
     test("a null enabled (the ConfigBuilder serializer's unset) is backfilled like an absent one", () => {
         const config = commercial((c) => {
             c.app.vectorSearch.enabled = null;
@@ -218,53 +265,8 @@ describe("app.vectorSearch backfill", () => {
     });
 });
 
-describe("the superseded model-id locations", () => {
-    // A configuration written against the earlier keys keeps its models and its index name, with a
-    // warning naming the new location; the old keys are removed from the resolved config.
-    test("bedrockAnalysisModelId beside the block is read into bedrockModels.analysisModelId", () => {
-        const config = commercial((c) => {
-            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels;
-            c.app.pipelines.useSystemGenAiMetadata.bedrockAnalysisModelId =
-                "us.anthropic.claude-old-v1:0";
-        })();
-        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId).toBe(
-            "us.anthropic.claude-old-v1:0"
-        );
-        expect(
-            (config.app.pipelines.useSystemGenAiMetadata as any).bedrockAnalysisModelId
-        ).toBeUndefined();
-        expect(warnings()).toContain("bedrockAnalysisModelId is superseded");
-    });
-
-    test("app.vectorSearch.embeddingModelId/embeddingDimensions are read into bedrockModels", () => {
-        const config = commercial((c) => {
-            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
-            delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions;
-            c.app.vectorSearch.embeddingModelId = "amazon.nova-2-multimodal-embeddings-v1:0";
-            c.app.vectorSearch.embeddingDimensions = 384;
-        })();
-        const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
-        expect([models.embeddingModelId, models.embeddingDimensions]).toEqual([
-            "amazon.nova-2-multimodal-embeddings-v1:0",
-            384,
-        ]);
-        expect(config.vectorIndexName).toBe("vec-amazon-nova-2-multimodal-embeddings-v1-0-384");
-        expect((config.app.vectorSearch as any).embeddingModelId).toBeUndefined();
-        expect(warnings()).toContain("app.vectorSearch.embeddingModelId is superseded");
-        expect(warnings()).toContain("app.vectorSearch.embeddingDimensions is superseded");
-    });
-
-    test("the block's own value wins over a superseded key, silently", () => {
-        const config = commercial((c) => {
-            c.app.vectorSearch.embeddingDimensions = 256;
-        })();
-        expect(config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions).toBe(
-            1024
-        );
-        expect(warnings()).not.toContain("superseded");
-    });
-
-    test("with neither location set the defaults apply", () => {
+describe("bedrockModels backfill", () => {
+    test("an absent embedding model and width take the Titan V2 defaults", () => {
         const config = commercial((c) => {
             delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId;
             delete c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions;

@@ -18,6 +18,10 @@ import pytest
 from preview_pipeline.analysis import headers
 
 
+# headers.SOG_META_MAX_BYTES, written out so a test of the limit does not move with it.
+_SOG_META_LIMIT_BYTES = 16 * 1024 ** 2
+
+
 def _write(tmp_path, name, data):
     path = tmp_path / name
     path.write_bytes(data)
@@ -106,6 +110,20 @@ class TestSplatContainers:
         data = json.dumps({"version": 1, "count": 5}).encode()
         assert headers.read_sog_meta(_write(tmp_path, "meta.sog", data)) == {
             "points": 5, "version": 1, "hasHigherOrderSh": False, "members": 1}
+
+    def test_a_sog_bundle_meta_over_the_size_limit_is_not_read(self, tmp_path):
+        # Valid JSON padded past the limit: checked from the central directory, refused before decompressing.
+        meta = '{"version": 2, "count": 77}' + " " * _SOG_META_LIMIT_BYTES
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("meta.json", meta)
+        with pytest.raises(headers.HeaderError, match="meta.json was not read"):
+            headers.read_sog_meta(_write(tmp_path, "a.sog", buf.getvalue()))
+
+    def test_a_bare_sog_meta_over_the_size_limit_is_not_read(self, tmp_path):
+        data = b'{"version": 1, "count": 5}' + b" " * _SOG_META_LIMIT_BYTES
+        with pytest.raises(headers.HeaderError, match="meta.json was not read"):
+            headers.read_sog_meta(_write(tmp_path, "meta.sog", data))
 
     def test_sog_without_meta_is_refused(self, tmp_path):
         buf = io.BytesIO()

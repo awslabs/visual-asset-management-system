@@ -2,8 +2,9 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Build-source properties of the media Lambda image that a green `docker build` cannot show: the base image
-is digest-pinned (a tag is a moving reference), every requirement is an exact pin including the transitive
-closure, every third-party import in the runtime code has a pinned distribution, every runtime file the
+is digest-pinned (a tag is a moving reference), every direct requirement is an exact pin and the image installs
+a hash lock of the transitive closure generated from them, every third-party import in the runtime code has a
+pinned distribution, every runtime file the
 handler imports is COPYed, the image drops root after the last COPY, the bundled ffmpeg is named through
 IMAGEIO_FFMPEG_EXE, and the vendored logger is byte-identical to the pipeline copy it was taken from.
 
@@ -22,11 +23,13 @@ _REPO_ROOT = os.path.abspath(os.path.join(_CONTAINER_DIR, *([".."] * 5)))
 _DOCKERFILE = os.path.join(_CONTAINER_DIR, "Dockerfile")
 _DOCKERIGNORE = os.path.join(_CONTAINER_DIR, ".dockerignore")
 _REQUIREMENTS = os.path.join(_CONTAINER_DIR, "requirements.txt")
+_LOCK = os.path.join(_CONTAINER_DIR, "requirements.lock")
 _LOGGER_SOURCE = os.path.join(_REPO_ROOT, "backendPipelines", "preview", "3dThumbnail", "lambda", "customLogging", "logger.py")
 _LOGGER_COPY = os.path.join(_CONTAINER_DIR, "customLogging", "logger.py")
 
 # Files in the build context that are not runtime code and therefore need no COPY.
-_NOT_RUNTIME = {"Dockerfile", ".dockerignore", "requirements.txt", "tests", "__pycache__", ".pytest_cache"}
+_NOT_RUNTIME = {"Dockerfile", ".dockerignore", "requirements.txt", "requirements.lock", "tests", "__pycache__",
+                ".pytest_cache"}
 # Import name -> distribution name for every third-party package the runtime code may import.
 _IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow", "imageio_ffmpeg": "imageio-ffmpeg", "pypdfium2": "pypdfium2", "tinytag": "tinytag",
@@ -86,6 +89,15 @@ def _requirements():
     return pins
 
 
+def _locked():
+    """{normalised package name: (version, hash count)} of requirements.lock."""
+    with open(_LOCK, encoding="utf-8") as handle:
+        text = handle.read()
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
+                         re.MULTILINE)
+    return {_normalise(name): (version, block.count("--hash=")) for name, version, block in entries}
+
+
 def _runtime_python_files():
     for root, dirs, files in os.walk(_CONTAINER_DIR):
         dirs[:] = [d for d in dirs if d not in _NOT_RUNTIME]
@@ -131,13 +143,45 @@ class TestRequirements:
             assert distribution in pins, distribution
         assert pins["boto3"] == pins["botocore"] == "1.43.89"
 
-    def test_office_libraries_carry_their_transitive_closure(self):
+    def test_office_libraries_carry_their_transitive_closure_in_the_lock(self):
         # python-pptx needs lxml and XlsxWriter, python-docx needs lxml, openpyxl needs et_xmlfile: the closure is
-        # pinned, or a rebuild resolves them afresh.
+        # locked with hashes, or a rebuild resolves them afresh.
         pins = _requirements()
         assert (pins["python-docx"], pins["python-pptx"], pins["openpyxl"]) == ("1.2.0", "1.0.2", "3.1.5")
-        for distribution in ("lxml", "xlsxwriter", "et-xmlfile"):
-            assert distribution in pins, distribution
+        locked = _locked()
+        for distribution in ("lxml", "xlsxwriter", "et-xmlfile", "urllib3", "s3transfer", "jmespath"):
+            assert distribution in locked, distribution
+
+
+@pytest.mark.unit
+class TestDependencyLock:
+    def test_the_image_installs_only_the_lock_in_hash_checking_mode_from_wheels(self):
+        installs = [line for line in _instruction_lines() if re.search(r"\bpip3?\s+install\b", line)]
+        assert len(installs) == 1, installs
+        assert "--require-hashes" in installs[0]
+        assert "--only-binary=:all:" in installs[0]
+        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.lock$", installs[0]), installs[0]
+
+    def test_the_lock_header_names_the_command_that_regenerates_it(self):
+        with open(_LOCK, encoding="utf-8") as handle:
+            header = handle.read().split("\n")[:3]
+        assert any("uv pip compile requirements.txt --generate-hashes --python-version 3.12" in line
+                   for line in header), header
+
+    def test_every_lock_entry_is_pinned_and_hashed(self):
+        locked = _locked()
+        # Control: the closure of the direct pins is larger than the direct pins.
+        assert len(locked) > len(_requirements())
+        with open(_LOCK, encoding="utf-8") as handle:
+            entry_lines = [line for line in handle if re.match(r"^[A-Za-z0-9]", line)]
+        assert len(entry_lines) == len(locked), "a lock entry is not pinned with hashes"
+        assert all(hashes >= 1 for _, hashes in locked.values())
+
+    def test_the_lock_pins_every_direct_dependency_at_its_requirements_version(self):
+        locked = _locked()
+        for name, version in _requirements().items():
+            assert name in locked, name
+            assert locked[name][0] == version, f"{name}: lock {locked[name][0]} vs requirements {version}"
 
     def test_every_third_party_import_in_runtime_code_is_pinned(self):
         pins = _requirements()
@@ -163,10 +207,10 @@ class TestRequirements:
 class TestRuntimeStage:
     def test_every_runtime_entry_is_copied(self):
         copies = [line for line in _instruction_lines() if line.upper().startswith("COPY ")]
-        sources = {line.split()[1] for line in copies}
+        sources = {source for line in copies for source in line.split()[1:-1]}
         runtime_entries = {name for name in os.listdir(_CONTAINER_DIR) if name not in _NOT_RUNTIME}
         assert runtime_entries <= sources, runtime_entries - sources
-        assert "requirements.txt" in sources
+        assert {"requirements.txt", "requirements.lock"} <= sources
 
     def test_drops_root_after_the_last_copy_and_before_the_entrypoint(self):
         lines = _instruction_lines()

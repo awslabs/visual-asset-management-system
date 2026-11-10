@@ -146,7 +146,7 @@
                     "guardrailIdentifier": "",
                     "guardrailVersion": "",
                     "create": {
-                        "enabled": false,
+                        "enabled": true,
                         "promptAttackInputStrength": "LOW",
                         "piiFilter": "anonymize"
                     }
