@@ -22,7 +22,20 @@ import ListDefinition from "../components/list/list-definitions/types/ListDefini
 import Synonyms from "../synonyms";
 import { usePageTitleWhen } from "../hooks/usePageTitle";
 
+/**
+ * A list of one database's elements, or of every database's when the route names none. The routes
+ * that render it (`/assets`, `/search/:databaseId/assets`, `/databases/:databaseId/assets`) render
+ * the same page component, so in-app navigation between them keeps this instance mounted; the body
+ * is keyed by the route's database so a change of database starts it afresh. It then loads that
+ * database's list and drops the previous one's rows, selection, filter text and page, and an answer
+ * still on its way for the previous database is never shown.
+ */
 export default function ListPage(props: any) {
+    const { databaseId } = useParams();
+    return <ListPageBody key={databaseId ?? ""} {...props} />;
+}
+
+function ListPageBody(props: any) {
     const { databaseId } = useParams();
     const {
         singularNameTitleCase,
