@@ -262,7 +262,7 @@ class TestDetailsReadCheckInterval:
 @pytest.mark.aws
 class TestAbortStopsCopies:
     def test_an_abort_cancels_the_runs_copy_jobs(self):
-        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+        with hooks._main_table(_ingesting_row()) as table:
             with hooks._abort(table, [_ingesting_row()]) as drive, \
                     patch.object(le, "_cancel_output_copies", return_value=[]) as cancel:
                 assert drive["single"](EXEC)["statusCode"] == 200
@@ -271,7 +271,7 @@ class TestAbortStopsCopies:
 
     def test_a_copy_left_running_is_reported(self):
         warning = "The copy of output 'big.e57' could not be stopped and may still be running."
-        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+        with hooks._main_table(_ingesting_row()) as table:
             with hooks._abort(table, [_ingesting_row()]) as drive, \
                     patch.object(le, "_cancel_output_copies", return_value=[warning]):
                 response = drive["single"](EXEC)
@@ -296,14 +296,14 @@ class TestTerminalWritersClearThePhase:
     counters)."""
 
     def test_abort(self):
-        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+        with hooks._main_table(_ingesting_row()) as table:
             with hooks._abort(table, [_ingesting_row()]) as drive, \
                     patch.object(le, "_cancel_output_copies", return_value=[]):
                 assert drive["single"](EXEC)["statusCode"] == 200
             _assert_phase_cleared(hooks._stored(table), "ABORTED")
 
     def test_group_abort(self):
-        with hooks._main_table(_ingesting_row()) as table, hooks._callback():
+        with hooks._main_table(_ingesting_row()) as table:
             with hooks._abort(table, [_ingesting_row()]) as drive, \
                     patch.object(le, "_cancel_output_copies", return_value=[]):
                 assert drive["group"]()["statusCode"] == 200
@@ -312,7 +312,7 @@ class TestTerminalWritersClearThePhase:
     @pytest.mark.parametrize("status", ["ABORTED", "FAILED", "TIMED_OUT"])
     def test_status_change_reconcile_of_a_run_stopped_outside_vams(self, status):
         row = _ingesting_row()
-        with hooks._main_table(row) as table, hooks._callback(), \
+        with hooks._main_table(row) as table, \
                 patch.object(le.dynamodb, "Table", return_value=table), \
                 patch.object(le.sfn, "describe_execution", return_value=_described(status)), \
                 patch.object(le, "_cancel_output_copies", return_value=[]):
@@ -321,7 +321,7 @@ class TestTerminalWritersClearThePhase:
 
     def test_details_read_path_expiry(self):
         row = _ingesting_row(started_hours_ago=50)
-        with hooks._main_table(row) as table, hooks._callback(), \
+        with hooks._main_table(row) as table, \
                 patch.object(le.dynamodb, "Table", return_value=table), \
                 patch.object(le.sfn, "describe_execution", return_value=_described()), \
                 patch.object(le, "_cancel_output_copies", return_value=[]):
@@ -330,18 +330,22 @@ class TestTerminalWritersClearThePhase:
 
     def test_listing_read_path_expiry(self):
         row = _ingesting_row(started_hours_ago=50)
-        with hooks._main_table(row) as table, hooks._callback():
+        with hooks._main_table(row) as table:
             _item, persisted = _list(row, _described())
-            le._persist_list_reconcile(table, persisted, lambda eid: dict(row))
+            # The listing's persist (#1135 removed the callback wrapper around it).
+            le._persist_reconciled_main_row(
+                table, persisted, le.LIST_RECONCILED_MAIN_ROW_ATTRIBUTES,
+                only_if_not_terminal=any(
+                    attr in persisted for attr in le.COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
             _assert_phase_cleared(hooks._stored(table), "FAILED")
 
     def test_error_handler_terminal_write(self):
         with hooks._main_table(_ingesting_row()) as table:
             dynamo = MagicMock()
             dynamo.Table.return_value = table
-            assert le.eo.finalize_main_row(dynamo, "t", EXEC, hooks._row()["workflowDatabaseId"],
-                                           hooks._row()["workflowId"], "FAILED", "2026-11-06T00:00:00Z",
-                                           execution_error="OutputIngestionTimeout")
+            le.eo.finalize_main_row(dynamo, "t", EXEC, hooks._row()["workflowDatabaseId"],
+                                    hooks._row()["workflowId"], "FAILED", "2026-11-06T00:00:00Z",
+                                    execution_error="OutputIngestionTimeout")
             _assert_phase_cleared(hooks._stored(table), "FAILED")
 
 
