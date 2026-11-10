@@ -619,19 +619,20 @@ class FieldClassifier:
 
     # The metadata (MD_) and attribute (AB_, file index only) objects are mapped `flat_object`. OpenSearch
     # indexes three Lucene fields for one: `<root>._value` (each leaf value), `<root>._valueAndPath`
-    # (`<root>.<key>=<value>`) and `<root>` itself (the key paths, `<root>.<key>`). A query names the root
-    # or a key (`<root>.<key>`) and the field type rewrites it onto those fields (#1285):
+    # (`<root>.<key>=<value>`) and `<root>` itself (the key paths, `<root>.<key>`). The field a query must
+    # name depends on the kind of query, and the rule is the same on both engines (#1285):
     #
-    # * Exact (term, phrase) and prefix queries are rewritten by both engines: on the root to the values,
-    #   on a key to that key's value. A name such as `MD_._value` is read as a key called `_value`, which
-    #   no record has, so an exact or prefix query on it matches nothing.
-    # * Other wildcard queries (a leading `*`, a `?`, an inner `*`) differ. Amazon OpenSearch Serverless
-    #   does not rewrite them: on the root they match the key paths, on a key nothing, and on
-    #   `<root>._value` / `<root>._valueAndPath` the values / `path=value` terms (observed on a test
-    #   collection). OpenSearch 2.18 and later, the engines VAMS deploys on provisioned domains
-    #   (OPENSEARCH_VERSION, 3.5; 2.19 in the EU Sovereign Cloud), rewrite them like the others
-    #   (FlatObjectFieldMapper.FlatObjectFieldType.wildcardQuery), so there the root and the key are the
-    #   fields to name and the internal names match nothing.
+    # * Exact (term, phrase) and prefix queries are rewritten: on the root they match the values, on a
+    #   key (`<root>.<key>`) that key's value. A name such as `MD_._value` is read as a key called
+    #   `_value`, which no record has, so an exact or prefix query on it matches nothing.
+    # * Other wildcard queries (a leading `*`, a `?`, an inner `*`) are not rewritten: on the root they
+    #   match the key paths and on a key nothing. They match the values on `<root>._value`, and one key's
+    #   value on `<root>._valueAndPath` (`<root>.<key>=<pattern>`).
+    #
+    # Both points were confirmed by querying seeded records on Amazon OpenSearch Serverless (a test
+    # collection) and on a provisioned OpenSearch 3.5 domain (OPENSEARCH_VERSION), so the helpers below
+    # do not look at OPENSEARCH_TYPE or the engine version. OpenSearch 2.19, which provisioned domains in
+    # the EU Sovereign Cloud run, has not been checked.
 
     @staticmethod
     def flat_object_roots(index_type: str) -> List[str]:
@@ -648,21 +649,21 @@ class FieldClassifier:
     @staticmethod
     def flat_object_value_fields(index_type: str, wildcard: bool) -> List[str]:
         """The fields a query_string over every metadata (and attribute) value names: the flat_object
-        roots for an exact or prefix term, and for a wildcard term (``wildcard``) the `._value` subfields
-        on OpenSearch Serverless, which does not rewrite a wildcard on the root."""
+        roots for an exact or prefix term, and for any other wildcard term (``wildcard``) the `._value`
+        subfields, because no engine rewrites such a term on the root. Both engines alike."""
         roots = FieldClassifier.flat_object_roots(index_type)
-        if wildcard and opensearch_type == "serverless":
+        if wildcard:
             return [f"{root}._value" for root in roots]
         return roots
 
     @staticmethod
     def flat_object_key_pattern_query(prefix: str, escaped_key: str, value: str) -> str:
         """query_string text matching the caller's wildcard ``value`` against one key's whole value.
-        A prefix pattern, and every pattern on an engine that rewrites wildcards, names the key; a
-        wildcard pattern on OpenSearch Serverless names the `path=value` field instead, anchored on the
-        key (`MD_._valueAndPath:MD_.Plant\\=*3`)."""
+        A prefix pattern names the key (`MD_.Plant:Line*`). Any other pattern names the `path=value`
+        field, anchored on the key (`MD_._valueAndPath:MD_.Plant\\=*3`), because no engine rewrites it on
+        the key. Both engines alike."""
         pattern = FieldClassifier.whole_value_pattern(value)
-        if opensearch_type == "serverless" and not FieldClassifier.is_prefix_pattern(value):
+        if not FieldClassifier.is_prefix_pattern(value):
             return f"{prefix}._valueAndPath:{prefix}.{escaped_key}\\={pattern}"
         return f"{prefix}.{escaped_key}:{pattern}"
 
@@ -1704,9 +1705,8 @@ class DualIndexQueryBuilder:
         # Build flat object query
         if has_wildcards:
             # The caller's pattern, matched against the key's whole value (#1282): unescaped, the
-            # space ended the term and every word after it was searched in every field
             # space ended the term and every word after it was searched in every field. A pattern
-            # that is not a prefix names the path=value field on OpenSearch Serverless (#1285).
+            # that is not a prefix names the path=value field, on both engines (#1285).
             query_str = self.field_classifier.flat_object_key_pattern_query(prefix, escaped_field_name, value_part)
         else:
             # Exact match - quote the value for phrase matching
@@ -1995,8 +1995,8 @@ class DualIndexQueryBuilder:
         
         if include_metadata:
             # Add the fields that search all metadata/attribute values (files have MD_ and AB_, assets
-            # MD_ only). The general query's *word* terms are wildcards, so on OpenSearch Serverless
-            # these are the `._value` subfields (FieldClassifier.flat_object_value_fields, #1285).
+            # MD_ only). The general query's *word* terms are wildcards, so these are the `._value`
+            # subfields on both engines (FieldClassifier.flat_object_value_fields, #1285).
             return core_fields + self.field_classifier.flat_object_value_fields(index_type, wildcard=True)
         else:
             return core_fields

@@ -5,10 +5,11 @@
 
 The value searches named the flat_object subfield ``MD_._value``. Both engines read that name as a key
 called ``_value``, so an exact or prefix query on it matched nothing; only a pattern with another
-wildcard reached the values, and only on OpenSearch Serverless. ``--metadata-query SBXC-325`` therefore
-found nothing while ``--metadata-mode value`` (a contains search) found the asset. The builders now name
-the root for exact and prefix terms and, for other wildcards, the field each engine answers on
-(``query_string_oracle`` models both). A key name never matches as a value.
+wildcard reached the values. ``--metadata-query SBXC-325`` therefore found nothing while
+``--metadata-mode value`` (a contains search) found the asset. The builders now name the root for exact
+and prefix terms and, for other wildcards, the ``._value`` / ``._valueAndPath`` subfields, on both
+engines (``query_string_oracle``). A key name never matches as a value. The provisioned-domain cases
+from a live check are in ``test_search_metadata_patterns_both_engines.py``.
 """
 
 import pytest
@@ -100,14 +101,11 @@ class TestMetadataQueryKeyValuePairs:
     def test_a_pair_does_not_match_another_keys_value(self, search_module, engine, pair):
         assert not _finds(_metadata(search_module, pair, "both", "asset"), ASSET, engine)
 
-    def test_the_pair_names_the_path_field_only_for_a_serverless_wildcard(self, search_module, engine):
+    def test_the_pair_names_the_path_field_for_a_wildcard_that_is_not_a_prefix(self, search_module, engine):
         wildcard = _metadata(search_module, "ProjectCode:*325", "both", "asset")["query_string"]["query"]
         prefix = _metadata(search_module, "ProjectCode:SBXC*", "both", "asset")["query_string"]["query"]
         assert prefix == "MD_.ProjectCode:SBXC*"
-        if engine == "serverless":
-            assert wildcard == "MD_._valueAndPath:MD_.ProjectCode\\=*325"
-        else:
-            assert wildcard == "MD_.ProjectCode:*325"
+        assert wildcard == "MD_._valueAndPath:MD_.ProjectCode\\=*325"
 
 
 @pytest.mark.unit
@@ -144,9 +142,8 @@ class TestFieldNames:
                        _simple_value(search_module, "SBXC*", "file")):
             assert clause["query_string"]["fields"] == ["MD_", "AB_"]
 
-    def test_wildcard_terms_name_the_field_the_engine_answers_on(self, search_module, engine):
-        expected = ["MD_._value", "AB_._value"] if engine == "serverless" else ["MD_", "AB_"]
+    def test_wildcard_terms_name_the_value_subfields_on_both_engines(self, search_module, engine):
         for clause in (_metadata(search_module, "*325", "both", "file"),
                        _metadata(search_module, "SBXC", "value", "file"),
                        _simple_value(search_module, "SBXC", "file")):
-            assert clause["query_string"]["fields"] == expected
+            assert clause["query_string"]["fields"] == ["MD_._value", "AB_._value"]

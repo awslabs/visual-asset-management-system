@@ -8,16 +8,18 @@ field kinds the VAMS indexes map, for the two engines VAMS runs on.
   field's exact value.
 * ``flat_object`` (``MD_``, ``AB_``): one Lucene field of leaf values (``<root>._value``), one of
   ``<root>.<key>=<value>`` terms (``<root>._valueAndPath``) and the root field itself, holding the key
-  paths (``<root>.<key>``). A query names the root or a key (``<root>.<key>``) and the field type rewrites
-  it. Exact (term, phrase) and prefix queries are rewritten by both engines: on the root to the leaf
-  values, on a key to that key's value; ``<root>._value`` is read as a key called ``_value``. Other
-  wildcard queries differ (#1285):
+  paths (``<root>.<key>``). A query names the root or a key (``<root>.<key>``), and the two engines answer
+  it the same way (#1285):
 
-  - ``serverless`` (Amazon OpenSearch Serverless, observed on a test collection): not rewritten, so on the
-    root they match the key paths, on a key nothing, and on ``<root>._value`` / ``<root>._valueAndPath``
-    the values / ``path=value`` terms.
-  - ``provisioned`` (OpenSearch 2.18 and later, FlatObjectFieldType.wildcardQuery): rewritten like the
-    others, so the internal names match nothing.
+  - Exact (term, phrase) and prefix queries are rewritten: on the root to the leaf values, on a key to
+    that key's value; ``<root>._value`` is read as a key called ``_value``, which no record has.
+  - Other wildcard queries are not rewritten: on the root they match the key paths, on a key nothing, and
+    on ``<root>._value`` / ``<root>._valueAndPath`` the values / ``path=value`` terms.
+
+  Observed on Amazon OpenSearch Serverless (a test collection) and on a provisioned OpenSearch 3.5 domain
+  (``PROVISIONED_3_5_PROBES`` below). An earlier model had provisioned domains rewrite every wildcard
+  query; the live domain does not. ``ENGINES`` stays a parameter of every test, so a difference found
+  later has one place to go.
 
 A term is quoted (exact), plain (exact), a prefix (its only wildcard one trailing ``*``) or a wildcard.
 Clauses join terms with ``AND`` or with whitespace under default_operator OR. Anything else raises.
@@ -27,6 +29,71 @@ import re
 
 ENGINES = ("serverless", "provisioned")
 FLAT_OBJECT_ROOTS = ("MD_", "AB_")
+
+# query_string filters sent directly to the asset and file indexes of a provisioned OpenSearch 3.5 domain
+# holding the records in PROBE_ASSETS / PROBE_FILES, and the number of records each matched there:
+# (index, query_string, hits). test_search_metadata_patterns_both_engines.py holds the model to them.
+PROVISIONED_3_5_PROBES = (
+    ("asset", "MD_:PRJ\\-325", 3),
+    ("asset", "MD_:Train*", 3),
+    ("asset", "MD_:PRJ*", 4),
+    ("asset", "MD_:*325", 0),
+    ("asset", "MD_:*Beta", 0),
+    ("asset", "MD_:Tr?in\\-Alpha", 0),
+    ("asset", "MD_:*PRJ\\-325*", 0),
+    ("asset", "MD_:*RJ*", 0),
+    ("asset", "MD_._value:PRJ\\-325", 0),
+    ("asset", "MD_._value:Train*", 0),
+    ("asset", "MD_._value:*325", 3),
+    ("asset", "MD_._value:*Beta", 1),
+    ("asset", "MD_._value:*PRJ\\-325*", 3),
+    ("asset", "MD_._value:Tr*n\\-A*", 2),
+    ("asset", "MD_._value:*housing\\ insp*", 1),
+    ("asset", "MD_._value:*housing* AND MD_._value:*inspection*", 1),
+    ("asset", "MD_.ProjectCode:PRJ\\-325", 3),
+    ("asset", "MD_.ProjectCode:PRJ*", 4),
+    ("asset", "MD_.ProjectCode:*325", 0),
+    ("asset", "MD_.TrainSet:*Beta", 0),
+    ("asset", "MD_._valueAndPath:MD_.ProjectCode\\=*325", 3),
+    ("asset", "MD_._valueAndPath:MD_.TrainSet\\=*Beta", 1),
+    ("asset", "MD_._valueAndPath:MD_.TrainSet\\=Tr?in\\-Alpha", 2),
+    ("asset", "MD_._valueAndPath:MD_.ProjectCode\\=PRJ*", 0),
+    ("file", "MD_:*log", 0),
+    ("file", "MD_:maint*", 1),
+    ("file", "MD_:*maintenance*", 0),
+    ("file", "MD_:*maintenance* OR AB_:*maintenance*", 0),
+    ("file", "MD_._value:*log", 1),
+    ("file", "MD_._value:*log OR AB_._value:*log", 1),
+    ("file", "MD_._value:*ator\\ No* OR AB_._value:*ator\\ No*", 1),
+    ("file", "MD_._value:*maintenance*", 2),
+    ("file", "MD_._value:*maintenance* OR AB_._value:*maintenance*", 2),
+    ("file", "MD_._valueAndPath:MD_.docType\\=*Notes", 1),
+)
+
+# The probed records: the metadata (and, on files, attribute) values that the counts above depend on.
+PROBE_ASSETS = {
+    "fz-a/cad-part": {"str_assetname": "cad-part", "MD_": {"ProjectCode": "PRJ-325"}},
+    "fz-a/operator-notes": {"str_assetname": "operator-notes",
+                            "MD_": {"ProjectCode": "PRJ-325", "TrainSet": "Train-Alpha"}},
+    "fz-b/delete-me": {"str_assetname": "delete-me", "MD_": {"ProjectCode": "PRJ-325"}},
+    "fz-b/checklist": {"str_assetname": "checklist", "MD_": {"ProjectCode": "PRJ-999"}},
+    "fz-a/gearbox": {"str_assetname": "gearbox",
+                     "MD_": {"TrainSet": "Train-Beta", "Inspection": "gearbox housing inspection"}},
+    "fz-b/gear-photo": {"str_assetname": "gear-photo", "MD_": {"TrainSet": "Train-Alpha"}},
+    "fz-b/gearbox-stl": {"str_assetname": "gearbox-stl", "MD_": {"Inspection": "gearbox housing review"}},
+}
+PROBE_FILES = {
+    "pump-manual/centrifugal_pump_manual.pdf": {
+        "str_key": "/centrifugal_pump_manual.pdf", "str_assetname": "pump-manual",
+        "MD_": {"category": "maintenance log"}, "AB_": {"sys_format": "PDF"}},
+    "operator-notes/operator_notes.txt": {
+        "str_key": "/operator_notes.txt", "str_assetname": "operator-notes",
+        "MD_": {"docType": "Operator Notes",
+                "genai_keywords": "operator notes, night shift, maintenance log, conveyor belt"},
+        "AB_": {"sys_format": "TXT"}},
+    "sensor-log/sensor_readings.csv": {
+        "str_key": "/sensor_readings.csv", "str_assetname": "sensor-log", "MD_": {}, "AB_": {"sys_format": "CSV"}},
+}
 
 
 def tokens(text):
@@ -118,15 +185,15 @@ def _pattern(term, lower):
     return re.compile("".join(out))
 
 
-def _flat_object_terms(document, field, term_kind, engine):
+def _flat_object_terms(document, field, term_kind):
     """The terms a query of ``term_kind`` on flat_object ``field`` is matched against, or None when the
-    field is not a flat_object field."""
+    field is not a flat_object field. The same on both engines."""
     root, _, key = field.partition(".")
     if root not in FLAT_OBJECT_ROOTS:
         return None
     leaves = document.get(root) or {}
     values = [str(v) for v in leaves.values()]
-    rewritten = term_kind in ("exact", "prefix", "exists") or engine == "provisioned"
+    rewritten = term_kind in ("exact", "prefix", "exists")
     if not key:
         if rewritten:
             return values
@@ -144,7 +211,7 @@ def term_matches(term, document, field, engine):
     """Whether one query_string term on ``field`` matches ``document``."""
     assert engine in ENGINES
     term_kind = kind(term)
-    flat = _flat_object_terms(document, field, term_kind, engine)
+    flat = _flat_object_terms(document, field, term_kind)
     if flat is not None:
         if term_kind == "exists":
             return bool(flat)
