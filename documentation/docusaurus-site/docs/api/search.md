@@ -182,12 +182,13 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid search parameters.                                          |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                                                                     |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 
@@ -242,12 +243,13 @@ Same format as [Advanced Search](#advanced-search).
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid search parameters.                                          |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                                                                     |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 
@@ -272,24 +274,24 @@ Searches by meaning. The query is embedded with the deployment's embedding model
 }
 ```
 
-| Field                | Type          | Default    | Description                                                                                                                                                                                      |
-| -------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query`              | string        | --         | Natural-language query (1-1,000 characters). Required.                                                                                                                                           |
-| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the highest-ranked file hit of each asset.                                                                                            |
-| `databaseIds`        | array[string] | `[]`       | Databases to search (at most 100), intersected with the caller's accessible databases. Empty searches every accessible database.                                                                 |
-| `includeArchived`    | boolean       | `false`    | Include archived files.                                                                                                                                                                          |
-| `includeSegments`    | boolean       | `true`     | Also match video time windows and text chunks. A file found through a segment reports it in `_vector.bestSegment`.                                                                               |
-| `fileClasses`        | array[string] | `[]`       | File classes to keep (`image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other`). One value is pushed into the index filter. |
-| `fileExtensions`     | array[string] | `[]`       | Extensions to keep, with or without the leading dot.                                                                                                                                             |
-| `size`               | integer       | `25`       | Hits returned (1-100). There is no pagination: `size` is the whole window.                                                                                                                       |
-| `filters`            | array         | --         | OpenSearch-only: `query_string` filter clauses as on [Advanced Search](#advanced-search).                                                                                                        |
-| `metadataQuery`      | string        | --         | OpenSearch-only: metadata search text as on Advanced Search.                                                                                                                                     |
-| `metadataSearchMode` | string        | --         | OpenSearch-only: `key`, `value`, or `both`.                                                                                                                                                      |
-| `geoSearch`          | object        | --         | OpenSearch-only: [geospatial filter](#geospatial-search).                                                                                                                                        |
-| `tags`               | array[string] | --         | OpenSearch-only: keep hits carrying any of these tags.                                                                                                                                           |
-| `enrich`             | boolean       | `true`     | When an OpenSearch mode is enabled, merge the file index document (metadata fields, preview key) into `_source`.                                                                                 |
+| Field                | Type          | Default    | Description                                                                                                                                                                                                                                                                                |
+| -------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`              | string        | --         | Natural-language query (1-1,000 characters). Required.                                                                                                                                                                                                                                     |
+| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the highest-ranked file hit of each asset.                                                                                                                                                                                      |
+| `databaseIds`        | array[string] | `[]`       | Databases to search (at most 100), intersected with the caller's accessible databases. Empty searches every accessible database.                                                                                                                                                           |
+| `includeArchived`    | boolean       | `false`    | Include archived files.                                                                                                                                                                                                                                                                    |
+| `includeSegments`    | boolean       | `true`     | Also match video time windows and text chunks. A file found through a segment reports it in `_vector.bestSegment`.                                                                                                                                                                         |
+| `fileClasses`        | array[string] | `[]`       | File classes to keep, from exactly `image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other` (3D models are `mesh`, `usd` or `cad`); any other value is refused with `400`. One value is pushed into the index filter. |
+| `fileExtensions`     | array[string] | `[]`       | Extensions to keep, with or without the leading dot (at most 100, each at most 256 characters).                                                                                                                                                                                            |
+| `size`               | integer       | `25`       | Hits returned (1-100). There is no pagination: `size` is the whole window.                                                                                                                                                                                                                 |
+| `filters`            | array         | --         | OpenSearch-only: `query_string` filter clauses as on [Advanced Search](#advanced-search), with the same bounds (at most 100).                                                                                                                                                              |
+| `metadataQuery`      | string        | --         | OpenSearch-only: metadata search text as on Advanced Search.                                                                                                                                                                                                                               |
+| `metadataSearchMode` | string        | --         | OpenSearch-only: `key`, `value`, or `both`.                                                                                                                                                                                                                                                |
+| `geoSearch`          | object        | --         | OpenSearch-only: [geospatial filter](#geospatial-search).                                                                                                                                                                                                                                  |
+| `tags`               | array[string] | --         | OpenSearch-only: keep hits carrying any of these tags (at most 500, each at most 256 characters).                                                                                                                                                                                          |
+| `enrich`             | boolean       | `true`     | When an OpenSearch mode is enabled, merge the file index document (metadata fields, preview key) into `_source`.                                                                                                                                                                           |
 
-The OpenSearch-only fields are applied, and hits enriched, only when an OpenSearch mode is enabled. Without OpenSearch they are ignored and the response carries an `opensearch:fields_ignored` warning.
+The OpenSearch-only fields are applied, and hits enriched, only when an OpenSearch mode is enabled. Without OpenSearch they are ignored and the response carries an `opensearch:fields_ignored` warning. They are validated like the [Advanced Search](#advanced-search) fields, so a malformed value is refused with `400`. When an OpenSearch mode is enabled and the request carries an OpenSearch-only constraint that the file index cannot apply (the index cannot be reached, or the query fails), the request fails with `503` instead of returning hits the constraint was not applied to.
 
 File-type words in the query (`video`, `footage`, `point cloud`, `pdf`, `3D model`, ...) add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; the detected classes are reported in `nlp.classIntent`. The bonus changes the order only: `_score` and `_vector.distance` are the similarity without it. Words that describe content rather than a file type, such as `report` or `manual`, are not type words. This is a soft preference, not a filter; use `fileClasses` to filter.
 
@@ -308,14 +310,14 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
         "hits": [
             {
                 "_index": "vams-vectors",
-                "_id": "site-surveys#asset-123#videos/crane.mp4#3sL9kQ",
+                "_id": "site-surveys#asset-123#/videos/crane.mp4#3sL9kQ",
                 "_score": 0.81,
                 "_index_type": "file",
                 "_source": {
                     "str_rectype": "file",
                     "str_databaseid": "site-surveys",
                     "str_assetid": "asset-123",
-                    "str_key": "videos/crane.mp4",
+                    "str_key": "/videos/crane.mp4",
                     "str_fileext": "mp4",
                     "str_assetname": "Harbour crane survey",
                     "str_assettype": "video",
@@ -385,27 +387,27 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 -   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
 -   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search ([Using vector indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html)), so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of `0` is `eq`, unless `nlp.truncated` is `true`. `nlp.truncated` is `true` only when a result window filled or the accessible database list was cut.
 -   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
--   `nlp.candidatesEvaluated` is the number of distinct vector items after the per-database results were merged; `nlp.itemsCollapsed` is how many of them folded into another hit of the same file.
+-   `nlp.candidatesEvaluated` is the number of distinct vector items of the hits the caller may open, after the per-database results were merged; `nlp.itemsCollapsed` is how many of those items folded into another hit of the same file. Neither counts an item of a file the caller cannot open.
 
 **Warnings:**
 
-| Code                           | Meaning                                                                                                                           |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `truncated:window`             | A whole-file result window filled; more files may match than were evaluated. `nlp.truncated` is `true`.                           |
-| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `nlp.truncated` is `true`.                      |
-| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty, its total is `0` (`eq`), and the query was not embedded. |
-| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                              |
-| `opensearch:enrichment_failed` | The OpenSearch constrain/enrich step failed; the hits are returned without it.                                                    |
-| `segments:window_full`         | A segment result window filled while the whole-file windows did not; more segments may match. `nlp.truncated` stays `false`.      |
+| Code                           | Meaning                                                                                                                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `truncated:window`             | A whole-file result window filled, so more files may match. `nlp.truncated` is `true`.                                                                                                                    |
+| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `nlp.truncated` is `true`.                                                                                              |
+| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty, its total is `0` (`eq`), and the query was not embedded.                                                                         |
+| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                                                                                                      |
+| `opensearch:enrichment_failed` | File details from the OpenSearch file index could not be loaded; the hits are returned without them. Sent only for a request with no OpenSearch-only constraint (one with a constraint fails with `503`). |
+| `segments:window_full`         | A segment result window filled while the whole-file windows did not, so more segments may match. `nlp.truncated` stays `false`.                                                                           |
 
 **Error Responses:**
 
-| Status | Description                                                                     |
-| ------ | ------------------------------------------------------------------------------- |
-| `400`  | Invalid search parameters, or the query could not be embedded.                  |
-| `403`  | Not authorized to access search.                                                |
-| `503`  | The vector index is being built (`"Vector index is being built"`); retry later. |
-| `500`  | Internal server error.                                                          |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters, or the query could not be embedded.                                                                                                                                                                                                                                                                                                                                  |
+| `403`  | Not authorized to access search.                                                                                                                                                                                                                                                                                                                                                                |
+| `503`  | Retry later. The message is one of `Vector index is being built` (the index is still being created), `The search filters could not be applied. Try again; if it keeps failing, contact your administrator.` (an OpenSearch-only constraint could not be applied), or `Search is busy right now. Try again in a moment.` (Amazon Bedrock or Amazon DynamoDB throttled or timed out the request). |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                          |
 
 A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.` A query that is empty or only whitespace is refused with `400` and the message `The query must not be blank.`, before the query is embedded. When the embedding model call fails, the response is `400` with the message `The query could not be prepared for search. Try again; if it keeps failing, contact your administrator.`; the cause is written to the function's log.
 
@@ -502,11 +504,12 @@ The response returns the mappings for both indexes, keyed by `asset_index` and `
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `403`  | Not authorized to access search.                                    |
-| `404`  | Search is not available when the OpenSearch feature is not enabled. |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `403`  | Not authorized to access search.                                                                               |
+| `404`  | Search is not available when the OpenSearch feature is not enabled.                                            |
+| `503`  | OpenSearch is enabled but cannot be reached now (`Search is temporarily unavailable. Try again in a moment.`). |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 

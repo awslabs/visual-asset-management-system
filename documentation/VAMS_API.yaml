@@ -8789,7 +8789,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /search/nlp:
         post:
             summary: "Natural-language search over vector embeddings."
-            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search, so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of 0 is eq unless nlp.truncated is true; nlp.truncated is true only when a result window filled or the accessible database list was cut. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied and hits enriched from the file index only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. File-type words in the query (for example 'video', 'point cloud', 'pdf') add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; _score and _vector.distance are the similarity without the bonus, and the detected classes are reported in nlp.classIntent."
+            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search, so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of 0 is eq unless nlp.truncated is true; nlp.truncated is true only when a result window filled or the accessible database list was cut. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied and hits enriched from the file index only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. When an OpenSearch mode is enabled and an OpenSearch-only constraint cannot be applied, the request fails with 503 rather than returning hits the constraint was not applied to. File-type words in the query (for example 'video', 'point cloud', 'pdf') add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; _score and _vector.distance are the similarity without the bonus, and the detected classes are reported in nlp.classIntent."
             requestBody:
                 required: true
                 content:
@@ -8816,7 +8816,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "503":
-                    description: "Vector index is being built; retry later."
+                    description: "Retry later: the vector index is being built ('Vector index is being built'), an OpenSearch-only constraint could not be applied ('The search filters could not be applied. Try again; if it keeps failing, contact your administrator.'), or Amazon Bedrock or Amazon DynamoDB throttled or timed out the request ('Search is busy right now. Try again in a moment.')."
                     content:
                         application/json:
                             schema:
@@ -15179,14 +15179,18 @@ components:
                     description: "Also match video windows and text chunks; a file found through a segment reports it in _vector.bestSegment."
                 fileClasses:
                     type: array
+                    maxItems: 14
                     items:
                         type: string
+                        enum: [image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other]
                     default: []
-                    description: "fileClass ids to keep (lower-cased, de-duplicated). One value is pushed into the index filter; several are applied after the merge."
+                    description: "fileClass ids to keep (case-insensitive, de-duplicated); any other value is refused with 400. 3D models are mesh, usd or cad. One value is pushed into the index filter; several are applied after the merge."
                 fileExtensions:
                     type: array
+                    maxItems: 100
                     items:
                         type: string
+                        maxLength: 256
                     default: []
                     description: "Extensions to keep, without the leading dot (lower-cased, de-duplicated)."
                 size:
@@ -15197,9 +15201,10 @@ components:
                     description: "Hits returned. There is no pagination; the result window is min(100, 2 * size) candidates per SearchVectors call."
                 filters:
                     type: array
+                    maxItems: 100
                     items:
                         type: object
-                    description: "OpenSearch-only: query_string filter clauses as on /search."
+                    description: "OpenSearch-only: query_string filter clauses as on /search, validated the same way (a malformed clause is refused with 400)."
                 metadataQuery:
                     type: string
                     maxLength: 1000
@@ -15210,11 +15215,13 @@ components:
                     description: "OpenSearch-only."
                 geoSearch:
                     type: object
-                    description: "OpenSearch-only: geospatial filter as on /search."
+                    description: "OpenSearch-only: geospatial filter as on /search, validated the same way."
                 tags:
                     type: array
+                    maxItems: 500
                     items:
                         type: string
+                        maxLength: 256
                     description: "OpenSearch-only: keep hits carrying any of these tags."
                 enrich:
                     type: boolean
@@ -15322,10 +15329,10 @@ components:
                             type: integer
                         candidatesEvaluated:
                             type: integer
-                            description: "Distinct vector items after the merge, before the collapse."
+                            description: "Distinct vector items of the hits the caller may open, after the merge and before the collapse."
                         itemsCollapsed:
                             type: integer
-                            description: "Items folded into another hit of the same file."
+                            description: "Items of the hits the caller may open that folded into another hit of the same file."
                         classIntent:
                             type: array
                             items:

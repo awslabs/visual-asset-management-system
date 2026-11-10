@@ -8,7 +8,7 @@ title: Search Commands
 Search assets and files using the dual-index Amazon OpenSearch Service system. VAMS maintains separate indexes for assets and files, allowing optimized queries and precise results per entity type.
 
 :::note[Prerequisite]
-The keyword commands (`search assets`, `search files`, `search simple`, `search mapping`) require Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled they exit with a "Search Disabled" error; use `vamscli assets list` as an alternative. `search nlp` is the exception: it requires the `VECTORSEARCH` feature switch instead and works with or without OpenSearch.
+The keyword commands (`search assets`, `search files`, `search simple`, `search mapping`) require Amazon OpenSearch Service to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled they exit with a "Search Disabled" error that names the alternative: `vamscli search nlp` or `vamscli assets list` when the `VECTORSEARCH` switch is on, `vamscli assets list` otherwise. `search nlp` is the exception: it requires the `VECTORSEARCH` feature switch instead and works with or without OpenSearch.
 :::
 
 ---
@@ -255,26 +255,28 @@ Search files by meaning. The query is embedded with the deployment's Amazon Bedr
 vamscli search nlp -q TEXT [OPTIONS]
 ```
 
-| Option               | Type    | Required | Description                                                                                                                 |
-| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `-q`, `--query`      | TEXT    | Yes      | Natural-language description of what to find (1–1000 characters)                                                            |
-| `--entity-type`      | CHOICE  | No       | `file` (default, one hit per file) or `asset` (file hits grouped by asset, best score kept)                                 |
-| `-d`, `--database`   | TEXT    | No       | Restrict to a database ID; repeatable, at most 100. Intersected with the databases you can access                           |
-| `--include-archived` | Flag    | No       | Include archived files                                                                                                      |
-| `--size`             | INTEGER | No       | Number of hits to return (1–100, default 25)                                                                                |
-| `--file-class`       | TEXT    | No       | Hard filter on the indexed file class (`video`, `document`, `3d-model`, …); repeatable                                      |
-| `--file-ext`         | TEXT    | No       | Hard filter on the file extension; repeatable                                                                               |
-| `--no-segments`      | Flag    | No       | Match whole-file vectors only; skip video time windows and text chunks                                                      |
-| `--filters`          | TEXT    | No       | OpenSearch filters (JSON array or query string, as for `search assets`); ignored with a warning when OpenSearch is disabled |
-| `--metadata-query`   | TEXT    | No       | Metadata `key:value` constraint; OpenSearch-only, like `--filters`                                                          |
-| `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                                                                         |
-| `--json-output`      | Flag    | No       | Output the raw API response as JSON                                                                                         |
+| Option               | Type    | Required | Description                                                                                                                                                                                                                                                |
+| -------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-q`, `--query`      | TEXT    | Yes      | Natural-language description of what to find (1–1000 characters)                                                                                                                                                                                           |
+| `--entity-type`      | CHOICE  | No       | `file` (default, one hit per file) or `asset` (file hits grouped by asset, best score kept)                                                                                                                                                                |
+| `-d`, `--database`   | TEXT    | No       | Restrict to a database ID; repeatable, at most 100. Intersected with the databases you can access                                                                                                                                                          |
+| `--include-archived` | Flag    | No       | Include archived files                                                                                                                                                                                                                                     |
+| `--size`             | INTEGER | No       | Number of hits to return (1–100, default 25)                                                                                                                                                                                                               |
+| `--file-class`       | TEXT    | No       | Hard filter on the indexed file class; repeatable. One of `image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other` (3D models are `mesh`, `usd` or `cad`); any other value is refused |
+| `--file-ext`         | TEXT    | No       | Hard filter on the file extension; repeatable                                                                                                                                                                                                              |
+| `--no-segments`      | Flag    | No       | Match whole-file vectors only; skip video time windows and text chunks                                                                                                                                                                                     |
+| `--filters`          | TEXT    | No       | OpenSearch filters (JSON array or query string, as for `search assets`); ignored with a warning when OpenSearch is disabled                                                                                                                                |
+| `--metadata-query`   | TEXT    | No       | Metadata `key:value` constraint; OpenSearch-only, like `--filters`                                                                                                                                                                                         |
+| `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                                                                                                                                                                                                        |
+| `--json-output`      | Flag    | No       | Output the raw API response as JSON                                                                                                                                                                                                                        |
 
 `--filter` is accepted as an alias of `--filters`.
 
 When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) give matching classes a ranking bonus of 0.1 rather than filtering: a hit of a named class moves ahead of one of another class that scores less than 0.1 higher, and the `score` column still shows the similarity without the bonus. Words that describe content, such as `report` or `manual`, name no type. The classes detected are echoed in `nlp.classIntent` of the JSON response.
 
 The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. Every total that is not zero reads `N+`, because the vector index uses approximate nearest-neighbour search and can miss a weak match even when no window filled; a filled window or an unsearched database (the `truncated:*` warnings) means more files may match than were ranked. Each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
+
+`--filters` and `--metadata-query` are applied by the OpenSearch file index. When OpenSearch is enabled but cannot apply them, the command fails with `Search Unavailable` and the server's message instead of printing hits the filters were not applied to. The same error, with its own message, is printed while the vector index is still being built and when the search service is busy; retry in a few minutes. An unknown `--file-class` or a malformed `--filters` value fails with `Invalid search parameters` and the server's message.
 
 ```bash
 vamscli search nlp -q "rusty pipe near the north tank"

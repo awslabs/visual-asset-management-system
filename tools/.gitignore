@@ -15,8 +15,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-# The smoke-test harness library is source, not a packaging artefact.
-!smoketest/lib/
 lib64/
 parts/
 sdist/
