@@ -26,9 +26,11 @@ ENV PYTHONUNBUFFERED=1
 RUN dnf install -y shadow-utils && dnf clean all
 
 # Every wheel here is self-contained (manylinux: Pillow, pypdfium2, imageio-ffmpeg), so no native development
-# packages are installed. The pins include the transitive closure.
-COPY requirements.txt ${LAMBDA_TASK_ROOT}/requirements.txt
-RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
+# packages are installed. The packages come from requirements.lock (generated from requirements.txt with
+# `uv pip compile --generate-hashes`; the command is in its header), installed with --require-hashes so two
+# builds of one commit ship the same code, transitive dependencies included.
+COPY requirements.txt requirements.lock ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lock
 
 # The bundled ffmpeg under a stable path. imageio-ffmpeg's own resolver would otherwise execute the binary
 # (`ffmpeg -version`) on every cold start to validate it, and the versioned file name moves with the wheel.

@@ -6,8 +6,10 @@
 Every property here fails in a way a deploy reports as success: a floating base tag rebuilds a different
 image months apart from identical sources; a USER placed before the last COPY leaves the handler
 root-owned and one placed after ENTRYPOINT never applies; an unpinned requirement resolves differently
-per build; a stray Open3D adds ~400 MB to an image that routes FBX elsewhere; and a .dockerignore that
-excludes the package builds an image with no handler in it."""
+per build, and so does every transitive dependency unless the image installs a hash lock; a COPY with no
+chmod after it leaves the code unreadable to the non-root user on a build host with a restrictive umask;
+a stray Open3D adds ~400 MB to an image that routes FBX elsewhere; and a .dockerignore that excludes the
+package builds an image with no handler in it."""
 
 import os
 import re
@@ -18,6 +20,7 @@ CONTAINER_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__
 LAMBDA_DOCKERFILE = os.path.join(CONTAINER_DIR, "Dockerfile.lambda")
 FARGATE_DOCKERFILE = os.path.join(CONTAINER_DIR, "Dockerfile")
 LAMBDA_REQUIREMENTS = os.path.join(CONTAINER_DIR, "requirements.lambda.txt")
+LAMBDA_LOCK = os.path.join(CONTAINER_DIR, "requirements.lambda.lock")
 FARGATE_REQUIREMENTS = os.path.join(CONTAINER_DIR, "requirements.txt")
 DOCKERIGNORE = os.path.join(CONTAINER_DIR, ".dockerignore")
 
@@ -42,6 +45,58 @@ def _requirement_lines(path):
 def _index(lines, pattern):
     matches = [i for i, line in enumerate(lines) if re.match(pattern, line)]
     return matches
+
+
+def _instructions(text):
+    """Dockerfile instructions with comments and blank lines dropped and `\\` continuations joined."""
+    joined, current = [], []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        continued = stripped.endswith("\\")
+        current.append(stripped[:-1].strip() if continued else stripped)
+        if not continued:
+            joined.append(" ".join(current))
+            current = []
+    if current:
+        joined.append(" ".join(current))
+    return joined
+
+
+def _canonical(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _locked(path):
+    """{canonical package name: (version, hash count)} of a hash-locked requirements file."""
+    text = _read(path)
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
+                         re.MULTILINE)
+    return {_canonical(name): (version, block.count("--hash=")) for name, version, block in entries}
+
+
+def _unreadable_copies(text):
+    """COPY instructions of build-context source whose next instruction does not chmod the copied path.
+
+    `docker COPY` keeps the build host's modes, so on a host with umask 077 or 027 the files land root-owned
+    600/640; the next instruction must add the read bits for the non-root USER. Requirements files are read
+    by root's pip install and are exempt."""
+    instructions = _instructions(text)
+    missing = []
+    for at, instruction in enumerate(instructions):
+        words = instruction.split()
+        if words[0] != "COPY" or any(word.startswith("--from=") for word in words):
+            continue
+        sources = [word for word in words[1:-1] if not word.startswith("--")]
+        if all(source.startswith("requirements") for source in sources):
+            continue
+        target = words[-1]
+        following = instructions[at + 1] if at + 1 < len(instructions) else ""
+        covered = re.match(r"^RUN chmod (-R )?a\+r", following) and target in following
+        if not covered:
+            missing.append(instruction)
+    return missing
 
 
 @pytest.mark.unit
@@ -84,9 +139,64 @@ class TestLambdaDockerfile:
         text = _read(LAMBDA_DOCKERFILE)
         assert re.search(r"^COPY preview_pipeline \$\{LAMBDA_TASK_ROOT\}/preview_pipeline$", text, re.MULTILINE)
         assert re.search(r"^COPY lambda_handler\.py \$\{LAMBDA_TASK_ROOT\}/lambda_handler\.py$", text, re.MULTILINE)
-        assert re.search(r"^COPY requirements\.lambda\.txt ", text, re.MULTILINE)
+        assert re.search(r"^COPY requirements\.lambda\.txt requirements\.lambda\.lock ", text, re.MULTILINE)
         assert "--only-binary=:all:" in text, "no compiler is installed, so every package must come as a wheel"
         assert "open3d" not in text.lower()
+
+
+@pytest.mark.unit
+class TestLambdaImageReadBits:
+    """The non-root USER reads what the image COPYs, whatever the build host's umask."""
+
+    def test_every_copy_of_source_is_followed_by_a_chmod_of_its_target(self):
+        assert _unreadable_copies(_read(LAMBDA_DOCKERFILE)) == []
+
+    def test_the_package_and_the_handler_get_world_read(self):
+        instructions = _instructions(_read(LAMBDA_DOCKERFILE))
+        assert "RUN chmod -R a+rX ${LAMBDA_TASK_ROOT}/preview_pipeline" in instructions
+        assert "RUN chmod a+r ${LAMBDA_TASK_ROOT}/lambda_handler.py" in instructions
+        user_at = [i for i, line in enumerate(instructions) if line.startswith("USER ")]
+        chmod_at = [i for i, line in enumerate(instructions) if line.startswith("RUN chmod ")]
+        assert chmod_at and max(chmod_at) < user_at[0]
+
+    def test_the_detector_reports_a_copy_with_no_chmod(self):
+        # Positive control: the check above passes vacuously if it cannot see an unprotected COPY.
+        text = "FROM x\nCOPY pkg /app/pkg\nCOPY handler.py /app/handler.py\nRUN chmod a+r /app/handler.py\nUSER u\n"
+        assert _unreadable_copies(text) == ["COPY pkg /app/pkg"]
+
+
+@pytest.mark.unit
+class TestLambdaDependencyLock:
+    """The image installs a hash lock generated from requirements.lambda.txt, so the transitive dependencies
+    of pyvista, vtk, cadquery, ifcopenshell and the rest are as fixed as the direct pins."""
+
+    def test_the_image_installs_only_the_lock_in_hash_checking_mode_from_wheels(self):
+        installs = [line for line in _instructions(_read(LAMBDA_DOCKERFILE)) if re.search(r"\bpip3?\s+install\b", line)]
+        assert len(installs) == 1, installs
+        assert "--require-hashes" in installs[0]
+        assert "--only-binary=:all:" in installs[0]
+        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.lambda\.lock$", installs[0]), installs[0]
+
+    def test_the_lock_header_names_the_command_that_regenerates_it(self):
+        header = _read(LAMBDA_LOCK).split("\n")[:3]
+        assert any("uv pip compile requirements.lambda.txt --generate-hashes --python-version 3.12" in line
+                   for line in header), header
+
+    def test_every_lock_entry_is_pinned_and_hashed(self):
+        locked = _locked(LAMBDA_LOCK)
+        # The closure of the 19 direct pins is far larger; a near-empty parse means the parser missed the file.
+        assert len(locked) > len(_requirement_lines(LAMBDA_REQUIREMENTS)) * 2
+        requirement_lines = [line for line in _requirement_lines(LAMBDA_LOCK) if not line.startswith("--hash")]
+        assert len(requirement_lines) == len(locked), "a lock entry is not pinned with hashes"
+        assert all(hashes >= 1 for _, hashes in locked.values())
+
+    def test_the_lock_pins_every_direct_dependency_at_its_requirements_version(self):
+        locked = _locked(LAMBDA_LOCK)
+        for line in _requirement_lines(LAMBDA_REQUIREMENTS):
+            match = EXACT_PIN.match(line)
+            name, version = _canonical(match.group(1)), line.split("==", 1)[1]
+            assert name in locked, name
+            assert locked[name][0] == version, f"{name}: lock {locked[name][0]} vs requirements {version}"
 
 
 @pytest.mark.unit

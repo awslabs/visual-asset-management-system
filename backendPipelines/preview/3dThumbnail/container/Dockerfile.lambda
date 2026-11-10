@@ -60,11 +60,19 @@ RUN dnf install -y --setopt=install_weak_deps=0 \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
-COPY requirements.lambda.txt ${LAMBDA_TASK_ROOT}/requirements.lambda.txt
-RUN pip install --no-cache-dir --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lambda.txt
+# The Python packages come from requirements.lambda.lock (generated from requirements.lambda.txt with
+# `uv pip compile --generate-hashes`; the command is in its header), installed with --require-hashes so two
+# builds of one commit ship the same code, transitive dependencies included.
+COPY requirements.lambda.txt requirements.lambda.lock ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lambda.lock
 
+# COPY keeps the build host's file modes, so on a host with umask 077 or 027 the code would be root-owned
+# and unreadable to the non-root user below; each COPY of source is followed by a chmod that adds read
+# (and traverse on directories) for everyone.
 COPY preview_pipeline ${LAMBDA_TASK_ROOT}/preview_pipeline
+RUN chmod -R a+rX ${LAMBDA_TASK_ROOT}/preview_pipeline
 COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/lambda_handler.py
+RUN chmod a+r ${LAMBDA_TASK_ROOT}/lambda_handler.py
 
 # The base image's PATH omits /usr/sbin, where shadow-utils installs useradd.
 RUN /usr/sbin/useradd --uid 10001 --user-group --no-create-home appuser
