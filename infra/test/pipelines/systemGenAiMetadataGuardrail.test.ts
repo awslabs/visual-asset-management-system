@@ -380,6 +380,45 @@ describe("no guardrail (creation off, no identifier)", () => {
     });
 });
 
+describe("the embedding and segment functions are granted only on the vector search path", () => {
+    // GenerateEmbeddingTask and the video-segment Map run only with vector search on, so with it off the
+    // two functions hold no Amazon Bedrock model, guardrail or orchestration-bus grant they cannot use.
+    const actionsOf = (t: Template, fragment: string): string[] =>
+        statementsOf(t, fragment).flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    const PATH_ACTIONS = ["bedrock:InvokeModel", "bedrock:ApplyGuardrail", "events:PutEvents"];
+    const on = synth("VectorOn");
+    const off = synth("VectorOff", (c) => {
+        c.app.vectorSearch.enabled = false;
+    });
+
+    test.each(["GenerateEmbedding", "SegmentAnalyze"])(
+        "%s holds InvokeModel, ApplyGuardrail and PutEvents with vector search on",
+        (fragment) => {
+            const actions = actionsOf(on, fragment);
+            for (const action of PATH_ACTIONS) {
+                expect([fragment, action, actions.includes(action)]).toEqual([fragment, action, true]);
+            }
+        }
+    );
+
+    test.each(["GenerateEmbedding", "SegmentAnalyze"])(
+        "%s holds none of them with vector search off",
+        (fragment) => {
+            const actions = actionsOf(off, fragment);
+            // Control: the role still has its bucket grants, so the policy was found.
+            expect(actions.some((a) => a.startsWith("s3:"))).toBe(true);
+            expect(actions.filter((a) => PATH_ACTIONS.includes(a))).toEqual([]);
+        }
+    );
+
+    test("the whole-file analysis keeps its model and guardrail grants with vector search off", () => {
+        const actions = actionsOf(off, "GenerateMetadata");
+        expect(actions).toContain("bedrock:InvokeModel");
+        expect(actions).toContain("bedrock:ApplyGuardrail");
+        expect(applyGuardrail(allStatements(off))).toHaveLength(1);
+    });
+});
+
 describe("getConfig() and the create block", () => {
     /** Builds a config.json from the commercial template, applies `mutate`, and calls getConfig(). */
     const resolve = (mutate: (c: any) => void): (() => Config.Config) => {
