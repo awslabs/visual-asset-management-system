@@ -363,7 +363,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet, instead of reading as a third note under the Three.js USD bullet, which opens USD without that setting. ([#1214](https://github.com/awslabs/visual-asset-management-system/issues/1214))
 -   **Documentation** The uninstall guide no longer lists the REST API stage access log group among the explicitly named `/aws/vendedlogs/` groups that persist after stack deletion; CDK names that group and deletes it with the stack. ([#1225](https://github.com/awslabs/visual-asset-management-system/pull/1225))
 -   **Backend/Auth** Fixed the API route listing (`GET /auth/routes/api`) and the allowed-route check (`GET /auth/routes/api/allowed`) covering the routes of add-ons a deployment has not enabled, such as the Physna viewer route without Physna Sync: they leave such routes out, so the constraint editor no longer offers them and no denial is recorded for them. ([#1243](https://github.com/awslabs/visual-asset-management-system/issues/1243))
--   **CLI** Fixed VamsCLI sending a request whose path has an empty, `.` or `..` segment, for example from an ID given as `..`, which the URL join turned into a request to another route; it refuses such a request before sending anything (`InvalidRequestPathError`). ([#536](https://github.com/awslabs/visual-asset-management-system/issues/536))
+-   **CLI** VamsCLI checks the path of each request before sending it and refuses one with an empty, `.` or `..` segment (`InvalidRequestPathError`). ([#536](https://github.com/awslabs/visual-asset-management-system/issues/536))
 
 ### Chores
 

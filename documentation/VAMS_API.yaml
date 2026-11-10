@@ -11515,7 +11515,8 @@ components:
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
                         An add-on's types are accepted only while the deployment enables the
-                        add-on.
+                        add-on, and a type of an optional add-on feature only while that
+                        feature is enabled too.
                 criteriaAnd:
                     type: array
                     maxItems: 100
@@ -11589,7 +11590,8 @@ components:
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
                         An add-on's types are accepted only while the deployment enables the
-                        add-on.
+                        add-on, and a type of an optional add-on feature only while that
+                        feature is enabled too.
                 criteriaAnd:
                     type: array
                     maxItems: 100

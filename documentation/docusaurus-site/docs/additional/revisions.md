@@ -299,7 +299,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 -   **Route listings follow the enabled add-ons** — The API route listing and the allowed-route check leave out the routes of an add-on the deployment has not enabled, such as the Physna viewer route without Physna Sync, so the constraint editor no longer offers them and no denial is recorded for them. (issue #1243)
--   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment, for example from an ID given as `..`, which the URL join would have turned into a request to another route. (issue #536)
+-   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 
 **Other changes:**
 
