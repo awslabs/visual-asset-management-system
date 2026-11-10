@@ -1,0 +1,43 @@
+{
+  "name": "software_stacks_target_nodes_register",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/target_nodes/software_stacks",
+    "absolutePath": "/api/target_nodes/software_stacks",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "ami_id": "ami-00000cdefabcdefab",
+      "stack_name": "vams-spike-simulation",
+      "root_size": "100",
+      "target_node_profile_id": "1",
+      "target_node_user_data_id": "1",
+      "user_data_variables": "SIM_MODE=batch",
+      "connection_string": "ssh {{ TARGET_NODE_USER }}@{{ TARGET_NODE_PRIVATE_IP }}",
+      "launch_tenancy": "default",
+      "description": "VAMS spike simulation stack"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "ami-00000cdefabcdefab registered successfully in SOCA as vams-spike-simulation "
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/target_nodes/software_stacks.py"
+    ]
+  }
+}

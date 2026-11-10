@@ -23,6 +23,7 @@ from common.constants import (
     CONSTRAINT_PERMISSION_LABELS,
     CONSTRAINT_PERMISSION_TYPE_LABELS,
 )
+from common.addonFeatures import constraint_object_type_deployed
 from common.apiRoutes import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
@@ -577,7 +578,11 @@ def delete_constraint(constraint_id, claims_and_roles):
 
 def get_constraint_permission_objects(event):
     """Return the constraint permission objects: object types (with their valid
-    fields), operators, permissions, and permission types."""
+    fields), operators, permissions, and permission types.
+
+    An add-on object type is listed only when this deployment enabled its add-on
+    (``common/addonFeatures.py``), so the constraint editor offers no type a deployment cannot use.
+    """
     object_types = [
         {
             "label": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["label"],
@@ -585,7 +590,7 @@ def get_constraint_permission_objects(event):
             "fields": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["fields"],
         }
         for object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES
-        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS
+        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS and constraint_object_type_deployed(object_type)
     ]
     response_model = GetConstraintPermissionObjectsResponseModel(
         objectTypes=object_types,

@@ -1,0 +1,166 @@
+{
+  "name": "software_stacks_dcv_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/dcv/virtual_desktops/software_stacks",
+    "absolutePath": "/api/dcv/virtual_desktops/software_stacks",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": {
+        "1": {
+          "id": 1,
+          "stack_name": "vams-spike-stack",
+          "ami_id": "ami-00000abcdefabcdef",
+          "ami_arch": "x86_64",
+          "ami_base_os": "amazonlinux2023",
+          "ami_root_disk_size": 50,
+          "created_on": "2026-09-10T12:00:00",
+          "created_by": "vspikeaaaaaaaaaa",
+          "is_active": true,
+          "deactivated_by": null,
+          "deactivated_on": null,
+          "thumbnail": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12P4DwABAQEAG7buVgAAAABJRU5ErkJggg==",
+          "description": "VAMS spike stack",
+          "virtual_desktop_profile_id": 1,
+          "launch_tenancy": "default",
+          "launch_host": null,
+          "os_family": "linux",
+          "share_scope": "cluster",
+          "hardware_profile_id": null,
+          "volume_acceleration": null,
+          "updated_by": null,
+          "updated_on": "2026-09-10T12:00:00",
+          "projects": [
+            {
+              "id": 1,
+              "created_on": "2026-09-01T00:00:00",
+              "created_by": "socaadmin",
+              "deactivated_on": null,
+              "deactivated_by": null,
+              "project_name": "default",
+              "is_active": true,
+              "description": "Default project",
+              "aws_budget": null,
+              "hardware_profile_id": null,
+              "updated_by": null,
+              "updated_on": "2026-09-01T00:00:00"
+            }
+          ],
+          "allowed_aws_budgets": [
+            null
+          ],
+          "allowed_projects": [
+            "default"
+          ],
+          "profile": {
+            "id": 1,
+            "profile_name": "default",
+            "created_on": "2026-09-01T00:00:00",
+            "created_by": "socaadmin",
+            "deactivated_on": null,
+            "deactivated_by": null,
+            "is_active": true,
+            "description": null,
+            "pattern_allowed_instance_types": "m5.large,m5.xlarge,m5.2xlarge",
+            "allowed_instance_types": "{\"x86_64\": [\"m5.large\", \"m5.xlarge\", \"m5.2xlarge\"], \"arm64\": []}",
+            "allowed_subnet_ids": "subnet-00000abcdefabcdef,subnet-00000bcdefabcdefa",
+            "max_root_size": 500,
+            "updated_by": null,
+            "updated_on": "2026-09-01T00:00:00"
+          },
+          "project_ids": [
+            1
+          ]
+        },
+        "2": {
+          "id": 2,
+          "stack_name": "vams-spike-stack-windows",
+          "ami_id": "ami-00000fedcbafedcba",
+          "ami_arch": "x86_64",
+          "ami_base_os": "windows2022",
+          "ami_root_disk_size": 100,
+          "created_on": "2026-09-10T12:00:00",
+          "created_by": "vspikeaaaaaaaaaa",
+          "is_active": true,
+          "deactivated_by": null,
+          "deactivated_on": null,
+          "thumbnail": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12P4DwABAQEAG7buVgAAAABJRU5ErkJggg==",
+          "description": "VAMS spike Windows stack",
+          "virtual_desktop_profile_id": 1,
+          "launch_tenancy": "default",
+          "launch_host": null,
+          "os_family": "windows",
+          "share_scope": "cluster",
+          "hardware_profile_id": null,
+          "volume_acceleration": null,
+          "updated_by": null,
+          "updated_on": "2026-09-10T12:00:00",
+          "projects": [
+            {
+              "id": 1,
+              "created_on": "2026-09-01T00:00:00",
+              "created_by": "socaadmin",
+              "deactivated_on": null,
+              "deactivated_by": null,
+              "project_name": "default",
+              "is_active": true,
+              "description": "Default project",
+              "aws_budget": null,
+              "hardware_profile_id": null,
+              "updated_by": null,
+              "updated_on": "2026-09-01T00:00:00"
+            }
+          ],
+          "allowed_aws_budgets": [
+            null
+          ],
+          "allowed_projects": [
+            "default"
+          ],
+          "profile": {
+            "id": 1,
+            "profile_name": "default",
+            "created_on": "2026-09-01T00:00:00",
+            "created_by": "socaadmin",
+            "deactivated_on": null,
+            "deactivated_by": null,
+            "is_active": true,
+            "description": null,
+            "pattern_allowed_instance_types": "m5.large,m5.xlarge,m5.2xlarge",
+            "allowed_instance_types": "{\"x86_64\": [\"m5.large\", \"m5.xlarge\", \"m5.2xlarge\"], \"arm64\": []}",
+            "allowed_subnet_ids": "subnet-00000abcdefabcdef,subnet-00000bcdefabcdefa",
+            "max_root_size": 500,
+            "updated_by": null,
+            "updated_on": "2026-09-01T00:00:00"
+          },
+          "project_ids": [
+            1
+          ]
+        }
+      }
+    }
+  },
+  "expect": {
+    "count": 2,
+    "imageId": "ami-00000abcdefabcdef"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/software_stacks.py",
+      "source/soca/cluster_manager/web_interface/models.py"
+    ]
+  }
+}
