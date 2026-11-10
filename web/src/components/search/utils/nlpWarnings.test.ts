@@ -4,8 +4,8 @@
  */
 
 /**
- * D76: the search page shows its own text for each rare natural-language warning code, never the
- * API's message, which is written for API and CLI callers. A code it does not know shows the message.
+ * The search page shows its own text for each rare natural-language warning code, never the API's
+ * message, which is written for API and CLI callers. A code it does not know shows the message.
  */
 import {
     NLP_WINDOW_WARNING_CODES,
@@ -18,7 +18,7 @@ import {
 
 const API_MESSAGES: Record<string, string> = {
     "databases:none_accessible": "No searchable database is accessible to the caller",
-    "opensearch:enrichment_failed": "OpenSearch enrichment failed; hits are returned without it",
+    "opensearch:enrichment_failed": "File details could not be loaded.",
     "opensearch:fields_ignored": "OpenSearch is not enabled; ignored: filters, tags",
     "truncated:targets": "Only the first 200 accessible databases were searched",
 };
@@ -33,7 +33,7 @@ describe("nlpWarningText", () => {
         ],
         [
             "opensearch:enrichment_failed",
-            "Some result details, such as dates and metadata, couldn't be loaded, and metadata, tag and location filters weren't applied. The matches are still shown.",
+            "Some result details couldn't be loaded. The matches are still shown.",
         ],
         [
             "opensearch:fields_ignored",
@@ -53,6 +53,14 @@ describe("nlpWarningText", () => {
             expect(text).not.toBe(API_MESSAGES[code]);
             expect(text).not.toMatch(/caller|OpenSearch|ignored:|\d/);
         }
+    });
+
+    it("says nothing about filters when result details could not be loaded", () => {
+        // The API sends this warning only for a search that asked for no metadata, tag or location
+        // filter; one that did and could not have it applied fails instead.
+        const text = nlpWarningText(warning("opensearch:enrichment_failed"));
+        expect(text).not.toMatch(/filter|applied|metadata|tag|location/i);
+        expect(text).toMatch(/still shown/);
     });
 
     it("falls back to the API's message for a code it does not know", () => {
@@ -101,7 +109,7 @@ describe("rareNlpWarningText", () => {
 });
 
 describe("rareNlpWarningTexts", () => {
-    it("lists the Search notice's lines: each rare warning's text once, in the API's order, without the window-full codes (D77)", () => {
+    it("lists the Search notice's lines: each rare warning's text once, in the API's order, without the window-full codes", () => {
         expect(
             rareNlpWarningTexts([
                 warning("databases:none_accessible"),
@@ -117,7 +125,7 @@ describe("rareNlpWarningTexts", () => {
 });
 
 describe("nlpSearchedNoDatabase", () => {
-    it("is true only when the answer carries the no-accessible-database warning (D78)", () => {
+    it("is true only when the answer carries the no-accessible-database warning", () => {
         expect(NO_ACCESSIBLE_DATABASE_CODE).toBe("databases:none_accessible");
         expect(nlpSearchedNoDatabase([warning("databases:none_accessible")])).toBe(true);
         expect(

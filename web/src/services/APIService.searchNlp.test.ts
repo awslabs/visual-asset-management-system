@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { searchNlp } from "./APIService";
-import { apiClient } from "./apiClient";
+import { searchAssets, searchNlp } from "./APIService";
+import { ApiError, apiClient } from "./apiClient";
 
 jest.mock("./apiClient", () => {
     class MockApiError extends Error {
@@ -85,5 +85,27 @@ describe("searchNlp", () => {
             false,
             "Vector index is being built",
         ]);
+    });
+
+    it.each([
+        "The search filters could not be applied. Try again; if it keeps failing, contact your administrator.",
+        "Search is busy right now. Try again in a moment.",
+    ])("hands a 503's message to the page unchanged: %s", async (message) => {
+        mockPost.mockRejectedValue(new ApiError(message, 503, { message }));
+        expect(await searchNlp({ query: "anything" })).toEqual([false, message]);
+    });
+});
+
+describe("searchAssets", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it.each([
+        "Search is temporarily unavailable. Try again in a moment.",
+        "Search is busy right now. Try again in a moment.",
+    ])("hands a 503's message to the page unchanged: %s", async (message) => {
+        mockPost.mockRejectedValue(new ApiError(message, 503, { message }));
+        expect(await searchAssets({ query: "anything" })).toEqual([false, message]);
     });
 });

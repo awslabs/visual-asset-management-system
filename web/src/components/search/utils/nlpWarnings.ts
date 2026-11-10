@@ -21,8 +21,10 @@ export const NLP_WINDOW_WARNING_CODES = new Set(["truncated:window", "segments:w
 const RARE_WARNING_TEXT: Record<string, () => string> = {
     "databases:none_accessible": () =>
         `You don't have access to any ${Synonyms.database} this search covers. Ask your administrator for access.`,
+    // Sent only for a search that asked for no metadata, tag or location filter: a search that did
+    // and could not have it applied fails with a 503 instead, shown as "Search failed".
     "opensearch:enrichment_failed": () =>
-        "Some result details, such as dates and metadata, couldn't be loaded, and metadata, tag and location filters weren't applied. The matches are still shown.",
+        "Some result details couldn't be loaded. The matches are still shown.",
     "opensearch:fields_ignored": () =>
         "Some filters aren't available for natural-language search in this deployment and weren't applied.",
     "truncated:targets": () =>
