@@ -314,3 +314,45 @@ class TestPdalStage:
 
         assert result.status == PipelineStatus.COMPLETE
         harness.upload.assert_called_once()
+
+
+@pytest.mark.unit
+class TestPdalStageLasInput:
+    """#1215: constructPipeline sends a LAS/LAZ in a point format PotreeConverter cannot read (8 to 10)
+    to the PDAL stage, which rewrites it as LAS 1.2 / format 3 for the POTREE stage. Unfixed, the
+    stage refused every LAS/LAZ input ("requires no PDAL conversion") and the run failed."""
+
+    def _module(self):
+        return load_stage_module("pipelines.pdal.pipeline")
+
+    @pytest.mark.parametrize("key", ["xidM/scan.laz", "xidM/scan.las", "xidM/SCAN.LAZ"])
+    def test_las_input_is_translated_and_uploaded(self, tmp_path, key):
+        harness = StageHarness(self._module(), tmp_path)
+        stem = os.path.splitext(os.path.basename(key))[0]
+        writes = [os.path.join(harness.output_dir, stem + ".laz")]
+        seen = {}
+        base = fake_popen(0, writes)
+
+        class _Recording(base):
+            def __init__(self, cmd, *args, **kwargs):
+                seen["cmd"] = cmd
+                super().__init__(cmd, *args, **kwargs)
+
+        result = harness.run(make_stage("PDAL", key), _Recording)
+
+        assert result.status == PipelineStatus.COMPLETE
+        assert seen["cmd"][:3] == ["pdal", "translate", "-i"]
+        assert seen["cmd"][3] == os.path.join(harness.input_dir, os.path.basename(key))
+        assert seen["cmd"][4:6] == ["-o", os.path.join(harness.output_dir, stem + ".laz")]
+        assert seen["cmd"][6:] == ["--writers.las.minor_version=2", "--writers.las.dataformat_id=3"]
+        harness.upload.assert_called_once_with(
+            "aux-bkt", os.path.join(OUTPUT_DIR_KEY, stem + ".laz"), writes[0])
+
+    def test_a_failed_las_translation_names_pdal_and_its_text(self, tmp_path):
+        harness = StageHarness(self._module(), tmp_path)
+        result = harness.run(make_stage("PDAL", "xidM/scan.laz"),
+                             fake_popen(1, output="PDAL: readers.las: Invalid LAS header\n"))
+
+        assert result.status == PipelineStatus.FAILED
+        assert result.errorMessage == "PDAL translate exited with code 1: PDAL: readers.las: Invalid LAS header"
+        harness.upload.assert_not_called()

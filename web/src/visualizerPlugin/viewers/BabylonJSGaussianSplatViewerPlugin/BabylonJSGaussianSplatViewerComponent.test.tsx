@@ -248,12 +248,38 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
 
             const alert = await findByRole("alert");
             expect(alert.textContent).toBe(
-                "ball.spz uses SPZ format version 4. The BabylonJS Gaussian Splat viewer opens " +
-                    "SPZ versions 2 and 3 and PLY files."
+                "ball.spz uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer " +
+                    "does not support. The BabylonJS Gaussian Splat viewer opens SPZ versions 2 " +
+                    "and 3, PLY, SOG and SPLAT files."
             );
             expect(babylon.SceneLoader.ImportMeshAsync).not.toHaveBeenCalled();
             expect(queryByText("Downloading asset...")).toBeNull();
             warn.mockRestore();
+        });
+
+        it("points an SPZ version 4 file to the SuperSplat Editor where ALLOWUNSAFEEVAL is enabled", async () => {
+            // The deployment config the API returned, as Auth.tsx caches it.
+            localStorage.setItem(
+                "vams_cache_config",
+                JSON.stringify({ featuresEnabled: ["ALLOWUNSAFEEVAL"] })
+            );
+            const babylon = makeBabylon();
+            mockLoadBabylonJS.mockResolvedValue(babylon);
+            respondWithHead([0x4e, 0x47, 0x53, 0x50, 4, 0, 0, 0, 0x78, 0x50, 0, 0, 0, 12, 0, 5]);
+            const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            try {
+                const { findByRole } = render(
+                    <BabylonJSGaussianSplatViewerComponent {...props} assetKey="splats/ball.spz" />
+                );
+
+                const alert = await findByRole("alert");
+                expect(alert.textContent).toContain("Open it in the SuperSplat Editor instead");
+                expect(babylon.SceneLoader.ImportMeshAsync).not.toHaveBeenCalled();
+            } finally {
+                localStorage.removeItem("vams_cache_config");
+                warn.mockRestore();
+            }
         });
 
         it("still hands a gzip SPZ file to the loader", async () => {
@@ -265,6 +291,25 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
 
             await waitFor(() => expect(babylon.SceneLoader.ImportMeshAsync).toHaveBeenCalled());
             expect(queryByRole("alert")).toBeNull();
+        });
+
+        it("hands a SOG archive and a headerless .splat file to the loader", async () => {
+            for (const [assetKey, head] of [
+                ["splats/scene.sog", [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]],
+                ["splats/scene.splat", [0x00, 0x10, 0x3f, 0xbe, 0x9a, 0x01]],
+            ] as const) {
+                const babylon = makeBabylon();
+                mockLoadBabylonJS.mockResolvedValue(babylon);
+                respondWithHead([...head]);
+
+                const { queryByRole, unmount } = render(
+                    <BabylonJSGaussianSplatViewerComponent {...props} assetKey={assetKey} />
+                );
+
+                await waitFor(() => expect(babylon.SceneLoader.ImportMeshAsync).toHaveBeenCalled());
+                expect(queryByRole("alert")).toBeNull();
+                unmount();
+            }
         });
     });
 });
