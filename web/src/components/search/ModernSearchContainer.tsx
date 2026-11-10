@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Box from "@cloudscape-design/components/box";
 import LiveRegion from "@cloudscape-design/components/live-region";
@@ -183,6 +183,16 @@ const ModernSearchContainer: React.FC<
     const [dismissedNoticeAnswer, setDismissedNoticeAnswer] = useState<NlpSearchResponse | null>(
         null
     );
+    // The number of the newest search. Each search takes the next one, and only the newest applies its
+    // answer, its error and the end of the loading state: an older search that answers later (a page
+    // change, a refresh or an auto-refresh still running) never replaces a newer one. Clear all
+    // filters takes a number too, so no answer from before it is applied.
+    const latestSearchRef = useRef(0);
+    const startSearch = () => {
+        latestSearchRef.current += 1;
+        return latestSearchRef.current;
+    };
+    const isLatestSearch = (searchNumber: number) => searchNumber === latestSearchRef.current;
 
     // Initialize search query if provided
     useEffect(() => {
@@ -233,11 +243,13 @@ const ModernSearchContainer: React.FC<
     }, [preferencesLoaded, preferences.pageSize]); // React to preferences loading and changes
 
     /**
-     * One search against the engine the current mode selects. Natural-language mode with nothing
-     * typed issues no request: there is nothing to embed, so the table shows its empty state and
-     * `null` is returned so callers do not announce a search that never ran.
+     * One search against the engine the current mode selects, as search number `searchNumber`
+     * (startSearch). Natural-language mode with nothing typed issues no request: there is nothing to
+     * embed, so the table shows its empty state and `null` is returned so callers do not announce a
+     * search that never ran. An answer that arrives after a newer search started is dropped, and
+     * `null` is returned for it too.
      */
-    const runSearch = async (searchQuery: SearchQuery) => {
+    const runSearch = async (searchQuery: SearchQuery, searchNumber: number) => {
         if (searchMode === "nlp") {
             if (!searchQuery.query.trim()) {
                 setNlpResult(null);
@@ -256,6 +268,7 @@ const ModernSearchContainer: React.FC<
                 metadataOperator,
                 includeOpenSearchConstraints: !useNoOpenSearch,
             });
+            if (!isLatestSearch(searchNumber)) return null;
             setNlpResult(result);
             setAnsweredMode("nlp");
             searchState.setResult(result);
@@ -265,52 +278,68 @@ const ModernSearchContainer: React.FC<
             // The announcement reads the count the badge and the table header show.
             return withNlpResultTotal(result);
         }
-        setNlpResult(null);
-        setAnsweredMode("keyword");
         const result = await searchAPI.executeSearch(
             searchQuery,
             databaseId,
             metadataSearchMode,
             metadataOperator
         );
+        if (!isLatestSearch(searchNumber)) return null;
+        setNlpResult(null);
+        setAnsweredMode("keyword");
         searchState.setResult(result);
         return result;
     };
 
+    /**
+     * A failed search, reported as "Search failed" with the API's message (a 503 included: the
+     * search ran and failed, the feature is not off). An older search's failure is dropped like its
+     * answer would be.
+     */
+    const reportSearchError = (error: any, searchNumber: number) => {
+        if (!isLatestSearch(searchNumber)) return;
+        console.error("Search error:", error);
+        searchState.setError(error.message || "Search failed");
+        showError("Search failed", error.message || "An error occurred while searching");
+    };
+
     const handleSearch = async () => {
+        const searchNumber = startSearch();
         try {
             searchState.setLoading(true);
             setCountAnnouncement("");
-            const result = await runSearch(searchState.buildSearchQuery());
+            const result = await runSearch(searchState.buildSearchQuery(), searchNumber);
 
-            // `null` means no request was issued (empty natural-language query): nothing to announce.
-            // An auto-refresh is not announced either. No toast: the badge in the title row shows
-            // the count, and a toast would cover the title row's controls.
+            // `null` means no request was issued (empty natural-language query) or a newer search
+            // started: nothing to announce. An auto-refresh is not announced either. No toast: the
+            // badge in the title row shows the count, and a toast would cover the title row's controls.
             if (result && !autoRefreshing) {
                 setCountAnnouncement(searchAnnouncement(result, searchMode === "nlp"));
             }
         } catch (error: any) {
-            console.error("Search error:", error);
-            searchState.setError(error.message || "Search failed");
-            showError("Search failed", error.message || "An error occurred while searching");
+            reportSearchError(error, searchNumber);
         } finally {
-            searchState.setLoading(false);
-            setAutoRefreshing(false);
+            // The loading state lasts until the newest search ends.
+            if (isLatestSearch(searchNumber)) {
+                searchState.setLoading(false);
+                setAutoRefreshing(false);
+            }
         }
     };
 
     // A search whose query differs from state (a sort or page change applied before the reducer
     // re-renders), reported like handleSearch but without the count announcement.
     const runOverride = async (searchQuery: SearchQuery) => {
+        const searchNumber = startSearch();
         try {
             searchState.setLoading(true);
-            await runSearch(searchQuery);
+            await runSearch(searchQuery, searchNumber);
         } catch (error: any) {
-            console.error("Search error:", error);
-            searchState.setError(error.message || "Search failed");
-            showError("Search failed", error.message || "An error occurred while searching");
+            reportSearchError(error, searchNumber);
         } finally {
-            searchState.setLoading(false);
+            if (isLatestSearch(searchNumber)) {
+                searchState.setLoading(false);
+            }
         }
     };
 
@@ -437,23 +466,30 @@ const ModernSearchContainer: React.FC<
             if (searchMode === "nlp") return;
 
             // Trigger search with the new page size - pass pagination directly to avoid closure
+            const searchNumber = startSearch();
             try {
                 searchState.setLoading(true);
                 setCountAnnouncement("");
-                const result = await runSearch(searchState.buildSearchQuery(newPagination));
+                const result = await runSearch(
+                    searchState.buildSearchQuery(newPagination),
+                    searchNumber
+                );
                 if (result) {
                     setCountAnnouncement(searchAnnouncement(result, false));
                 }
             } catch (error: any) {
-                console.error("Search error:", error);
-                searchState.setError(error.message || "Search failed");
-                showError("Search failed", error.message || "An error occurred while searching");
+                reportSearchError(error, searchNumber);
             } finally {
-                searchState.setLoading(false);
+                if (isLatestSearch(searchNumber)) {
+                    searchState.setLoading(false);
+                }
             }
         }
     };
 
+    // A search still running when the mode changes is not dropped: its answer records the mode it ran
+    // in (answeredMode), so the other mode never presents it, and the search in the new mode that the
+    // auto-refresh starts is newer and wins.
     const handleSearchModeChange = (nextMode: SearchMode) => {
         updatePreferences({ searchMode: nextMode });
         setNlpResult(null);
@@ -461,6 +497,9 @@ const ModernSearchContainer: React.FC<
     };
 
     const handleClearSearch = () => {
+        // Drop any search still running, and show no count until the reloaded answer arrives.
+        startSearch();
+        setAnsweredMode(null);
         searchState.clearSearch();
         setNlpResult(null);
         // Don't reset recordType - preserve the current search mode (asset/file)
@@ -581,6 +620,12 @@ const ModernSearchContainer: React.FC<
         preferences.pageSize,
         searchState.sort,
     ]);
+
+    // Whether the page holds an answer to show a count for: one from the mode on screen, and not the
+    // empty result Clear all filters leaves while the reloaded list is on its way ("0 results" would
+    // describe a search that has not answered).
+    const hasAnswer =
+        answeredMode === searchMode && (searchMode === "nlp" ? !!nlpResult : !!searchState.result);
 
     // Calculate pagination values: the count shown, and the pages over the records that can be shown
     // (fewer in natural-language mode, which counts every match but returns at most 100).
@@ -755,69 +800,21 @@ const ModernSearchContainer: React.FC<
 
             case "map":
                 if (useMapView) {
+                    // The map shows what the table would: in natural-language mode the page of the
+                    // answer held, paged in the browser through the same dispatch as the table, so a
+                    // page change never runs a keyword search; in keyword mode the server page.
                     return (
                         <SearchPageMapView
                             state={{
                                 ...searchState,
+                                result: displayedResult,
                                 tablePreferences: {
                                     pageSize: preferences.pageSize,
                                 },
                                 showMapThumbnails: preferences.showMapThumbnails,
                                 useMapView: useMapView,
                             }}
-                            dispatch={(action: any) => {
-                                switch (action.type) {
-                                    case "set-selected-items":
-                                        searchState.setSelectedItems(action.selectedItems);
-                                        break;
-                                    case "query-paginate":
-                                        if (action.pagination) {
-                                            console.log(
-                                                "[Pagination] query-paginate action received:",
-                                                action.pagination
-                                            );
-                                            searchState.setPagination(action.pagination);
-                                            (async () => {
-                                                try {
-                                                    searchState.setLoading(true);
-                                                    const searchQuery =
-                                                        searchState.buildSearchQuery(
-                                                            action.pagination
-                                                        );
-                                                    console.log(
-                                                        "[Pagination] Executing search with pagination:",
-                                                        searchQuery.pagination
-                                                    );
-                                                    const result = await searchAPI.executeSearch(
-                                                        searchQuery,
-                                                        databaseId,
-                                                        metadataSearchMode,
-                                                        metadataOperator
-                                                    );
-                                                    searchState.setResult(result);
-                                                } catch (error: any) {
-                                                    console.error(
-                                                        "Pagination search error:",
-                                                        error
-                                                    );
-                                                    searchState.setError(
-                                                        error.message || "Search failed"
-                                                    );
-                                                    showError(
-                                                        "Search failed",
-                                                        error.message ||
-                                                            "An error occurred while searching"
-                                                    );
-                                                } finally {
-                                                    searchState.setLoading(false);
-                                                }
-                                            })();
-                                        }
-                                        break;
-                                    default:
-                                        console.log("Unhandled dispatch action:", action.type);
-                                }
-                            }}
+                            dispatch={handleListDispatch}
                         />
                     );
                 }
@@ -865,10 +862,8 @@ const ModernSearchContainer: React.FC<
                 onSearch={handleExplicitSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                resultCount={answeredMode === searchMode ? totalResults : undefined}
-                resultCountIsLowerBound={
-                    answeredMode === searchMode && isTotalLowerBound(displayedResult)
-                }
+                resultCount={hasAnswer ? totalResults : undefined}
+                resultCountIsLowerBound={hasAnswer && isTotalLowerBound(displayedResult)}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||

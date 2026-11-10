@@ -30,6 +30,7 @@ import {
     SearchExplanation,
     formatTotalResultCount,
     getPageCount,
+    getPagedResultCount,
     getTotalResultCount,
     isTotalLowerBound,
 } from "./types";
@@ -244,11 +245,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const config = appCache.getItem("config");
     const navigate = useNavigate();
 
-    // Get pagination info from state
+    // Get pagination info from state. The pages cover the records the result can page through: a
+    // natural-language answer counts every match but holds at most 100, so it pages over those.
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
-    const totalResults = getTotalResultCount(state?.result);
-    const pageCount = getPageCount(totalResults, pageSize);
+    const pageCount = getPageCount(getPagedResultCount(state?.result), pageSize);
 
     // The "Files" / "Assets" toggle on the search page is driven by the
     // `_rectype` filter on search state, not by a per-document field. Read
