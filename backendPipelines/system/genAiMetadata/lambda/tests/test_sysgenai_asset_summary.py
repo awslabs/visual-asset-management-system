@@ -307,7 +307,7 @@ class TestSummary:
 
     @pytest.mark.parametrize("tool", [True, False])
     def test_a_placeholder_word_in_the_answer_writes_no_row(self, tool):
-        """D46: the summary reads its answer through the same normalisation as the per-file analysis."""
+        """The summary reads its answer through the same normalisation as the per-file analysis."""
         reply = dict(SUMMARY_REPLY, style="null", subcategory=" None ", colors=["n/a"], keywords=["pump", "null"])
         response = h.converse_tool_response(reply) if tool else h.converse_response(json.dumps(reply))
         envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")]) if tool else _envelope()
@@ -318,7 +318,7 @@ class TestSummary:
         assert rows["genai_asset_keywords"][0] == "pump"
 
     def test_the_assessment_line_carries_the_output_screen_of_the_tool_answer(self):
-        """D48: the summary's request is screened and logged like the per-file analysis."""
+        """The summary's request is screened and logged like the per-file analysis."""
         masked = json.dumps(dict(SUMMARY_REPLY, title="Pump line of {NAME}"))
         guardrail = [h.apply_guardrail_response(outputs=[masked], assessments=[h.pii_assessment("NAME")])]
         envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")])
@@ -333,7 +333,7 @@ class TestSummary:
         assert _rows(s3)["genai_asset_title"][0] == "Pump line of {NAME}"
 
     def test_a_blocked_tool_answers_cause_names_the_output_side(self):
-        """D50: the summary's tool answer is screened as OUTPUT like the per-file analysis's, and a block's cause
+        """The summary's tool answer is screened as OUTPUT like the per-file analysis's, and a block's cause
         lists the filters under the output side."""
         guardrail = [h.apply_guardrail_response(outputs=["Blocked by the guardrail."],
                                                 assessments=[h.prompt_attack_assessment()])]
@@ -351,7 +351,7 @@ class TestSummary:
         assert _rows(s3) is None
 
     def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
-        """D49: the summary's one request falls back like the per-file analysis."""
+        """The summary's one request falls back like the per-file analysis."""
         error = h.client_error("ModelErrorException", "Model produced invalid sequence as part of ToolUse.")
         envelope = _envelope(schemas=[er.build_metadata_schema_entry("dbM")])
         _mod, s3, bedrock, state = _summarize(envelope, script=[error, h.converse_response(json.dumps(SUMMARY_REPLY))])
@@ -384,7 +384,7 @@ class TestSummary:
                              "genai_asset_category": ("Industrial Equipment", "string")}),
     ])
     def test_a_rerun_types_the_key_an_earlier_summary_filled_from_the_schema(self, listed, expected):
-        """D39: the asset's Category was filled from its controlled list by an earlier run; this run writes it in
+        """The asset's Category was filled from its controlled list by an earlier run; this run writes it in
         the list's type, or, when the answer is outside the list, empties it and keeps the answer in the
         pipeline's key."""
         schema = er.build_metadata_schema_entry(
@@ -429,7 +429,7 @@ MAPPED_FILES = [
 
 @pytest.mark.unit
 class TestMappedFileKeys:
-    """D44: with key reuse the per-file run may write a file's description into a key the file already carries
+    """With key reuse the per-file run may write a file's description into a key the file already carries
     (a schema ``Description``, a ``tags`` key) and clear its genai_* key; the summary reads it there."""
 
     def test_the_summary_reads_the_record_the_per_file_run_writes(self):
@@ -537,7 +537,7 @@ class TestEntry:
         assert response["statusCode"] == 400 and mod.lambda_client.invoke.call_count == 0
 
     def test_a_vocabulary_category_named_like_a_model_key_starts(self):
-        """D45: the vocabulary's category names are data, not configuration keys."""
+        """The vocabulary's category names are data, not configuration keys."""
         config = _rendered_config()
         config["classificationVocabulary"] = {"categories": {"Product Model ID": {
             "description": "Product model identifiers", "subcategories": []}}}

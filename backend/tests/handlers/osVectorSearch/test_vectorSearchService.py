@@ -469,7 +469,7 @@ class TestTruncation:
 
 
 class TestApproximateTotals:
-    """D75: the vector index matches by approximate nearest-neighbour search, so a weak match can drop
+    """The vector index matches by approximate nearest-neighbour search, so a weak match can drop
     out of an answer whose windows did not fill. Every total that is not zero is a minimum (``gte``);
     zero stays exact, and ``nlp.truncated`` still means only a filled window or an unsearched database."""
 
@@ -594,7 +594,7 @@ class TestErrorsAndEnvelope:
         store = FakeStore([item()])
         status, body = call(svc, store, {"query": "tractor"})
         assert status == 200 and body["hits"]["hits"] == []
-        # Nothing was searched, so the empty answer is exact (D75): no consumer shows "0+".
+        # Nothing was searched, so the empty answer is exact: no consumer shows "0+".
         assert body["hits"]["total"] == {"value": 0, "relation": "eq"}
         assert body["nlp"]["truncated"] is False
         assert {w["code"] for w in body["warnings"]} == {"databases:none_accessible"}

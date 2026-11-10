@@ -269,7 +269,7 @@ def _row(plan, key):
 @pytest.mark.unit
 class TestSecondRun:
     """A person-named key the pipeline filled on an earlier run (it owns it by digest) is typed by the schema
-    exactly like an empty one (D39)."""
+    exactly like an empty one."""
 
     def test_the_first_run_fits_the_controlled_list(self):
         state, digests = _first_run()

@@ -610,7 +610,7 @@ class TestEmbeddedTextScreening:
         assert status["error"] == "BedrockGuardrailIntervened"
         prefix = "segment t0000010000: guardrail intervened: Blocked by the guardrail. "
         assert status["cause"].startswith(prefix) and len(status["cause"]) <= 1024
-        # D50: the window's text is screened on its way to the embeddings model, so the cause names the input side.
+        # The window's text is screened on its way to the embeddings model, so the cause names the input side.
         assert json.loads(status["cause"][len(prefix):]) == {"input": [
             {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}]}
         assert _failed_record(s3)["error"] == "BedrockGuardrailIntervened"
@@ -894,7 +894,7 @@ class TestHelpers:
                 module.parse_segment_json(bad)
 
     def test_a_placeholder_word_is_no_value(self, monkeypatch):
-        """D46: a window answer that writes the word for an absent value keeps no value, as the whole-file
+        """A window answer that writes the word for an absent value keeps no value, as the whole-file
         analysis does."""
         module = _load(monkeypatch, FakeS3(), FakeBedrockRuntime([_reply()]), FakeEvents())
         parsed = module.parse_segment_json(json.dumps({

@@ -377,7 +377,7 @@ class TestApplyGuardrailVerdicts:
 
     @pytest.mark.parametrize("source, side", [("INPUT", "input"), ("OUTPUT", "output")])
     def test_a_blocks_cause_names_the_side_its_source_screened(self, source, side):
-        """D50: the embedding step screens text on its way to a model (INPUT) and the structured-output step a
+        """The embedding step screens text on its way to a model (INPUT) and the structured-output step a
         model's answer (OUTPUT), so the cause lists the filters under that side. The blocked batch is re-evaluated
         one text at a time, and that call carries the source and names the side too."""
         attack = {"policy": "contentPolicy", "type": "PROMPT_ATTACK", "action": "BLOCKED", "confidence": "HIGH"}

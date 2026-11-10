@@ -974,7 +974,7 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
         expect(s).toContain("retrieval-augmented generation");
     });
 
-    test("every page that states the natural-language total's relation names approximate matching and keeps zero exact (D75)", () => {
+    test("every page that states the natural-language total's relation names approximate matching and keeps zero exact", () => {
         // The handler reports every non-zero total as gte because SearchVectors is approximate.
         const handler = readRepo(
             path.join("backend", "backend", "handlers", "osVectorSearch", "vectorSearchService.py")
@@ -1010,7 +1010,7 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
         );
     });
 
-    test("the user guide lists the Search notice texts the web shows for the rare warnings (D76)", () => {
+    test("the user guide lists the Search notice texts the web shows for the rare warnings", () => {
         const warnings = readRepo(
             path.join("web", "src", "components", "search", "utils", "nlpWarnings.ts")
         );
@@ -1029,7 +1029,7 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
         }
     });
 
-    test("the docs place the Search notice above the results, dismissible, not in a notification (D77)", () => {
+    test("the docs place the Search notice above the results, dismissible, not in a notification", () => {
         const container = readRepo(
             path.join("web", "src", "components", "search", "ModernSearchContainer.tsx")
         );
@@ -1457,7 +1457,7 @@ describe("user guide", () => {
         expect(views).toContain("`?tab=asset-list`");
         expect(views).toContain("`?tab=unified-search`");
         expect(views).not.toContain("?tab=search`");
-        // D68: the page switches views from its title row; it has no tab strip. The `?tab=` query
+        // The page switches views from its title row; it has no tab strip. The `?tab=` query
         // key keeps its name, so a lookbehind skips it.
         const intro = text.slice(0, text.indexOf("## Search views"));
         for (const part of [intro, views]) {

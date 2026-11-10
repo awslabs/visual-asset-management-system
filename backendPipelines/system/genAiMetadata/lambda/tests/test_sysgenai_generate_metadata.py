@@ -1041,7 +1041,7 @@ class TestReplyParsing:
                 mod.parse_model_json(bad)
 
     def test_a_placeholder_word_is_no_value(self):
-        """D46: a model that writes the word for an absent value (a tool field is a string) writes no value."""
+        """A model that writes the word for an absent value (a tool field is a string) writes no value."""
         mod = h.load_handler("generateMetadata")
         parsed = mod.parse_model_json(json.dumps(dict(
             MODEL_REPLY, title="null", subcategory=" None ", style="N/A", orientation="NULL", sizeEstimate="n/a",
@@ -1060,7 +1060,7 @@ class TestReplyParsing:
 
     @pytest.mark.parametrize("tool", [True, False])
     def test_a_placeholder_word_writes_no_row(self, tool):
-        """D46: the tool answer and the prompt-JSON answer alike."""
+        """The tool answer and the prompt-JSON answer alike."""
         s3 = _seed(h.FakeS3())
         reply = dict(MODEL_REPLY, orientation="null", sizeEstimate="None", textSummary="null", objects=["null"])
         response = h.converse_tool_response(reply) if tool else h.converse_response(json.dumps(reply))
@@ -1574,7 +1574,7 @@ class TestKeyReuse:
 
     def test_without_the_metadata_schema_a_key_the_pipeline_wrote_is_left_as_it_is(self):
         """An earlier run filled the key from the schema, so it may be a controlled list or any other type; the
-        run cannot tell without the schema and writes nothing into it (D39)."""
+        run cannot tell without the schema and writes nothing into it."""
         envelope = _envelope(file_metadata={"Material": "bronze", "genai_materials": "bronze"},
                              file_attributes={"genai_written": _digests(Material="bronze")})
         s3 = _seed(h.FakeS3(), envelope=envelope)

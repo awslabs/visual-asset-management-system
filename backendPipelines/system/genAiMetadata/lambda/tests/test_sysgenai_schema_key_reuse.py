@@ -84,7 +84,7 @@ def _tool_schema(call):
 
 
 def _offers(prop, *values):
-    """Whether a tool property names exactly these schema values as guidance, with no enum forcing them (D47)."""
+    """Whether a tool property names exactly these schema values as guidance, with no enum forcing them."""
     listed = ", ".join(json.dumps(value) for value in values)
     target = prop.get("items", prop)
     return "enum" not in target and "lists these values for " in prop["description"] and (
@@ -154,7 +154,7 @@ class TestSchemaAwareAnalysis:
         assert "when none fits, give the value that does" in prompt
 
     def test_no_schema_list_is_an_enum_the_model_must_pick_from(self):
-        """D47: an enum makes a value outside the list (and so notInControlledList) impossible on the tool path;
+        """An enum makes a value outside the list (and so notInControlledList) impossible on the tool path;
         only the pipeline's own complexity grade is a closed set."""
         _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]), config={"metadataWriteTarget": "asset"})
         _mod2, _s32, bedrock2, _state2 = _run(_envelope([_schema_entry()]))
@@ -242,7 +242,7 @@ def _attributes(s3):
 
 @pytest.mark.unit
 class TestSecondRun:
-    """A key the pipeline filled from the schema on an earlier run is typed by the schema again (D39)."""
+    """A key the pipeline filled from the schema on an earlier run is typed by the schema again."""
 
     def test_the_tool_asks_for_the_list_and_the_key_takes_its_entry(self):
         _mod, s3, bedrock, _state = _run(_second_run_envelope())
@@ -279,7 +279,7 @@ def _mapped_keys_envelope(stored_targets=None):
 
 @pytest.mark.unit
 class TestTargetsRecord:
-    """D44: the file's targets record names the key each field landed in outside its genai_* key, so the asset
+    """The file's targets record names the key each field landed in outside its genai_* key, so the asset
     summary can read a description key reuse wrote into a schema key."""
 
     def test_the_record_names_each_field_written_outside_its_genai_key(self):
@@ -338,7 +338,7 @@ class TestStructuredOutput:
         assert s3.json_at("abkt", SUMMARY_KEY)["replyFormat"] == "text"
 
     def test_the_tool_instruction_asks_to_leave_out_a_field_that_does_not_apply(self):
-        """D46: a tool field is a string, so the prompt's "or null" would be answered with the word."""
+        """A tool field is a string, so the prompt's "or null" would be answered with the word."""
         _mod, _s3, bedrock, _state = _run(_envelope([_schema_entry()]))
         assert "Leave out a field that does not apply" in bedrock.calls[0]["system"][1]["text"]
 
@@ -373,7 +373,7 @@ class TestStructuredOutput:
                        "troubleshooting guide.")
 
     def test_a_model_error_in_the_tool_call_is_asked_again_in_prompt_json(self):
-        """D49: Amazon Nova Lite answers some requests carrying the tool with a ModelErrorException that names tool
+        """Amazon Nova Lite answers some requests carrying the tool with a ModelErrorException that names tool
         use; the same request in prompt-JSON succeeds."""
         error = h.client_error("ModelErrorException", self.NOVA_TOOL_ERROR)
         _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]),
@@ -433,7 +433,7 @@ class TestStructuredOutput:
         assert "Jane Q. Public" not in json.dumps(summary)
 
     def test_the_assessment_line_carries_the_output_screen_of_the_tool_answer(self):
-        """D48: the Converse guardrail never sees a tool answer, so the filters of its OUTPUT screen join the
+        """The Converse guardrail never sees a tool answer, so the filters of its OUTPUT screen join the
         line's output side; the Converse trace's input side stays as it was."""
         response = h.converse_tool_response(dict(base.MODEL_REPLY))
         response["trace"] = {"guardrail": {"inputAssessment": {"gr-test": {"sensitiveInformationPolicy": {
@@ -467,7 +467,7 @@ class TestStructuredOutput:
         assert _rows(s3, FILE_METADATA_KEY) is None or "Material" not in _rows(s3, FILE_METADATA_KEY)
 
     def test_a_blocked_tool_answers_cause_names_the_output_side(self):
-        """D50: the OUTPUT screen stopped the model's answer, not the prompt, and the recorded cause says so."""
+        """The OUTPUT screen stopped the model's answer, not the prompt, and the recorded cause says so."""
         guardrail = [h.apply_guardrail_response(outputs=["Blocked by the guardrail."],
                                                 assessments=[h.prompt_attack_assessment()])]
         _mod, s3, bedrock, state = _run(_envelope([_schema_entry()]), env=GUARDRAIL_ENV,

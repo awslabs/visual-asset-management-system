@@ -146,7 +146,7 @@ class TestMeshFile:
         assert s3.json_at("aux", MANIFEST_KEY)["attributes"]["sys_file"]["versionId"] == "current-9"
 
     def test_a_null_version_is_read_at_that_version(self):
-        # D51: "null" is the version S3 reports for an object written while versioning was off, and the
+        # "null" is the version S3 reports for an object written while versioning was off, and the
         # workflow records it as the version the run reads (#994). It is a real version id: the header,
         # format sniff and digest read it, as the containers do, never the current object.
         content = b"glTF" + bytes(range(64))
