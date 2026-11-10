@@ -345,8 +345,8 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
 
                 <Alert type="info" statusIconAriaLabel="Info">
                     The archive is prepared in the background and appears under My zip downloads.
-                    Only you can see and download it until it expires, at the end of the retention
-                    period your administrator set; the archive file is then removed automatically.
+                    Only you can see and download it for 7 days; it is then removed from the list
+                    and the archive file is removed automatically.
                 </Alert>
 
                 {submitError && (

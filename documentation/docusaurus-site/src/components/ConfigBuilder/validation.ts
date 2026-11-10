@@ -3452,7 +3452,6 @@ export const RULES: Rule[] = [
     },
     ...(
         [
-            ["retentionDays", 1, 30, "days"],
             ["maxFilesPerRequest", 1, 1000000, "files"],
             ["maxTotalBytesPerRequest", 1, 5497558138880, "bytes"],
             ["maxActiveRequestsPerUser", 1, 100, "jobs"],

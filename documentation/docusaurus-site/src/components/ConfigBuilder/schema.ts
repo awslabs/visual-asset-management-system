@@ -2112,16 +2112,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Lets users download files, folders or a whole asset as one zip, tar or tar.gz archive, built by the zipArchive system pipeline on AWS Batch Fargate. Requires the global VPC. The job table, the API routes and the archive expiry rule deploy either way.",
-    },
-    {
-        path: "app.zipDownloads.retentionDays",
-        label: "Download as Zip — archive retention (days)",
-        input: "number",
-        section: "pipelines-standard",
-        advanced: true,
-        min: 1,
-        help: "Days after creation a zip download expires and can no longer be downloaded. The archive file is removed by an S3 lifecycle rule the same number of days after it was written, applied by S3 within about a day or two. 1 to 30, default 7.",
+        help: "Lets users download files, folders or a whole asset as one zip, tar or tar.gz archive, built by the zipArchive system pipeline on AWS Batch Fargate. Requires the global VPC. The job table, the API routes and the archive expiry rule deploy either way. A zip download is kept for 7 days.",
     },
     {
         path: "app.zipDownloads.maxFilesPerRequest",

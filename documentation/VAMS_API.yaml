@@ -16084,7 +16084,7 @@ components:
                 expiresAt:
                     type: string
                     format: date-time
-                    description: "When the job expires (createdAt plus app.zipDownloads.retentionDays). From then on it is not listed and every route answers 404 for it. The archive object is removed by an S3 lifecycle rule retentionDays after the archive was written, which S3 applies asynchronously, so it can remain for up to a day or two after expiresAt."
+                    description: "When the job expires (createdAt plus 7 days, a fixed retention). From then on it is not listed and every route answers 404 for it. The archive object is removed by an S3 lifecycle rule 7 days after the archive was written, which S3 applies asynchronously, so it can remain for up to a day or two after expiresAt."
         zipDownloadListResponse:
             type: object
             properties:

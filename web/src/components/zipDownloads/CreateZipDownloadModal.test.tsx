@@ -79,9 +79,7 @@ describe("CreateZipDownloadModal", () => {
         expect(screen.getByText("1 file and 1 folder")).toBeInTheDocument();
         expect(screen.getByText("/a.glb")).toBeInTheDocument();
         expect(screen.getByText("/textures/")).toBeInTheDocument();
-        expect(
-            screen.getByText(/until it expires, at the end of the retention/)
-        ).toBeInTheDocument();
+        expect(screen.getByText(/Only you can see and download it for 7 days/)).toBeInTheDocument();
     });
 
     it("creates a zip of the current files with the default name and no version pin", async () => {

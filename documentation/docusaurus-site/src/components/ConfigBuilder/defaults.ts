@@ -457,7 +457,6 @@ const COMMERCIAL: ConfigShape = {
         },
         zipDownloads: {
             enabled: false,
-            retentionDays: 7,
             maxFilesPerRequest: 100000,
             maxTotalBytesPerRequest: 5497558138880,
             maxActiveRequestsPerUser: 5,

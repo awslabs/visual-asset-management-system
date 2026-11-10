@@ -1809,7 +1809,7 @@ def list_zip_downloads(
     Give `database_id` and `asset_id` together for one asset's jobs, or neither for every asset.
     Each row carries requestId, status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED),
     archiveFileName, archiveFormat, progress, errorMessage and expiresAt. Jobs are private to their
-    creator, expire at expiresAt (the retention period after creation; an expired job is not
+    creator, expire at expiresAt (7 days after creation; an expired job is not
     listed and cannot be downloaded), and rows on assets the caller can no
     longer read are left out — so an empty list says nothing about other users' jobs.
 

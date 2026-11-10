@@ -521,7 +521,7 @@ Holds one row per Download as Zip job. Every API read and write starts from the 
 | `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
 | `workflowExecutionId`                                | String |               | The Zip Archive run; never returned by the API                                                         |
 | `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
-| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus `app.zipDownloads.retentionDays`; the table's time-to-live attribute   |
+| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus 7 days; the table's time-to-live attribute                             |
 
 | Index            | Partition Key  | Sort Key    | Projection |
 | ---------------- | -------------- | ----------- | ---------- |
@@ -637,7 +637,7 @@ Where:
 -   `vams.preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
     resolved member list, under the first 16 hex characters of the SHA-256 of the requesting user's ID
     (`userHash`) and the job's `requestId`. Lifecycle rules expire the prefix after
-    `app.zipDownloads.retentionDays`. The prefix sits beside the per-database prefixes; a database ID
+    7 days. The prefix sits beside the per-database prefixes; a database ID
     cannot contain a dot, so the rules never reach a database's data
 
 Common uses:

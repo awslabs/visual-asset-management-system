@@ -1724,7 +1724,6 @@ export function zipDownloadServiceEnvironment(config: Config.Config): Record<str
     const zip = config.app.zipDownloads;
     return {
         ZIPDOWNLOADS_ENABLED: zip.enabled ? "true" : "false",
-        ZIP_DOWNLOAD_RETENTION_DAYS: zip.retentionDays.toString(),
         ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST: zip.maxFilesPerRequest.toString(),
         ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST: zip.maxTotalBytesPerRequest.toString(),
         ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER: zip.maxActiveRequestsPerUser.toString(),

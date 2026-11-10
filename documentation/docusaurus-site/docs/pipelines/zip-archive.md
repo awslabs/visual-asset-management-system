@@ -91,7 +91,7 @@ The pipeline has no configuration block of its own. It is deployed, and its pipe
 }
 ```
 
-`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.zipDownloads` keys set the retention and limits of Download as Zip jobs; see [Zip downloads (`app.zipDownloads`)](../deployment/configuration-reference.md#zip-downloads-appzipdownloads).
+`computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.zipDownloads` keys set the limits of Download as Zip jobs, which are kept for 7 days; see [Zip downloads (`app.zipDownloads`)](../deployment/configuration-reference.md#zip-downloads-appzipdownloads).
 
 ## Running the Zip Archive Workflow
 

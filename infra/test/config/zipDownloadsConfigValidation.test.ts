@@ -16,6 +16,9 @@
 import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
+import govcloudTemplate from "../../config/config.template.govcloud.json";
+import eusovereignTemplate from "../../config/config.template.eusovereign.json";
+import defaultConfig from "../../config/config.json";
 import { newTestApp } from "../support/testApp";
 import { RULES } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
@@ -73,20 +76,47 @@ describe("app.zipDownloads defaults", () => {
 
     test("a partial block keeps its values and fills the rest", () => {
         const config = baseConfig((c) => {
-            c.app.zipDownloads = { retentionDays: 3 };
+            c.app.zipDownloads = { maxActiveRequestsPerUser: 3 };
         });
         expect(resolve(config)().app.zipDownloads).toEqual({
             ...Config.ZIP_DOWNLOADS_DEFAULTS,
-            retentionDays: 3,
+            maxActiveRequestsPerUser: 3,
         });
     });
 });
 
+describe("app.zipDownloads.retentionDays is not configuration (a fixed 7 days)", () => {
+    test.each([
+        ["config.json", defaultConfig],
+        ["config.template.commercial.json", commercialTemplate],
+        ["config.template.govcloud.json", govcloudTemplate],
+        ["config.template.eusovereign.json", eusovereignTemplate],
+    ])("%s does not carry the key", (_name, file) => {
+        expect((file as any).app.zipDownloads).toBeDefined();
+        expect("retentionDays" in (file as any).app.zipDownloads).toBe(false);
+    });
+
+    test("the defaults and the ConfigBuilder have no retentionDays", () => {
+        expect("retentionDays" in Config.ZIP_DOWNLOADS_DEFAULTS).toBe(false);
+        expect(RULES.some((rule) => rule.id === "zip-downloads-retentionDays-range")).toBe(false);
+    });
+
+    test.each([7, 3, 0, 31, 2.5, "x"])(
+        "a config that still carries retentionDays = %p loads, and the key is dropped",
+        (value) => {
+            const config = baseConfig((c) => {
+                c.app.zipDownloads.retentionDays = value;
+            });
+            const resolved = resolve(config)();
+            expect(resolved.app.zipDownloads).toEqual(Config.ZIP_DOWNLOADS_DEFAULTS);
+            expect("retentionDays" in resolved.app.zipDownloads).toBe(false);
+            expect(builderViolations(config)).toEqual([]);
+        }
+    );
+});
+
 describe("app.zipDownloads validation (feature off: values are still checked)", () => {
     test.each([
-        ["retentionDays", 0],
-        ["retentionDays", 31],
-        ["retentionDays", 2.5],
         ["maxFilesPerRequest", 0],
         ["maxFilesPerRequest", 1000001],
         ["maxTotalBytesPerRequest", 5497558138881],

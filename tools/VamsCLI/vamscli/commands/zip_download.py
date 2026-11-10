@@ -1,8 +1,8 @@
 """Download as Zip commands for VamsCLI.
 
 A zip download is a server-side job that archives a selection of one asset's files (zip, tar or
-tar.gz). The job and its archive can be downloaded until the job's expiresAt (the deployment's
-retention period after it was created); the archive file is then removed by an S3 lifecycle rule. Jobs belong to the user who
+tar.gz). The job and its archive can be downloaded until the job's expiresAt (7 days after it was
+created); the archive file is then removed by an S3 lifecycle rule. Jobs belong to the user who
 created them. The archive is fetched through a short-lived presigned URL, which these commands
 stream straight to a local file and never print.
 """
@@ -57,7 +57,7 @@ _ERROR_PRESENTATION = (
      "were enabled after you signed in, run 'vamscli auth login' to refresh the feature switches."),
     (ZipDownloadNotFoundError, "Zip Download Not Found",
      "Use 'vamscli zip-download list' to see your zip downloads. A job expires at its "
-     "expiresAt, the deployment's retention period after it was created."),
+     "expiresAt, 7 days after it was created."),
     (ZipDownloadLimitError, "Zip Download Limit Reached",
      "Wait for one of your active zip downloads to finish, or cancel one with "
      "'vamscli zip-download cancel'."),
@@ -156,7 +156,7 @@ def zip_download():
 
     A job archives files, folders or the whole asset at their current versions, at per-file
     versions (PATH@VERSIONID), or at an asset version. Jobs belong to you, appear in
-    'zip-download list', and expire at their expiresAt (the deployment's retention period after
+    'zip-download list', and expire at their expiresAt (7 days after
     creation); an expired job cannot be downloaded. The whole job is
     refused when a selected file is archived, deleted, in an archive storage tier or of a blocked
     type.

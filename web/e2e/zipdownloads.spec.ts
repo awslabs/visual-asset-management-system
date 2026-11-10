@@ -240,7 +240,7 @@ test.describe("Download as Zip", () => {
             await expect(dialog.getByRole("radio", { name: /Current files/ })).toBeChecked();
             await expect(dialog.getByRole("radio", { name: /ZIP \(\.zip\)/ })).toBeChecked();
             await expect(dialog.getByLabel("Archive name")).toHaveValue(/\.zip$/);
-            await expect(dialog.getByText(/retention period/)).toBeVisible();
+            await expect(dialog.getByText(/for 7 days/)).toBeVisible();
             await dialog.getByRole("button", { name: "Cancel" }).click(); // never create
             await expect(dialog).toBeHidden();
         }

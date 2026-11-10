@@ -777,7 +777,6 @@ const MIB = 1024 * 1024;
  */
 export const ZIP_DOWNLOADS_DEFAULTS = {
     enabled: false,
-    retentionDays: 7,
     maxFilesPerRequest: 100000,
     // 5 TiB, the largest single Amazon S3 object.
     maxTotalBytesPerRequest: 5 * 1024 * 1024 * MIB,
@@ -793,7 +792,6 @@ export const ZIP_DOWNLOADS_BOUNDS: Record<
     Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
     { min: number; max: number; unit: string }
 > = {
-    retentionDays: { min: 1, max: 30, unit: "days" },
     maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
     maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
     maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
@@ -5095,7 +5093,6 @@ export interface ConfigPublic {
         // optional (see ZIP_DOWNLOADS_DEFAULTS).
         zipDownloads: {
             enabled: boolean;
-            retentionDays: number;
             maxFilesPerRequest: number;
             maxTotalBytesPerRequest: number;
             maxActiveRequestsPerUser: number;

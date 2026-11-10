@@ -152,7 +152,7 @@ Comments, subscriptions, and API keys: `list_asset_comments`,
 
 Zip downloads: `list_zip_downloads`, `get_zip_download`. A zip download is a
 server-side job that archives part or all of one asset; jobs are private to the
-user who created them and expire after the deployment's retention period.
+user who created them and expire 7 days after they were created.
 `list_zip_downloads` takes `database_id` and `asset_id` together for one asset, or
 neither for every asset, and is paginated like every other list.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,

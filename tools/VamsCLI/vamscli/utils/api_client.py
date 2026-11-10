@@ -4239,8 +4239,8 @@ class APIClient(CustomAPIClientMixin):
     # ------------------------------------------------------------------
     # Download as Zip (prepared downloads) API Methods
     # ------------------------------------------------------------------
-    # A job archives a selection of one asset's files on the server and keeps the archive for the
-    # deployment's retention period. Every job belongs to the user who created it; the API reports a
+    # A job archives a selection of one asset's files on the server and keeps the archive for 7
+    # days. Every job belongs to the user who created it; the API reports a
     # job of another user, or of another asset than the path names, as "Zip download not found".
     # The DELETE route CANCELS a job that is still queued or running and DELETES a finished one, so
     # cancel_zip_download and delete_zip_download read the job first and refuse the wrong state

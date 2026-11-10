@@ -72,6 +72,14 @@ export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
 export const PREPARED_DOWNLOADS_PREFIX = "vams.preparedDownloads/";
 
 /**
+ * Days a Download as Zip job and its prepared archive are kept: a fixed 7, not configuration. The
+ * vams.preparedDownloads/ lifecycle rule expires archives after this many days, and the job row's
+ * expiresAt (the zip download requests table's TTL) is createdAt plus the same days. Mirrored as
+ * ZIP_DOWNLOAD_RETENTION_DAYS in backend/backend/common/zipDownloads.py.
+ */
+export const ZIP_DOWNLOAD_RETENTION_DAYS = 7;
+
+/**
  * Index of MetadataSchemaStorageTableV2 on "databaseId:metadataEntityType": the schemas of one database
  * and entity type, which every schema read path queries. Named in
  * backend/backend/common/metadataSchemaValidation.py (load_enabled_schemas) and granted by exact ARN
@@ -1011,8 +1019,8 @@ export function storageResourcesBuilder(
                   ]
                 : []),
             // Download as Zip archives and their manifests
-            // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after the
-            // configured retention. Deployed whatever app.zipDownloads.enabled says, so turning the
+            // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after
+            // ZIP_DOWNLOAD_RETENTION_DAYS (7). Deployed whatever app.zipDownloads.enabled says, so turning the
             // feature off never orphans an archive. Any incomplete upload under the prefix is aborted
             // after a day (the bucket-wide rule above waits 14): the backstop for an upload a cancelled
             // or failed job left open that neither the read-time reconcile nor the delayed sweep
@@ -1022,7 +1030,7 @@ export function storageResourcesBuilder(
                 id: "PreparedDownloadsExpiration",
                 enabled: true,
                 prefix: PREPARED_DOWNLOADS_PREFIX,
-                expiration: Duration.days(config.app.zipDownloads.retentionDays),
+                expiration: Duration.days(ZIP_DOWNLOAD_RETENTION_DAYS),
                 noncurrentVersionExpiration: Duration.days(1),
                 abortIncompleteMultipartUploadAfter: Duration.days(1),
             },
@@ -1622,7 +1630,7 @@ export function storageResourcesBuilder(
     // Zip Download Requests — Download as Zip jobs, one row per job, owned by the user who asked for it
     // (PK userId = the authenticated caller, SK requestId = time-sortable id, so a reverse query lists
     // newest first). UserAssetIndex (PK userAssetKey = `userId#databaseId#assetId`) lists one user's
-    // jobs for one asset. expiresAt (epoch seconds) is the TTL: createdAt + app.zipDownloads.retentionDays,
+    // jobs for one asset. expiresAt (epoch seconds) is the TTL: createdAt + ZIP_DOWNLOAD_RETENTION_DAYS (7),
     // the same retention as the vams.preparedDownloads/ lifecycle rule. Deployed whether or not the feature
     // is enabled, so turning it off leaves existing jobs readable until they expire.
     const zipDownloadRequestsStorageTable = new dynamodb.Table(

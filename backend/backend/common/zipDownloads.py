@@ -59,6 +59,13 @@ from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX
 
 PREPARED_DOWNLOADS_PREFIX = AUXILIARY_PREPARED_DOWNLOADS_PREFIX
 
+# How long a zip download job and its prepared archive are kept: a fixed 7 days, not configuration.
+# The job row's expiresAt (the table's TTL) is createdAt plus this, list and get hide a row past it,
+# and the vams.preparedDownloads/ lifecycle rule expires the archive after the same number of days
+# (infra storageBuilder-nestedStack.ts ZIP_DOWNLOAD_RETENTION_DAYS; a test keeps the two equal).
+# Mode 2 archives written into an asset are asset versions and are not affected.
+ZIP_DOWNLOAD_RETENTION_DAYS = 7
+
 STATUS_QUEUED = "QUEUED"
 STATUS_RUNNING = "RUNNING"
 STATUS_SUCCEEDED = "SUCCEEDED"
@@ -224,7 +231,7 @@ def sanitize_archive_file_name(requested: Optional[str], archive_format: str, as
     return name + extension
 
 
-def expires_at_epoch(created: datetime, retention_days: int) -> int:
+def expires_at_epoch(created: datetime, retention_days: int = ZIP_DOWNLOAD_RETENTION_DAYS) -> int:
     return int(created.timestamp()) + int(retention_days) * 86400
 
 

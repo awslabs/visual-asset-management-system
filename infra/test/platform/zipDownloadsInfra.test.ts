@@ -13,6 +13,9 @@
  * switch, the sweep state machine that invokes the service, and its two cross-call grants (launch
  * and abort), each on an exact function ARN. In no cell is the service a terminal callback: no
  * terminal writer names it and no role but the sweep's may invoke it.
+ *
+ * Retention is a fixed 7 days (ZIP_DOWNLOAD_RETENTION_DAYS), not configuration: the feature-on cells
+ * synthesize a config that still carries the removed `retentionDays` key (14), which is ignored.
  */
 
 import {
@@ -29,6 +32,7 @@ import {
     ZIP_DOWNLOAD_SWEEP_RETRY,
     ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS,
 } from "../../lib/lambdaBuilder/assetFunctions";
+import { ZIP_DOWNLOAD_RETENTION_DAYS } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 
 jest.setTimeout(900_000);
 
@@ -37,10 +41,11 @@ const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteZipArchivePipeline.lambda_handler";
 /** The terminal writers' callback registry variable, removed with the registry (#1135). */
 const CALLBACK_REGISTRY_ENV = "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER";
 
-function enabledMutate(retentionDays: number) {
+/** Feature on, from a config written before retention became fixed (its retentionDays is ignored). */
+function enabledMutate(legacyRetentionDays: number) {
     return (c: any) => {
         c.app.zipDownloads.enabled = true;
-        c.app.zipDownloads.retentionDays = retentionDays;
+        c.app.zipDownloads.retentionDays = legacyRetentionDays;
         c.app.zipDownloads.computeVcpu = 8;
         c.app.zipDownloads.computeMemoryGiB = 24;
         c.app.useGlobalVpc.enabled = true;
@@ -49,7 +54,10 @@ function enabledMutate(retentionDays: number) {
 
 const synthOff = (name: TemplateName): SynthResult => synthTemplate(name);
 const synthOn = (name: TemplateName): SynthResult =>
-    synthTemplate(name, { mutate: enabledMutate(14), mutateKey: "zip-downloads-on-14" });
+    synthTemplate(name, {
+        mutate: enabledMutate(14),
+        mutateKey: "zip-downloads-on-legacy-retention-14",
+    });
 
 function functionByHandler(synth: SynthResult, handler: string): Resource {
     const found = synth.where("AWS::Lambda::Function", (r) => r.properties.Handler === handler);
@@ -185,7 +193,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         ).toHaveLength(1);
     });
 
-    test("the auxiliary bucket expires vams.preparedDownloads/ after the retention, and its markers", () => {
+    test("the auxiliary bucket expires vams.preparedDownloads/ after 7 days, and its markers", () => {
         const buckets = synth.where("AWS::S3::Bucket", (r) =>
             JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
                 "PreparedDownloadsExpiration"
@@ -235,7 +243,8 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         const service = functionByHandler(synth, SERVICE_HANDLER);
         const env = envOf(service);
         expect(env.ZIPDOWNLOADS_ENABLED).toBe("false");
-        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBe("7");
+        // Retention is a backend constant; CDK passes no retention variable.
+        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBeUndefined();
         expect(env.ZIP_ARCHIVE_WORKFLOW_DATABASE_ID).toBe("GLOBAL");
         expect(env.ZIP_ARCHIVE_WORKFLOW_ID).toBe("utility-zip-archive");
         expect(env.PRESIGNED_URL_TIMEOUT_SECONDS).toBe("900");
@@ -359,7 +368,8 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
     test("the service is on, with the configured limits", () => {
         const env = envOf(functionByHandler(synth, SERVICE_HANDLER));
         expect(env.ZIPDOWNLOADS_ENABLED).toBe("true");
-        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBe("14");
+        // The config's legacy retentionDays (14) reaches nothing.
+        expect(env.ZIP_DOWNLOAD_RETENTION_DAYS).toBeUndefined();
         expect(env.ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST).toBe("100000");
         expect(env.ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST).toBe("5497558138880");
         expect(env.ZIP_DOWNLOAD_MAX_ACTIVE_PER_USER).toBe("5");
@@ -501,7 +511,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expectNoZipCallback(synth, sweepRoleId);
     });
 
-    test("the lifecycle rule follows retentionDays and aborts incomplete uploads after a day", () => {
+    test("the lifecycle rule stays 7 days (legacy retentionDays ignored) and aborts incomplete uploads after a day", () => {
         const bucket = synth.where("AWS::S3::Bucket", (r) =>
             JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
                 "PreparedDownloadsExpiration"
@@ -510,7 +520,9 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         const rule = (bucket.properties.LifecycleConfiguration.Rules as any[]).find(
             (r) => r.Id === "PreparedDownloadsExpiration"
         );
-        expect(rule.ExpirationInDays).toBe(14);
+        expect(rule.ExpirationInDays).toBe(ZIP_DOWNLOAD_RETENTION_DAYS);
+        expect(ZIP_DOWNLOAD_RETENTION_DAYS).toBe(7);
+        expect(rule.NoncurrentVersionExpiration).toEqual({ NoncurrentDays: 1 });
         // The backstop for an upload no reader aborted: no terminal callback finalizes a job.
         expect(rule.Prefix).toBe("vams.preparedDownloads/");
         expect(rule.AbortIncompleteMultipartUpload).toEqual({ DaysAfterInitiation: 1 });

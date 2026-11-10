@@ -62,7 +62,7 @@ vamscli zip-download list --page-size 50 --starting-token <token> --json-output
 | `--page-size`       | Jobs read per page (1 to 1,000, default 100)    |
 | `--starting-token`  | `NextToken` from a previous page                |
 
-Jobs past their retention and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`.
+Jobs older than 7 days and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`.
 
 ---
 
