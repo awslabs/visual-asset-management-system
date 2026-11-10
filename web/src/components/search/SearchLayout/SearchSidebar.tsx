@@ -160,6 +160,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     onFilterChange={onFilterChange}
                     loading={loading}
                     recordType={recordType}
+                    searchMode={searchMode}
                 />
 
                 {/* Metadata Search */}
@@ -191,6 +192,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
                     disabled={loading}
                     filters={filters}
                     onFilterChange={onFilterChange}
+                    searchMode={searchMode}
                 />
             </SpaceBetween>
         </Box>
