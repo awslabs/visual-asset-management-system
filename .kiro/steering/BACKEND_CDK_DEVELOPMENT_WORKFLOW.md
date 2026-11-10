@@ -442,7 +442,9 @@ cannot see and a suite importing everything never reaches.
     indexer.
 -   **A runtime cross-group read is function-scoped and gated.** Two are admitted:
     `vectorSearchService._opensearch_step` imports `handlers.osSemanticSearch.search` inside
-    the function after `OPENSEARCH_DISABLED` is ruled out, and
+    the function after `OPENSEARCH_DISABLED` is ruled out (for an asset answer it also reads
+    each returned asset's location from the asset index through the same client,
+    `_add_asset_locations`, so it stays one crossing), and
     `crReindexer.ReindexUtility.clear_opensearch_indexes` imports `opensearchpy` inside the
     method. Both are named with a site count in
     `tests/common/test_indexer_families_import_boundary.py`, which walks the tree and fails
@@ -1067,6 +1069,34 @@ compiled expression holds the enforcer's function map whose `g` is bound to that
 manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
+
+#### **Keyword search: sorts, index writes and query text** (`handlers/osSemanticSearch/`)
+
+-   **Search sorts are total.** Every keyword search sort, each larger fill window included, ends
+    with `SORT_TIEBREAKER_FIELDS` (database ID, asset ID and archive state, plus the file path on the
+    file index), appended by `with_unique_tiebreaker`, so records equal on every key the caller gives
+    keep one order from page to page. The merge of a search over both indexes applies the file
+    query's sort and orders a missing value last and a list by its smallest (ascending) or largest
+    (descending) value, as OpenSearch does. A new sort path appends the keys too. Do not sort on
+    `_id`: it needs field data for the id field, which a domain can turn off.
+-   **Indexers re-read the source after a write.** `process_asset_index_request`
+    (`osAssetIndexer.py`) re-reads the asset row with a strongly consistent read after a successful
+    write and deletes the document when the row is gone; `reconcile_written_file_document`
+    (`osFileIndexer.py`) re-reads the S3 state and the asset row, then deletes the document or writes
+    it once more from the current state. A failed re-read reports the record for redrive.
+    Conditional or versioned writes are not used, because OpenSearch Serverless and provisioned
+    domains do not offer the same document versioning. A test that stubs the file write also patches
+    `reconcile_written_file_document`.
+-   **A query keeps each word in its field.** Never put a raw value with spaces into
+    `query_string` text. The general keyword query uses `FieldClassifier.any_word_anywhere_query`
+    (any word, anywhere inside a value); a field filter with wildcards on an analyzed text field
+    `every_word_in_field_query`; a wildcard pattern on a keyword-typed field `whole_value_pattern`;
+    a contains search of metadata values `every_word_anywhere_in_values_query`.
+-   **Flat-object value fields depend on the engine.** For an exact or prefix term name only the
+    root (`MD_`, `AB_`) or a key (`MD_.<key>`). For any other wildcard pattern use
+    `FieldClassifier.flat_object_value_fields` or `flat_object_key_pattern_query`, which choose
+    `<root>._value` / `<root>._valueAndPath` on OpenSearch Serverless (`OPENSEARCH_TYPE`) and the
+    root or key on provisioned domains. Never hardcode `MD_._value`.
 
 #### **System User (`SYSTEM_USER`)**
 

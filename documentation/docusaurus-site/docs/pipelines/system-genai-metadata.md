@@ -59,6 +59,13 @@ flowchart TD
 
 The file-upload trigger fires on a **new** version of a file: an upload, a direct Amazon S3 write, a copy, move, or rename into the asset, a revert to an earlier version, and — when the workflow allows trigger chaining — another workflow's output. It does not fire when a file or an asset is **unarchived**: the restore copies the file's newest content version forward under a new version id, the pipeline has already analyzed that content, and its metadata, attributes, and vectors stay as they were (the vector indexer marks them live again without re-embedding; see [Vector search](../concepts/vector-search.md#only-the-latest-live-version-is-searchable)). To analyze a restored file again, re-execute the workflow on it or run the vector reindexer.
 
+### Files already in the deployment
+
+Turning the pipeline on does not analyze the files a deployment already holds. The file-upload trigger fires only for a version written after the trigger is armed, so a file uploaded before then has no `sys_*` attributes, `genai_*` metadata or vector until a run reaches it. Two ways start those runs:
+
+-   **Run the workflow on a file.** The system workflow runs like any other workflow: in an asset's **File Manager**, select a file and choose **Execute Workflow** from the **Automation** menu, then pick **SYSTEM - GenAI Metadata Generation**; or launch it with `vamscli workflow execute --workflow-database-id GLOBAL -w system-genai-metadata --input-file <databaseId>:<assetId>:<fileKey>`. Each execution analyzes one file, so a whole asset or a folder is not accepted as the selection. This works with vector search on or off.
+-   **With vector search on, run the vector reindexer.** Its `enqueue` operation, which the `vectorBackfill` step of the [v2.6 to v2.7 migration](../deployment/update-the-solution.md#v26-to-v27) wraps, launches the full workflow for the latest live version of every file the workflow's input filters admit, at most `app.vectorSearch.indexingConcurrency` at a time. A file with no attributes or metadata yet gets them from that run as well as its vector, and a file that has them is analyzed again. See [Reindexing](../concepts/vector-search.md#reindexing) for its options and cost.
+
 <!-- TODO(owner): diagram: pipeline_usecase_systemGenAiMetadata.png — pipeline use-case diagram (branches, images, Bedrock calls, event to the vector indexer), exported to documentation/diagrams/ and static/img/ -->
 
 ## Supported files and how each is analyzed

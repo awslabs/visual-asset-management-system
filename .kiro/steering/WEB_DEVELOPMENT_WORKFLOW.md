@@ -115,6 +115,8 @@ web/
       Databases.tsx
       LandingPage.tsx
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
+                            #   ListPage.tsx keys its body by the route's databaseId: the routes
+                            #   that share one page component keep it mounted (#1228)
       search/               # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
       # Orchestration route shells rendering the matching features/orchestration component
@@ -885,6 +887,9 @@ against any sandbox. The core spec for a page outside the orchestration module i
     opened by click, Enter or Space; an exact count has none.
 -   **A database route locks the Database filter and names it**: the disabled multiselect reads the
     database id, not "All databases".
+-   **Clear all filters is absent until a criterion is set**: it shows once a query, a filter or a
+    metadata filter row is set and is gone after it is pressed; a fresh load, a record type switch
+    and a database route's locked database show none.
 
 Claude Code counterpart: `web/e2e/CLAUDE.md` ("Selector facts worth not rediscovering", "Adding a core
 spec for a new page").

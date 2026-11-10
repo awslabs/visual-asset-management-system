@@ -241,6 +241,10 @@ locators — the app's markup is not always guessable, and these were establishe
 -   **A database route locks the Database filter and names it.** On `#/databases/<databaseId>/assets/`
     the disabled Database multiselect reads the database id, not "All databases", so
     `getByRole("button", { name: /^All databases/ })` finds nothing there.
+-   **Clear all filters is absent until a criterion is set.** The title row shows the button only
+    once a query, a filter or a metadata filter row is set, and it is gone again after it is pressed.
+    A fresh load, a record type switch and a database route's locked database show none, so set a
+    filter before looking for it, and expect no button on an untouched page.
 
 When a page's markup changes, fix the helper once; every spec follows.
 

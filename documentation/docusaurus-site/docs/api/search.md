@@ -751,7 +751,7 @@ One field per index rather than one field per key is what keeps a deployment's m
 Three separate things are worth keeping apart when reading the rest of this page:
 
 -   **What the index stores** — the `MD_` and `AB_` objects above.
--   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as the object itself, `MD_` (plus `AB_` on the file index), which matches any of its values. On Amazon OpenSearch Serverless a value pattern that is not a prefix (a leading `*`, a `?` or an inner `*`) is sent to the `flat_object` value subfield `MD_._value` / `AB_._value` instead, and a key pattern of that kind to `MD_._valueAndPath`, because Serverless answers such patterns on the object itself with key names. An exact value or a prefix (`SBXC-325`, `SBXC*`) matches the whole value on every engine.
+-   **What a query addresses internally** — one key as `MD_.{key}` or `AB_.{key}`, and a value-only search as the object itself, `MD_` (plus `AB_` on the file index), which matches any of its values. On Amazon OpenSearch Serverless a value pattern that is not a prefix (a leading `*`, a `?` or an inner `*`) is sent to the `flat_object` value subfield `MD_._value` / `AB_._value` instead, and a key pattern of that kind to `MD_._valueAndPath`, because Serverless answers such patterns on the object itself with key names. An exact value or a prefix (`PRJ-325`, `PRJ*`) matches the whole value on every engine.
 -   **What a request may submit** — see below. The submitted spelling is normalized before the query is built, so it need not match either of the above.
 
 #### Values of Several Words
