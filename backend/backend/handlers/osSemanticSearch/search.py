@@ -2263,7 +2263,7 @@ class DualIndexResponseProcessor:
             if not isinstance(aggregation, dict) or "buckets" not in aggregation:
                 raised[name] = aggregation
                 continue
-            counts: Dict[Any, int] = {}
+            hit_counts: Dict[Any, int] = {}
             for hit in passed_hits:
                 index_type = FILE_INDEX if DualIndexResponseProcessor._is_file_hit(hit) else ASSET_INDEX
                 if name not in AGGREGATED_FIELDS[index_type]:
@@ -2271,15 +2271,29 @@ class DualIndexResponseProcessor:
                 value = hit.get("_source", {}).get(name)
                 for key in (value if isinstance(value, list) else [value]):
                     if key is not None:
-                        counts[key] = counts.get(key, 0) + 1
+                        hit_counts[key] = hit_counts.get(key, 0) + 1
+            counts: Dict[Any, int] = {}
             for bucket in aggregation.get("buckets") or []:
                 key = bucket.get("key")
-                counts[key] = max(counts.get(key, 0), int(bucket.get("doc_count", 0) or 0))
-            buckets = sorted(
+                counts[key] = max(hit_counts.pop(key, 0), int(bucket.get("doc_count", 0) or 0))
+            # Documents of values OpenSearch did not return as buckets (#770)
+            other = int(aggregation.get("sum_other_doc_count", 0) or 0)
+            if other == 0:
+                # OpenSearch returned every value it counted, so a value only the passed hits carry
+                # had no certain document and is a bucket of its own
+                counts.update(hit_counts)
+            else:
+                # Past the returned buckets OpenSearch counted `other` documents without naming their
+                # values; the passed hits of those values are counted there too, so they are counted
+                # once, in the larger of the two numbers, and not as buckets as well
+                other = max(other, sum(hit_counts.values()))
+            ordered = sorted(
                 ({"key": key, "doc_count": count} for key, count in counts.items() if count > 0),
                 key=lambda b: (-b["doc_count"], str(b["key"])),
-            )[:AGGREGATION_BUCKET_LIMIT]
-            raised[name] = {**aggregation, "buckets": buckets}
+            )
+            other += sum(b["doc_count"] for b in ordered[AGGREGATION_BUCKET_LIMIT:])
+            raised[name] = {**aggregation, "buckets": ordered[:AGGREGATION_BUCKET_LIMIT],
+                            "sum_other_doc_count": other}
         return raised
 
     @staticmethod
@@ -2398,12 +2412,17 @@ class DualIndexResponseProcessor:
         Uses str_databaseid aggregation as the authoritative total since it
         groups all records by database (which aligns with access control).
         Falls back to str_assetid if str_databaseid is not present.
+
+        The terms aggregation returns at most AGGREGATION_BUCKET_LIMIT buckets and counts the
+        documents of every further value in ``sum_other_doc_count``, which is added, so a search whose
+        hits span more databases than that is counted whole (#770).
         """
         for agg_key in ["str_databaseid", "str_assetid"]:
             agg_data = aggregations.get(agg_key, {})
             buckets = agg_data.get("buckets", [])
             if buckets:
-                return sum(bucket.get("doc_count", 0) for bucket in buckets)
+                other = int(agg_data.get("sum_other_doc_count", 0) or 0)
+                return sum(bucket.get("doc_count", 0) for bucket in buckets) + other
         return None
 
     def _fix_aggregation_structure(self, aggregations: Dict[str, Any]) -> Dict[str, Any]:
