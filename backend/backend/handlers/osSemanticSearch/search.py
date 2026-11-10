@@ -18,7 +18,6 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
 from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.osSemanticSearch.search.DatabaseAccessManager
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
@@ -31,7 +30,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import deferred_authorization_audit
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, service_unavailable, VAMSGeneralErrorResponse, validation_error_message
 from models.search import (
     SearchRequestModel, SimpleSearchRequestModel, SearchResponseModel, SearchHitModel, SearchHitExplanationModel,
     AggregationModel, IndexMappingResponseModel
@@ -90,16 +89,22 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
+class SearchServiceUnavailable(Exception):
+    """OpenSearch is enabled but cannot serve the request now: a setting could not be read or the client
+    could not be created. Answered 503 with SEARCH_UNAVAILABLE_MESSAGE; the cause stays in the log."""
+
+
 # Get SSM parameter values
 def get_ssm_parameter_value(parameter_name: str) -> str:
-    """Get SSM parameter value"""
+    """Get SSM parameter value. A failed read raises SearchServiceUnavailable; the parameter name is
+    logged, never returned to the caller."""
     try:
         ssm_client = boto3.client('ssm', config=retry_config)
         response = ssm_client.get_parameter(Name=parameter_name)
         return response['Parameter']['Value']
     except Exception as e:
         logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
+        raise SearchServiceUnavailable() from e
 
 # The three aos/* SSM values, read on first OpenSearch use so a deployment without OpenSearch imports.
 _opensearch_settings: Optional[Dict[str, str]] = None
@@ -117,13 +122,18 @@ def opensearch_settings() -> Dict[str, str]:
 
 
 SEARCH_NOT_AVAILABLE_MESSAGE = "Search is not available when OpenSearch feature is not enabled"
+# The answer when OpenSearch is enabled but cannot serve the request now (see SearchServiceUnavailable).
+SEARCH_UNAVAILABLE_MESSAGE = "Search is temporarily unavailable. Try again in a moment."
 
 
 def _not_available() -> APIGatewayProxyResponseV2:
-    response = dict(STANDARD_JSON_RESPONSE)
-    response["statusCode"] = 404
-    response["body"] = json.dumps({"message": SEARCH_NOT_AVAILABLE_MESSAGE})
-    return response
+    """404: the deployment was built without OpenSearch."""
+    return general_error(body={"message": SEARCH_NOT_AVAILABLE_MESSAGE}, status_code=404)
+
+
+def _search_unavailable(event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
+    """503: OpenSearch is enabled, but its client could not be created or its settings read."""
+    return service_unavailable(body={"message": SEARCH_UNAVAILABLE_MESSAGE}, event=event)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -2491,10 +2501,8 @@ def handle_get_request(event: Dict[str, Any], search_manager: DualIndexSearchMan
     """Handle GET request for index mappings"""
     try:
         if not search_manager.is_available():
-            return general_error(
-                body={"message": "Search is not available when OpenSearch feature is not enabled"},
-                status_code=404
-            )
+            # lambda_handler answers a deployment without OpenSearch before this; here the client failed.
+            return _search_unavailable(event)
         
         # Get index mappings
         mappings = search_manager.get_index_mappings()
@@ -2513,10 +2521,8 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
     """Handle POST request for search operations"""
     try:
         if not search_manager.is_available():
-            return general_error(
-                body={"message": "Search is not available when OpenSearch feature is not enabled"},
-                status_code=404
-            )
+            # lambda_handler answers a deployment without OpenSearch before this; here the client failed.
+            return _search_unavailable(event)
         
         # Parse request body
         body = event.get('body')
@@ -2577,10 +2583,8 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
     """Handle POST request for simple search operations"""
     try:
         if not search_manager.is_available():
-            return general_error(
-                body={"message": "Search is not available when OpenSearch feature is not enabled"},
-                status_code=404
-            )
+            # lambda_handler answers a deployment without OpenSearch before this; here the client failed.
+            return _search_unavailable(event)
         
         # Parse request body
         body = event.get('body')
@@ -2709,6 +2713,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except SearchServiceUnavailable:
+        return _search_unavailable(event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

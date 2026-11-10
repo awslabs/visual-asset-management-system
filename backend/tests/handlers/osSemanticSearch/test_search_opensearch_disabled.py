@@ -129,3 +129,43 @@ class TestOpenSearchEnabled:
         assert manager.is_available() is False
         with pytest.raises(module.VAMSGeneralErrorResponse):
             manager.search_dual_index({}, {}, ["file"])
+
+
+ROUTES = [("POST", "/search"), ("GET", "/search"), ("POST", "/search/simple")]
+
+
+class TestOpenSearchEnabledButUnavailable:
+    """With OpenSearch enabled, a setting that cannot be read or a client that cannot be created is a
+    fault of the service, not of the request and not a missing feature: every route answers 503 with a
+    generic try-again message, and the SSM parameter name stays in the log."""
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_an_unreadable_setting_is_a_503_without_the_parameter_name(self, monkeypatch, method, path):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = RuntimeError("AccessDenied on /vams/aos/endPoint")
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        body = json.loads(response["body"])
+        assert body == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert "/vams/aos" not in response["body"] and "parameter" not in response["body"].lower()
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_a_client_that_cannot_be_created_is_a_503_not_feature_off(self, monkeypatch, method, path):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        broken = MagicMock()
+        broken.OpenSearch.side_effect = RuntimeError("no network")
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": broken}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        assert json.loads(response["body"]) == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert module.SEARCH_NOT_AVAILABLE_MESSAGE not in response["body"]
+
+    def test_a_failed_read_is_retried_on_the_next_request(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = RuntimeError("throttled")
+        with patch("boto3.client", side_effect=recorder):
+            with pytest.raises(module.SearchServiceUnavailable):
+                module.opensearch_settings()
+            recorder.ssm.get_parameter.side_effect = lambda Name: {"Parameter": {"Value": f"value-of-{Name}"}}
+            assert module.opensearch_settings()["endpoint"] == "value-of-/vams/aos/endPoint"

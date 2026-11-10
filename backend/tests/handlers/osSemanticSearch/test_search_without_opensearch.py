@@ -115,5 +115,8 @@ class TestSearchWithoutOpenSearch:
         module = _load(monkeypatch, ssm_client, "false")
         assert ssm_client.get_parameter.call_count == 0
         with patch("boto3.client", return_value=ssm_client):
-            with pytest.raises(Exception, match="configuration parameter"):
+            # The failed read is a service fault (answered 503 by the handler); its message names no
+            # parameter, which goes to the log only.
+            with pytest.raises(module.SearchServiceUnavailable) as caught:
                 module.DualIndexSearchManager()
+        assert str(caught.value) == ""
