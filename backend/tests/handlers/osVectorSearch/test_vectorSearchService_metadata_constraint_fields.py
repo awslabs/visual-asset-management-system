@@ -49,6 +49,11 @@ def _metadata_clauses(svc, search_module, metadata_query, mode):
     ("maintenance", "value", {PDF, TXT}),
     ("maint*", "both", {PDF}),
     ("category:maintenance log", "both", {PDF}),
+    # a value in one pair of double quotes is that exact value (#1299)
+    ('"maintenance log"', "both", {PDF}),
+    ('"maintenance log"', "value", {PDF}),
+    ('category:"maintenance log"', "both", {PDF}),
+    ('"Operator Notes" OR "PDF"', "both", {PDF, TXT}),
 ])
 def test_the_constraint_keeps_the_files_holding_the_value(svc, search_module, engine, metadata_query, mode,
                                                           expected):

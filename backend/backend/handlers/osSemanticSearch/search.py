@@ -617,6 +617,88 @@ class FieldClassifier:
         escaped = FieldClassifier.escape_opensearch_query_string(value.strip(), preserve_wildcards=True)
         return re.sub(r'(\s)', r'\\\1', escaped)
 
+    @staticmethod
+    def quoted_exact_value(value: str) -> Optional[str]:
+        """The text inside ``value`` when the caller wrapped it in exactly one pair of double quotes,
+        else None (#1299).
+
+        A quoted value is searched as that exact value: `*` and `?` inside it are literal, and a value
+        of several words matches the whole value. Escaping the caller's quotes made them literal
+        characters of the searched value, which no record holds. An unbalanced quote, a quote inside
+        the value and empty quotes return None, so they stay literal characters."""
+        stripped = value.strip()
+        if len(stripped) < 2 or stripped[0] != '"' or stripped[-1] != '"':
+            return None
+        inner = stripped[1:-1]
+        if '"' in inner or not inner.strip():
+            return None
+        return inner
+
+    @staticmethod
+    def exact_phrase(value: str) -> str:
+        """``value`` as one exact query_string phrase: every special character escaped, `*` and `?`
+        included, so the phrase holds them as literal characters."""
+        return f'"{FieldClassifier.escape_opensearch_query_string(value, preserve_wildcards=False)}"'
+
+    # A quoted metadataQuery value: its opening quote starts the query or follows an ' AND ' / ' OR '
+    # separator (in 'both' mode also a `key:` there), and its closing quote ends the query or precedes a
+    # separator (#1299)
+    _QUOTED_VALUE_AFTER = re.compile(r'\s*(?:$| AND | OR )')
+
+    @staticmethod
+    def _opens_quoted_value(text: str, opening: int, allow_key: bool) -> bool:
+        """Whether only whitespace, or with ``allow_key`` a ``key:`` and whitespace, stands between the
+        quote at ``opening`` and the query start or the separator before it. Linear in the text."""
+        start = 0
+        for separator in (' AND ', ' OR '):
+            at = text.rfind(separator, 0, opening)
+            if at != -1:
+                start = max(start, at + len(separator))
+        segment = text[start:opening]
+        if not segment.strip():
+            return True
+        key, colon, rest = segment.partition(':')
+        return allow_key and bool(colon) and '"' not in key and not rest.strip()
+
+    @staticmethod
+    def split_metadata_query(text: str, search_mode: str) -> Tuple[Optional[str], List[str]]:
+        """(operator, terms) of a metadataQuery: split at every ' AND ', or else at every ' OR ', except
+        that a separator inside a value wholly wrapped in one pair of double quotes belongs to that value
+        (#1299): a quoted term in 'value' and 'both' mode, and the quoted value of a ``key:value`` term in
+        'both' mode. 'key' mode, and a text without such a value, are split exactly as ``str.split``
+        splits them."""
+        spans = []
+        allow_key = search_mode not in ("key", "value")
+        opening = text.find('"') if search_mode != "key" else -1
+        while opening != -1:
+            closing = text.find('"', opening + 1)
+            if closing == -1:
+                break
+            if (FieldClassifier._QUOTED_VALUE_AFTER.match(text, closing + 1)
+                    and FieldClassifier._opens_quoted_value(text, opening, allow_key)):
+                spans.append((opening, closing))
+                opening = text.find('"', closing + 1)
+            else:
+                opening = closing
+
+        def split(separator: str) -> List[str]:
+            parts, start, at = [], 0, text.find(separator)
+            while at != -1:
+                if any(first < at < last for first, last in spans):
+                    at = text.find(separator, at + 1)
+                    continue
+                parts.append(text[start:at])
+                start = at + len(separator)
+                at = text.find(separator, start)
+            parts.append(text[start:])
+            return parts
+
+        for operator in ('AND', 'OR'):
+            parts = split(f' {operator} ')
+            if len(parts) > 1:
+                return operator, parts
+        return None, [text]
+
     # The metadata (MD_) and attribute (AB_, file index only) objects are mapped `flat_object`. OpenSearch
     # indexes three Lucene fields for one: `<root>._value` (each leaf value), `<root>._valueAndPath`
     # (`<root>.<key>=<value>`) and `<root>` itself (the key paths, `<root>.<key>`). The field a query must
@@ -1016,6 +1098,19 @@ class SimpleSearchQueryBuilder:
         Returns:
             OpenSearch query dict
         """
+        # A value in one pair of double quotes is that exact value, its `*` and `?` literal (#1299)
+        quoted = self.field_classifier.quoted_exact_value(value)
+        if quoted is not None:
+            if use_keyword:
+                return {"term": {f"{field_name}.keyword": quoted}}
+            return {
+                "query_string": {
+                    "query": field_name + ":" + self.field_classifier.exact_phrase(quoted),
+                    "default_operator": "OR",
+                    "lenient": True
+                }
+            }
+
         # Check if user provided wildcards
         has_wildcards = '*' in value or '?' in value
         
@@ -1262,13 +1357,27 @@ class SimpleSearchQueryBuilder:
                 })
         
         if request.metadataValue:
+            # A value in one pair of double quotes is that exact whole value, its `*` and `?` literal (#1299)
+            quoted_value = self.field_classifier.quoted_exact_value(request.metadataValue)
+
             # Check if user provided wildcards
-            has_wildcards = '*' in request.metadataValue or '?' in request.metadataValue
+            has_wildcards = quoted_value is None and ('*' in request.metadataValue or '?' in request.metadataValue)
             
             # Search across all values in flat objects; the fields depend on the query kind (#1285)
             prefix_only = has_wildcards and self.field_classifier.is_prefix_pattern(request.metadataValue)
 
-            if has_wildcards:
+            if quoted_value is not None:
+                # An exact phrase: the roots, which both engines rewrite onto the values
+                search_queries.append({
+                    "query_string": {
+                        "query": self.field_classifier.exact_phrase(quoted_value),
+                        "fields": self.field_classifier.flat_object_value_fields(index_type, wildcard=False),
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+            elif has_wildcards:
                 # The caller's pattern, matched against each whole value
                 search_queries.append({
                     "query_string": {
@@ -1641,20 +1750,16 @@ class DualIndexQueryBuilder:
         if not metadata_query:
             return {}
         
-        # Check if query contains AND or OR operator for multiple terms
-        operator = None
-        terms = [metadata_query]
-        if ' AND ' in metadata_query:
-            operator = 'AND'
-            terms = metadata_query.split(' AND ')
-        elif ' OR ' in metadata_query:
-            operator = 'OR'
-            terms = metadata_query.split(' OR ')
+        # Check if query contains AND or OR operator for multiple terms. An operator inside a term wholly
+        # in one pair of double quotes belongs to the quoted value (#1299).
+        operator, terms = self.field_classifier.split_metadata_query(metadata_query, search_mode)
         terms = [term.strip() for term in terms if term.strip()]
 
         term_queries = []
         for term in terms:
-            if search_mode not in ("key", "value") and ':' in term:
+            # A term wholly in one pair of quotes is one value, even with a ':' inside (#1299)
+            quoted_term = self.field_classifier.quoted_exact_value(term) is not None
+            if search_mode not in ("key", "value") and ':' in term and not quoted_term:
                 field_part, value_part = term.split(':', 1)
                 term_query = self._build_metadata_pair_query(field_part.strip(), value_part.strip())
             else:
@@ -1696,8 +1801,13 @@ class DualIndexQueryBuilder:
         # Whitespace ends a field name in query_string syntax, so escape it in the name only
         escaped_field_name = re.sub(r'(\s)', r'\\\1', escaped_field_name)
 
+        # A value in one pair of double quotes is that exact value, its `*` and `?` literal (#1299)
+        quoted_value = self.field_classifier.quoted_exact_value(value_part)
+        if quoted_value is not None:
+            value_part = quoted_value
+
         # Check if user provided wildcards
-        has_wildcards = '*' in value_part or '?' in value_part
+        has_wildcards = quoted_value is None and ('*' in value_part or '?' in value_part)
 
         # Escape the value part (preserve wildcards if user provided them)
         escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
@@ -1722,6 +1832,21 @@ class DualIndexQueryBuilder:
 
     def _build_metadata_term_query(self, term: str, search_mode: str, index_type: str) -> Dict[str, Any]:
         """Clause for one metadata term that is a key ('key' mode) or a value ('value' and 'both')."""
+        # A value in one pair of double quotes is that exact whole value, its `*` and `?` literal, in
+        # 'value' and 'both' mode alike (#1299). Exact phrases name the roots, which both engines rewrite
+        # onto the values (#1285).
+        quoted_value = self.field_classifier.quoted_exact_value(term) if search_mode != "key" else None
+        if quoted_value is not None:
+            return {
+                "query_string": {
+                    "query": self.field_classifier.exact_phrase(quoted_value),
+                    "fields": self.field_classifier.flat_object_value_fields(index_type, wildcard=False),
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            }
+
         # Check if user provided wildcards
         has_wildcards = '*' in term or '?' in term
         escaped_query = self.field_classifier.escape_opensearch_query_string(term, preserve_wildcards=has_wildcards)
