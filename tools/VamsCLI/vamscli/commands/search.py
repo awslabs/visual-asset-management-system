@@ -653,12 +653,9 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         return result
     
     except SearchDisabledError as e:
-        output_error(
-            e,
-            json_output,
-            error_type="Search Disabled",
-            helpful_message="Use 'vamscli assets list' instead."
-        )
+        # The refusal itself names what to use instead (search nlp where vector search is on), so no
+        # second, narrower hint follows it.
+        output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
@@ -816,12 +813,9 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         return result
     
     except SearchDisabledError as e:
-        output_error(
-            e,
-            json_output,
-            error_type="Search Disabled",
-            helpful_message="Use 'vamscli assets list' instead."
-        )
+        # The refusal itself names what to use instead (search nlp where vector search is on), so no
+        # second, narrower hint follows it.
+        output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
@@ -977,12 +971,9 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         return result
     
     except SearchDisabledError as e:
-        output_error(
-            e,
-            json_output,
-            error_type="Search Disabled",
-            helpful_message="Use 'vamscli assets list' instead."
-        )
+        # The refusal itself names what to use instead (search nlp where vector search is on), so no
+        # second, narrower hint follows it.
+        output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         output_error(
@@ -1057,12 +1048,9 @@ def mapping(ctx: click.Context, output_format: str, json_output: bool):
         return mapping
     
     except SearchDisabledError as e:
-        output_error(
-            e,
-            json_output,
-            error_type="Search Disabled",
-            helpful_message="Use 'vamscli assets list' instead."
-        )
+        # The refusal itself names what to use instead (search nlp where vector search is on), so no
+        # second, narrower hint follows it.
+        output_error(e, json_output, error_type="Search Disabled")
         raise click.ClickException(str(e))
     except SearchMappingError as e:
         output_error(
@@ -1124,7 +1112,9 @@ def _require_vector_search(profile_manager) -> None:
 @click.option('--size', type=click.IntRange(1, NLP_MAX_SIZE), default=25,
               help='Number of hits to return (1-100, default: 25)')
 @click.option('--file-class', 'file_classes', multiple=True,
-              help='Hard filter on the indexed file class, e.g. video, document (repeatable)')
+              help='Hard filter on the indexed file class (repeatable): image, video, audio, document, '
+                   'text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc or other; 3D models are '
+                   'mesh, usd or cad')
 @click.option('--file-ext', 'file_exts', multiple=True,
               help='Hard filter on the file extension, e.g. glb (repeatable)')
 @click.option('--no-segments', is_flag=True,
@@ -1236,11 +1226,13 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
         return result
 
     except SearchUnavailableError as e:
+        # The server's message says why (the index is being built, the filters could not be applied, or
+        # search is busy); every case is retried later.
         output_error(
             e,
             json_output,
             error_type="Search Unavailable",
-            helpful_message="The vector index is still being built. Retry in a few minutes."
+            helpful_message="Retry in a few minutes."
         )
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:

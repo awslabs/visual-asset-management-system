@@ -82,8 +82,8 @@ def test_search_nlp_forwards_every_field_of_the_route_model():
 
 
 def test_search_nlp_file_class_ids_match_the_backend_classifier():
-    """The tool validates `file_classes` against a copy of the backend's FILE_CLASSES (the route
-    itself does not validate them); the copy must not drift from the source."""
+    """The tool validates `file_classes` against a copy of the backend's FILE_CLASSES before the call
+    (the route refuses an unknown id too); the copy must not drift from the source."""
     backend_source = (REPO_ROOT / "backend/backend/common/vectorsearch/fileClassIntent.py").read_text(
         encoding="utf-8")
     phrases = re.search(r"FILE_CLASS_PHRASES: Dict\[str, str\] = \{(.*?)\n\}", backend_source, re.S)

@@ -195,7 +195,7 @@ def test_search_nlp_rejects_an_unknown_entity_type_before_calling_the_api(mock_c
 
 
 def test_search_nlp_rejects_an_unknown_file_class_and_names_the_valid_ids(mock_client):
-    # The route does not validate fileClasses, so an unknown id would be a silent empty result.
+    # Refused before the call, with the valid ids named (the route answers 400 for it too).
     out = server.search_nlp(query="q", file_classes=["document", "3d-model"])
     assert out["error_type"] == "ValueError"
     assert "3d-model" in out["error"] and "document" not in out["error"].split("got")[1]

@@ -5036,12 +5036,16 @@ class APIClient(CustomAPIClientMixin):
             plus top-level `nlp` and `warnings`
 
         Raises:
-            SearchUnavailableError: 503 while the vector index is being built (message preserved)
+            SearchUnavailableError: 503 with the server's message: the vector index is being built,
+                the OpenSearch-only constraints could not be applied, or search is busy
             AuthenticationError: 401/403
             APIError: 400 (invalid parameters), 404 (route absent - feature off), other failures
         """
         try:
-            response = self.post(API_SEARCH_NLP, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_NLP, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:

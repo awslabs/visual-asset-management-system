@@ -1733,3 +1733,110 @@ class TestSearchLowerBoundTotal:
             # Pure JSON (no status lines), identical to the API body: value stays numeric.
             assert json.loads(result.output) == response
             assert "12+" not in result.output
+
+
+def _feature_switches(*on):
+    return lambda feature, *_: feature in on
+
+
+@pytest.mark.parametrize("command", ["assets", "files"])
+class TestKeywordRefusalPrintsOneMessage:
+    """With NOOPENSEARCH on, the keyword commands print one refusal: the one that names what to use
+    instead (`search nlp` too when VECTORSEARCH is on), with no second, narrower hint after it."""
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_with_vector_search_the_one_message_names_search_nlp(self, mock_is_feature_enabled, command,
+                                                                cli_runner, search_command_mocks):
+        from vamscli.constants import FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH
+        with search_command_mocks:
+            mock_is_feature_enabled.side_effect = _feature_switches(FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH)
+            result = cli_runner.invoke(cli, ['search', command, '-q', 'pump'])
+        assert result.exit_code == 1
+        assert "Use 'vamscli search nlp' for natural-language search, or 'vamscli assets list'." in result.output
+        assert "Use 'vamscli assets list' instead." not in result.output
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_without_vector_search_the_asset_list_is_named_once(self, mock_is_feature_enabled, command,
+                                                               cli_runner, search_command_mocks):
+        from vamscli.constants import FEATURE_NOOPENSEARCH
+        with search_command_mocks:
+            mock_is_feature_enabled.side_effect = _feature_switches(FEATURE_NOOPENSEARCH)
+            result = cli_runner.invoke(cli, ['search', command, '-q', 'pump'])
+        assert result.exit_code == 1
+        refusal_lines = [line for line in result.output.splitlines()
+                         if "vamscli assets list" in line and not line.startswith("Error:")]
+        assert len(refusal_lines) == 1
+        assert 'search nlp' not in result.output
+
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_json_output_carries_the_one_message(self, mock_is_feature_enabled, command,
+                                                 cli_runner, search_command_mocks):
+        from vamscli.constants import FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH
+        with search_command_mocks:
+            mock_is_feature_enabled.side_effect = _feature_switches(FEATURE_NOOPENSEARCH, FEATURE_VECTORSEARCH)
+            result = cli_runner.invoke(cli, ['search', command, '-q', 'pump', '--json-output'])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error_type"] == "SearchDisabledError" and "search nlp" in payload["error"]
+
+
+class TestSearchNlpClientThroughTheRequestWrapper:
+    """APIClient.search_nlp through the real request wrapper (only the HTTP session is replaced): the
+    status codes and the server's message reach the mapping, so a 503 is a SearchUnavailableError that
+    carries the server's reason and a 400 names the refused parameter, instead of the wrapper's generic
+    'Server error' / 'Invalid request' text."""
+
+    def _client_answering(self, monkeypatch, status, message):
+        client = APIClient("https://example.invalid/api", Mock())
+        monkeypatch.setattr(client, "_validate_token_before_request", lambda include_auth: None)
+        monkeypatch.setattr(client, "_get_headers", lambda include_auth: {})
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps({"message": message}).encode("utf-8")
+        response.headers["Content-Type"] = "application/json"
+        response.url = "https://example.invalid/api/search/nlp"
+        monkeypatch.setattr(client.session, "request", Mock(return_value=response))
+        return client
+
+    @pytest.mark.parametrize("message", [
+        "Vector index is being built",
+        "The search filters could not be applied. Try again; if it keeps failing, contact your administrator.",
+        "Search is busy right now. Try again in a moment.",
+    ])
+    def test_a_503_is_search_unavailable_with_the_servers_message(self, monkeypatch, message):
+        client = self._client_answering(monkeypatch, 503, message)
+        with pytest.raises(SearchUnavailableError) as caught:
+            client.search_nlp({"query": "x"})
+        assert str(caught.value) == message
+
+    def test_a_400_names_the_refusal(self, monkeypatch):
+        client = self._client_answering(monkeypatch, 400, "fileClasses accepts only these values: image, video")
+        with pytest.raises(APIError, match="Invalid search parameters: fileClasses accepts only"):
+            client.search_nlp({"query": "x", "fileClasses": ["3d-model"]})
+
+    def test_a_404_says_the_feature_may_be_off(self, monkeypatch):
+        client = self._client_answering(monkeypatch, 404, "Not Found")
+        with pytest.raises(APIError, match="VECTORSEARCH"):
+            client.search_nlp({"query": "x"})
+
+
+class TestSearchNlpUnavailableCommand:
+    @pytest.mark.parametrize("message", ["Vector index is being built", "Search is busy right now. Try again in a moment."])
+    def test_the_server_reason_and_a_retry_hint_are_printed(self, cli_runner, search_command_mocks, message):
+        with search_command_mocks as mocks, \
+                patch('vamscli.commands.search.is_feature_enabled', return_value=True):
+            mocks['api_client'].search_nlp.side_effect = SearchUnavailableError(message)
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'pump manual'])
+        assert result.exit_code == 1
+        assert message in result.output and "Retry in a few minutes." in result.output
+        assert "still being built" not in result.output
+
+
+def test_the_file_class_help_lists_the_classifier_ids():
+    from vamscli.commands.search import nlp
+
+    help_text = next(option.help for option in nlp.params if option.name == 'file_classes')
+    for class_id in ("image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+                     "pointcloud", "splat", "ifc", "other"):
+        assert class_id in help_text
+    assert "3d-model" not in help_text

@@ -656,8 +656,8 @@ def search_files(
 _NLP_ENTITY_TYPES = ("file", "asset")
 _NLP_SIZE_MAX = 100
 # The fileClass ids the vector index stores, in the order the backend declares them
-# (backend/backend/common/vectorsearch/fileClassIntent.py FILE_CLASSES). The route does not validate
-# `fileClasses`, so an unknown id is a silent empty result; the tool refuses it here instead.
+# (backend/backend/common/vectorsearch/fileClassIntent.py FILE_CLASSES). The route refuses an unknown
+# id with a 400 as well; the tool refuses it before the call, with the list in the error.
 # tests/test_search_nlp_tool.py pins this copy to the backend's.
 _NLP_FILE_CLASSES = (
     "image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
@@ -760,8 +760,8 @@ def search_nlp(
     - include_archived: also match archived files.
     - file_classes: hard filter on the indexed file class. The ids are exactly: image, video,
       audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other
-      (case-insensitive; the route does not validate them, so any other value is refused here
-      with an error naming this list rather than returning an empty result). When omitted, type
+      (case-insensitive; 3D models are mesh, usd or cad). Any other value is refused here with an
+      error naming this list, before the call; the route refuses it too. When omitted, type
       words in the query soft-boost matching classes and the classes detected are echoed in
       `nlp.classIntent`.
     - file_extensions: hard filter on the file extension, e.g. ["glb", "pdf"] (a leading dot is
@@ -773,6 +773,10 @@ def search_nlp(
       ignored with `opensearch:fields_ignored` when OpenSearch is off.
     - tags: keep only files whose asset carries at least one of these tags. OpenSearch-only,
       ignored with `opensearch:fields_ignored` when OpenSearch is off.
+      When OpenSearch is on but cannot apply metadata_query, geo_search or tags, the call fails
+      (HTTP 503, "The search filters could not be applied...") rather than returning hits the
+      constraint was not applied to; a 503 also means the index is still being built or search is
+      busy. Retry later in each case.
     - include_segments: True (default) also searches inside-file segments (video time windows, text
       chunks); a hit found that way carries `source._vector.segmentHits` and
       `source._vector.bestSegment` ({segmentKey, segmentKind, segmentLabel, segmentStartMs,
@@ -786,7 +790,8 @@ def search_nlp(
     exact (`relation` "eq"). `nlp.truncated` is true when, in addition, a result window filled or
     not every database was searched, so more files may match than were ranked.
     `warnings[]` is the closed set truncated:window, truncated:targets, databases:none_accessible,
-    opensearch:fields_ignored, opensearch:enrichment_failed, segments:window_full; an empty result
+    opensearch:fields_ignored, opensearch:enrichment_failed (file details could not be loaded; only
+    on a call without an OpenSearch-only constraint), segments:window_full; an empty result
     with databases:none_accessible means the caller can access no database, not that nothing
     matched. Each result's `source` carries the OpenSearch-style fields (str_databaseid,
     str_assetid, str_assetname, str_key, str_fileext, …) plus `_vector` {distance,
