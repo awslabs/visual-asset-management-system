@@ -97,7 +97,7 @@ The sidebar provides several categories of filters that narrow search results in
 | **Tags**           | Assets        | Filter by one or more tags assigned to assets.                                                                  |
 | **File extension** | Files         | Filter by file extension (for example, `.e57`, `.las`, `.pdf`).                                                 |
 
-Each option shows how many current results carry that value. The type and tag lists keep the values of the last unfiltered search, so you can still add another value once a filter narrows the results; their counts are always for the current results, and a value with no count in the current results shows none. When the result count is a minimum (shown with `+`), the filter counts are minimums too and carry a `+`.
+Each option shows how many current results carry that value. The type and tag lists keep the values of the last unfiltered search, so you can still add another value once a filter narrows the results; their counts are always for the current results, and a value with no count in the current results shows none. When the result count is a minimum (shown with `+`), the filter counts are minimums too and carry a `+`. A keyword search counts up to 1,000 values per filter; when the results hold more, the type and tag lists offer the most common values and say so under the list ("Only the most common tags are listed."), and a database the counted values do not include shows no count rather than 0.
 
 ### Advanced filters
 
