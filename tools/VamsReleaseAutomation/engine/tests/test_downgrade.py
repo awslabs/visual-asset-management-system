@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Migration audit 2026-11-10 (#1244 D16, D17): downgrades that cross a data migration stop, upgrades skip
-releases without one, and a real gap in the chain still stops."""
+"""Data migrations across versions: a downgrade that crosses a migration stops (deploy and rollback), an upgrade
+skips releases without one, and a real gap in the chain still stops."""
 
 import json
 
