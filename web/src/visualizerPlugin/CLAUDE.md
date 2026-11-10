@@ -382,6 +382,12 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 
 ---
 
+## Three.js Selection Highlight (`ThreeJSViewerPlugin/utils/selectionHighlight.ts`)
+
+-   A selected object wears a highlight clone of its material library entry, made only by `createHighlightMaterial` and put back only by `releaseHighlight` / `syncSelectionHighlight`, which track each clone by identity (a `WeakMap` to the material it came from) and dispose it on deselect. Never detect a highlight from a colour value; the material editor can set any colour.
+-   A lit mesh material glows through `emissive` (0x4caf50, intensity 0.5). A material with no emissive colour (`PointsMaterial`, line and sprite materials, `MeshBasicMaterial`) is tinted green with `vertexColors` off (#1275).
+-   `supportsWireframe(material)` is false for point, line and sprite materials: Wireframe Mode (Controls tab), the material editor's Wireframe option and the material reset skip them, and never add a `wireframe` property to them.
+
 ## Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
 
 Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; do not fetch a referenced file anywhere else.

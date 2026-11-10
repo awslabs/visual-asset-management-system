@@ -292,7 +292,8 @@ Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such
 `PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
 case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
 thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
-0.6% of the pixels). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+0.6% of the pixels; `expect.vertexCount` makes a canvas case also assert the viewer reports
+`<n> vertices`, as the Three.js info box does for the `threejs-ply-points` point cloud). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
 time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
 source before adding a download; no sample binary is ever committed.
 
@@ -309,7 +310,9 @@ must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disa
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
 such as Chromium's own `416` line for an empty file; never widen `CONSOLE_ERROR_IGNORE` for one case)
 and `reads` (the statuses, in order, of the presigned GETs of the sample's file: `[206]`, `[206, 200]`
-or `[416]`, how the bounded text loader read it). A text sample's `viewer` must list the sample's
+or `[416]`, how the bounded text loader read it), and `selectInPanel` (a Three.js canvas case also
+selects the object by its scene graph row and checks the canvas gains, then loses, highlight-green
+pixels, as `threejs-ply-points` does for a point cloud, #1275). A text sample's `viewer` must list the sample's
 `extensionToken` (so `.gitignore` is `(none)`, `.env.example` is `.example`); the manifest jest test
 checks it. Every case fails on console or page errors
 (`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the

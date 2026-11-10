@@ -130,7 +130,7 @@ The tables in this section list the viewers available in every deployment. The P
 | `.spz`    | BabylonJS Gaussian Splat Viewer (SPZ v2, v3), SuperSplat Editor (PlayCanvas) (SPZ v2-v4)        | --                                                 |
 
 :::info[PLY files and multiple viewers]
-The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. `.spz` likewise matches the BabylonJS Gaussian Splat Viewer, which opens SPZ versions 2 and 3, and, when `ALLOWUNSAFEEVAL` is enabled, the SuperSplat Editor, which also opens SPZ version 4. VAMS presents all compatible viewers and you can select the appropriate one for your data type.
+The `.ply` extension is used for both point cloud data and Gaussian splat data. Three viewers match at priority 1 (Potree, BabylonJS Gaussian Splat, Three.js), and the SuperSplat Editor is a fourth when `ALLOWUNSAFEEVAL` is enabled. `.spz` likewise matches the BabylonJS Gaussian Splat Viewer, which opens SPZ versions 2 and 3, and, when `ALLOWUNSAFEEVAL` is enabled, the SuperSplat Editor, which also opens SPZ version 4. VAMS presents all compatible viewers and you can select the appropriate one for your data type. The Three.js Viewer draws a `.ply` file with no faces as a point cloud, and uses the file's per-vertex colours for points and meshes when it has them; a `.ply` without colours is drawn in grey. A point cloud selected in its scene graph or 3D view is drawn in the highlight green, and the Controls tab's Wireframe Mode applies to meshes only.
 :::
 
 ### USD extensions
