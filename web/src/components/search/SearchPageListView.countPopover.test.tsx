@@ -6,10 +6,12 @@
 /**
  * The search table's counter and its "About this count" popover. Totals count only records the
  * caller can open. When the backend can only give a minimum (hits.total.relation "gte") the counter
- * ends in "+" and the popover says why; an exact count gets neither.
+ * ends in "+" and the popover says why; an exact count gets neither. The popover opens from an info
+ * icon button named "About this count", which the keyboard reaches and opens with Enter or Space.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import SearchPageListView from "./SearchPageListView";
 import { INITIAL_STATE } from "./SearchPageTypes";
@@ -71,6 +73,8 @@ function renderView(state: any) {
     );
 }
 
+const countInfoButton = () => screen.getByRole("button", { name: "About this count" });
+
 beforeEach(() => {
     jest.spyOn(console, "log").mockImplementation(() => undefined);
 });
@@ -82,13 +86,39 @@ describe("Search list view count", () => {
         const { container } = renderView(lowerBoundState);
 
         expect(counterText(container)).toBe("3+");
-        fireEvent.click(screen.getByText("\u24D8"));
+        fireEvent.click(countInfoButton());
         expect(screen.getByText("About this count")).toBeInTheDocument();
         expect(screen.getByText(/includes only records you can open/)).toBeInTheDocument();
         expect(screen.getByText(/there may be more/)).toBeInTheDocument();
     });
 
-    it("explains a natural-language minimum by approximate matching, not by permission rules (D75)", () => {
+    it.each([
+        ["Enter", "{Enter}"],
+        ["Space", " "],
+    ])("opens the explanation from the keyboard with %s", async (_, key) => {
+        renderView(lowerBoundState);
+        const trigger = countInfoButton();
+        // An icon button, not a bare glyph: the keyboard reaches it and it is named for screen readers.
+        expect(trigger.tagName).toBe("BUTTON");
+        expect(screen.queryByText(/includes only records you can open/)).toBeNull();
+
+        trigger.focus();
+        expect(trigger).toHaveFocus();
+        await userEvent.keyboard(key);
+        expect(await screen.findByText(/includes only records you can open/)).toBeInTheDocument();
+    });
+
+    it("is reached by Tab", async () => {
+        renderView(lowerBoundState);
+        const trigger = countInfoButton();
+        // Tab from the start of the page until the trigger takes focus (it is not the first stop).
+        for (let i = 0; i < 20 && document.activeElement !== trigger; i++) {
+            await userEvent.tab();
+        }
+        expect(trigger).toHaveFocus();
+    });
+
+    it("explains a natural-language minimum by approximate matching, not by permission rules", () => {
         const nlpState = {
             ...lowerBoundState,
             result: {
@@ -99,7 +129,7 @@ describe("Search list view count", () => {
         };
         renderView(nlpState);
 
-        fireEvent.click(screen.getByText("\u24D8"));
+        fireEvent.click(countInfoButton());
         expect(screen.getByText(/includes only records you can open/)).toBeInTheDocument();
         expect(
             screen.getByText(/finds the closest matches approximately, so it can miss a weak match/)
@@ -120,7 +150,7 @@ describe("Search list view count", () => {
         };
         renderView(nlpState);
 
-        fireEvent.click(screen.getByText("\u24D8"));
+        fireEvent.click(countInfoButton());
         expect(screen.getByText(/approximately/)).toBeInTheDocument();
         expect(screen.getByText(/This search also reached its result limit\./)).toBeInTheDocument();
         expect(screen.queryByText(/A result window of 100 filled/)).not.toBeInTheDocument();
@@ -130,6 +160,6 @@ describe("Search list view count", () => {
         const { container } = renderView(exactState);
 
         expect(counterText(container)).toBe("1");
-        expect(screen.queryByText("\u24D8")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "About this count" })).toBeNull();
     });
 });
