@@ -45,6 +45,8 @@ vamscli search assets [OPTIONS]
 `--output-format json` and `--json-output` are equivalent: both emit the raw API response. Use `--output-format csv` to write comma-separated rows to standard output, suitable for redirecting to a file.
 :::
 
+`--query` is split at whitespace into words. Each word matches anywhere inside a value, and a record matches when at least one of the words does, so `-q "maintenance log"` finds a file whose metadata reads `night shift, maintenance log`. `*` and `?` are literal characters here. The same applies to `search files` and `search simple`.
+
 ### Filter syntax
 
 The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause. A JSON array is sent as it is, and each item must be a `query_string` clause; the API rejects any other clause type, such as `term` or `range`, with a 400 error.
