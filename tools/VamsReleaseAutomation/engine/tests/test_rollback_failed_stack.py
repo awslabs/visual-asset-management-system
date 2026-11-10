@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""B-050-36 (E2E-050 Phase B10d): a cdk deploy whose stack CloudFormation could not roll back is ROLLBACK_FAILED,
+"""(live test Phase B10d): a cdk deploy whose stack CloudFormation could not roll back is ROLLBACK_FAILED,
 not an IT block.
 
-demo11's fresh prod create (2026-11-07 17:39-17:54 UTC) failed first on the account's CloudFront cache-policy quota
+prod01's fresh prod create (2026-11-07 17:39-17:54 UTC) failed first on the account's CloudFront cache-policy quota
 (StaticWeb `ApiCachePolicy` CREATE_FAILED, ServiceLimitExceeded). During the rollback the Conversion3dBasic
-registration's provider role was denied `lambda:GetFunction` (B-050-35), so the root stack ended ROLLBACK_FAILED.
+registration's provider role was denied `lambda:GetFunction`, so the root stack ended ROLLBACK_FAILED.
 vra saw the denial in the events and stopped BLOCKED_ON_IT (exit 10) with an IT request that says the run "resumes
 automatically once the access below is in place": wrong twice, since the quota still blocks and CloudFormation cannot
 deploy over a ROLLBACK_FAILED stack. The events below are copied from e2e-050-run/O/O06, O07, O11."""
@@ -19,14 +19,14 @@ import pytest
 from vra import deploy, errors
 from vra.errors import CommandFailed, PermissionDenied, RollbackFailed
 
-ROOT = "vams-core-demo11-us-east-1"
-WEB = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-demo11-us-east-1-StaticWeb-X/1"
-REG = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-demo11-us-east-1-Conv3dPipe-Y/2"
+ROOT = "vams-core-prod01-us-east-1"
+WEB = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-prod01-us-east-1-StaticWeb-X/1"
+REG = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-prod01-us-east-1-Conv3dPipe-Y/2"
 DENY = ("Received response status [FAILED] from custom resource. Message returned: TimeoutError: "
         '{"state":"TIMEOUT","observedResponses":{"403: User: arn:aws:sts::111111111111:assumed-role/'
-        "vrae2e-demo11-frameworkonEvent-a78d52/vams-core-demo11-us-east--Conversion3dBasicRegistr-RwoBenQQ19jl is "
+        "vrae2e-prod01-frameworkonEvent-a78d52/vams-core-prod01-us-east--Conversion3dBasicRegistr-RwoBenQQ19jl is "
         "not authorized to perform: lambda:GetFunction on resource: arn:aws:lambda:us-east-1:111111111111:function:"
-        "vams-core-demo11-us-east--importGlobalPipelineWork-vXdz4VFaJMPz because no identity-based policy allows "
+        "vams-core-prod01-us-east--importGlobalPipelineWork-vXdz4VFaJMPz because no identity-based policy allows "
         'the lambda:GetFunction action":10},"reason":"Waiter has timed out"}')
 QUOTA = ("Resource handler returned message: \"Limit exceeded for resource of type 'AWS::CloudFront::CachePolicy'. "
          "Reason: Account's Cache Policies limit reached. (Service: CloudFront, Status Code: 400)\" "
@@ -85,7 +85,7 @@ class _Cfn:
 
 class _Shell:
     def run(self, *a, **k):
-        raise CommandFailed("cdk deploy failed", 1, "❌  vams-core-demo11-us-east-1 failed")
+        raise CommandFailed("cdk deploy failed", 1, "❌  vams-core-prod01-us-east-1 failed")
 
 
 def _ctx(status):

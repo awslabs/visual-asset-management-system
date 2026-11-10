@@ -85,7 +85,7 @@ def test_synth_passes_names_region_and_config_file(ctx, ledger, calls):
 
 
 def test_deploy_refuses_a_bundle_whose_core_stack_is_not_the_ledgers(ctx, ledger):
-    m = {"targets": {"dev": {"stacks": ["vams-core-demo8-us-east-1", "vams-web-demo8-us-east-1"]}}}
+    m = {"targets": {"dev": {"stacks": ["vams-core-dev01-us-east-1", "vams-web-dev01-us-east-1"]}}}
     with pytest.raises(NeedsHuman, match="ledger names vams-core-dev-us-east-1"):
         deploy.assembly_matches_ledger(ctx, "dev", m, "dev", None)
     m["targets"]["dev"]["stacks"] = ["vams-core-dev-us-east-1"]

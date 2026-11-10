@@ -1,15 +1,15 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""E2E-050 Phase B10 regressions on the bundle store (VRA_BUNDLE_STORE, the pipeline's CI setup).
+"""Live test Phase B10 regressions on the bundle store (VRA_BUNDLE_STORE, the pipeline's CI setup).
 
-B-050-32: execution b5788c18 rebuilt commit 82ce189 after `vra iam apply` of prod-3 (R50-2: a bundle synthesized
+execution b5788c18 rebuilt commit 82ce189 after `vra iam apply` of prod-3 (a bundle synthesized
 under other IAM settings is never reused). The CI job holds no earlier bundle, so the build took the commit's id
 cust-v2.6.6-10 again and synthesized it; the create-only upload then refused it ("already exists in the bundle store
 with different content"): no rebuild of an already-built commit could ever pass in CI. Now a still-valid stored
 bundle of the commit is reused (pulled, not synthesized) and an id the store holds with other content is superseded
 by the next free id.
 
-B-050-33: that refused upload still added the build's new files (cdk.out/prod/performance-counters.json) under the
+that refused upload still added the build's new files (cdk.out/prod/performance-counters.json) under the
 immutable cust-v2.6.6-10, so its prod target no longer passes `verify_bundle`. A different stored manifest is now
 refused before anything is uploaded.
 """
@@ -123,7 +123,7 @@ def test_a_refused_upload_writes_nothing_under_the_stored_id(store_ctx, calls, m
     victim = next(k for k, _e in _keys(b1) if "/cdk.out/" in k and not k.endswith("manifest.json"))
     s3.delete_object(Bucket=BUCKET, Key=victim)
     before = _keys(b1)
-    # a race: another job's resolve gave this build the same id (forced here; the id pick is B-050-32's part)
+    # a race: another job's resolve gave this build the same id (forced here; the id pick is's part)
     monkeypatch.setattr(build_mod, "pick_store_build_id",
                         lambda ctx, store, mine, *a, **k: {"buildId": mine[0], "superseded": []}, raising=False)
     out = _build(store_ctx)

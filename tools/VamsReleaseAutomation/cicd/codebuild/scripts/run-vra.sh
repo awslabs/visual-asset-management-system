@@ -75,7 +75,7 @@ if [ -n "${VRA_PIPELINE_EXECUTION_ID:-}" ] && [ "${VRA_PIPELINE_RESUME:-true}" =
   esac
 fi
 
-# B-050-39 begin: `report` without a run id reports (and notifies) the run this job ran, not the newest run in
+# report-run begin: `report` without a run id reports (and notifies) the run this job ran, not the newest run in
 # the home by start time (a resumed run is older than any later watch run, so the Deploy-prod job of 5437d5c2
 # notified the morning's watch-sync run instead of the promote it had just finished)
 if [ "${cmd_args[0]:-}" = "report" ] && [ -s "${out_dir}/last-run-id" ]; then
@@ -87,7 +87,7 @@ if [ "${cmd_args[0]:-}" = "report" ] && [ -s "${out_dir}/last-run-id" ]; then
     cmd_args=(report "$(head -n1 "${out_dir}/last-run-id")" "${cmd_args[@]:1}")
   fi
 fi
-# B-050-39 end
+# report-run end
 
 if [ "${#exported[@]}" -gt 0 ]; then
   msg="the job environment sets VAMS config variable(s) ${exported[*]}: unset them in the CI image / job (record a value in envs/<env>/env.yaml synthEnv if the build needs one)"
@@ -134,11 +134,11 @@ json.dump({"name": name, "exitCode": int(code), "outcome": outcome, "runId": run
           open(path, "w"), indent=2)
 PY
 
-# B-050-39 begin: remember this job's run for a later `report` step (a report never replaces it)
+# report-run begin: remember this job's run for a later `report` step (a report never replaces it)
 if [ -n "${run_id}" ] && [ "${cmd_args[0]:-}" != "report" ]; then
   printf '%s\n' "${run_id}" >"${out_dir}/last-run-id"
 fi
-# B-050-39 end
+# report-run end
 
 echo "[run-vra] ${name}: exit ${code} (${outcome}) run ${run_id:-n/a}" >&2
 

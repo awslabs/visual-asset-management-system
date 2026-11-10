@@ -315,7 +315,7 @@ def test_step_denial_from_cloudformation_then_resume_retries(ctx):
 
 
 def test_resume_does_not_crash_on_an_it_request_whose_principal_is_in_another_account(tmp_path):
-    """E2E-040: a synth child fell back to the build host's role (another account); its IT request named that
+    """Live test: a synth child fell back to the build host's role (another account); its IT request named that
     principal, and `vra resume` crashed with InvalidInput from SimulatePrincipalPolicy. Such a request is not
     simulable in the env's account: the resume retries the real step instead."""
     import json as _json
@@ -351,10 +351,10 @@ def test_resume_does_not_crash_on_an_it_request_whose_principal_is_in_another_ac
     assert perms.resimulate(ctx, run, {"id": "IT-REQUEST-1"}) is None
 
 
-# ------------------------------------------------------------------ B-050-8 (E2E-050 Phase B3, live)
+# ------------------------------------------------------------------ (live test Phase B3, live)
 _B8_VALS = {"Partition": "aws", "Region": "us-east-1", "Account": "111111111111", "ConfigName": "vams",
-            "CoreStack": "vams-core-demo8-us-east-1", "SsmPrefix": "/vams-demo8-us-east-1/resourceNames",
-            "BaseStackName": "demo8-us-east-1", "CdkQualifier": "hnb659fds"}
+            "CoreStack": "vams-core-dev01-us-east-1", "SsmPrefix": "/vams-dev01-us-east-1/resourceNames",
+            "BaseStackName": "dev01-us-east-1", "CdkQualifier": "hnb659fds"}
 
 
 class _ConditionAwareIam:
@@ -376,7 +376,7 @@ class _ConditionAwareIam:
 
 
 def test_conditioned_manifest_statements_simulate_with_their_context():
-    """B-050-8, live on demo8 through the pipeline: the backup and migrate preflights of vra-deploy-dev (deployed
+    """, live on dev01 through the pipeline: the backup and migrate preflights of vra-deploy-dev (deployed
     from vra-deploy-role.yaml, whose DataKms grants kms:* on key/* only via dynamodb.* / s3.*) reported
     kms:Decrypt/DescribeKey as implicitDeny, because the manifest's ``condition:`` never reached
     SimulatePrincipalPolicy. The real call (through DynamoDB) is allowed, so the IT request was false."""
@@ -401,7 +401,7 @@ def test_condition_context_is_partition_aware_and_skips_unresolved_values():
 
 
 def test_cognito_export_statement_is_simulated_only_when_the_env_exports():
-    """B-050-8, live: the backup preflight of every env demanded cognito-idp:ListUsers/ListGroups/... although
+    """, live: the backup preflight of every env demanded cognito-idp:ListUsers/ListGroups/... although
     ``cognitoExport`` defaults to false and the role template grants it only with EnableCognitoExport=true."""
     man = permissions.load_manifest("backup")
     off = [s["sid"] for s in permissions.expand_manifest(man, _B8_VALS, {})]
@@ -434,7 +434,7 @@ def test_env_features_turn_on_cognito_export(tmp_path):
 
 
 def test_drift_detection_status_is_granted_and_simulated_on_star():
-    """B-050-8, live: cloudformation:DescribeStackDriftDetectionStatus has no resource-level permissions, but
+    """, live: cloudformation:DescribeStackDriftDetectionStatus has no resource-level permissions, but
     vra-deploy-role.yaml granted it only on the VAMS stack ARNs, so vra-deploy-dev could not poll the drift
     detection `vra deploy` starts (preflight deploy: implicitDeny on `*`). Template and manifests grant it on `*`."""
     import yaml as _yaml
@@ -456,7 +456,7 @@ def test_drift_detection_status_is_granted_and_simulated_on_star():
 
 
 def test_simulate_splits_a_call_whose_actions_need_different_authorization():
-    """E2E-050 B-050-12: IAM refuses one SimulatePrincipalPolicy call that mixes kms key actions with
+    """Live test: IAM refuses one SimulatePrincipalPolicy call that mixes kms key actions with
     kms:ListKeys (InvalidInput "require different authorization information"); `vra iam verify` then left 73 of
     87 precreated roles unchecked. Such a call is split per action; other InvalidInput errors still raise."""
     from botocore.exceptions import ClientError

@@ -1,9 +1,9 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""B-050-40 (E2E-050 Phase B10g): VAMS builds the ARN of its per-asset SNS topics (``AssetTopic<db>-<asset>``,
+"""(live test Phase B10g): VAMS builds the ARN of its per-asset SNS topics (``AssetTopic<db>-<asset>``,
 created at runtime) with ``cdk.Fn.sub(...)``. The iam-policy-report shows such a resource only as an opaque
 ``${Token[TOKEN.n]}``, and `vra iam` took every single-service SNS token for a template topic named after the core
-stack, so IT's precreated roles got ``sns:CreateTopic`` on ``...:vams-core-demo11-us-east-1*``. On demo11 every
+stack, so IT's precreated roles got ``sns:CreateTopic`` on ``...:vams-core-prod01-us-east-1*``. On prod01 every
 asset create then failed ("Error creating SNS topic": AuthorizationError on ``AssetTopice2e050r506-...``). 7 roles
 were affected. The precreated build synth carries no policy for these roles, so the pattern comes from a table
 (the plan's report-only synth and the deploy gate's precreated synth must give the same policy digest).
@@ -22,7 +22,7 @@ from vra import iam
 
 ACCT = "111111111111"
 ENV = {"partition": "aws", "region": "us-east-1", "account": ACCT}
-CORE = "vams-core-demo11-us-east-1"
+CORE = "vams-core-prod01-us-east-1"
 LIVE_TOPIC = f"arn:aws:sns:us-east-1:{ACCT}:AssetTopice2e050r506-x81ce7ba4-7f79-4759-ac21-98f190d24afe"
 EMPTY = iam.Assembly({"roles": []}, {}, None)
 
@@ -60,7 +60,7 @@ def test_asset_topic_roles_get_the_runtime_topic_pattern(tail):
 
 def test_the_prod4_report_has_no_core_stack_topic_grant_left():
     """Every SNS token of the real prod-4 report resolves to AssetTopic* (none to the core stack pattern)."""
-    rep = Path(__file__).parent / "fixtures" / "b050_40_prod4_sns_statements.json"
+    rep = Path(__file__).parent / "fixtures" / "asset_topic_role_sns_statements.json"
     rows = json.loads(rep.read_text())["rows"]
     assert len(rows) == 7
     for row in rows:

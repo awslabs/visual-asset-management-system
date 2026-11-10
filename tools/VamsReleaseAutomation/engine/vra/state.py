@@ -108,7 +108,7 @@ class Run:
 
     def _park_refused_first_publish(self, exc: NeedsHuman) -> None:
         """The run's first publish to the shared home was refused (rejected push, a person's unpushed commit, an
-        unreachable remote). Without this the home kept a RUNNING run that nothing owns (E2E-040 O3): park it
+        unreachable remote). Without this the home kept a RUNNING run that nothing owns (live test O3): park it
         NEEDS_HUMAN with the reason, so the copy that reaches the remote later is never RUNNING."""
         reason = exc.message
         self.state["result"] = {"publishRefused": {"reason": reason, "at": util.now_iso()}}
@@ -858,7 +858,7 @@ class StateStore:
     def push_run(self, run: Run) -> None:
         self.push_file(run.dir / "state.json")
 
-    # E2E-050 B-050-26: a bundle is ~15k files (three cdk.out targets); one request at a time took ~13 minutes
+    # live test: a bundle is ~15k files (three cdk.out targets); one request at a time took ~13 minutes
     TRANSFER_WORKERS = int(os.environ.get("VRA_STORE_WORKERS", "16") or 16)
 
     def _parallel(self, fn: Callable, items: list) -> list:

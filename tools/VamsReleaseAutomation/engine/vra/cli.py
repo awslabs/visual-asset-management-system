@@ -317,7 +317,7 @@ def _resume_env(ctx: Context, ns: argparse.Namespace) -> str | None:
     except Exception:  # noqa: BLE001 - an unknown run fails later with its own message
         return None
     if env is None and getattr(ns, "human_approval", None):
-        # a run of no env (a build) holds only its run lock. E2E-050 B-050-19: such a run could never be taken
+        # a run of no env (a build) holds only its run lock. live test: such a run could never be taken
         # over without a TTY ("(and an env)"). The record's own env authorizes it, checked against that env's
         # approvers like every human-only record; it must name an env of this ledger.
         from vra import approvals
@@ -343,12 +343,12 @@ def human_gate(ctx: Context, ns: argparse.Namespace) -> list[dict]:
                 and getattr(ns, "approval", None)):
             # `vra iam apply --approval <record>`: the record bound to this exact IT response (subject
             # iam-apply:<package>:<sha16>, scope iam-apply, single use) is the person's authorization; iam.apply
-            # requires and claims it on every env (E2E-050: the documented one-record form was refused)
+            # requires and claims it on every env (live test: the documented one-record form was refused)
             ctx.iam_apply_bound_authorization = True
             continue
         if (action == "iam-apply" and not tty and not getattr(ns, "human_approval", None)
                 and not human.is_agent()):
-            # E2E-050 B-050-11: the generic message asked for a `human:iam-apply` record, which iam.apply then
+            # live test: the generic message asked for a `human:iam-apply` record, which iam.apply then
             # refuses; name the record it takes (bound to this exact response)
             raise errors.NeedsHuman(f"{human.HUMAN_ONLY['iam-apply']}; without an interactive terminal it needs --approval "
                              "naming the record bound to this IT response (subject iam-apply:<packageId>:<first 16 "

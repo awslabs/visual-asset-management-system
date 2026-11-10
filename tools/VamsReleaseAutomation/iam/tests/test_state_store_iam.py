@@ -143,7 +143,7 @@ def test_the_engines_state_writes_pass_the_bucket_policy(tmp_path):
     bundle.mkdir(parents=True)
     (bundle / "manifest.json").write_text("{}")
     assert store.push_dir(bundle, create_only=True) == []                # build bundles are create-only
-    # IT packages and responses create-only, the apply record replaced, pipeline plans create-only (R50-3)
+    # IT packages and responses create-only, the apply record replaced, pipeline plans create-only
     pkg = tmp_path / "state" / "iam" / "prod" / "1"
     pkg.mkdir(parents=True)
     (pkg / "package.json").write_text("{}")
@@ -282,7 +282,7 @@ def test_state_store_block_is_create_only_and_scoped_to_lock_items():
     assert create["condition"] == {"Null": {"s3:if-none-match": "false"}}
     assert sorted(r.split("/*/")[1] for r in create["resources"]) == ["artifacts/*", "history/*", "iam/*",
                                                                       "pipeline/*"]
-    # the IT apply record is the only unconditional write under iam/ (R50-3, R50-4)
+    # the IT apply record is the only unconditional write under iam/
     rec = _sid(m, "ToolsStateStoreRecords")
     assert [r for r in rec["resources"] if "/iam/" in r] == ["arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json"]
     # no unconditional PutObject reaches history or bundles

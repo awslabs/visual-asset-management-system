@@ -304,7 +304,7 @@ class AwsFactory:
         for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
             out[k] = ""
         # the profile is the ONLY credential source: if it fails, the child must fail, never fall back to the
-        # host's instance profile or container role (E2E-040: cdk synth ran fork code as the build host's role)
+        # host's instance profile or container role (live test: cdk synth ran fork code as the build host's role)
         out.update(NO_FALLBACK_CREDENTIALS_ENV)
         out[CREDPROC_NONCE_ENV] = nonce
         return out

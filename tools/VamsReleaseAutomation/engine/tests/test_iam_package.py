@@ -337,7 +337,7 @@ def test_apply_on_a_gated_env_needs_a_single_use_approval(tmp_path):
     resp = response_for(c, "prod")
     with pytest.raises(NeedsHuman):
         iam.apply(c, "prod", resp)
-    subject = iam.approval_subject("prod-1", util.sha256_file(resp))   # package AND response (R50-5)
+    subject = iam.approval_subject("prod-1", util.sha256_file(resp))   # package AND response
     approve(c.ledger, "prod", subject, "release-manager@example.com", scope=["iam-apply"])
     res = iam.apply(c, "prod", resp)
     assert res["packageId"] == "prod-1" and iam.applied_record(c, "prod")["approval"]
@@ -359,7 +359,7 @@ def test_apply_answers_the_latest_package_only(ictx, tmp_path):
 
 
 def test_iam_apply_without_a_terminal_takes_the_documented_single_bound_approval(tmp_path, monkeypatch):
-    """E2E-050: `vra iam apply --env test --from it-response.yaml --approval <record bound to the response>` (the
+    """Live test: `vra iam apply --env test --from it-response.yaml --approval <record bound to the response>` (the
     documented form) was refused outside a terminal: the human gate wanted a second record, subject
     human:iam-apply, through the global --human-approval, and its message named --approval. The bound record is
     now the person's authorization, required on every env and recorded."""
@@ -385,7 +385,7 @@ def test_iam_apply_without_a_terminal_takes_the_documented_single_bound_approval
 
 
 def test_iam_apply_without_an_approval_names_the_bound_record_not_a_human_record(tmp_path, monkeypatch):
-    """E2E-050 B-050-11: outside a terminal and without --approval, the refusal told the person to write a record
+    """Live test: outside a terminal and without --approval, the refusal told the person to write a record
     with subject human:iam-apply, which iam apply then refuses; it names the record bound to the response."""
     from vra import human
     monkeypatch.setattr(human, "_tty", lambda: False)
@@ -661,7 +661,7 @@ def test_verify_reports_missing_unbounded_untrusted_and_denied(tmp_path):
 
 
 def test_verify_labels_grants_vams_never_makes_effective_and_keeps_real_gaps(tmp_path):
-    """E2E-050 B-050-14: on demo11, `vra iam verify` reported 136 problems for IT's 87 roles: `kms:ListKeys` /
+    """Live test: on prod01, `vra iam verify` reported 136 problems for IT's 87 roles: `kms:ListKeys` /
     `kms:ListAliases` granted on `key/*` (they take only `*`) and SNS subscription actions granted on the topic
     pattern. VAMS's own policy never makes these effective, so they are listed under `notEffective` with that label
     instead of as IT gaps; a real denial stays a problem."""

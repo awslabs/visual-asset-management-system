@@ -40,12 +40,12 @@ SUMMARY_RE = re.compile(r"Number of stacks with differences:\s*(\d+)")
 # Changes that are not replacements but cannot be undone by redeploying the previous build.
 FORWARD_ONLY = {("AWS::Cognito::UserPool", "Schema"): "user pool schema attributes cannot be modified or removed"}
 POLICY_PROPS = ("DeletionPolicy", "UpdateReplacePolicy")
-# IAM quota check (O-050-7): resources that count against the account's IAM quotas (iam:GetAccountSummary keys).
+# IAM quota check: resources that count against the account's IAM quotas (iam:GetAccountSummary keys).
 # A replacement counts too: CloudFormation creates the new role before it deletes the old one.
 IAM_QUOTA_TYPES = {"AWS::IAM::Role": ("roles", "Roles", "RolesQuota"),
                    "AWS::IAM::ManagedPolicy": ("policies", "Policies", "PoliciesQuota")}
 REPLACE_RE = re.compile(r"\b(replace|may be replaced|requires replacement|may cause replacement)\b")
-# CloudFront quota check (O-050-15): account-wide CloudFront quotas a VAMS CloudFront deployment draws on (2 cache
+# CloudFront quota check: account-wide CloudFront quotas a VAMS CloudFront deployment draws on (2 cache
 # policies, 1 origin request policy, 1 response headers policy, 1 distribution). Per type: counter key, Service
 # Quotas code (service code `cloudfront`, verified 2026-11-09 with servicequotas:ListServiceQuotas), quota name,
 # documented AWS default (the fallback when the quota cannot be read), and the in-use list call (custom only).
@@ -129,7 +129,7 @@ def parse_diff(text: str) -> dict:
             **counters}
 
 
-# ===================================================================== IAM quota check (O-050-7)
+# ===================================================================== IAM quota check
 QUOTA_HEADROOM_DEFAULT = 10
 
 
@@ -256,7 +256,7 @@ def iam_quota_check(ctx, env: str, counts: dict, blocking: bool = True) -> dict:
     return res
 
 
-# ===================================================================== CloudFront quota check (O-050-15)
+# ===================================================================== CloudFront quota check
 CF_QUOTA_HEADROOM_DEFAULT = 2
 CF_QUOTA_REGION = "us-east-1"   # CloudFront quotas are global; Service Quotas serves them from us-east-1 (aws)
 
@@ -574,7 +574,7 @@ def stack_failure_text(ctx, env: str, stacks: list[str], depth: int = 0) -> str:
     return "\n".join(x for x in lines if x)
 
 
-# B-050-36: a stack CloudFormation could not roll back. A retry or a `vra resume` cannot deploy over it (a failed
+# a stack CloudFormation could not roll back. A retry or a `vra resume` cannot deploy over it (a failed
 # first create must be deleted, a failed update needs continue-update-rollback), whatever IT grants.
 STUCK_STATES = ("ROLLBACK_FAILED", "UPDATE_ROLLBACK_FAILED", "DELETE_FAILED")
 _FOLLOW_ON = ("Resource creation cancelled", "Resource update cancelled", "Embedded stack ",
@@ -667,7 +667,7 @@ def cdk_deploy(ctx, env: str, manifest: dict, target: str, sc) -> dict:
         denials = permissions.classify_text(text, "cloudformation")
         stuck = {s: st for s in stacks if (st := stack_status(ctx, env, s)) in STUCK_STATES}
         if stuck:
-            # B-050-36: not an IT block. Granting the denied calls (often rollback-phase ones) does not make the
+            # not an IT block. Granting the denied calls (often rollback-phase ones) does not make the
             # step resumable; the stack needs cleanup and the first failure needs its own fix.
             first = first_failure(ctx, env, stacks)
             cause = f"first failure: {first['resource']} ({first['type']}) {first['status']}: {first['reason']}" \
@@ -1002,7 +1002,7 @@ def do_deploy(ctx, run, env: str, build_id: str, approval: str | None = None, mo
                 rec = _require_extra_approval(ctx, env, build_id, "allow-replacements", approval,
                                               "--allow-replacements")
                 parsed["allowedBy"] = (rec or {}).get("approver") or ctx.initiator
-            # IAM (O-050-7) and CloudFront (O-050-15) quotas: on a first install (or a new A/B slot) the templates
+            # IAM and CloudFront quotas: on a first install (or a new A/B slot) the templates
             # are the complete count
             first = None if ctx.dry_run else _first_install_counts(ctx, env, manifest, target, base_override)
             counts = parsed["iam"] if first is None else _first_install_merge(parsed["iam"], first["iam"])
@@ -1097,7 +1097,7 @@ def do_deploy(ctx, run, env: str, build_id: str, approval: str | None = None, mo
                                                 "VRA_SSM_PREFIX": ctx.ledger.ssm_prefix(env, base_override)}, sc)
                 run.step(p + "dns-switch", _switch, "DNS switch hook")
         except (PermissionDenied, NeedsHuman, RollbackFailed):
-            # RollbackFailed from cdk-deploy (B-050-36): CloudFormation already failed to roll back; a vra
+            # RollbackFailed from cdk-deploy: CloudFormation already failed to roll back; a vra
             # rollback on top would deploy over a stuck stack
             raise
         except VraError as exc:
@@ -1136,7 +1136,7 @@ def _smoke(ctx, run, env, sc, live, builds=None):
     envs and the envs they promote from) executed nothing, e.g. because liveTest.webUrl is unset. ``builds``: whose
     bundled VamsCLI wheel runs it (tests_runner.resolve_vamscli). The reads (web URL parameter, sign-in secret)
     use the run's own deploy identity, never ``testRoleArn``: that role trusts only the env's test CI identity
-    (E2E-050 B-050-27)."""
+    (live test)."""
     jdir = run.junit_dir / f"smoke-{env}"
     res = tests_runner.live_cli_smoke(ctx, env, jdir, sc, live, builds, role="deploy")
     summ = tests_runner.aggregate_junit(jdir)
@@ -1205,7 +1205,7 @@ def perform_rollback(ctx, run, env: str, to_build: str | None = None, exclude_bu
         out["note"] = "no previous successful deploy recorded"
     else:
         m = build_mod.load_manifest(ctx, prev["build"])
-        # a bundle fetched from a bundle store must be the one this env deployed (B-050-21)
+        # a bundle fetched from a bundle store must be the one this env deployed
         want = prev.get("manifestSha256")
         if want and _manifest_sha(ctx, prev["build"]) != want:
             raise VraError(f"bundle of {prev['build']} does not match the manifest {env} deployed "

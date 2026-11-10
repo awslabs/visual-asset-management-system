@@ -112,7 +112,7 @@ def test_child_processes_get_credential_process_profile(monkeypatch):
 
 
 def test_credential_process_children_never_fall_back_to_host_credentials(monkeypatch):
-    """E2E-040: `cdk synth` with the synth role's credential_process profile ran as the build host's EC2 instance
+    """Live test: `cdk synth` with the synth role's credential_process profile ran as the build host's EC2 instance
     profile (another account) when the profile did not resolve inside CDK. A child with a vra profile gets no
     instance-metadata, container or web-identity fallback; the helper itself gets its base sources back."""
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/example")

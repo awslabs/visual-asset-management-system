@@ -89,7 +89,7 @@ def validate(ledger) -> tuple[list[str], list[str]]:
             warns.append(f"{w}.pipeline is ignored with mode agent (no pipeline is rendered)")
         return errs, warns
     # automation.actions is optional: the GitHub Actions side is configured in its workflow files and repository
-    # variables (cicd/github-actions), and vra reads nothing from it (R50-23)
+    # variables (cicd/github-actions), and vra reads nothing from it
     if m == "pipeline+actions" and isinstance(pl, dict) and not pl.get("actionsHandoff"):
         warns.append(f"{w}.pipeline.actionsHandoff is not set: the GitHub Actions hand-off has no role to start the "
                      "release pipeline with (and the fork source does not trigger on push in this mode)")
@@ -144,7 +144,7 @@ def validate(ledger) -> tuple[list[str], list[str]]:
             continue
         if e.get("lane", "release") != "release":
             continue
-        # B-050-7: a CodeBuild tier role may only assume the env's deploy role; without deployRoleArn the engine
+        # a CodeBuild tier role may only assume the env's deploy role; without deployRoleArn the engine
         # in CI would run as the tier role itself, every preflight would be denied, and its IT request would ask to
         # widen the tier role (defeating the tier split). Hybrid pipelines run only the ungated root envs
         in_pipeline = m in ("pipeline", "pipeline+actions") or (
@@ -295,7 +295,7 @@ def template_digest(t: dict) -> str:
 
 
 # resource policies that decide who may act on the pipeline: the source bucket policy decides who may write the
-# release source (sourceWriterArns), so widening it is as human-only as an IAM change (B-050-6)
+# release source (sourceWriterArns), so widening it is as human-only as an IAM change
 ACCESS_POLICY_TYPES = ("AWS::S3::BucketPolicy",)
 
 
@@ -661,7 +661,7 @@ def push_source(ctx, lane: str | None, bucket: str | None, key: str | None, pipe
     key = key or spec.get("objectKey")
     if spec.get("type") == "s3" and not spec.get("bucketName") and (not bucket or (not pipeline_name and not package)):
         # the stack created the bucket: its name and the pipeline to start (the created source never polls) are
-        # stack outputs, so an operator does not have to look them up (B-050-3)
+        # stack outputs, so an operator does not have to look them up
         outs = outputs(deployed_stack(ctx, f"{pl.get('prefix') or 'vra'}-pipeline", region))
         bucket = bucket or outs.get("SourceBucketName")
         if not package and not pipeline_name:
@@ -687,7 +687,7 @@ def push_source(ctx, lane: str | None, bucket: str | None, key: str | None, pipe
         z = tmp / "source.zip"
         g.run("archive", "--format=zip", "-o", str(z), f"origin/{branch}")
         # an S3 source's CODEBUILD_RESOLVED_SOURCE_VERSION is the object's version id, not a commit, and the
-        # archive has no .git: the build stage reads the commit from this file (B-050-13)
+        # archive has no .git: the build stage reads the commit from this file
         with zipfile.ZipFile(z, "a", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(REVISION_FILE, revision + "\n")
     try:

@@ -184,7 +184,7 @@ def test_mcp_allows_safe_members_of_the_same_groups():
 
 
 @pytest.mark.parametrize("argv", [
-    ["resume", "--takeov"],                                  # argparse expands a unique prefix (E2E-040)
+    ["resume", "--takeov"],                                  # argparse expands a unique prefix (live test)
     ["resume", "r1", "--takeover=1"],
     ["status", "--human-approval=approvals/dev/x.yaml"],
     ["deploy", "--env", "dev", "--build", "b", "--allow-repl"],

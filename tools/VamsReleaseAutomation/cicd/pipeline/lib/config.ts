@@ -217,7 +217,7 @@ export interface PipelineConfig {
      * Exact IAM role ARNs (no wildcards) that may write the S3 sources the stack created, besides the watch tier:
      * the operator role that runs the first `vra pipeline push-source --package` (the watch job needs that zip
      * before it can run at all) and manual `push-source` runs. Never list a role that runs fork or upstream code.
-     * Without it only the watch tier writes the sources (B-050-5).
+     * Without it only the watch tier writes the sources.
      */
     sourceWriterArns?: string[];
 
@@ -531,7 +531,7 @@ export function resolveReleaseEnvs(cfg: PipelineConfig, baseDir = "."): ReleaseE
 /** cicd/oidc/github_trust.py IMMUTABLE_SUBJECT and NAME_SUBJECT: the one subject format of every vra role. */
 export const IMMUTABLE_SUBJECT = "repo:{owner}@{owner_id}/{name}@{repository_id}:environment:{env}";
 
-/** The hand-off role's allowed subjects: the listed ones plus the immutable-id subject (R50-16). */
+/** The hand-off role's allowed subjects: the listed ones plus the immutable-id subject. */
 export function handoffSubjects(h: NonNullable<PipelineConfig["actionsHandoff"]>): string[] {
     const out = [...(h.subjects ?? [])];
     const ids = h.repositoryIds;
@@ -550,7 +550,7 @@ export function handoffSubjects(h: NonNullable<PipelineConfig["actionsHandoff"]>
 
 /**
  * Whether an env's live tests run under a test-only tier: release.isolateTests when set, else every
- * approval-gated env (R50-18: the fork's web/e2e dependency tree never runs under a gated env's deploy tier).
+ * approval-gated env (the fork's web/e2e dependency tree never runs under a gated env's deploy tier).
  */
 export function testsIsolated(
     cfg: PipelineConfig,

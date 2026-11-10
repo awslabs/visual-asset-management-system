@@ -91,7 +91,7 @@ def test_unit_suite_skips_npm_script_missing_at_this_version(ctx, repos, calls):
 
 
 def test_build_ids_count_the_homes_builds_when_tags_are_not_pushed(ctx, repos, calls):
-    """E2E-050 B-050-20: with build.pushTags false every CodeBuild build clones the fork afresh, without the tags of
+    """Live test: with build.pushTags false every CodeBuild build clones the fork afresh, without the tags of
     earlier builds, so the build of aa5ec64 got id cust-v2.6.6-1, the id the earlier build of 8f54a8b had; a
     rollback that excludes the failing build then excluded both. The ids the shared home recorded count now."""
     proj = util.read_yaml(ctx.ledger.root / "vra.yaml")
@@ -180,7 +180,7 @@ def test_bundle_verifies_after_cdk_wrote_its_asset_cache(ctx, repos, calls):
 
 
 def test_bundle_verifies_with_a_leftover_cdk_read_lock(ctx, repos, calls):
-    """E2E-040: a bundle copied to machine B while A's `cdk diff` read it carried `read.<pid>.<n>.lock`, and the
+    """Live test: a bundle copied to machine B while A's `cdk diff` read it carried `read.<pid>.<n>.lock`, and the
     takeover's deploy failed the integrity check. CDK's assembly lock files are not content; other files still
     count."""
     m = _build(ctx).run.state["result"]
@@ -355,7 +355,7 @@ def test_manual_rollback_to_build_records_vams_version(ctx, repos, calls, ledger
 
 
 def test_ci_rollback_fetches_the_previous_bundle_from_the_bundle_store(ctx, repos, calls, ledger, monkeypatch):
-    """E2E-050 B-050-21: with a git home (pushArtifacts false) a CodeBuild job holds only its own execution's
+    """Live test: with a git home (pushArtifacts false) a CodeBuild job holds only its own execution's
     bundle, so the pipeline's auto-rollback stopped at "unknown build <previous>". The build now mirrors each bundle
     to VRA_BUNDLE_STORE (create-only) and a rollback fetches the previous one, bound to the manifest sha256 the
     env's deploy record holds."""

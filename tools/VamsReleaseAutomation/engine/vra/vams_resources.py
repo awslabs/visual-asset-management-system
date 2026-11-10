@@ -36,7 +36,7 @@ def stack_output_prefix(cfn, stack: str) -> str | None:
 # A stack in one of these states never finished its first create, so it holds no deployment to back up, inspect or
 # migrate: ROLLBACK_COMPLETE is a failed CREATE (CloudFormation cannot update it; `cdk deploy` deletes and re-creates
 # it), REVIEW_IN_PROGRESS is a change set that was never executed. A failed UPDATE ends in UPDATE_ROLLBACK_COMPLETE,
-# which stays "deployed". (B-050-34)
+# which stays "deployed".
 NEVER_CREATED = ("DELETE_COMPLETE", "ROLLBACK_COMPLETE", "REVIEW_IN_PROGRESS")
 
 

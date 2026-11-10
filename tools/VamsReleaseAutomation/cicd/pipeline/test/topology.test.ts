@@ -426,7 +426,7 @@ describe("state store: tier-scoped locks, create-only history and bundles, no de
 
     test("each tier takes run leases and only its own env locks", () => {
         expect(lockKeys("vra-build")).toEqual(["run#*"]);
-        // R50-12: dev, preview and the scheduled watch are separate tiers, each with its own lock
+        // dev, preview and the scheduled watch are separate tiers, each with its own lock
         expect(lockKeys("vra-deploy-dev")).toEqual(["run#*", "env#dev"]);
         expect(lockKeys("vra-deploy-dev-preview")).toEqual(["run#*", "env#dev-preview"]);
         expect(lockKeys("vra-watch")).toEqual(["run#*", "env#watch"]);

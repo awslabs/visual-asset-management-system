@@ -67,7 +67,7 @@ case "${cmd}" in
       mkdir -p "$(dirname "${VRA_HOME}")"
       # A deploy / test job's primary input is the build stage's artifact, which carries vra-home/state/iam/:
       # git cannot clone into that non-empty folder. Move it aside, clone, then add back only the files the
-      # home does not have (the home's committed copy wins). (E2E-050 B-050-16)
+      # home does not have (the home's committed copy wins). (live test)
       carried=""
       if [ -d "${VRA_HOME}" ] && [ -n "$(ls -A "${VRA_HOME}")" ]; then
         carried="${VRA_HOME}.carried"

@@ -280,7 +280,7 @@ def test_hand_off_starts_one_execution_for_the_checked_commit():
     assert set(trig["workflows"]) == {wf("pr-checks.yml")["name"], wf("security-scan.yml")["name"]}
     job = doc["jobs"]["hand-off"]
     assert job["environment"] == "vra-handoff"
-    # each check workflow by name and file (R50-13)
+    # each check workflow by name and file
     assert {x.split("=")[0] for x in job["env"]["REQUIRED"].split(",")} == set(trig["workflows"])
     assert all("=.github/workflows/" in x for x in job["env"]["REQUIRED"].split(","))
     run = "\n".join(str(s.get("run", "")) for s in job["steps"])

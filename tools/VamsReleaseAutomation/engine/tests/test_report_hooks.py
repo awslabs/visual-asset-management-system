@@ -64,7 +64,7 @@ def test_live_cli_smoke_password_on_stdin(ctx, ledger, calls):
 
 
 def test_live_cli_smoke_without_vamscli_is_a_failed_case_not_a_crash(ctx, ledger, tmp_path):
-    """E2E-050 B-050-18: in CodeBuild vamscli was not installed; the bare FileNotFoundError ended `vra deploy`
+    """Live test: in CodeBuild vamscli was not installed; the bare FileNotFoundError ended `vra deploy`
     after cdk deploy without a deploy record or the auto-rollback. It is a failed smoke case now, which the deploy's
     failure path handles like any failed test."""
     env = util.read_yaml(ledger.root / "envs/dev/env.yaml")
@@ -90,7 +90,7 @@ def test_live_cli_smoke_without_vamscli_is_a_failed_case_not_a_crash(ctx, ledger
 
 def test_build_packs_the_forks_vamscli_wheel_and_the_smoke_runs_exactly_that_wheel(ctx, ledger, tmp_path,
                                                                                     monkeypatch):
-    """E2E-050 B-050-18a: the pipeline's CodeBuild jobs had no VamsCLI, so the post-deploy smoke could never run.
+    """Live test: the pipeline's CodeBuild jobs had no VamsCLI, so the post-deploy smoke could never run.
     `vra build` now packs a wheel built from the fork's tools/VamsCLI into the bundle (sha256 in the manifest); the
     smoke installs that wheel into its own venv after the hash matched and runs it. A changed wheel is refused, a
     build without one (an older bundle) falls through to the next build named (rollback: the build left)."""
@@ -154,7 +154,7 @@ def test_build_packs_the_forks_vamscli_wheel_and_the_smoke_runs_exactly_that_whe
 
 
 def test_post_deploy_smoke_reads_with_the_deploy_identity_not_the_test_role(ctx, ledger, tmp_path, monkeypatch):
-    """E2E-050 B-050-27: on an env with ``testRoleArn`` the post-deploy smoke of a deploy (and of a rollback) read
+    """Live test: on an env with ``testRoleArn`` the post-deploy smoke of a deploy (and of a rollback) read
     the web URL parameter and the sign-in secret as ``vra-test-<env>``. That role trusts only the env's test CI
     identity, so in the pipeline's deploy job the AssumeRole was denied and every gated deploy failed its smoke
     after a good `cdk deploy`. The deploy run's smoke now reads with its own deploy identity (the deploy role
@@ -163,7 +163,7 @@ def test_post_deploy_smoke_reads_with_the_deploy_identity_not_the_test_role(ctx,
     monkeypatch.setenv("VRA_VAMSCLI", "/opt/own/vamscli")
     env = util.read_yaml(ledger.root / "envs/test/env.yaml")
     env["testRoleArn"] = f"arn:aws:iam::{env['account']}:role/vra-test-test"
-    env["liveTest"] = {"auth": {"type": "password", "secret": "vra/demo4/smoke-user"}}
+    env["liveTest"] = {"auth": {"type": "password", "secret": "vra/test1/smoke-user"}}
     util.write_yaml(ledger.root / "envs/test/env.yaml", env)
     ledger._envs.clear()
     asked = []
@@ -206,7 +206,7 @@ def test_post_deploy_smoke_reads_with_the_deploy_identity_not_the_test_role(ctx,
 @pytest.mark.parametrize("code,expected", [("AccessDeniedException", "PermissionDenied"),
                                            ("ResourceNotFoundException", "UsageError")])
 def test_smoke_secret_read_errors_are_engine_errors_not_crashes(ctx, ledger, tmp_path, monkeypatch, code, expected):
-    """E2E-050 B-050-28: the post-deploy smoke's secret read raised a bare botocore ClientError, which crashed the
+    """Live test: the post-deploy smoke's secret read raised a bare botocore ClientError, which crashed the
     deploy run after `cdk deploy` (FAILED with a traceback, no deploy recorded, the env lock held dirty, and a
     pipeline retry could not resume it). A denial is now PermissionDenied (the run parks BLOCKED_ON_IT and a retry
     resumes it); any other error, e.g. the first deploy's smoke secret that does not exist yet, is a VraError, so
@@ -216,7 +216,7 @@ def test_smoke_secret_read_errors_are_engine_errors_not_crashes(ctx, ledger, tmp
     monkeypatch.setenv("VRA_VAMSCLI", "/opt/own/vamscli")
     env = util.read_yaml(ledger.root / "envs/test/env.yaml")
     env["liveTest"] = {"webUrl": "https://test.vams.example.com",
-                       "auth": {"type": "password", "secret": "vra/demo11/smoke-user"}}
+                       "auth": {"type": "password", "secret": "vra/prod01/smoke-user"}}
     util.write_yaml(ledger.root / "envs/test/env.yaml", env)
     ledger._envs.clear()
 
@@ -234,7 +234,7 @@ def test_smoke_secret_read_errors_are_engine_errors_not_crashes(ctx, ledger, tmp
     with pytest.raises(errors.VraError) as info:
         run.step("smoke", lambda sc: deploy._smoke(ctx, run, "test", sc, None, []))
     assert type(info.value).__name__ == expected
-    assert "vra/demo11/smoke-user" in info.value.message
+    assert "vra/prod01/smoke-user" in info.value.message
 
 
 def test_ledger_diff_against_deployed_bundle(ctx, repos, ledger):
@@ -318,7 +318,7 @@ def test_report_shows_data_copy_counts():
 
 
 def test_report_shows_takeovers_and_human_authorizations():
-    """E2E-040 (W10): the report of a deploy that machine B took over from a killed machine A did not mention the
+    """Live test (W10): the report of a deploy that machine B took over from a killed machine A did not mention the
     takeover or the approval that authorized it."""
     rep = {"runId": "deploy-x", "workflow": "deploy", "status": "SUCCEEDED", "message": None, "initiator": "op",
            "startedAt": "t0", "endedAt": "t1", "steps": [], "tests": {"tests": 0}, "itRequests": [], "approvals": [],

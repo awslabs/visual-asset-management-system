@@ -95,10 +95,10 @@ def test_hook_commands_run_the_shared_guard_from_the_package():
     hooks = json.loads((CURSOR / "hooks.json").read_text())["hooks"]
     assert set(hooks) == {"beforeShellExecution", "beforeMCPExecution", "preToolUse"}
     for (entry,) in hooks.values():
-        # `|| exit 2`: a guard that cannot run blocks (R50-8)
+        # `|| exit 2`: a guard that cannot run blocks
         assert entry["command"] == 'python3 "${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py" --format cursor || exit 2'
         assert entry["failClosed"] is True and entry["timeout"] <= 15
-    # cloud agents skip beforeMCPExecution but run preToolUse for MCP tools (R50-21)
+    # cloud agents skip beforeMCPExecution but run preToolUse for MCP tools
     assert hooks["preToolUse"][0]["matcher"] == "MCP:.*"
 
 
@@ -139,7 +139,7 @@ def test_install_cursor_copies_the_files_and_links_the_skill(tmp_path):
     assert r.returncode == 0, r.stderr
     for rel in ("mcp.json", "cli.json", "rules/vra-release-automation.mdc", "skills/vra-deploy/SKILL.md"):
         assert (tmp_path / ".cursor" / rel).read_text() == (CURSOR / rel).read_text(), rel
-    # the hooks name the package by its absolute path (Cursor's app environment has no VRA_PACKAGE, R50-21)
+    # the hooks name the package by its absolute path (Cursor's app environment has no VRA_PACKAGE)
     hooks = (tmp_path / ".cursor/hooks.json").read_text()
     assert "${VRA_PACKAGE" not in hooks and f'{PKG}/adapters/shared/vra-guard.py' in hooks
     json.loads(hooks)
@@ -178,7 +178,7 @@ def test_cron_calls_cursor_headless_with_the_gated_tier_off(tmp_path):
     assert r.returncode == 20, r.stderr
     argv = (tmp_path / "agent-argv.txt").read_text().split("\n")
     assert argv[:1] == ["-p"] and "--trust" in argv and "--approve-mcps" in argv
-    assert "--force" not in argv and "-f" not in argv          # cli.json allow is the allowlist (R50-10)
+    assert "--force" not in argv and "-f" not in argv          # cli.json allow is the allowlist
     assert argv[argv.index("--workspace") + 1] == str(PKG)
     assert argv[argv.index("--output-format") + 1] == "json"
     agent_env = (tmp_path / "agent-env.txt").read_text()
@@ -187,7 +187,7 @@ def test_cron_calls_cursor_headless_with_the_gated_tier_off(tmp_path):
 
 
 def test_cron_canary_stops_triage_when_the_guard_does_not_block(tmp_path):
-    """A guard that allows the aws probe, or cannot run, stops the headless agent (R50-10)."""
+    """A guard that allows the aws probe, or cannot run, stops the headless agent."""
     env = _fake_bin(tmp_path, 20)
     fake_pkg = tmp_path / "pkg"
     (fake_pkg / "adapters/shared").mkdir(parents=True)

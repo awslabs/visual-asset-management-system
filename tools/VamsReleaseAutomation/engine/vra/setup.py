@@ -442,7 +442,7 @@ def run_setup(ctx, answers_path: str | None, force: bool = False, skip_preflight
     if home_info:
         out["home"] = home_info
         if not ctx.dry_run:
-            # `published` is the remote's real state, never "committed locally" (E2E-040 O4: a git home with no
+            # `published` is the remote's real state, never "committed locally" (live test O4: a git home with no
             # upstream yet reported published: true before anything was pushed)
             try:
                 ctx.home.publish("vra setup", paths=["."])

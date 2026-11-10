@@ -210,7 +210,7 @@ def test_warnings_for_two_dev_owners_and_non_arn_approvers(repos, tmp_path):
 
 
 def test_a_pipeline_env_without_a_deploy_role_fails_validate(repos, tmp_path):
-    """B-050-7: the CodeBuild tier role can only assume deployRoleArn; without it CI runs as the tier role."""
+    """the CodeBuild tier role can only assume deployRoleArn; without it CI runs as the tier role."""
     envs = three_envs()
     del envs["dev"]["deployRoleArn"]
     envs["test"]["profile"] = "test-admin"  # a local profile does not exist in CodeBuild
@@ -276,7 +276,7 @@ def test_render_pipeline_plus_actions_turns_off_the_push_trigger(repos, tmp_path
 
 
 def test_pipeline_plus_actions_does_not_require_an_unread_actions_block(repos, tmp_path):
-    """R50-23: vra reads nothing from automation.actions, so pipeline+actions validates without it."""
+    """vra reads nothing from automation.actions, so pipeline+actions validates without it."""
     a = automation_block(mode="pipeline+actions")
     a.pop("actions", None)
     L = make_ledger(repos, tmp_path, automation=a)
@@ -414,7 +414,7 @@ def test_agent_may_deploy_a_plan_without_iam_or_approval_changes(repos, tmp_path
 
 
 def test_a_source_bucket_policy_change_is_human_only(repos, tmp_path, monkeypatch):
-    """B-050-6: widening who may write the release source (sourceWriterArns -> the source bucket policy) is an
+    """widening who may write the release source (sourceWriterArns -> the source bucket policy) is an
     access change: an agent must not deploy it, as with an IAM change."""
     def with_policy(writers):
         t = template()
@@ -504,7 +504,7 @@ def test_push_source_uploads_once_per_revision_and_starts_the_pipeline(repos, tm
 
 
 def test_push_source_zip_carries_the_commit_the_build_stage_reads(repos, tmp_path, monkeypatch):
-    """E2E-050 B-050-13: an S3 source resolves to the object's version id and the git archive has no .git, so the
+    """Live test: an S3 source resolves to the object's version id and the git archive has no .git, so the
     build stage ran `vra build --ref <S3 version id>` ("cannot resolve ... in the fork"). The zip carries the commit
     in .vra-revision, buildspec-build.yml prefers it, and an object uploaded without it is uploaded again."""
     import io
@@ -536,7 +536,7 @@ def test_push_source_zip_carries_the_commit_the_build_stage_reads(repos, tmp_pat
 
 def test_push_source_takes_the_bucket_and_pipeline_of_a_stack_created_source_from_the_stack(repos, tmp_path,
                                                                                             monkeypatch):
-    """B-050-3: the stack creates the bucket (no bucketName) and that source never polls, so push-source run by an
+    """the stack creates the bucket (no bucketName) and that source never polls, so push-source run by an
     operator without --bucket / --pipeline reads both from the stack outputs instead of refusing or uploading
     without starting anything."""
     from moto import mock_aws

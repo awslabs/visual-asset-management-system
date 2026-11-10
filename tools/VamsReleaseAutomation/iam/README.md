@@ -90,8 +90,7 @@ the region themselves, mirroring VAMS.
     `<ConfigName>-core-<BaseStackName>-<region>*` covers them. The templates accept only lowercase
     `ConfigName` / `BaseStackName`: generated bucket names are lowercase and IAM ARN matching is case-sensitive.
 -   Per-asset SNS topics are created at runtime as `AssetTopic<databaseId>-<assetId>`. The roles that use them
-    get `...:sns:<region>:<account>:AssetTopic*`, as VAMS grants it (`engine/vra/iam.py` `RUNTIME_PATTERNS`,
-    B-050-40).
+    get `...:sns:<region>:<account>:AssetTopic*`, as VAMS grants it (`engine/vra/iam.py` `RUNTIME_PATTERNS`).
 -   External asset buckets (`app.assetBuckets.externalAssetBuckets`) go into `AdditionalBucketArns` /
     `AdditionalKmsKeyArns`; an external table key (`app.useKmsCmkEncryption.optionalExternalCmkArn`) into
     `ExternalTableKmsKeyArn` (DynamoDB use only).

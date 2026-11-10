@@ -1,13 +1,13 @@
 {
-    "source": "E2E-050 state/iam/prod/4/iam-policy-report.json (SNS statements only, account replaced)",
+    "source": "live test state/iam/prod/4/iam-policy-report.json (SNS statements only, account replaced)",
     "rows": [
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-created-0/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/StorageResourcesBuilder/sqsBucketSync-created-0/ServiceRole",
             "statements": [
                 {
                     "Action": "sns:Publish",
                     "Effect": "Allow",
-                    "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
+                    "Resource": "(vams-core-prod01-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
                 },
                 {
                     "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
@@ -17,12 +17,12 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/StorageResourcesBuilder/sqsBucketSync-deleted-1/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/StorageResourcesBuilder/sqsBucketSync-deleted-1/ServiceRole",
             "statements": [
                 {
                     "Action": "sns:Publish",
                     "Effect": "Allow",
-                    "Resource": "(vams-core-demo11-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
+                    "Resource": "(vams-core-prod01-us-east-1/StorageResourcesBuilder/FileIndexerSnsTopic/Resource.Ref)"
                 },
                 {
                     "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
@@ -32,7 +32,7 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/sendEmail/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/ApiBuilder/sendEmail/ServiceRole",
             "statements": [
                 {
                     "Action": "sns:Publish",
@@ -42,7 +42,7 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/subscriptionService/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/ApiBuilder/subscriptionService/ServiceRole",
             "statements": [
                 {
                     "Action": [
@@ -60,7 +60,7 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/unsubscribeService/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/ApiBuilder/unsubscribeService/ServiceRole",
             "statements": [
                 {
                     "Action": [
@@ -77,7 +77,7 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/assetService/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/ApiBuilder/assetService/ServiceRole",
             "statements": [
                 {
                     "Action": ["sns:CreateTopic", "sns:DeleteTopic"],
@@ -87,7 +87,7 @@
             ]
         },
         {
-            "roleConstructPath": "vams-core-demo11-us-east-1/ApiBuilder/createAsset/ServiceRole",
+            "roleConstructPath": "vams-core-prod01-us-east-1/ApiBuilder/createAsset/ServiceRole",
             "statements": [
                 {
                     "Action": "sns:CreateTopic",

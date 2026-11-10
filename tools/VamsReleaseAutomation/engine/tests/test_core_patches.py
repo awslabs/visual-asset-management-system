@@ -222,7 +222,7 @@ def test_1210_and_431_patches_apply_together_to_v266(tmp_path):
 @pytest.mark.parametrize("listed,warned", [(False, True), (True, False)])
 def test_validate_warns_about_1210_when_a_role_prefix_is_set_without_the_patch(tmp_path, listed, warned):
     """Without the CP-1210 entry, `vra ledger validate` warns for an env with iam.mode boundary and a rolePrefix (the
-    demo4 500 of Phase B8b); with it listed, no warning."""
+    test1 500 of Phase B8b); with it listed, no warning."""
     c = make_ctx(tmp_path, prod_iam={"mode": "boundary", "rolePrefix": "ITVAMS-",
                                      "boundaryArn": "arn:aws:iam::111111111111:policy/it-vams-boundary"})
     if listed:

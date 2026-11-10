@@ -259,7 +259,7 @@ def placeholders(ctx, env: str, extra: dict | None = None) -> dict[str, str]:
             "StagingBucket": (e.get("dataCopy") or {}).get("stagingBucket") or "*", "SourceAccount": e["account"]}
     try:
         vals["CoreStack"] = ctx.ledger.core_stack_name(env)
-        # B-050-29: a CloudFormation-generated Lambda name keeps at most 25 characters of the stack name
+        # a CloudFormation-generated Lambda name keeps at most 25 characters of the stack name
         from vra.iam import LAMBDA_GENERATED_STACK_CHARS
         vals["CoreStackLambda"] = vals["CoreStack"][:LAMBDA_GENERATED_STACK_CHARS]
         vals["SsmPrefix"] = ctx.ledger.ssm_prefix(env)
@@ -317,7 +317,7 @@ def env_features(ctx, env: str) -> dict[str, str]:
 
 
 def cloudfront_feature(ctx, env: str) -> str | None:
-    """cloudFrontQuota (O-050-15): "on" when the env's overlay config.json deploys the web app on CloudFront
+    """cloudFrontQuota: "on" when the env's overlay config.json deploys the web app on CloudFront
     (``app.useCloudFront.enabled``, which VAMS defaults to true when the block is absent); None for ALB envs, an
     explicit ``enabled: false`` and partitions without CloudFront support in VAMS (GovCloud, EU Sovereign: ALB
     only); "optional" when no overlay says (a gap warns; the deploy's quota check still needs the reads)."""
@@ -340,7 +340,7 @@ def cloudfront_feature(ctx, env: str) -> str | None:
 
 
 def condition_context(condition: dict | None, values: dict[str, str]) -> list[dict]:
-    """SimulatePrincipalPolicy context entries for a manifest statement's ``condition:`` (B-050-8). The role
+    """SimulatePrincipalPolicy context entries for a manifest statement's ``condition:``. The role
     templates carry the same conditions (kms:ViaService dynamodb.* / s3.*, kms:CallerAccount ...); simulated
     without the keys, such a statement is an implicit deny although the real call (made through the service)
     is allowed. A wildcard value is made concrete the way the service sends it: ``dynamodb.*`` ->
@@ -393,7 +393,7 @@ def expand_manifest(manifest: dict, values: dict[str, str], features: dict[str, 
         res = [substitute(r, values) for r in (st.get("resources") or ["*"])]
         boot = values.get("BootstrapRoleArns")
         if st.get("sid") == "CdkBootstrapRolesAssume" and isinstance(boot, list):
-            # iam.mode bootstrap: the roles IT created (any name, R50-7); none with cliCredentialsSynthesizer
+            # iam.mode bootstrap: the roles IT created (any name); none with cliCredentialsSynthesizer
             if not boot:
                 continue
             res = list(boot)
@@ -454,7 +454,7 @@ def _different_authorization(exc: BaseException) -> bool:
 
 def _simulate_pages(iam_client, kwargs: dict) -> list[dict]:
     """All EvaluationResults of one call (paginated). A call IAM refuses because its actions need different
-    authorization information is split into one call per action (E2E-050 B-050-12)."""
+    authorization information is split into one call per action (live test)."""
     kwargs = dict(kwargs)
     results: list[dict] = []
     try:

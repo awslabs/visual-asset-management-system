@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""B-050-39 (E2E-050 Phase B10g): every CI deploy/test/watch job ends with `run-vra.sh report-<env> report --notify`.
+"""(live test Phase B10g): every CI deploy/test/watch job ends with `run-vra.sh report-<env> report --notify`.
 Without a run id `vra report` picks the newest run in the home by start time. The Deploy-prod retry of 5437d5c2
 resumed a run started two days earlier, so its POST_BUILD reported and notified the morning's watch-sync run
 (sync-20261109T060202Z-a7ac) instead of the promote it had just finished. run-vra.sh now remembers the run of the

@@ -676,7 +676,7 @@ class Ledger:
         deployment (``name``, ``app.baseStackName``, ``env.region``, ``env.account``) into env.yaml from it.
 
         Refuses when env.yaml already names a different deployment (setup answered ``baseStackName: dev`` but the
-        imported config deploys ``demo8``): importing would make the engine check, back up and migrate one stack
+        imported config deploys ``dev01``): importing would make the engine check, back up and migrate one stack
         while synth deploys another."""
         src = Path(src)
         if not src.exists():

@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the REVIEW-050 findings on `vra iam` (the reviewer's reproductions, inverted: each one
+"""Regression tests for the security review findings on `vra iam` (the reviewer's reproductions, inverted: each one
 failed on vra 0.5.0 before the fix wave and passes after it)."""
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _add_boundary(d):
     d["boundaryArn"] = BOUNDARY
 
 
-# ================================================================ R50-1: the #431 check is never skipped
+# ================================================================: the #431 check is never skipped
 def test_boundary_arn_only_in_it_response_still_runs_the_431_check(tmp_path):
     c = make_ctx(tmp_path, prod_iam={"mode": "boundary", "rolePrefix": "ITVAMS-"})
     _ungate(c)
@@ -61,7 +61,7 @@ def test_boundary_mode_without_any_arn_fails_closed(tmp_path):
     assert any("without iam.boundaryArn" in w for w in c.ledger.validate()["warnings"])
 
 
-# ================================================================ R50-5: the approval names the response
+# ================================================================: the approval names the response
 def test_gated_iam_apply_approval_is_bound_to_the_response(tmp_path):
     c = make_ctx(tmp_path)
     plan_from(c, "prod", "commercial-report", tmp_path)
@@ -97,7 +97,7 @@ def test_apply_dry_run_shows_the_response_sha_and_records_the_it_ticket(tmp_path
     assert rec["action"] == "iam-apply" and rec["itTicket"] == "CHG-1234" and rec["responseSha256"] == sha
 
 
-# ================================================================ R50-4: applied.json is bound to history
+# ================================================================: applied.json is bound to history
 def test_gate_refuses_an_applied_json_no_iam_apply_recorded(tmp_path):
     c = make_ctx(tmp_path, prod_iam={"mode": "precreated", "rolePrefix": "ITVAMS-"})
     _ungate(c)
@@ -132,7 +132,7 @@ def test_gate_refuses_an_applied_json_written_by_hand(tmp_path):
         iam.gate(c, new_run(c), "prod", "s")
 
 
-# ================================================================ R50-2: no bundle reuse across IAM changes
+# ================================================================: no bundle reuse across IAM changes
 def test_complete_bundle_is_rebuilt_after_iam_apply_and_the_iam_gate_runs(tmp_path, repos):
     state = {"name": "commercial-report"}
     c = make_ctx(tmp_path, repos, prod_iam=None, handler=_synth_handler(state))
@@ -172,7 +172,7 @@ def test_deploy_gate_refuses_a_bundle_built_with_other_iam_settings(tmp_path):
         {"env": "dev", "modes": ["standard"]}
 
 
-# ================================================================ R50-3: IT packages through the S3 state store
+# ================================================================: IT packages through the S3 state store
 def test_it_package_is_shared_through_the_s3_state_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
     with moto.mock_aws():
@@ -209,7 +209,7 @@ def test_it_package_is_shared_through_the_s3_state_store(tmp_path, monkeypatch):
         assert iam.gate(m2, new_run(m2), "prod", "s")["package"] == "prod-1"
 
 
-# ================================================================ R50-6: PassRole matches the names in use
+# ================================================================: PassRole matches the names in use
 def test_precreated_passrole_matches_exactly_the_passed_roles(tmp_path):
     import fnmatch
     c = make_ctx(tmp_path, prod_iam={"mode": "precreated", "rolePrefix": "APP-"})
@@ -233,7 +233,7 @@ def test_precreated_passrole_matches_exactly_the_passed_roles(tmp_path):
         assert len(hits) < 10
 
 
-# ================================================================ R50-7: bootstrap mode with vra's deploy role
+# ================================================================: bootstrap mode with vra's deploy role
 def _deploy_policy(params: dict) -> list[dict]:
     from test_freeze_restore_signing import _conditions
     from test_iam_and_ci_roles import load_cfn, render
@@ -283,7 +283,7 @@ def test_package_vra_deploy_policy_names_the_bootstrap_arns(tmp_path):
     assert iam.bootstrap_assume_arns(c2, "prod") == []
 
 
-# ================================================================ R50-14: pipeline deploy recomputes human-only
+# ================================================================: pipeline deploy recomputes human-only
 def test_pipeline_deploy_recomputes_iam_and_gate_changes_against_the_live_stack(repos, tmp_path, monkeypatch):
     from vra import pipeline
     from test_pipeline import FakeCfn, automation_block, make_ctx as pl_ctx, make_ledger, template
@@ -307,7 +307,7 @@ def test_pipeline_deploy_recomputes_iam_and_gate_changes_against_the_live_stack(
         pipeline.deploy(ctx, rec["planId"])
 
 
-# ================================================================ R50-19: verify reports broader roles
+# ================================================================: verify reports broader roles
 def test_verify_reports_roles_broader_than_the_package(tmp_path):
     from test_iam_package import FakeIam, _live_roles, _verify_ctx
 
@@ -336,7 +336,7 @@ def test_verify_reports_roles_broader_than_the_package(tmp_path):
     assert not res["ok"]
 
 
-# ================================================================ R50-22 / R50-24 / R50-26
+# ================================================================ / /
 def test_bootstrap_check_reads_the_asset_publishing_roles(tmp_path):
     c = make_ctx(tmp_path, prod_iam={"mode": "bootstrap", "rolePrefix": "ITVAMS-"})
     _ungate(c)
@@ -388,7 +388,7 @@ def test_assembly_load_reads_nested_cloud_assemblies(tmp_path):
         sorted(map(json.dumps, flat.bootstrap_arns().values())) and flat.bootstrap_arns()
 
 
-# ================================================================ R50-9: typed confirmations only at a person's TTY
+# ================================================================: typed confirmations only at a person's TTY
 def _clean_env(monkeypatch):
     from vra import human
     for var in human.AGENT_MARKERS + human.CI_MARKERS:

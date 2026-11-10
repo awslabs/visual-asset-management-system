@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""REVIEW-050 fix wave: the GitHub Actions samples, the hand-off gate and the OIDC trust source."""
+"""Security review fixes: the GitHub Actions samples, the hand-off gate and the OIDC trust source."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def wf(name: str) -> dict:
     return yaml.safe_load((GA / name).read_text())
 
 
-# ------------------------------------------------------------------ R50-11
+# ------------------------------------------------------------------
 @pytest.mark.parametrize("name", HOME_WORKFLOWS)
 def test_jobs_that_run_fork_code_hold_no_home_write_token(name):
     text = (GA / name).read_text()
@@ -92,7 +92,7 @@ def test_adopt_copies_only_engine_paths_and_refuses_links(tmp_path):
 
 
 def test_checkout_clones_into_the_folder_the_build_artifact_already_filled(tmp_path):
-    """E2E-050 B-050-16: a deploy job's primary input (the build's artifact) carries vra-home/state/iam/, so
+    """Live test: a deploy job's primary input (the build's artifact) carries vra-home/state/iam/, so
     `git clone` refused the non-empty folder and no deploy stage could start. The checkout clones anyway, adds
     back only the carried state files the home lacks, and keeps the home's committed copies."""
     repo = tmp_path / "repo"
@@ -120,7 +120,7 @@ def test_checkout_clones_into_the_folder_the_build_artifact_already_filled(tmp_p
     assert json.loads((home / "state/iam/prod/3/package.json").read_text()) == {"new": True}
 
 
-# ------------------------------------------------------------------ R50-13 / R50-17
+# ------------------------------------------------------------------ /
 def _run(name, path, branch="main", conclusion="success", n=1, rid=None):
     return {"name": name, "path": path, "head_sha": "a" * 40, "event": "push", "head_branch": branch,
             "status": "completed", "conclusion": conclusion, "run_number": n, "run_attempt": 1, "id": rid or n}
@@ -160,7 +160,7 @@ def test_security_scan_fails_on_high_for_pushes_by_default_and_hand_off_reads_as
     assert ".github/workflows/vra-security-scan.yml" in hand and '--branch "${TRUNK}"' in hand
 
 
-# ------------------------------------------------------------------ R50-18
+# ------------------------------------------------------------------
 def test_gated_envs_isolate_tests_and_prod_class_refuses_unisolated_tests():
     text = (GA / "vra-deploy-env.yml").read_text()
     assert "!(inputs.isolate-tests || inputs.requires-approval)" in text
@@ -168,7 +168,7 @@ def test_gated_envs_isolate_tests_and_prod_class_refuses_unisolated_tests():
     assert "ci_graph.py is-prod-class" in text and "exit 20" in text
 
 
-# ------------------------------------------------------------------ R50-16
+# ------------------------------------------------------------------
 def test_one_trust_source_for_github_com_ghec_and_ghes():
     assert trust.issuer_host("https://github.com") == "token.actions.githubusercontent.com"
     assert trust.issuer_host("https://github.com", "acme") == "token.actions.githubusercontent.com/acme"

@@ -81,7 +81,7 @@ def test_merge_path_policy_conflicts_and_continue(ctx, repos, ledger):
 
 
 def test_merge_of_a_release_the_target_already_contains_publishes_nothing(ctx, repos, ledger, tmp_path):
-    """E2E-050 O-050-4 / B-050-23: v2.6.67 was merged into test/fork-main; the next daily watch merged it again
+    """Live test: v2.6.67 was merged into test/fork-main; the next daily watch merged it again
     (alreadyUpToDate), then pushed an empty sync branch, failed without a fork write token, and the watch exited 1.
     A release the target contains is marked processed: no push, no pull request."""
     # the fork's edits outside the lanes are registered (`-s ours` below keeps the fork's tree)

@@ -53,7 +53,7 @@ def _tty() -> bool:
 
 
 # Environment variables agent hosts and CI systems set. Any of them present: a typed confirmation is not
-# accepted, only an approval record (R50-9). `env -u VRA_AGENT` clears one, not all of them, and not the
+# accepted, only an approval record. `env -u VRA_AGENT` clears one, not all of them, and not the
 # process chain below.
 AGENT_MARKERS = ("VRA_AGENT", "VRA_MCP", "VRA_AGENT_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
                  "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_THREAD_ID", "CURSOR_AGENT",

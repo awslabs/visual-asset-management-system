@@ -560,8 +560,8 @@ Resources:
                           - lambda:InvokeFunction
                           - lambda:GetFunction
                       Resource: !Sub
-                          # B-050-29: generated Lambda names keep at most 25 characters of the core stack name
-                          # (vams-core-demo11-us-east-1 -> vams-core-demo11-us-east--crOsReindexer...), so the region
+                          # generated Lambda names keep at most 25 characters of the core stack name
+                          # (vams-core-prod01-us-east-1 -> vams-core-prod01-us-east--crOsReindexer...), so the region
                           # part may be cut; the ARN's region field still scopes it
                           - arn:${AWS::Partition}:lambda:${R}:${AWS::AccountId}:function:${ConfigName}-core-${BaseStackName}-*
                           - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
@@ -713,7 +713,7 @@ Resources:
                       Action:
                           - iam:GetRole
                           - iam:SimulatePrincipalPolicy
-                          # find grants broader than the package (R50-19)
+                          # find grants broader than the package
                           - iam:ListAttachedRolePolicies
                           - iam:ListRolePolicies
                           - iam:GetRolePolicy

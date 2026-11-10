@@ -197,7 +197,7 @@ def resume(ctx, run_id: str, confirm: bool = False) -> Outcome:
     from vra import permissions
     run = Run.load(ctx.state_dir, run_id, store=ctx.store, home=ctx.home)
     if ctx.dry_run and not run.state.get("dryRun"):
-        # B-050-30: resuming re-simulates IT requests, resets steps and runs the workflow on the stored run, and
+        # resuming re-simulates IT requests, resets steps and runs the workflow on the stored run, and
         # every one of those saves and publishes it. `--dry-run` promises to change nothing, so it is refused here,
         # before the run lease, any save or any AWS call.
         raise errors.UsageError(
@@ -303,7 +303,7 @@ def env_lock(ctx, run: Run, env: str):
                 util.eprint(f"warning: could not hold the lock for {env}: {exc}")
         if held:
             run.state.setdefault("heldLocks", {})[env] = {"since": util.now_iso(), "reason": dirty}
-            # B-050-37: once per env, however often the run parks; and name the other-machine path (a CI retry
+            # once per env, however often the run parks; and name the other-machine path (a CI retry
             # runs on a new host, so its resume is refused at this lock until a person unlocks or takes over)
             note = (f"{env} stays locked by this run ({dirty}): `vra resume {run.run_id}` continues on this "
                     f"machine; from another machine (e.g. a CI retry) a person first runs "
@@ -319,7 +319,7 @@ def env_lock(ctx, run: Run, env: str):
                 util.eprint(f"warning: lock release for {env} failed: {exc}")
             run.state.get("locks", {}).pop(env, None)
             (run.state.get("heldLocks") or {}).pop(env, None)
-            # B-050-38: the lock is released, so an earlier park's "stays locked" note no longer holds (a resumed
+            # the lock is released, so an earlier park's "stays locked" note no longer holds (a resumed
             # run that succeeded still told the reader to unlock an env nobody held)
             notes = run.state.get("notes")
             if notes:

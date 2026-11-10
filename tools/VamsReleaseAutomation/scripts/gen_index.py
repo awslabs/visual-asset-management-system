@@ -38,10 +38,10 @@ DESCRIPTIONS = {
     "scripts/tests/test_check_scripts.py": "Tests for the self-check scripts (scan scope, links, neutrality)",
     "scripts/check_agent_policy.py": "Checks the human-only set across engine, skill, MCP server, guard and adapters",
     "scripts/tests/test_check_agent_policy.py": "Tests for the agent policy check",
-    "engine/tests/test_review050_regressions.py": "REVIEW-050 regressions: IAM gates, IT apply binding, PassRole, TTY rule",
+    "engine/tests/test_security_review_regressions.py": "Security review regressions: IAM gates, IT apply binding, PassRole, TTY rule",
     "cicd/github-actions/vra-home-publish.yml": "Reusable workflow: the only job that pushes the home (no fork code)",
     "cicd/oidc/github_trust.py": "One source for GitHub OIDC trust: issuer hosts (GHES, GHEC), subjects, rendered template",
-    "cicd/tests/test_review050_ci.py": "REVIEW-050 regressions: home token, hand-off gate, ASH, test isolation, trust",
+    "cicd/tests/test_security_review_ci.py": "Security review regressions: home token, hand-off gate, ASH, test isolation, trust",
     "scripts/tests/test_check_doc_commands.py": "Tests for the doc-command check (command groups and flags)",
     "adapters/install.sh": "Installs one adapter into the operator workspace",
     "adapters/shared/vra-guard.py": "Pre-tool-use command guard for every adapter (exit 2 blocks)",
@@ -99,27 +99,27 @@ DESCRIPTIONS = {
     "iam/scripts/extract_cdk_bootstrap_roles.py": "Refreshes cdk-bootstrap-roles.json from a CDK CLI",
     "scripts/make_iam_fixture.py": "Reduces a real VAMS cdk.out to an IAM test fixture",
     "engine/vra/core_patches.py": "Ledger core patches (`core-patches/*.patch`) applied to every build and IAM plan source",
-    "engine/tests/test_b050_29_generated_lambda_names.py":
-        "B-050-29: generated Lambda names keep 25 characters of the stack name (IAM package and vra role grants)",
-    "engine/tests/test_b050_35_ref_is_a_name.py":
-        "B-050-35: `Ref` of a Lambda function or DynamoDB table resolves to its name inside an IAM package ARN",
-    "engine/tests/test_b050_36_rollback_failed.py":
-        "B-050-36: a cdk deploy that leaves a stack ROLLBACK_FAILED reports exit 40 with the first failure, "
+    "engine/tests/test_generated_lambda_name_truncation.py":
+        "generated Lambda names keep 25 characters of the stack name (IAM package and vra role grants)",
+    "engine/tests/test_ref_is_a_name.py":
+        "`Ref` of a Lambda function or DynamoDB table resolves to its name inside an IAM package ARN",
+    "engine/tests/test_rollback_failed_stack.py":
+        "a cdk deploy that leaves a stack ROLLBACK_FAILED reports exit 40 with the first failure, "
         "not an IT block",
-    "engine/tests/test_b050_37_held_lock_note.py":
-        "B-050-37: a run that parks more than once lists its held-lock note once, naming the unlock and takeover "
+    "engine/tests/test_held_lock_note.py":
+        "a run that parks more than once lists its held-lock note once, naming the unlock and takeover "
         "paths for a resume from another machine",
-    "engine/tests/test_b050_38_held_lock_note_cleared.py":
-        "B-050-38: a resumed run that succeeds and releases its env drops the earlier \"stays locked\" note",
-    "cicd/tests/test_b050_39_report_run.py":
-        "B-050-39: a CI `report` step without a run id reports the run of the job's own vra step",
-    "engine/tests/test_b050_40_asset_topic.py":
-        "B-050-40: roles that use the runtime per-asset SNS topics are granted `AssetTopic*`, not the core stack "
+    "engine/tests/test_held_lock_note_cleared.py":
+        "a resumed run that succeeds and releases its env drops the earlier \"stays locked\" note",
+    "cicd/tests/test_report_step_run.py":
+        "a CI `report` step without a run id reports the run of the job's own vra step",
+    "engine/tests/test_asset_topic_grants.py":
+        "roles that use the runtime per-asset SNS topics are granted `AssetTopic*`, not the core stack "
         "pattern",
     "engine/tests/test_cloudfront_quota.py":
-        "O-050-15 (0.5.1): the CloudFront quota check before `cdk deploy`; the demo11 full cache-policy quota case",
-    "engine/tests/fixtures/b050_40_prod4_sns_statements.json":
-        "SNS statements of the 7 AssetTopic roles from the E2E-050 prod-4 IAM report (B-050-40)",
+        " (0.5.1): the CloudFront quota check before `cdk deploy`; the prod01 full cache-policy quota case",
+    "engine/tests/fixtures/asset_topic_role_sns_statements.json":
+        "SNS statements of the 7 AssetTopic roles from the live test prod-4 IAM report",
     "engine/tests/test_core_patches.py": "Ledger core patches; the GitHub issue #431 and #1210 patches on real VAMS v2.6.6 / development input",
     "engine/tests/fixtures/iam/vams-2.6.6-iam-role-transform.aspect.ts":
         "VAMS v2.6.6 IamRoleTransform aspect source (the boundary core patch applies to it)",

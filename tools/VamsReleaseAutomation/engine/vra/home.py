@@ -120,9 +120,9 @@ def _git(root: Path, *args: str, check: bool = True, timeout: int = 120) -> subp
 
 
 # a git host can refuse a push right after the previous one (its refs are still updating; a re-pull shows
-# nothing new): retry with a short backoff and keep git's own error (E2E-050 B-050-17)
+# nothing new): retry with a short backoff and keep git's own error (live test)
 PUSH_ATTEMPTS = 6
-# pushes lost to another writer that moved the branch first: replayed and retried at once (B-050-22)
+# pushes lost to another writer that moved the branch first: replayed and retried at once
 PUSH_RACE_ATTEMPTS = 40
 
 
@@ -159,7 +159,7 @@ class Sync:
         # vra-home.yaml change only by a person's commit; artifacts travel only when sync.pushArtifacts is set.
         self.scope = ["state", "checkpoints"] + (["artifacts"] if cfg.get("pushArtifacts") else [])
         # engine output that stays on this machine (never pushed, never a person's change): the build bundle when
-        # artifacts do not travel. A CI build is not refused for its own bundle (E2E-050 B-050-15)
+        # artifacts do not travel. A CI build is not refused for its own bundle (live test)
         self.local_only = [] if cfg.get("pushArtifacts") else ["artifacts"]
         self.read_only = False  # stateStore s3: the home is read (ledger) but never pushed
         self.pulls = 0
@@ -203,7 +203,7 @@ class Sync:
     def _refuse_foreign_unpushed(self, message: str, extra: list[str]) -> None:
         """`git push` publishes the whole branch. When a person's local commit that changes the ledger (or anything
         outside the engine's scope) is not pushed yet, the engine's push would publish it for them, past review,
-        and a gated command would then accept an approval record that was never pushed by a person (E2E-040: an
+        and a gated command would then accept an approval record that was never pushed by a person (live test: an
         unpushed approval commit reached the remote with the run's first state push, then passed the gate)."""
         root = self.home.root
         p = _git(root, "diff", "--name-only", "@{u}", "HEAD", check=False)
@@ -220,7 +220,7 @@ class Sync:
 
     def _displace_unpublished(self, stderr: str) -> bool:
         """A process of this machine that died before it published leaves engine files that another machine has
-        since committed (E2E-040: machine A was killed mid-smoke, B took the run over and pushed the same log);
+        since committed (live test: machine A was killed mid-smoke, B took the run over and pushed the same log);
         `git pull --ff-only` then refuses. Files in the engine's scope are moved to ``.vra-local/displaced/``
         (kept, never deleted) and the remote's committed copy wins. Anything outside the scope stays a human's
         call. Returns True when something was moved."""
@@ -288,7 +288,7 @@ class Sync:
             return True
         if defer_push():
             # a CI step that runs fork code holds no write token: the commit stays local and a separate publish
-            # job (github-actions/vra-home-publish.yml) pushes the state files (R50-11)
+            # job (github-actions/vra-home-publish.yml) pushes the state files
             self.deferred = getattr(self, "deferred", 0) + 1
             return True
         self._refuse_foreign_unpushed(message, paths or [])
@@ -310,13 +310,13 @@ class Sync:
             after = _git(root, "rev-parse", "-q", "--verify", "@{u}", check=False).stdout.strip()
             if after != before:
                 # another writer moved the branch (CI jobs publish about once a second): replayed on top, push
-                # again at once with a little jitter, or two busy writers starve each other (E2E-050 B-050-22)
+                # again at once with a little jitter, or two busy writers starve each other (live test)
                 races += 1
                 if races >= PUSH_RACE_ATTEMPTS:
                     break
                 _push_sleep(random.uniform(0, 0.5))
                 continue
-            refusals += 1                     # nothing new upstream: the host refused for a moment (B-050-17)
+            refusals += 1                     # nothing new upstream: the host refused for a moment
             if refusals >= PUSH_ATTEMPTS:
                 break
             _push_sleep(min(2 ** (refusals - 1), 8))
@@ -530,7 +530,7 @@ class Home:
 
     def pull(self) -> None:
         # two vra processes of one machine share the home's git repository: their pulls, commits and pushes must
-        # not interleave (E2E-040: a heartbeat push and another run's pull collided on .git/index.lock)
+        # not interleave (live test: a heartbeat push and another run's pull collided on .git/index.lock)
         with self.mutex("sync"):
             self.sync.pull()
 

@@ -217,7 +217,7 @@ class Assembly:
     @classmethod
     def load(cls, out: Path) -> "Assembly":
         """A cdk.out directory, including nested cloud assemblies (CDK stages, ``cdk:cloud-assembly`` artifacts
-        of manifest.json): their templates and stack artifacts are read too (R50-26)."""
+        of manifest.json): their templates and stack artifacts are read too."""
         out = Path(out)
         rep = out / REPORT
         report = util.read_json(rep) if rep.exists() else None
@@ -260,7 +260,7 @@ class Assembly:
     asset_manifests: list = []
 
     def publishing_arns(self) -> dict[str, set]:
-        """``file-publishing`` / ``image-publishing`` -> the assumeRoleArn values of the asset manifests (R50-22)."""
+        """``file-publishing`` / ``image-publishing`` -> the assumeRoleArn values of the asset manifests."""
         out: dict[str, set] = {"file-publishing": set(), "image-publishing": set()}
         for m in self.asset_manifests or []:
             for kind, key in (("file-publishing", "files"), ("image-publishing", "dockerImages")):
@@ -470,7 +470,7 @@ def role_rows(asm: Assembly, env_info: dict) -> tuple[list[dict], list[dict]]:
         stmts, unresolved = resolve_statements(
             (r.get("identityPolicyStatements") or []) + (r.get("managedPolicyStatements") or []), asm, path, env_info)
         # iam:PassRole on another VAMS role: with IT-created roles the grant names exactly the roles VAMS passes
-        # (R50-6); the digest form names them by construct path, so a report-only plan and a precreated synth
+        #; the digest form names them by construct path, so a report-only plan and a precreated synth
         # (other names) give the same policy digest
         targets: set[str] = set()
         out_stmts, norm_stmts = [], []
@@ -529,7 +529,7 @@ def _partition(s: str, partition: str) -> str:
 
 
 # Generated (CloudFormation-named) Lambda functions keep at most this many characters of the stack name: a census of
-# 639 generated function names in 26 VAMS stacks (E2E-050 B9, 2026-11-06) found the full name for 25-char core stack
+# 639 generated function names in 26 VAMS stacks (live test B9, 2026-11-06) found the full name for 25-char core stack
 # names and exactly 25 characters for 26-char ones. DynamoDB tables, SNS topics and SQS queues kept the full name.
 LAMBDA_GENERATED_STACK_CHARS = 25
 TOKEN_RE = re.compile(r"\(([^()]+)\)")
@@ -564,7 +564,7 @@ def _arn_for(res: dict, attr: str, stack: str, v: dict) -> str | None:
     name = name if isinstance(name, str) else None
     p, r, a = v["partition"], v["region"], v["account"]
     gen = f"{stack}*"
-    # B-050-35: ``Ref`` of a table or a function is its NAME (CDK writes ``arn:...:function:${Ref}``); only
+    # ``Ref`` of a table or a function is its NAME (CDK writes ``arn:...:function:${Ref}``); only
     # ``Arn`` is the ARN. Returning the ARN for Ref doubled the prefix (function:arn:<p>:lambda:...) and the grant
     # matched nothing.
     if t == "AWS::DynamoDB::Table":
@@ -577,8 +577,8 @@ def _arn_for(res: dict, attr: str, stack: str, v: dict) -> str | None:
     if t == "AWS::Logs::LogGroup" and attr == "Arn":
         return f"arn:{p}:logs:{r}:{a}:log-group:{name or '*'}:*"
     if t == "AWS::Lambda::Function" and attr in ("Arn", "Ref"):
-        # B-050-29: CloudFormation keeps at most LAMBDA_GENERATED_STACK_CHARS of the stack name in a generated
-        # function name (vams-core-demo11-us-east-1 -> vams-core-demo11-us-east--PopulateS3AssetBucketsTa-3HgT...)
+        # CloudFormation keeps at most LAMBDA_GENERATED_STACK_CHARS of the stack name in a generated
+        # function name (vams-core-prod01-us-east-1 -> vams-core-prod01-us-east--PopulateS3AssetBucketsTa-3HgT...)
         fn = name or stack[:LAMBDA_GENERATED_STACK_CHARS] + "*"
         return fn if attr == "Ref" else f"arn:{p}:lambda:{r}:{a}:function:{fn}"
     if t == "AWS::SQS::Queue" and attr == "Arn":
@@ -611,7 +611,7 @@ def resolve_statements(stmts: list[dict], asm: Assembly, path: str, env_info: di
         for res in _list(st.get("Resource")) or ["*"]:
             got, why = resolve_resource(res, asm, env_info)
             if got is None and isinstance(res, str) and OPAQUE_RE.fullmatch(res):
-                got = _runtime_pattern(path, svcs, env_info)   # B-050-40
+                got = _runtime_pattern(path, svcs, env_info)   #
             if got is None:
                 original = res if isinstance(res, str) else json.dumps(res)
                 scoped = _stack_scoped(original, svcs, stack, env_info)
@@ -630,7 +630,7 @@ def resolve_statements(stmts: list[dict], asm: Assembly, path: str, env_info: di
     return merge_statements(resolved), unresolved
 
 
-# B-050-40: VAMS roles whose opaque-token resource is a runtime-named ARN pattern, built with ``cdk.Fn.sub`` (the
+# VAMS roles whose opaque-token resource is a runtime-named ARN pattern, built with ``cdk.Fn.sub`` (the
 # iam-policy-report shows only ``${Token[...]}``, and the precreated build synth has no policy to read it from, so
 # the plan and the deploy gate must both resolve it from this table to get the same policy digest). By construct
 # path below the core stack:
@@ -901,7 +901,7 @@ ASSUMED_BOOTSTRAP = ("deploy", "lookup", "file-publishing", "image-publishing") 
 
 
 def bootstrap_assume_arns(ctx, env: str) -> list[str] | None:
-    """iam.mode bootstrap: the bootstrap role ARNs vra's deploy role assumes (R50-7), from env.yaml
+    """iam.mode bootstrap: the bootstrap role ARNs vra's deploy role assumes, from env.yaml
     ``iam.bootstrap``, else IT's applied response, else the names `it-roles.yaml` gives them. ``[]`` with
     cliCredentialsSynthesizer (no bootstrap roles), ``None`` outside bootstrap mode (the cdk-* defaults apply)."""
     e = ctx.ledger.env(env)
@@ -1182,7 +1182,7 @@ def render_package(d: Path, n: int, prev: dict | None, meta: dict, roles: list[d
 
 
 def role_quota_summary(s: dict, roles: list[dict]) -> dict:
-    """What the env's VAMS stacks need from the account's IAM role quota (O-050-7). Pre-created roles: none (IT
+    """What the env's VAMS stacks need from the account's IAM role quota. Pre-created roles: none (IT
     creates them). Otherwise the stacks create every role, and switching a deployed stack to a boundary or role
     prefix replaces them all, so the account briefly holds both sets."""
     if "precreated" in s["modes"]:
@@ -1579,7 +1579,7 @@ def render_markdown(meta: dict, roles: list[dict], refs: list[dict], boot: list[
 
 
 def broad_grants(roles: list[dict]) -> list[dict]:
-    """Statements on ``Resource: "*"`` or with a wildcard action (R50-24), one row per role and resource."""
+    """Statements on ``Resource: "*"`` or with a wildcard action, one row per role and resource."""
     out = []
     for r in roles:
         for st in r["policy"]["Statement"]:
@@ -1701,7 +1701,7 @@ def apply(ctx, env: str, response_path: Path, approval: str | None = None, packa
                "approvalSha256": (rec or {}).get("sha256"), "authorization": authorization or []}
     applied["appliedSha256"] = applied_digest(applied)
     util.write_json(root / "applied.json", applied)
-    # the create-only history record is what the gates trust (R50-4): applied.json and the overlay are mutable
+    # the create-only history record is what the gates trust: applied.json and the overlay are mutable
     # files, the record binds them to this package, response and approval
     ctx.ledger.append_history(env, {"action": "iam-apply", "result": "SUCCEEDED", "by": ctx.initiator,
                                     "runId": use, "packageId": pkg["packageId"], "n": pkg["n"],
@@ -1937,7 +1937,7 @@ def gate(ctx, run, env: str, step_id: str) -> dict:
 
 
 def build_identity(ctx, env: str) -> dict:
-    """What decides how the env's roles are synthesized (R50-2): iam mode, the applied package and response,
+    """What decides how the env's roles are synthesized: iam mode, the applied package and response,
     the overlay files `vra iam apply` writes. Part of the bundle reuse key and checked again by `vra deploy`."""
     s = settings(ctx.ledger.env(env))
     if not needs_package(s):
@@ -1966,7 +1966,7 @@ def deploy_gate(ctx, run, env: str, manifest: dict, step_id: str) -> dict:
     res = gate(ctx, run, env, step_id) if needs_package(s) else {"env": env, "modes": s["modes"]}
     now = build_identity(ctx, env)
     if built != now and built is not None and _same_synthesis(built, now):
-        # B-050-31: IT changed only role policies (the remedy a BLOCKED_ON_IT deploy asks for) and the new package
+        # IT changed only role policies (the remedy a BLOCKED_ON_IT deploy asks for) and the new package
         # was applied: `gate` above proved it is applied and recorded, and the overlay `vra iam apply` writes - the
         # only IAM input of the synth - is byte-identical, so the bundle is the one this package would produce.
         return {**res, "bundleIam": "matches", "bundlePackage": built.get("package"),
@@ -1995,7 +1995,7 @@ def check_assembly(ctx, run, env: str, out: Path, step_id: str, source: dict | N
         return res
     asm = Assembly.load(out)
     # the boundary wherever it ends up (env.yaml, IT's response, the applied overlay): the #431 check must never
-    # be skipped because env.yaml left iam.boundaryArn blank (R50-1)
+    # be skipped because env.yaml left iam.boundaryArn blank
     want_boundary = boundary_arn(ctx, env, s) if "boundary" in s["modes"] else None
     if "boundary" in s["modes"] and not want_boundary and not synth_failed:
         raise NeedsHuman(f"{env} uses iam.mode boundary but no boundary ARN is known (env.yaml iam.boundaryArn, the "
@@ -2036,7 +2036,7 @@ def check_assembly(ctx, run, env: str, out: Path, step_id: str, source: dict | N
                     raise NeedsHuman(f"stack {stack} of the {env} build uses {kind} role {got!r}, the applied IT "
                                      f"package says {want or 'none (cliCredentialsSynthesizer)'}; the overlay was "
                                      f"not applied to this synth")
-        # the asset publishing roles live in the asset manifests (*.assets.json), not the stack artifacts (R50-22)
+        # the asset publishing roles live in the asset manifests (*.assets.json), not the stack artifacts
         part = env_info(ctx, env)["partition"]
         for kind, got in asm.publishing_arns().items():
             got = {g.replace("${AWS::Partition}", part) for g in got}
@@ -2244,7 +2244,7 @@ def verify(ctx, env: str) -> dict:
 NOT_EFFECTIVE = "not effective in VAMS's policy, not an IT gap"
 # Actions that take only `*` as resource, and SNS actions on subscriptions (`<topic arn>:<id>`). VAMS's own
 # synthesized policies grant them on key or topic ARNs, which they never match, so IAM denies them for the roles
-# VAMS creates as well (E2E-050 B-050-14, a documented limitation of `vra iam verify`).
+# VAMS creates as well (live test, a documented limitation of `vra iam verify`).
 WILDCARD_ONLY_ACTIONS = {"kms:listkeys", "kms:listaliases"}
 SNS_SUBSCRIPTION_ACTIONS = {"sns:getsubscriptionattributes", "sns:setsubscriptionattributes", "sns:unsubscribe"}
 
@@ -2268,7 +2268,7 @@ BROAD_MANAGED = ("AdministratorAccess", "PowerUserAccess", "IAMFullAccess")
 
 
 def _check_broader(iam, name: str, row: dict, res: dict) -> None:
-    """Upper bound (R50-19): managed policies and inline actions the package does not grant. A customer managed
+    """Upper bound: managed policies and inline actions the package does not grant. A customer managed
     policy or a wildcard / unlisted inline action is a problem; an extra AWS managed policy a warning (IT often
     adds e.g. AWSLambdaBasicExecutionRole), except the broad ones in ``BROAD_MANAGED``."""
     import fnmatch
@@ -2384,7 +2384,7 @@ def wf_plan(ctx, run, args):
                 creds, cred_role = {**region_env, **build.NO_CREDENTIALS_ENV}, "none"
                 sc.log(f"no AWS credentials for synth lookups in {env}: {exc}")
             # as vra build: prove the build-only role before minutes of synth, and turn a lookup that found no
-            # credentials into what to set (E2E-050: demo4's VPC lookup failed as a bare `command failed (1)`)
+            # credentials into what to set (live test: test1's VPC lookup failed as a bare `command failed (1)`)
             if cred_role in ("synth", "readonly"):
                 build.prove_synth_role(ctx, env, cred_role)
             sub_env, _keys = build.synth_environment(ctx, env, {**region_env, **creds})

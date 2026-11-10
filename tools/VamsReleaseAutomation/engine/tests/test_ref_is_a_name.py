@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""B-050-35 (E2E-050 Phase B10d): ``Ref`` of a Lambda function (or a DynamoDB table) is its name, not its ARN.
+"""(live test Phase B10d): ``Ref`` of a Lambda function (or a DynamoDB table) is its name, not its ARN.
 
 The iam-policy-report of the Conversion3dBasic registration's provider framework names the handler (a function of
 another nested stack) as ``arn:(PARTITION):lambda:us-east-1:<acct>:function:(<path>/Resource.Ref)``. `vra iam`
-resolved ``Ref`` to the full ARN, so IT's role `vrae2e-demo11-frameworkonEvent-a78d52` was granted
-``lambda:GetFunction`` on ``function:arn:aws:lambda:...:function:vams-core-demo11-us-east-*``, which matches no
-function. demo11's fresh prod create (2026-11-07 17:47 UTC) then hit ROLLBACK_FAILED: the registration custom
-resource could not GetFunction ``vams-core-demo11-us-east--importGlobalPipelineWork-vXdz4VFaJMPz`` on delete.
+resolved ``Ref`` to the full ARN, so IT's role `vrae2e-prod01-frameworkonEvent-a78d52` was granted
+``lambda:GetFunction`` on ``function:arn:aws:lambda:...:function:vams-core-prod01-us-east-*``, which matches no
+function. prod01's fresh prod create (2026-11-07 17:47 UTC) then hit ROLLBACK_FAILED: the registration custom
+resource could not GetFunction ``vams-core-prod01-us-east--importGlobalPipelineWork-vXdz4VFaJMPz`` on delete.
 The statements below are copied from ``state/iam/prod/3/iam-policy-report.json``."""
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ from vra import iam
 
 ACCT = "111111111111"
 ENV = {"partition": "aws", "region": "us-east-1", "account": ACCT}
-CORE = "vams-core-demo11-us-east-1"
+CORE = "vams-core-prod01-us-east-1"
 FN_PATH = f"{CORE}/ApiBuilder2/importGlobalPipelineWorkflow/Resource"
-LIVE_FN = "vams-core-demo11-us-east--importGlobalPipelineWork-vXdz4VFaJMPz"
+LIVE_FN = "vams-core-prod01-us-east--importGlobalPipelineWork-vXdz4VFaJMPz"
 LIVE_ARN = f"arn:aws:lambda:us-east-1:{ACCT}:function:{LIVE_FN}"
 NAMELESS_FN = {"Type": "AWS::Lambda::Function", "Properties": {"Handler": "index.handler"}}
 NAMELESS_TABLE = {"Type": "AWS::DynamoDB::Table", "Properties": {}}
@@ -57,10 +57,10 @@ def test_function_ref_inside_an_arn_resolves_to_one_matching_arn():
 
 
 def test_ref_is_the_name_and_arn_stays_the_arn():
-    assert iam._arn_for(NAMELESS_FN, "Ref", CORE, ENV) == "vams-core-demo11-us-east-*"
-    named = {"Type": "AWS::Lambda::Function", "Properties": {"FunctionName": "vams-demo11-explicit"}}
-    assert iam._arn_for(named, "Ref", CORE, ENV) == "vams-demo11-explicit"
-    assert iam._arn_for(NAMELESS_FN, "Arn", CORE, ENV) == f"arn:aws:lambda:us-east-1:{ACCT}:function:vams-core-demo11-us-east-*"
+    assert iam._arn_for(NAMELESS_FN, "Ref", CORE, ENV) == "vams-core-prod01-us-east-*"
+    named = {"Type": "AWS::Lambda::Function", "Properties": {"FunctionName": "vams-prod01-explicit"}}
+    assert iam._arn_for(named, "Ref", CORE, ENV) == "vams-prod01-explicit"
+    assert iam._arn_for(NAMELESS_FN, "Arn", CORE, ENV) == f"arn:aws:lambda:us-east-1:{ACCT}:function:vams-core-prod01-us-east-*"
 
 
 def test_table_ref_is_the_name_inside_a_table_arn():

@@ -136,7 +136,7 @@ class _SlowS3:
 
 
 def test_bundle_store_transfers_run_in_parallel_and_the_manifest_lands_last(tmp_path):
-    """E2E-050 B-050-26: the pipeline's bundle store copied a ~15k-file bundle one PutObject at a time (~13 minutes
+    """Live test: the pipeline's bundle store copied a ~15k-file bundle one PutObject at a time (~13 minutes
     per build, the same again for a CI rollback's fetch). Transfers now run on a bounded pool, and the bundle's
     manifest.json is written only after every other file, so a reader never sees a half-copied bundle as complete."""
     from vra.state import StateStore

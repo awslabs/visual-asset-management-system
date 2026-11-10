@@ -97,7 +97,7 @@ def test_second_machine_sees_locks_runs_and_history_of_the_first(tmp_path, repos
 
 
 def test_standalone_test_run_waits_for_the_env_lock_of_another_machines_deploy(tmp_path, repos):
-    """E2E-040: `vra test --env dev` on machine B ran (and recorded a pass for dev's current build) while machine A
+    """Live test: `vra test --env dev` on machine B ran (and recorded a pass for dev's current build) while machine A
     held dev's lock mid-deploy. A test run takes the env lock like every other env workflow."""
     a, b, _ = _git_home(tmp_path, repos)
     ca, cb = _ctx(a, tmp_path, "a"), _ctx(b, tmp_path, "b")
@@ -111,7 +111,7 @@ def test_standalone_test_run_waits_for_the_env_lock_of_another_machines_deploy(t
 
 
 def test_pulls_and_pushes_of_one_machine_never_interleave(tmp_path, repos, monkeypatch):
-    """E2E-040: a second vra process on machine A pulled while the deploy's heartbeat pushed, and failed on
+    """Live test: a second vra process on machine A pulled while the deploy's heartbeat pushed, and failed on
     .git/index.lock. Pull now holds the same machine mutex as publish; the mutex is reentrant per thread and
     exclusive across threads (the heartbeat) and processes."""
     import threading
@@ -207,7 +207,7 @@ def test_dirty_lock_survives_expiry_and_needs_takeover_from_another_machine(tmp_
     res = runner.resume(cb, rid)
     assert res.exit_code == errors.NEEDS_HUMAN and "--takeover" in res.message
     cb.takeover = True
-    # E2E-040: the human authorization of the takeover (here an approval record) was never recorded anywhere
+    # live test: the human authorization of the takeover (here an approval record) was never recorded anywhere
     cb.human_authorizations = [{"action": "takeover", "by": "op-b@example.com", "how": "approval",
                                 "approval": "approvals/dev/human_takeover.yaml", "approver": "lead@example.com"}]
     res = runner.resume(cb, rid)  # the workflow fails again, but it ran: the takeover was accepted and recorded
@@ -379,7 +379,7 @@ def test_engine_pushes_only_state_and_never_ledger_changes(tmp_path, repos, monk
 
 
 def test_a_ci_build_is_not_refused_for_its_own_unpushed_bundle(tmp_path, repos, monkeypatch):
-    """E2E-050 B-050-15: `vra build` writes artifacts/<buildId>/ into the home; with sync.pushArtifacts off that is
+    """Live test: `vra build` writes artifacts/<buildId>/ into the home; with sync.pushArtifacts off that is
     outside the push scope, so the first checkpoint push of a CodeBuild build stopped with "changes outside the
     engine's scope" (exit 20). The engine's own bundle is never pushed and never refused; the ledger still is."""
     a, _b, _ = _git_home(tmp_path, repos)
@@ -398,7 +398,7 @@ def test_a_ci_build_is_not_refused_for_its_own_unpushed_bundle(tmp_path, repos, 
 
 
 def test_a_push_the_git_host_refuses_for_a_moment_is_retried_with_its_error_kept(tmp_path, repos, monkeypatch):
-    """E2E-050 B-050-17: GitHub refused a push right after the previous one (a re-pull showed nothing new); three
+    """Live test: GitHub refused a push right after the previous one (a re-pull showed nothing new); three
     instant tries ended `vra deploy` in CodeBuild with exit 20 and git's error thrown away. The push backs off and
     retries, and a final failure names git's error."""
     from vra import home as home_mod
@@ -425,7 +425,7 @@ def test_a_push_the_git_host_refuses_for_a_moment_is_retried_with_its_error_kept
 
 
 def test_a_push_racing_a_busy_writer_is_replayed_until_it_wins(tmp_path, repos, monkeypatch):
-    """E2E-050 B-050-22: the watch job and the dev test job published the home about once a second each; the dev
+    """Live test: the watch job and the dev test job published the home about once a second each; the dev
     test's push lost six times in a row (each try slept 1-8 s before pushing, the other writer pushed meanwhile)
     and the Test-dev action ended NEEDS_HUMAN. A push that loses to new remote work is replayed and retried at
     once; the backoff is only for a host that refuses with nothing new upstream."""
@@ -483,7 +483,7 @@ def test_manifest_placeholders_for_live_test_secret_and_external_table_key(ctx, 
 
 
 def test_takeover_without_a_terminal_is_authorized_by_an_approval_of_the_runs_env(tmp_path, repos, monkeypatch):
-    """E2E-040: `vra --human-approval <rec> resume <run> --takeover` without a TTY always failed with "(and an env)":
+    """Live test: `vra --human-approval <rec> resume <run> --takeover` without a TTY always failed with "(and an env)":
     resume has no --env, so no approval could ever authorize a takeover from CI or a non-interactive shell. The env
     now comes from the run being resumed."""
     from vra import human
@@ -500,7 +500,7 @@ def test_takeover_without_a_terminal_is_authorized_by_an_approval_of_the_runs_en
 
 
 def test_takeover_of_a_run_of_no_env_is_authorized_by_the_records_env(tmp_path, repos, monkeypatch):
-    """E2E-050 B-050-19: a CodeBuild build run (no env) that stopped left its run lock behind; `vra
+    """Live test: a CodeBuild build run (no env) that stopped left its run lock behind; `vra
     --human-approval <rec> resume <build-run> --takeover` failed with "(and an env)" whatever record was passed.
     The env of the record authorizes it, and only an env of this ledger does."""
     from vra import human
@@ -521,7 +521,7 @@ def test_takeover_of_a_run_of_no_env_is_authorized_by_the_records_env(tmp_path, 
 
 
 def test_pull_moves_aside_unpublished_files_of_a_dead_process_that_another_machine_committed(tmp_path, repos):
-    """E2E-040: machine A was killed mid-smoke with an uncommitted run log; machine B took the run over and pushed
+    """Live test: machine A was killed mid-smoke with an uncommitted run log; machine B took the run over and pushed
     the same log; every later command on A failed `cannot fast-forward ... untracked working tree files would be
     overwritten`. The engine keeps A's copy under .vra-local/displaced/ and takes the committed one. Files outside
     the engine's scope are never touched."""
@@ -548,7 +548,7 @@ def test_pull_moves_aside_unpublished_files_of_a_dead_process_that_another_machi
 
 
 def test_engine_never_pushes_a_persons_unpushed_ledger_commit(tmp_path, repos):
-    """E2E-040: an approval committed on machine B but not pushed reached the remote with the run's first state
+    """Live test: an approval committed on machine B but not pushed reached the remote with the run's first state
     push (`git push` publishes the whole branch), and the gated dry-run then accepted it. The engine refuses to
     publish while a local commit outside its scope is unpushed, and the gate refuses the approval."""
     a, b, remote = _git_home(tmp_path, repos)
@@ -571,7 +571,7 @@ def test_engine_never_pushes_a_persons_unpushed_ledger_commit(tmp_path, repos):
     assert b.publish("run r1 SUCCEEDED")
 
 
-# --- a refused first publish, and runs nothing owns any more (E2E-040 O3) -------------------------------------------
+# --- a refused first publish, and runs nothing owns any more (live test O3) -------------------------------------------
 
 @workflow("_test_noop")
 def _wf_noop(ctx, run, args):
@@ -585,7 +585,7 @@ def _committed_status(h: Home, run_id: str) -> str:
 
 
 def test_run_whose_first_publish_is_refused_is_parked_not_left_running(tmp_path, repos):
-    """E2E-040 O3: a person's unpushed ledger commit made the run's first publish refuse, and the run stayed RUNNING
+    """Live test O3: a person's unpushed ledger commit made the run's first publish refuse, and the run stayed RUNNING
     in the home (committed locally, published with the person's push) with no owner. It is parked NEEDS_HUMAN with
     the reason, in the working copy and in the local commit that a later push publishes."""
     _a, b, _remote = _git_home(tmp_path, repos)
@@ -645,7 +645,7 @@ def test_status_all_and_history_verify_flag_running_runs_whose_lease_expired(tmp
     assert dead.status == "RUNNING" and live.status == "RUNNING"
 
 
-# --- `vra setup` reports whether the home really reached its remote (E2E-040 O4) -----------------------------------
+# --- `vra setup` reports whether the home really reached its remote (live test O4) -----------------------------------
 
 def _setup_git_home(tmp_path, repos, capsys, remote: str | None, sync_type: str = "git") -> dict:
     ans = tmp_path / f"answers-{sync_type}.yaml"
@@ -664,7 +664,7 @@ def _setup_git_home(tmp_path, repos, capsys, remote: str | None, sync_type: str 
 
 
 def test_setup_reports_published_false_until_the_first_push_happened(tmp_path, repos, capsys):
-    """E2E-040 O4: setup with sync.type git reported published: true while nothing was pushed (no upstream yet)."""
+    """Live test O4: setup with sync.type git reported published: true while nothing was pushed (no upstream yet)."""
     remote = tmp_path / "setup-remote.git"
     git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
     res = _setup_git_home(tmp_path, repos, capsys, str(remote))

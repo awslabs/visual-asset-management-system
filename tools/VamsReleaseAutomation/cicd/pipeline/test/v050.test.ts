@@ -150,7 +150,7 @@ describe("CodeConnections sources", () => {
         expect(Object.keys(template.findOutputs("ConnectionArn"))).toEqual(["ConnectionArn"]);
     });
 
-    test("the created connection is retained when its source goes away (keeps the handshake; B-050-4)", () => {
+    test("the created connection is retained when its source goes away (keeps the handshake)", () => {
         template.hasResource("AWS::CodeConnections::Connection", {
             DeletionPolicy: "Retain",
             UpdateReplacePolicy: "Retain",
@@ -289,7 +289,7 @@ describe("S3 sources fed by vra (partitions without CodeConnections or CodeCommi
                     r.startsWith(prefix)
                 ) as string
             ) ?? [];
-        // R50-12: only the watch tier feeds the sources and starts the pipelines
+        // only the watch tier feeds the sources and starts the pipelines
         expect(roleActions("WatchRole")).toEqual(
             expect.arrayContaining(["s3:PutObject", "codepipeline:StartPipelineExecution"])
         );
@@ -304,7 +304,7 @@ describe("S3 sources fed by vra (partitions without CodeConnections or CodeCommi
         expect(String(watch?.Properties.Source.BuildSpec)).toContain("pipeline-watch.sh");
     });
 
-    test("B-050-5: sourceWriterArns lets the operator bootstrap the package zip; nothing else changes", () => {
+    test("sourceWriterArns lets the operator bootstrap the package zip; nothing else changes", () => {
         const operator = "arn:aws:iam::111111111111:role/ReleaseOperator";
         const cfg = base({
             sources: {
@@ -401,7 +401,7 @@ describe("auto-rollback on failed tests", () => {
         ).toThrow(/autoRollback/);
     });
 
-    test("build, deploy and test jobs share the bundle store in the artifact bucket (B-050-21)", () => {
+    test("build, deploy and test jobs share the bundle store in the artifact bucket", () => {
         const { template } = synth(base());
         const bucket = Object.keys(template.findResources("AWS::S3::Bucket")).find((k) =>
             k.startsWith("Artifacts")
@@ -600,8 +600,8 @@ describe("three-env live-test example (examples/three-env)", () => {
     });
 });
 
-describe("REVIEW-050 fix wave", () => {
-    test("R50-18: gated envs isolate their tests by default; non-isolated tests on a prod-class env are refused", () => {
+describe("Security review fixes", () => {
+    test("gated envs isolate their tests by default; non-isolated tests on a prod-class env are refused", () => {
         const { template, nag } = synth(base());
         expect(nag).toEqual([]);
         const ids = Object.keys(template.findResources("AWS::IAM::Role"));
@@ -613,7 +613,7 @@ describe("REVIEW-050 fix wave", () => {
         ).toThrow(/prod-class/);
     });
 
-    test("R50-16: the hand-off role trusts a GHES issuer by its own keys and the immutable subject", () => {
+    test("the hand-off role trusts a GHES issuer by its own keys and the immutable subject", () => {
         const provider = "arn:aws:iam::111111111111:oidc-provider/ghes.example.com/_services/token";
         const { template } = synth(
             base({
@@ -637,7 +637,7 @@ describe("REVIEW-050 fix wave", () => {
         expect(text).toContain("repo:example-org@123/vams-fork@456:environment:vra-handoff");
     });
 
-    test("R50-3: every tier reads IT packages and pipeline plans, writes them create-only", () => {
+    test("every tier reads IT packages and pipeline plans, writes them create-only", () => {
         const stateStore = {
             bucketName: "vra-state-111111111111-us-east-1",
             lockTableName: "vra-locks",

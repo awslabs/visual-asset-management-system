@@ -670,7 +670,7 @@ Resources:
                       Action:
                           - lambda:InvokeFunction
                           - lambda:GetFunction
-                      # B-050-29: generated Lambda names keep at most 25 characters of the core stack name, so the
+                      # generated Lambda names keep at most 25 characters of the core stack name, so the
                       # region part may be cut; the ARN's region field still scopes it
                       Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ConfigName}-core-${BaseStackName}-*
                     - Sid: WorkflowExecutionsRead

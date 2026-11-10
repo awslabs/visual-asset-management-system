@@ -1,12 +1,12 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""E2E-050 Phase B10 regressions.
+"""Live test Phase B10 regressions.
 
-B-050-30: `vra --dry-run resume <run>` of a real run re-simulated its IT requests, reset its steps, ran the
+`vra --dry-run resume <run>` of a real run re-simulated its IT requests, reset its steps, ran the
 workflow and saved (and published) the run: the parked prod run of execution 0b86fcb7 went from BLOCKED_ON_IT to
 FAILED on the shared home. A dry run must change nothing.
 
-B-050-31: a deploy parked BLOCKED_ON_IT on a precreated env asks IT for a policy change; IT updates the role
+a deploy parked BLOCKED_ON_IT on a precreated env asks IT for a policy change; IT updates the role
 policies (same role names), `vra iam plan` writes package n+1 and a person applies it. The overlay `vra iam apply`
 writes is byte-identical, yet `vra resume` was refused by the deploy IAM gate ("rebuild") because the bundle's
 identity names package n, so the engine's own IT loop could never resume a deploy.
@@ -25,11 +25,11 @@ from vra.runner import workflow
 from test_iam_package import _ungate, make_ctx, new_run, plan_from, response_for
 
 
-# ================================================================ B-050-30
+# ================================================================
 CALLS = {"n": 0}
 
 
-@workflow("_test_b05030_blocked")
+@workflow("_test_resume_blocked")
 def _wf(ctx, run, args):
     def deploy(sc):
         CALLS["n"] += 1
@@ -44,7 +44,7 @@ def _wf(ctx, run, args):
 
 def test_dry_run_resume_of_a_real_run_changes_nothing(ctx):
     CALLS["n"] = 0
-    out = runner.start(ctx, "_test_b05030_blocked", {}, env="dev")
+    out = runner.start(ctx, "_test_resume_blocked", {}, env="dev")
     assert out.exit_code == errors.BLOCKED_ON_IT
     run_id = out.run.run_id
     state_file = out.run.dir / "state.json"
@@ -69,14 +69,14 @@ def test_resume_of_a_dry_run_run_stays_allowed(ctx):
     """A run that was itself started with --dry-run keeps resuming as a dry run (unchanged behaviour)."""
     CALLS["n"] = 0
     ctx.dry_run = True
-    out = runner.start(ctx, "_test_b05030_blocked", {}, env="dev")
+    out = runner.start(ctx, "_test_resume_blocked", {}, env="dev")
     assert out.run.state.get("dryRun") is True
     ctx.run_id = None
     out2 = runner.resume(ctx, out.run.run_id)
     assert out2.exit_code in (0, errors.BLOCKED_ON_IT)
 
 
-# ================================================================ B-050-31
+# ================================================================
 def _policy_only_change(asm):
     """IT-side remedy of a denial: one role's policy gets a wider resource, no role added, removed or renamed."""
     role = next(r for r in asm.report["roles"] if r["roleConstructPath"].endswith("/assetService/ServiceRole"))

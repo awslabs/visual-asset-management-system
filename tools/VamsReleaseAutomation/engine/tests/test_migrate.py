@@ -94,7 +94,7 @@ def test_standalone_migrate_on_gated_env_needs_approval(ctx, mig_root, tmp_path,
 
 
 def test_standalone_migrate_takes_the_env_lock_before_its_approval_gate(ctx, mig_root, tmp_path, monkeypatch):
-    """E2E-040: standalone migrate checked its approval before taking the env lock (deploy does lock, then gates)."""
+    """Live test: standalone migrate checked its approval before taking the env lock (deploy does lock, then gates)."""
     stub_inventory(monkeypatch)
     order = []
     from vra import approvals, runner as runner_mod
@@ -127,7 +127,7 @@ def test_standalone_migrate_dry_run_on_gated_env_needs_no_approval(ctx, mig_root
     assert out.exit_code == 0, out.message
 
 
-# --- standalone migrate on an env with no vra deploy history (E2E-040 O2) ------------------------------------------
+# --- standalone migrate on an env with no vra deploy history (live test O2) ------------------------------------------
 
 class _CoreStack:
     """describe_stacks of an imported env: the core stack is live, its description names the VAMS version."""
@@ -150,7 +150,7 @@ def _imported(ctx, description):
 
 
 def test_migrate_on_imported_env_reads_from_stack_and_to_from_source_tree(ctx, mig_root, monkeypatch):
-    """E2E-040 O2: with no vra history, `vra migrate --source` refused without --from/--to (exit 2). `from` now
+    """Live test O2: with no vra history, `vra migrate --source` refused without --from/--to (exit 2). `from` now
     comes from the core stack description (as `vra deploy` reads it), `to` from the tree's VAMS_VERSION."""
     stub_inventory(monkeypatch)
     _imported(ctx, "(SO9299) (VAMS-CORE) (version:2.5.3) Primary Components")

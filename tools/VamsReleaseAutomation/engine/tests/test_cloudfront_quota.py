@@ -1,10 +1,10 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""O-050-15: the CloudFront quota check before `cdk deploy` (vra 0.5.1).
+"""the CloudFront quota check before `cdk deploy` (vra 0.5.1).
 
-E2E-050, live: demo11's fresh prod install failed about 8 minutes into `cdk deploy` because the account's custom
+live test: prod01's fresh prod install failed about 8 minutes into `cdk deploy` because the account's custom
 CloudFront cache-policy quota (L-7D134442, 20 at the time) was full: StaticWeb `ApiCachePolicy` CREATE_FAILED
-(ServiceLimitExceeded), and the rollback then got stuck (B-050-36). Each VAMS CloudFront deployment adds 2 cache
+(ServiceLimitExceeded), and the rollback then got stuck. Each VAMS CloudFront deployment adds 2 cache
 policies, 1 origin request policy, 1 response headers policy and 1 distribution. The engine checked IAM quotas
 only. Each test here fails on the 0.5.0 code."""
 
@@ -116,7 +116,7 @@ def vams_cloudfront_diff() -> str:
 
 def vams_static_web_templates(asm: Path) -> Path:
     """A synthesized assembly shaped like the real cust-v2.6.6-8 bundle: StaticWeb nested stack with the
-    CloudFront resources, IAM-free (precreated roles, as demo11)."""
+    CloudFront resources, IAM-free (precreated roles, as prod01)."""
     asm.mkdir(parents=True, exist_ok=True)
     util.write_json(asm / "vams-core-dev.template.json", {"Resources": {
         "StaticWebNestedStack": {"Type": "AWS::CloudFormation::Stack"}, "Fn": {"Type": "AWS::Lambda::Function"}}})
@@ -180,7 +180,7 @@ def test_parse_diff_counts_cloudfront_adds_and_replacements():
                                              "policies": {"added": 0, "replaced": 0}}
 
 
-def test_demo11_full_cache_policy_quota_stops_before_cdk_deploy(ctx, repos, calls, monkeypatch, tmp_path):
+def test_full_cache_policy_quota_stops_before_cdk_deploy(ctx, repos, calls, monkeypatch, tmp_path):
     """The live case: a fresh CloudFront install, 20 of 20 custom cache policies in use, 2 needed: exit 20 naming the
     quota, the numbers and the fix; cdk deploy never runs (before: it ran and failed ~8 minutes in)."""
     cf, sq = FakeCloudFront(cache=20, orp=11, rhp=11, dists=11), FakeQuotas()

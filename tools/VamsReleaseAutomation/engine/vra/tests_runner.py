@@ -248,7 +248,7 @@ def live_auth(ctx, env: str, live: dict | None = None, role: str | None = None) 
         except VraError:
             raise
         except Exception as exc:  # noqa: BLE001
-            # E2E-050 B-050-28: a raw botocore error here crashed the deploy run after `cdk deploy` (status FAILED,
+            # live test: a raw botocore error here crashed the deploy run after `cdk deploy` (status FAILED,
             # nothing recorded, lock held). A denial parks the run BLOCKED_ON_IT (a pipeline retry resumes it);
             # anything else (no such secret yet, e.g. the first deploy) is a VraError, so the deploy's failure
             # path records the deploy and follows rollbackPolicy (ask: NEEDS_HUMAN, which a retry resumes).
@@ -327,7 +327,7 @@ def resolve_vamscli(ctx, builds: list[str | None], sc) -> str:
     """The vamscli the live suites run. ``VRA_VAMSCLI`` (an operator's own install) wins. Otherwise the VamsCLI
     wheel of the first of ``builds`` whose bundle carries one (``vra build`` packs it from the fork's
     ``tools/VamsCLI``), installed into a venv of its own after its sha256 matched the manifest; else ``vamscli``
-    on PATH. E2E-050 B-050-18a: the pipeline's CodeBuild jobs had no VamsCLI at all."""
+    on PATH. live test: the pipeline's CodeBuild jobs had no VamsCLI at all."""
     import sys
     if os.environ.get("VRA_VAMSCLI"):
         return os.environ["VRA_VAMSCLI"]
@@ -372,7 +372,7 @@ def live_cli_smoke(ctx, env: str, jdir: Path, sc, live: dict | None = None,
     ``role``: the identity that reads the web URL parameter and the sign-in secret. `vra test` leaves it unset
     (:func:`test_role`: ``testRoleArn`` when set). A deploy or rollback run passes ``"deploy"``: it runs where only
     the deploy identity is trusted (the pipeline's deploy job), and ``vra-test-<env>`` trusts only the env's test
-    CI identity, so assuming it there is denied (E2E-050 B-050-27). The deploy role grants both reads
+    CI identity, so assuming it there is denied (live test). The deploy role grants both reads
     (``VamsResourceNamesRead``, ``TestUserCredentials``)."""
     live = resolve_live(ctx, env, live, role)
     web = live.get("webUrl")
@@ -405,7 +405,7 @@ def live_cli_smoke(ctx, env: str, jdir: Path, sc, live: dict | None = None,
             p = sh.run(argv, check=False, input_text=stdin, mutating=False, timeout=600)
         except FileNotFoundError:
             # a failed case, not a crash: the deploy's failure path then records the deploy and rolls back
-            # (E2E-050 B-050-18: a bare FileNotFoundError in CodeBuild skipped both)
+            # (live test: a bare FileNotFoundError in CodeBuild skipped both)
             cases.append({"name": name, "status": "failed", "time": time.monotonic() - t0,
                           "message": f"vamscli not found ({cli}): install VamsCLI on this runner or set VRA_VAMSCLI"})
             broken = True
@@ -579,7 +579,7 @@ def _soft(fn, *args):
 @workflow("test")
 def wf_test(ctx, run, args):
     # The env lock, like every other env workflow: a test run while another run deploys or restores the env would
-    # test a half-changed env and record its result as promotion evidence for the env's current build (E2E-040).
+    # test a half-changed env and record its result as promotion evidence for the env's current build (live test).
     from vra.runner import env_lock
     with env_lock(ctx, run, args["env"]):
         return do_test(ctx, run, args["env"], args.get("suites"))

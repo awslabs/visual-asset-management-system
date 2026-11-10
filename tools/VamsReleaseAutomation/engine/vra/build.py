@@ -31,7 +31,7 @@ ASSEMBLY_CACHE_DIR = ".cache"
 
 # Lock files the CDK CLI creates in a cloud assembly while it reads (`read.<pid>.<n>.lock`) or writes it
 # (`synth.lock`). Not content: a cdk killed mid-read, or a copy taken while one ran, leaves one behind
-# (E2E-040: a bundle copied to machine B during A's `cdk diff` failed the integrity check forever).
+# (live test: a bundle copied to machine B during A's `cdk diff` failed the integrity check forever).
 CDK_ASSEMBLY_LOCK_RE = re.compile(r"^(read\.\d+\.\d+|synth)\.lock$")
 
 
@@ -165,7 +165,7 @@ _BUNDLE_STORE_RE = re.compile(r"s3://([a-z0-9][a-z0-9.\-]{1,61}[a-z0-9])(?:/([A-
 def bundle_store(ctx):
     """Where bundles of other builds come from: the state store (``stateStore.type: s3``), else the pipeline's
     bundle store (``VRA_BUNDLE_STORE=s3://<artifact bucket>/<prefix>``, set by the pipeline stack on its build,
-    deploy and test jobs; B-050-21), else None (a machine with a git home has its bundles locally)."""
+    deploy and test jobs), else None (a machine with a git home has its bundles locally)."""
     if ctx.store is not None:
         return ctx.store
     url = os.environ.get(BUNDLE_STORE_ENV, "").strip()
@@ -476,7 +476,7 @@ def synth_credentials(ctx, env: str) -> tuple[dict, str]:
 def prove_synth_role(ctx, env: str, role: str) -> None:
     """Assume the build-only synth role once, the way `vra credential-process` will inside cdk (with
     sts:SourceIdentity on gated envs), before minutes of synth. A role CDK cannot use otherwise surfaces deep in
-    synth as "no credentials have been configured" (E2E-040: the trust lacked sts:SetSourceIdentity)."""
+    synth as "no credentials have been configured" (live test: the trust lacked sts:SetSourceIdentity)."""
     from vra import permissions
     from vra.errors import PermissionDenied
     try:
@@ -541,8 +541,8 @@ VAMSCLI_DIR = "tools/vamscli"
 
 
 def vendor_vamscli(ctx, src: Path, bdir: Path, sc) -> dict:
-    """Build a VamsCLI wheel from the fork's own ``tools/VamsCLI`` at the build commit into the bundle (E2E-050
-    B-050-18a). The deploy and test jobs install exactly this wheel, checked against the manifest's sha256, for the
+    """Build a VamsCLI wheel from the fork's own ``tools/VamsCLI`` at the build commit into the bundle (live test).
+    The deploy and test jobs install exactly this wheel, checked against the manifest's sha256, for the
     post-deploy smoke and the live-cli suite; never a VamsCLI from a package index."""
     import sys
     cli_src = src / VAMSCLI_SRC
@@ -588,7 +588,7 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
     from vra import core_patches, iam as iam_mod
     want_patches = core_patches.digest(core_patches.current(ctx.ledger.root))
     # IAM settings of every env in the build (mode, applied IT package + response, overlay files `vra iam apply`
-    # writes): a bundle synthesized under other IAM settings is never reused (R50-2)
+    # writes): a bundle synthesized under other IAM settings is never reused
     want_iam = {e_: iam_mod.build_identity(ctx, e_) for e_ in sorted({e_ for e_, _s in
                                                                        synth_targets(ctx, lane, only_envs)})}
 
@@ -602,7 +602,7 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
             pat = f"{prefix_}v{version}-"
             existing = [t for t in g.out("tag", "--list", f"{pat}*").splitlines() if t]
             # with build.pushTags false a CI clone has none of the tags earlier builds made: the build ids the
-            # shared home recorded count too, or two commits get the same id (E2E-050 B-050-20)
+            # shared home recorded count too, or two commits get the same id (live test)
             known = {b: c for b, c in known_build_ids(ctx).items() if re.match(re.escape(pat) + r"\d+$", b)}
             tag = None
             for t in existing:
@@ -619,7 +619,7 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
         else:
             tag = None
             build_id = f"preview-v{version}-{commit[:12]}"
-        # B-050-32: with a bundle store (CI, stateStore s3) a build id names one bundle forever. Reuse a stored
+        # with a bundle store (CI, stateStore s3) a build id names one bundle forever. Reuse a stored
         # bundle of this commit that is still valid; otherwise take an id the store does not hold yet.
         store = None if ctx.dry_run else bundle_store(ctx)
         store_pick: dict = {}
@@ -665,7 +665,7 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
     bdir = build_dir(ctx, build_id)
     existing = bdir / "manifest.json"
     if info.get("storeReuse") and not existing.exists() and not ctx.dry_run:
-        bundle_store(ctx).pull_prefix(f"artifacts/{build_id}/")   # B-050-32: CI holds no earlier bundles
+        bundle_store(ctx).pull_prefix(f"artifacts/{build_id}/")   # CI holds no earlier bundles
     if existing.exists() and util.read_json(existing).get("commit") == info["commit"] and \
             util.read_json(existing).get("complete") and \
             core_patches.digest(util.read_json(existing).get("corePatches") or []) == want_patches:
@@ -939,7 +939,7 @@ def do_build(ctx, run, lane: str, ref: str, prefix: str = "", suites: list[str] 
         if store is None:
             return {"uploaded": False, **out}
         # create-only: a build id names one bundle forever; a different bundle under the same id is refused.
-        # B-050-33: refuse before writing anything when the store already holds another manifest for this id;
+        # refuse before writing anything when the store already holds another manifest for this id;
         # the per-file create-only check alone added this build's new files to the stored bundle.
         # (objects without a manifest are an interrupted upload: the per-file check below finishes or refuses it)
         held = store_manifest(store, build_id)
@@ -995,8 +995,8 @@ def _build_seq(build_id: str) -> int:
 
 
 def bundle_reusable(ctx, old: dict, commit: str, want_patches: str, want_iam: dict) -> bool:
-    """A complete bundle of ``commit`` with the same core patches and the IAM settings every env has now (R50-2;
-    standard-only envs on both sides need no IAM identity match)."""
+    """A complete bundle of ``commit`` with the same core patches and the IAM settings every env has now
+    (standard-only envs on both sides need no IAM identity match)."""
     from vra import core_patches, iam as iam_mod
     if old.get("commit") != commit or not old.get("complete") or \
             core_patches.digest(old.get("corePatches") or []) != want_patches:
@@ -1023,7 +1023,7 @@ def store_manifest(store, build_id: str) -> dict | None:
 
 def pick_store_build_id(ctx, store, mine: list[str], taken: list[str], fresh, commit: str, want_patches: str,
                         want_iam: dict) -> dict:
-    """B-050-32. ``mine``: ids already given to ``commit`` (newest first); ``taken``: every id of the series;
+    """``mine``: ids already given to ``commit`` (newest first); ``taken``: every id of the series;
     ``fresh(n)``: the id with sequence ``n``. The newest stored bundle of the commit that is still reusable is
     reused; ids the store holds with other content are superseded; else the first id the store does not hold."""
     superseded = []

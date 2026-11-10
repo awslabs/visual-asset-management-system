@@ -1,6 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""B-050-38 (E2E-050 Phase B10g): the Deploy-prod of 5437d5c2 parked with prod dirty (smoke secret missing), a person
+"""(live test Phase B10g): the Deploy-prod of 5437d5c2 parked with prod dirty (smoke secret missing), a person
 released the lock, and the CodePipeline retry resumed the run, which SUCCEEDED and released prod. Its report still
 said "prod stays locked by this run ... `vra unlock` releases it", sending the reader to unlock an env nobody held.
 Releasing the lock now drops that env's held-lock note."""
@@ -29,7 +29,7 @@ def _xdg(monkeypatch, tmp_path):
     monkeypatch.delenv("VRA_LEDGER", raising=False)
 
 
-@workflow("_test_b050_38_park_then_pass")
+@workflow("_test_held_lock_park_then_pass")
 def _wf(ctx, run, args):
     with runner.env_lock(ctx, run, "dev"):
         runner.mark_dirty(run, "dev", "cdk deploy of b1 to dev")
@@ -50,7 +50,7 @@ def _ctx(tmp_path: Path, repos) -> Context:
 
 def test_a_resumed_run_that_succeeds_drops_its_held_lock_note(tmp_path, repos):
     ctx = _ctx(tmp_path, repos)
-    out = runner.start(ctx, "_test_b050_38_park_then_pass", {})
+    out = runner.start(ctx, "_test_held_lock_park_then_pass", {})
     assert out.exit_code != 0
     assert any("stays locked by this run" in n for n in out.run.state.get("notes") or [])
     res = runner.resume(ctx, out.run.run_id)
@@ -63,7 +63,7 @@ def test_a_resumed_run_that_succeeds_drops_its_held_lock_note(tmp_path, repos):
 
 def test_other_notes_survive_the_release(tmp_path, repos):
     ctx = _ctx(tmp_path, repos)
-    out = runner.start(ctx, "_test_b050_38_park_then_pass", {})
+    out = runner.start(ctx, "_test_held_lock_park_then_pass", {})
     out.run.state.setdefault("notes", []).append("IT-REQUEST-2 is pending (deploy of dev did not need bucket access)")
     out.run.save()
     res = runner.resume(ctx, out.run.run_id)

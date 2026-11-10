@@ -108,7 +108,7 @@ def test_cursor_cli_permissions_and_hooks_are_part_of_the_policy(tmp_path):
 
 
 def test_agent_writes_to_iam_pipeline_state_and_overlays_must_be_denied(tmp_path):
-    """R50-4: an adapter that lets an agent write state/iam, state/pipeline or an env overlay is reported."""
+    """an adapter that lets an agent write state/iam, state/pipeline or an env overlay is reported."""
     pkg = _copy(tmp_path)
     p = pkg / "adapters/claude/settings.json.example"
     cfg = json.loads(p.read_text())
@@ -126,7 +126,7 @@ def test_agent_writes_to_iam_pipeline_state_and_overlays_must_be_denied(tmp_path
 
 
 def test_a_hook_that_fails_open_is_reported(tmp_path):
-    """R50-8: a hook command without `|| exit 2` is non-blocking when the guard cannot run."""
+    """a hook command without `|| exit 2` is non-blocking when the guard cannot run."""
     pkg = _copy(tmp_path)
     p = pkg / "adapters/codex/hooks.json"
     p.write_text(p.read_text().replace(" || exit 2", ""))
@@ -134,7 +134,7 @@ def test_a_hook_that_fails_open_is_reported(tmp_path):
 
 
 def test_pipeline_deploy_must_ask_a_person_everywhere(tmp_path):
-    """R50-15: plan / status / sync-ledger for agents; deploy and push-source ask."""
+    """plan / status / sync-ledger for agents; deploy and push-source ask."""
     pkg = _copy(tmp_path)
     k = pkg / "adapters/kiro/.kiro/agents/vra-release-operator.json"
     kc = json.loads(k.read_text())

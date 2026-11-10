@@ -453,8 +453,8 @@ def do_merge(ctx, run, lane: str, ref: str | None = None, prefix: str = "") -> d
         g = Git(ctx, ctx.repo_dir, sc.log_path)
         branch = prep["branch"]
         if merged.get("alreadyUpToDate") and prep.get("baseSha") and g.is_ancestor(prep["refSha"], prep["baseSha"]):
-            # the target already contains this release: nothing to push, no pull request (E2E-050 O-050-4 /
-            # B-050-23: the daily watch re-merged v2.6.67 and failed pushing an empty sync branch)
+            # the target already contains this release: nothing to push, no pull request (live test:
+            # the daily watch re-merged v2.6.67 and failed pushing an empty sync branch)
             if not ctx.dry_run:
                 mark_processed(ctx, lane, prep["ref"], prep["refSha"])
             return {"skipped": f"{prep['target']} already contains {prep['ref']}", "pushed": None}

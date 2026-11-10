@@ -1,8 +1,8 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""O-050-7: the IAM quota check before `cdk deploy`.
+"""the IAM quota check before `cdk deploy`.
 
-E2E-050 Phase B7, live: a permission-boundary + role-prefix switch on demo4 replaced all 91 VAMS roles; the
+Live test Phase B7, live: a permission-boundary + role-prefix switch on test1 replaced all 91 VAMS roles; the
 account held 942 of 1000 roles, CloudFormation creates each replacement before it deletes the old role, and
 `cdk deploy` failed after 18 minutes with "Cannot exceed quota for RolesPerAccount: 1000" (UPDATE_ROLLBACK_COMPLETE).
 The engine checked permissions, not quotas. Each test here failed on the code before the check."""
@@ -25,7 +25,7 @@ PKG = Path(__file__).resolve().parents[2]
 
 
 def boundary_switch_diff(n: int = 91) -> str:
-    """`cdk diff` of a boundary + prefix switch, in the rendering of the live demo4 diff (cdk-diff-test.txt)."""
+    """`cdk diff` of a boundary + prefix switch, in the rendering of the live test1 diff (cdk-diff-test.txt)."""
     lines = ["Stack vams-core-dev", "Resources"]
     for i in range(n):
         lines += [f"[~] AWS::IAM::Role ApiBuilder/fn{i}/ServiceRole fn{i}ServiceRole{i:08X} replace",
@@ -83,7 +83,7 @@ def _cdk_deployed(calls) -> bool:
     return any("deploy" in c["argv"] and "--app" in c["argv"] and "diff" not in c["argv"] for c in calls)
 
 
-def test_parse_diff_counts_the_live_demo4_role_replacements():
+def test_parse_diff_counts_the_live_boundary_role_replacements():
     p = deploy.parse_diff(boundary_switch_diff(91))
     assert p["iam"] == {"roles": {"added": 0, "replaced": 91}, "policies": {"added": 0, "replaced": 0}}
     # property-level "(requires replacement)" under a resource line without "replace"; additions; removals free
@@ -94,7 +94,7 @@ def test_parse_diff_counts_the_live_demo4_role_replacements():
                                               "policies": {"added": 1, "replaced": 0}}
 
 
-def test_demo4_boundary_switch_stops_before_cdk_deploy(ctx, repos, calls, monkeypatch):
+def test_boundary_switch_stops_before_cdk_deploy(ctx, repos, calls, monkeypatch):
     """942 roles + 91 replaced + headroom 10 > 1000: exit 20 naming the numbers and the fix; cdk deploy never runs
     (before: the deploy ran and CloudFormation rolled back on RolesPerAccount)."""
     iam = QuotaIam(942, 1000)
@@ -132,7 +132,7 @@ def test_quota_headroom_is_validated():
 
 def test_precreated_roles_env_counts_zero_and_reads_no_quota(ctx, repos, calls, monkeypatch):
     """A switch to IT-precreated roles removes the stack roles ([-]): nothing needs quota, so the deploy neither
-    reads iam:GetAccountSummary nor needs that grant (the demo11 case: IT's 87 roles, no AWS::IAM::Role)."""
+    reads iam:GetAccountSummary nor needs that grant (the prod01 case: IT's 87 roles, no AWS::IAM::Role)."""
     diff = "Stack vams-core-dev\nResources\n" + "".join(
         f"[-] AWS::IAM::Role ApiBuilder/fn{i}/ServiceRole fn{i}ServiceRole destroy\n" for i in range(91)) + \
         "[~] AWS::Lambda::Function Fn Fn1\n\u2728  Number of stacks with differences: 1\n"

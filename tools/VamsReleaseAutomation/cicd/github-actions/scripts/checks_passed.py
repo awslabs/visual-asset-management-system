@@ -10,7 +10,7 @@
 FILE = `gh api "repos/<repo>/actions/runs?head_sha=<sha>&per_page=100"` (JSON). For each required workflow the
 LATEST run for SHA counts (highest run_number, then run_attempt), from the given event only, on the trunk branch
 only, and only from the workflow FILE named after `=`: a branch cannot satisfy the gate with its own workflow of
-the same name (R50-13). A name without `=<path>` matches any file (not recommended).
+the same name. A name without `=<path>` matches any file (not recommended).
 
 Prints one word and exits:
   ready    every required workflow's latest run completed with conclusion success          exit 0

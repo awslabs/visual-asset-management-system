@@ -250,7 +250,7 @@ export class VraPipelineStack extends Stack {
         // The dev tier (Validate, root envs without approval, dev-preview, the scheduled watch) reaches only those
         // envs. Every other env (gated, or promoted from another env) has its own role, used only by its projects.
         // dev-preview runs upstream `development` code (npm ci of web/e2e): it gets a preview tier of its own, which
-        // can neither write the release pipeline's source nor start it (R50-12)
+        // can neither write the release pipeline's source nor start it
         const previewEnv: EnvTarget | undefined = this.cfg.preview?.env;
         const devTierEnvs: EnvTarget[] = this.releaseEnvs.filter(
             (e) => !e.promotesFrom && !e.requiresApproval
@@ -327,7 +327,7 @@ export class VraPipelineStack extends Stack {
             this.envRoles.set(env.name, role);
         }
         // live tests under a test-only tier: every approval-gated env by default (release.isolateTests unset),
-        // every env with isolateTests true, none with false (refused for prod-class envs, R50-18)
+        // every env with isolateTests true, none with false (refused for prod-class envs)
         {
             for (const env of allEnvs.filter((e) => testsIsolated(this.cfg, e))) {
                 const role = this.tierRole(
@@ -407,7 +407,7 @@ export class VraPipelineStack extends Stack {
                 }),
             },
         });
-        // Bundle store (B-050-21): with a git home that does not push artifacts, a CI job holds only its own
+        // Bundle store: with a git home that does not push artifacts, a CI job holds only its own
         // execution's bundle. The build mirrors every bundle (create-only) below this prefix of the artifact
         // bucket and a rollback fetches the previous build's bundle from it. The build tier writes (it has
         // read/write on the bucket for BuildOutput); the deploy and test tiers read (their input artifacts).
@@ -1010,7 +1010,7 @@ export class VraPipelineStack extends Stack {
                 }
             );
             // A connection carries a person's console handshake: a source change (or stack removal) must not
-            // throw it away. Retained like the buckets; an unused one is deleted by a person (B-050-4).
+            // throw it away. Retained like the buckets; an unused one is deleted by a person.
             conn.applyRemovalPolicy(RemovalPolicy.RETAIN);
             this.connections.set(key, conn);
             new CfnOutput(this, `ConnectionArn${n === 0 ? "" : n}`, {
@@ -1429,7 +1429,7 @@ export class VraPipelineStack extends Stack {
             description: `vra scheduled ${command} (buildspec-watch.yml)`,
             buildSpec: codebuild.BuildSpec.fromObjectToYaml(spec),
             environment: { ...env, environmentVariables: vars },
-            // watch tier: sync / merge and the S3 sources; it assumes no env role (never deploys, R50-12)
+            // watch tier: sync / merge and the S3 sources; it assumes no env role (never deploys)
             role: this.watchTier,
             encryptionKey: this.key,
             timeout: Duration.hours(8),

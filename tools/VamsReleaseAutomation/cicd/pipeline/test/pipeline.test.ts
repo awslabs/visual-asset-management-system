@@ -176,7 +176,7 @@ describe.each(["pipeline.example.json", "pipeline.example.commercial-github.json
             }
         });
 
-        test("gated envs run their live tests under a test-only tier by default (R50-18)", () => {
+        test("gated envs run their live tests under a test-only tier by default", () => {
             for (const env of gated) {
                 const text = assumable(`vra-test-${env}`);
                 expect(text).toContain(`vra-test-${env}`);

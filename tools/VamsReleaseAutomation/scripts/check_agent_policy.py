@@ -47,7 +47,7 @@ SAMPLES: dict[str, tuple[str, str]] = {
     "iam-apply": ("vra iam apply", "vra iam apply --env prod --from it-response.yaml"),
 }
 # Human-only actions the engine already enforces whose skill / guard / Kiro / Claude / Cursor entries another
-# build lane adds (handoffs/v050-lane-notes.md): sample, and who adds it. Their gaps print as "awaiting" and do
+# build lane adds: sample, and who adds it. Their gaps print as "awaiting" and do
 # not fail the check. Once the skill, the guard and every adapter name the action, move it to SAMPLES.
 # None is open in 0.5.0 (iam-apply moved to SAMPLES).
 AWAITING: dict[str, tuple[str, str, str]] = {}
@@ -159,12 +159,12 @@ def mcp_exposure() -> list[str]:
 
 AWAITED: dict[str, list[str]] = {}   # action -> its open gaps, filled by check()
 
-# State an agent must never write itself (R50-4): IT apply records, pipeline plans, the env overlays `vra iam
+# State an agent must never write itself: IT apply records, pipeline plans, the env overlays `vra iam
 # apply` writes. Sample paths every adapter's write denies must match.
 PROTECTED_WRITES = ("/srv/vra-home/state/iam/prod/applied.json", "/srv/vra-home/state/iam/prod/1/package.json",
                     "/srv/vra-home/state/pipeline/plans/pl-1.json",
                     "/srv/vra-home/ledger/envs/prod/overlay/infra/config/config.json")
-# `vra pipeline` (R50-15): agents run these; deploy and push-source ask a person (never in an allow list)
+# `vra pipeline`: agents run these; deploy and push-source ask a person (never in an allow list)
 PIPELINE_AGENT = ("vra pipeline plan", "vra pipeline status", "vra pipeline sync-ledger")
 PIPELINE_ASK = ("vra pipeline deploy --plan pl-1", "vra pipeline push-source --lane release",
                 "vra pipeline sync-ledger --deploy")
@@ -209,7 +209,7 @@ def hook_commands(root: Path, kiro: dict, claude: dict) -> list[tuple[str, str]]
 
 
 def fail_closed_problems(root: Path, kiro: dict, claude: dict) -> list[str]:
-    """R50-8: every hook runs the guard and ends in `|| exit 2` (a guard that cannot run blocks)."""
+    """every hook runs the guard and ends in `|| exit 2` (a guard that cannot run blocks)."""
     return [f"{who} hook does not fail closed (`... vra-guard.py || exit 2`): {cmd!r}"
             for who, cmd in hook_commands(root, kiro, claude)
             if "vra-guard.py" in cmd and not cmd.rstrip().endswith("|| exit 2")]

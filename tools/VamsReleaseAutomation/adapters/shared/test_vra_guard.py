@@ -101,7 +101,7 @@ CASES = [
     ("cat x.py | python3 -", 2),
     ("python3", 2),
     ("git log --oneline | head -5", 0),
-    # R50-9: wrappers with option values, command strings and opaque runners
+    # wrappers with option values, command strings and opaque runners
     ("env -u VRA_AGENT aws s3 ls", 2),
     ("env -uVRA_AGENT aws s3 ls", 2),
     ("env --unset=VRA_AGENT aws s3 ls", 2),
@@ -142,14 +142,14 @@ CASES = [
     ("env -u FOO vra --json status", 0),
     ("echo aws", 0),
     ("grep -rn aws docs", 0),
-    # R50-15: vra pipeline tiers
+    # vra pipeline tiers
     ("vra pipeline plan", 0),
     ("vra --json pipeline status", 0),
     ("vra pipeline sync-ledger", 0),
     ("vra pipeline frobnicate", 2),
     ("vra pipeline", 2),
 ]
-# R50-15: allowed by the guard for exit-code hosts (their ask lists prompt), "ask" for Cursor
+# allowed by the guard for exit-code hosts (their ask lists prompt), "ask" for Cursor
 ASK_CASES = ["vra pipeline deploy --plan pl-1", "vra pipeline push-source --lane release",
              "vra pipeline sync-ledger --deploy", "vra --json pipeline deploy"]
 
@@ -325,7 +325,7 @@ def test_pipeline_deploy_and_push_source_ask_a_person():
 
 
 def test_cursor_pre_tool_use_mcp_calls_are_checked_and_ask_becomes_deny():
-    """R50-21: cloud agents run preToolUse (tool_name MCP:<tool>), not beforeMCPExecution; ask is not enforced
+    """cloud agents run preToolUse (tool_name MCP:<tool>), not beforeMCPExecution; ask is not enforced
     there, so it is a deny."""
     ev = {"hook_event_name": "preToolUse", "tool_name": "MCP:status", "tool_input": {}}
     assert cursor(ev)[1] == {"permission": "allow"}
@@ -337,7 +337,7 @@ def test_cursor_pre_tool_use_mcp_calls_are_checked_and_ask_becomes_deny():
 
 
 def test_guard_fails_closed_on_an_internal_error(monkeypatch, capsys):
-    """R50-8: an exception inside the guard blocks (exit 2; Cursor: deny), never allows."""
+    """an exception inside the guard blocks (exit 2; Cursor: deny), never allows."""
     import importlib.util
     import io
     spec = importlib.util.spec_from_file_location("vra_guard_fc", GUARD)
@@ -365,7 +365,7 @@ def _oldest_python() -> str | None:
 
 
 def test_guard_runs_on_python_3_9():
-    """R50-8: the guard parses and decides on the oldest supported python3 (3.9, the Amazon Linux 2023
+    """the guard parses and decides on the oldest supported python3 (3.9, the Amazon Linux 2023
     default). Skipped when no 3.9 interpreter is on PATH (scripts/check.sh runs it when one is)."""
     import pytest
     py = _oldest_python()
@@ -378,7 +378,7 @@ def test_guard_runs_on_python_3_9():
 
 
 def test_every_adapter_hook_fails_closed():
-    """R50-8: each hook command ends in `|| exit 2`, so a missing interpreter or guard file blocks too."""
+    """each hook command ends in `|| exit 2`, so a missing interpreter or guard file blocks too."""
     pkg = GUARD.parents[2]
     commands = []
     claude = json.loads((pkg / "adapters/claude/settings.json.example").read_text())

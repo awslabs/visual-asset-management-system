@@ -111,7 +111,7 @@ def test_github_roles_are_pinned_to_their_environment():
     cond, _ = _oidc("github", "prod")
     assert cond["StringLike"]["token.actions.githubusercontent.com:sub"] == ["repo:example-org/vams-home:environment:prod"]
     assert cond["StringEquals"]["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
-    # R50-16: the immutable subject when the repository's ids are given
+    # the immutable subject when the repository's ids are given
     cond, _ = _oidc("github", "prod", RepositoryOwnerId="12", RepositoryId="34")
     assert cond["StringLike"]["token.actions.githubusercontent.com:sub"] == [
         "repo:example-org@12/vams-home@34:environment:prod"]
