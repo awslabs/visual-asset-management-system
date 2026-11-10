@@ -66,14 +66,14 @@ from common.indexing.documentIds import (
     vector_file_key_path,
 )
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
-from common.s3 import bucket_region_fields, list_all_object_versions, region_routing_s3_client
+from common.s3 import bucket_region_fields, list_all_object_versions, list_all_objects, region_routing_s3_client
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
 )
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, key_has_reserved_segment, select_newest_preview_file
 from common.vectorsearch.embeddings import round_vector
 from common.vectorsearch.vectorStore import DynamoDbVectorStore, VectorItem
 from customLogging.logger import safeLogger
@@ -224,14 +224,15 @@ def resolve_key_state(bucket_name: str, key: str) -> S3KeyState:
 
 
 def find_preview_file_key(bucket_name: str, key: str) -> str:
-    """The `.previewFile.*` sibling of a key, or '' when none exists."""
+    """The `.previewFile.<ext>` sibling of a key, or '' when none exists. A file can hold several (a
+    pipeline re-run in another format writes a `.png` beside an existing `.gif`), so every sibling is
+    listed and the newest one with an allowed extension is chosen by `select_newest_preview_file`, as
+    every other path that attaches a preview chooses it. The listing returns current objects only."""
     prefix = key + PREVIEW_FILE_PATTERN
-    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=5)
-    for obj in response.get('Contents', []) or []:
-        candidate = obj.get('Key', '')
-        if candidate.startswith(prefix):
-            return candidate
-    return ''
+    candidates = [(obj.get('Key', ''), obj.get('LastModified'), False)
+                  for obj in list_all_objects(bucket_name, prefix, client=s3_client)
+                  if obj.get('Key', '').startswith(prefix)]
+    return select_newest_preview_file(candidates) or ''
 
 
 def _get_asset_row(database_id: str, asset_id: str) -> Tuple[Optional[Dict[str, Any]], bool]:
@@ -306,6 +307,18 @@ def _read_document(key: str) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _document_already_consumed(detail: Dict[str, Any]) -> bool:
+    """Whether the vector item an event's document becomes is already written: the key is built from the
+    Detail alone (its segment key, else the whole-file item), since the document itself is gone."""
+    file_path = '/' + str(detail['filePath']).lstrip('/')
+    try:
+        sort_key = build_vector_file_version_key(
+            file_path, str(detail.get('versionId') or 'null'), str(detail.get('segmentKey') or ''))
+    except ValueError:
+        return False
+    return vector_store.item_exists(f"{detail['databaseId']}:{detail['assetId']}", sort_key)
+
+
 def _segment_fields(detail: Dict[str, Any], document: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     """The six segment fields of a document — the Detail's value, else the document's, else the whole-file
     default — checked against the store's key rules: (fields, '') or (None, reason) when the document is
@@ -364,7 +377,17 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         # bucket, so a location elsewhere is a publisher fault, acknowledged and left untouched.
         logger.warning("embedding.ready names a document outside the auxiliary bucket; dropping")
         return Outcome(True, 'drop', 'document is not in the auxiliary bucket')
-    document = _read_document(doc_key)
+    try:
+        document = _read_document(doc_key)
+    except ClientError as e:
+        if _is_not_found(e) and _document_already_consumed(detail):
+            # A redelivery (SQS and EventBridge deliver at least once, a batch is redelivered when a later
+            # record times out, an operator redrives the DLQ): the first delivery wrote the item and
+            # deleted the document. Any other missing document still fails the record.
+            logger.info(f"embedding.ready document {doc_key} is gone and its item is written; "
+                        "acknowledging the redelivery")
+            return Outcome(True, 'drop', 'document already consumed')
+        raise
     if document is None:
         logger.warning(f"embedding.ready document {doc_key} exceeds {EMBEDDING_DOCUMENT_MAX_BYTES} bytes; dropping")
         return Outcome(True, 'drop', f"document exceeds {EMBEDDING_DOCUMENT_MAX_BYTES} bytes")

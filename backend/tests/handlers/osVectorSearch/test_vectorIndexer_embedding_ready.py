@@ -145,13 +145,36 @@ class TestLatestLiveVersion:
         assert {tuple(sorted(c.kwargs.items())) for c in indexer.s3_client.head_object.call_args_list} == {
             (("Bucket", "assets"), ("Key", "prefix-a/a1/models/part.glb"))}
 
+    def _previews(self, indexer, *pages):
+        paginator = MagicMock()
+        paginator.paginate.return_value = [{"Contents": contents} for contents in pages]
+        indexer.s3_client.get_paginator.return_value = paginator
+        return paginator
+
     def test_preview_file_key_is_looked_up_beside_the_object(self, indexer):
-        indexer.s3_client.list_objects_v2.return_value = {
-            "Contents": [{"Key": "prefix-a/a1/models/part.glb.previewFile.png"}]}
+        paginator = self._previews(indexer, [{"Key": "prefix-a/a1/models/part.glb.previewFile.png",
+                                              "LastModified": datetime(2026, 9, 1, tzinfo=timezone.utc)}])
         indexer.handle_embedding_ready(dict(DETAIL))
         assert indexer.vector_store.items[0].previewFileKey == "prefix-a/a1/models/part.glb.previewFile.png"
-        indexer.s3_client.list_objects_v2.assert_called_once_with(
-            Bucket="assets", Prefix="prefix-a/a1/models/part.glb.previewFile.", MaxKeys=5)
+        indexer.s3_client.get_paginator.assert_called_with("list_objects_v2")
+        assert paginator.paginate.call_args.kwargs["Prefix"] == "prefix-a/a1/models/part.glb.previewFile."
+        assert paginator.paginate.call_args.kwargs["Bucket"] == "assets"
+
+    def test_the_newest_preview_wins_over_the_first_in_key_order(self, indexer):
+        # A .gif written first and a newer .png (a re-run in another format), listed across two pages:
+        # every path that attaches a preview picks the newest with select_newest_preview_file.
+        self._previews(
+            indexer,
+            [{"Key": "prefix-a/a1/models/part.glb.previewFile.gif", "LastModified": datetime(2026, 9, 1, tzinfo=timezone.utc)}],
+            [{"Key": "prefix-a/a1/models/part.glb.previewFile.png", "LastModified": datetime(2026, 9, 5, tzinfo=timezone.utc)}],
+        )
+        indexer.handle_embedding_ready(dict(DETAIL))
+        assert indexer.vector_store.items[0].previewFileKey == "prefix-a/a1/models/part.glb.previewFile.png"
+
+    def test_no_preview_leaves_the_key_empty(self, indexer):
+        self._previews(indexer, [])
+        indexer.handle_embedding_ready(dict(DETAIL))
+        assert indexer.vector_store.items[0].previewFileKey == ""
 
     def test_missing_extension_writes_the_none_sentinel(self, indexer):
         detail = {**DETAIL, "fileExt": "", "filePath": "/LICENSE"}
@@ -289,15 +312,73 @@ class TestSegmentDocuments:
         assert (item.segmentKey, item.segmentKind, item.segmentCount) == ("c000012", "textChunk", 200)
         assert indexer.vector_store.names() == ["put_item"]
 
-    def test_a_redelivered_segment_document_issues_the_same_keyed_write_twice(self, indexer):
-        _serve_document(indexer, {**DOCUMENT, **VIDEO_SEGMENT})
-        first = indexer.handle_embedding_ready({**DETAIL, **VIDEO_SEGMENT})
-        second = indexer.handle_embedding_ready({**DETAIL, **VIDEO_SEGMENT})
-        assert first.action == second.action == "put"
-        assert indexer.vector_store.names() == ["put_item", "put_item"]
-        keys = [(item.filePath, item.versionId, item.segmentKey) for item in indexer.vector_store.items]
-        assert keys == [("/models/part.glb", "v2", "t0000083456")] * 2
-        assert indexer.s3_client.delete_object.call_count == 2
+    @pytest.mark.parametrize("segment", [WHOLE_FILE_SEGMENT, VIDEO_SEGMENT], ids=["whole-file", "segment"])
+    def test_a_redelivered_document_is_acknowledged_once_its_item_is_written(self, indexer, segment):
+        """The first delivery writes the item and deletes the document; the duplicate finds the document
+        gone (S3 answers NoSuchKey after the delete, as the stub does) and the item written, so it is
+        acknowledged with no second write instead of failing towards the DLQ."""
+        bucket = _AuxiliaryBucket({DOCUMENT_KEY: {**DOCUMENT, **segment}})
+        bucket.install(indexer)
+        first = indexer.handle_embedding_ready({**DETAIL, **segment})
+        assert first.ok and first.action == "put"
+        assert DOCUMENT_KEY not in bucket.objects
+        written = list(indexer.vector_store.items)
+
+        second = indexer.handle_embedding_ready({**DETAIL, **segment})
+        assert second.ok and second.action == "drop" and second.detail == "document already consumed"
+        assert indexer.vector_store.items == written
+        assert bucket.deletes == [DOCUMENT_KEY]
+
+    def test_a_missing_document_whose_item_was_never_written_still_fails(self, indexer):
+        bucket = _AuxiliaryBucket({})
+        bucket.install(indexer)
+        with pytest.raises(ClientError):
+            indexer.handle_embedding_ready({**DETAIL, **VIDEO_SEGMENT})
+        assert indexer.vector_store.items == []
+
+    def test_a_missing_document_of_another_version_still_fails(self, indexer):
+        # The item of v1 exists; the event is for v2, whose document is gone and whose item is not.
+        indexer.vector_store = FakeVectorStore(seed=[seeded_item("db1:a1", "/models/part.glb#v1", "v1")])
+        _AuxiliaryBucket({}).install(indexer)
+        with pytest.raises(ClientError):
+            indexer.handle_embedding_ready(dict(DETAIL))
+
+    def test_a_redelivery_through_the_batch_handler_reports_no_failure(self, indexer):
+        bucket = _AuxiliaryBucket({DOCUMENT_KEY: DOCUMENT})
+        bucket.install(indexer)
+        body = {"version": "0", "id": "e1", "detail-type": "vector.embedding.ready",
+                "source": "vams.t1.pipeline.systemGenAi", "detail": DETAIL}
+        record = {"messageId": "m1", "eventSource": "aws:sqs", "body": json.dumps(body)}
+        first = indexer.lambda_handler({"Records": [record]}, MagicMock())
+        second = indexer.lambda_handler({"Records": [dict(record, messageId="m2")]}, MagicMock())
+        assert first["batchItemFailures"] == [] and second["batchItemFailures"] == []
+        assert [name for name in indexer.vector_store.names() if name.startswith("put")] == ["put_latest_item"]
+
+
+class _AuxiliaryBucket:
+    """The auxiliary bucket as S3 behaves: get_object serves a stored document, delete_object removes it,
+    and a later get_object of a removed key raises NoSuchKey."""
+
+    def __init__(self, objects):
+        self.objects = {key: json.dumps(doc).encode("utf-8") for key, doc in objects.items()}
+        self.deletes = []
+
+    def get_object(self, Bucket, Key):
+        assert Bucket == AUX_BUCKET
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."},
+                               "ResponseMetadata": {"HTTPStatusCode": 404}}, "GetObject")
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def delete_object(self, Bucket, Key):
+        assert Bucket == AUX_BUCKET
+        self.deletes.append(Key)
+        self.objects.pop(Key, None)
+        return {}
+
+    def install(self, indexer):
+        indexer.s3_client.get_object.side_effect = self.get_object
+        indexer.s3_client.delete_object.side_effect = self.delete_object
 
 
 @pytest.mark.unit

@@ -211,6 +211,10 @@ class FakeVectorStore:
         self.calls.append(("file_has_items", pk, key_path))
         return bool(self._file_items(pk, key_path))
 
+    def item_exists(self, pk, sort_key):
+        self.calls.append(("item_exists", pk, sort_key))
+        return any(item["databaseId:assetId"] == pk and item["fileVersionKey"] == sort_key for item in self.seeded)
+
     def delete_other_run_segments(self, pk, key_path, version_id, pipeline_execution_id):
         self.calls.append(("delete_other_run_segments", pk, key_path, version_id, pipeline_execution_id))
         prefix = f"{key_path}#{version_id}#"

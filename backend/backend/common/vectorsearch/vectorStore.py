@@ -195,6 +195,7 @@ class VectorStore(Protocol):
     ) -> Tuple[int, Optional[dict]]: ...
     def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int: ...
     def file_has_items(self, pk: str, key_path: str) -> bool: ...
+    def item_exists(self, pk: str, sort_key: str) -> bool: ...
     def delete_file(
         self, pk: str, key_path: str, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
@@ -503,6 +504,14 @@ class DynamoDbVectorStore:
         item under the file's key-path prefix."""
         kwargs = self._file_query(pk, key_path, _KEY_PROJECTION)
         kwargs["Limit"] = 1
+        return bool(self._client.query(**kwargs).get("Items"))
+
+    def item_exists(self, pk: str, sort_key: str) -> bool:
+        """Whether the one item at ``(pk, sort_key)`` exists: a strongly consistent keys-only Query on the
+        full key (the same Query permission the per-file rules use), so a write that just landed is seen."""
+        kwargs = self._query_kwargs(
+            "#pk = :pk AND #sk = :sk", {":pk": {"S": pk}, ":sk": {"S": sort_key}}, _KEY_PROJECTION)
+        kwargs["ConsistentRead"] = True
         return bool(self._client.query(**kwargs).get("Items"))
 
     def set_archived_for_file(
