@@ -199,7 +199,7 @@ class _SelectiveClient:
 def _lookup_stubs(module, os_client, links_table=None, metadata_table=None):
     """Patch the whole lookup chain process_asset_index_request walks."""
     assets = MagicMock()
-    assets.get_item.side_effect = lambda Key: {
+    assets.get_item.side_effect = lambda Key, **_: {
         "Item": {
             "databaseId": Key["databaseId"],
             "assetId": Key["assetId"],

@@ -111,6 +111,19 @@ def fileIndexer():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _source_unchanged_after_write(request):
+    """These tests cover what a write sends. The re-read of the source once a write has completed
+    (#789) is covered by tests/handlers/osSemanticSearch/test_osIndexer_late_write.py; here the
+    source is taken as unchanged."""
+    if "fileIndexer" not in request.fixturenames:
+        yield
+        return
+    module = request.getfixturevalue("fileIndexer")
+    with patch.object(module, "reconcile_written_file_document", return_value=None):
+        yield
+
+
 def _deep_relative_path(min_chars, file_name="model.glb"):
     """Asset-relative path of at least `min_chars` characters ending in a file name."""
     segments = []

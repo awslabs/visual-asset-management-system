@@ -1029,6 +1029,108 @@ def delete_file_document(database_id: str, asset_id: str, file_path: str) -> boo
         return False
 
 
+def current_file_state(bucket_name: str, s3_key: str) -> Optional[str]:
+    """What S3 holds for ``s3_key`` now: 'live', 'archived' (the current version is a delete marker) or
+    'gone' (no version left); None when S3 could not answer, so no caller acts on a failed read.
+
+    The one-entry version listing is an existence check (backend CLAUDE.md Rule 14): with no live
+    current version, the key's own newest entry, its delete marker, leads the listing when any entry
+    of the key remains, and the entry's Key is matched to tell it from a longer sibling key.
+    """
+    try:
+        try:
+            s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+            return "live"
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') not in S3_NOT_FOUND_ERROR_CODES:
+                raise
+        listing = s3_client.list_object_versions(Bucket=bucket_name, Prefix=s3_key, MaxKeys=1)
+        for entry in (listing.get('DeleteMarkers') or []) + (listing.get('Versions') or []):
+            if entry.get('Key') == s3_key:
+                return "archived"
+        return "gone"
+    except Exception as e:
+        logger.exception(f"Error re-reading S3 state of {bucket_name}/{s3_key}: {e}")
+        return None
+
+
+def asset_exists_any_state(database_id: str, asset_id: str) -> Optional[bool]:
+    """Whether the asset row exists, live or archived, read strongly consistent; None when a read
+    failed."""
+    try:
+        for partition in (database_id, f"{database_id}#deleted"):
+            response = asset_storage_table.get_item(
+                Key={'databaseId': partition, 'assetId': asset_id}, ConsistentRead=True
+            )
+            if 'Item' in response:
+                return True
+        return False
+    except Exception as e:
+        logger.exception(f"Error re-reading asset {database_id}/{asset_id}: {e}")
+        return None
+
+
+def reconcile_written_file_document(document: FileDocumentModel, bucket_name: str, s3_key: str,
+                                    recheck: bool = True) -> Optional[IndexOperationResponse]:
+    """After a file document was written, re-read what it was built from and correct a write that
+    landed after a later change (#789). Returns None when the written document stands.
+
+    This function runs in concurrent invocations with nothing ordering one file's events, and the
+    client re-sends a write that timed out (retry_on_timeout), so the write of an earlier event can
+    complete after a later event already removed the document or flipped its archived state. The
+    re-read happens once the write has completed: a file or asset removed before then is seen as
+    gone and the document is deleted; an archive or unarchive completed before then shows as an S3
+    state other than the one written, and the document is written again from the current state (once:
+    ``recheck`` is False for that write). A change after the re-read has its own event, which follows
+    the write. Conditional or versioned writes are not used because OpenSearch Serverless and
+    provisioned domains do not offer the same document versioning; the re-read works on both. A
+    failed re-read is reported as a failure, so the record is processed again.
+    """
+    doc_id = build_file_document_id(document.str_databaseid, document.str_assetid, document.str_key)
+    state = current_file_state(bucket_name, s3_key)
+    asset_present = asset_exists_any_state(document.str_databaseid, document.str_assetid)
+    if state is None or asset_present is None:
+        return IndexOperationResponse(
+            success=False,
+            message="File document written, but its source could not be re-read",
+            documentId=doc_id,
+            indexName=opensearch_file_index,
+            operation="error"
+        )
+    if state == "gone" or asset_present is False:
+        logger.warning(f"File {doc_id} was removed while it was indexed; removing its document")
+        removed = delete_file_document(document.str_databaseid, document.str_assetid, document.str_key)
+        return IndexOperationResponse(
+            success=removed,
+            message="File removed while indexed, document removed" if removed
+            else "Failed to remove the document of a removed file",
+            documentId=doc_id,
+            indexName=opensearch_file_index,
+            operation="delete"
+        )
+    if (state == "archived") != bool(document.bool_archived):
+        if not recheck:
+            # Still changing: report a failure, so the record is processed again from the current state
+            return IndexOperationResponse(
+                success=False,
+                message="File archive state changed while it was indexed",
+                documentId=doc_id,
+                indexName=opensearch_file_index,
+                operation="error"
+            )
+        logger.warning(f"File {doc_id} became {state} while it was indexed; writing its document again")
+        return process_file_index_request(FileIndexRequest(
+            databaseId=document.str_databaseid,
+            assetId=document.str_assetid,
+            filePath=document.str_key,
+            bucketName=bucket_name,
+            s3Key=s3_key,
+            isArchived=False,
+            operation="index",
+        ), recheck=False)
+    return None
+
+
 def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
                                             bucket_name: str,
                                             bucket_prefix: Optional[str]) -> int:
@@ -1137,8 +1239,10 @@ def validate_s3_key(name: str, value: str) -> Tuple[bool, str]:
     return (True, '')
 
 
-def process_file_index_request(request: FileIndexRequest) -> IndexOperationResponse:
-    """Process a file index request with full data lookup"""
+def process_file_index_request(request: FileIndexRequest, recheck: bool = True) -> IndexOperationResponse:
+    """Process a file index request with full data lookup. A written document is checked against
+    its source afterwards (reconcile_written_file_document); ``recheck`` is False for the one
+    rewrite that check may make."""
     
     try:
         # Validate input parameters using VAMS validators
@@ -1242,6 +1346,13 @@ def process_file_index_request(request: FileIndexRequest) -> IndexOperationRespo
             success = index_file_document(document)
             
             doc_id = build_file_document_id(request.databaseId, request.assetId, request.filePath)
+
+            if success:
+                # A write that landed after a later removal or archive change is corrected here (#789)
+                corrected = reconcile_written_file_document(document, request.bucketName, request.s3Key,
+                                                            recheck=recheck)
+                if corrected is not None:
+                    return corrected
 
             return IndexOperationResponse(
                 success=success,
@@ -1481,6 +1592,12 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 
                                 # Index the archived file
                                 success = index_file_document(document)
+
+                                if success:
+                                    # An unarchive or removal completed before this write landed (#789)
+                                    corrected = reconcile_written_file_document(document, bucket_name, s3_key)
+                                    if corrected is not None:
+                                        return corrected
                                 
                                 return IndexOperationResponse(
                                     success=success,

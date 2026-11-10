@@ -383,6 +383,23 @@ def get_asset_details(database_id: str, asset_id: str) -> Optional[Dict[str, Any
         logger.exception(f"Error getting asset details for {database_id}/{asset_id}: {e}")
         return None
 
+
+def asset_row_exists(database_id: str, asset_id: str) -> Optional[bool]:
+    """Whether the asset row exists now, read strongly consistent; None when the read failed.
+
+    Unlike get_asset_details, a failed read is not reported as a missing row, so a caller never
+    removes a document because DynamoDB could not answer.
+    """
+    try:
+        response = asset_storage_table.get_item(
+            Key={'databaseId': database_id, 'assetId': asset_id},
+            ConsistentRead=True,
+        )
+        return 'Item' in response
+    except Exception as e:
+        logger.exception(f"Error re-reading asset {database_id}/{asset_id}: {e}")
+        return None
+
 def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
     """
     Get asset-level metadata from NEW schema table as a flat single-level JSON object.
@@ -659,14 +676,17 @@ def index_asset_document(document: AssetDocumentModel) -> bool:
 
 def delete_asset_document(database_id: str, asset_id: str) -> bool:
     """Delete an asset document from OpenSearch with retry logic for 429 errors"""
+    # The database id of an archived asset carries #deleted, which the document id then carries too
+    return delete_asset_document_id(build_asset_document_id(database_id, asset_id, False))
+
+
+def delete_asset_document_id(doc_id: str) -> bool:
+    """Delete the asset document ``doc_id``; a document already gone counts as deleted."""
     try:
         if not opensearch_manager.is_available():
             raise VAMSGeneralErrorResponse("OpenSearch client not available")
         
         client = opensearch_manager.get_client()
-        
-        # Create document ID
-        doc_id = build_asset_document_id(database_id, asset_id, False)
         
         # Delete the document with retry logic
         response = opensearch_operation_with_retry(
@@ -732,10 +752,9 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
                 )
         
         if request.operation == "delete":
-            # Check if asset still exists
-            asset_details = get_asset_details(request.databaseId, request.assetId)
-            
-            if not asset_details:
+            # Check if asset still exists. Read strongly consistent: the REMOVE event follows the
+            # delete closely, and a stale read that still returns the row would index it again.
+            if asset_row_exists(request.databaseId, request.assetId) is not True:
                 # Asset completely removed, delete from index
                 success = delete_asset_document(request.databaseId, request.assetId)
                 
@@ -753,13 +772,27 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
         if request.operation == "index":
             # Get asset details
             asset_details = get_asset_details(request.databaseId, request.assetId)
-            if not asset_details:
-                logger.warning(f"Asset not found for indexing: {request.databaseId}/{request.assetId}")
+            if not asset_details and asset_row_exists(request.databaseId, request.assetId) is False:
+                # The row is gone (deleted, or archived and moved to the #deleted partition), so no
+                # document may stand for it at this key. Removing it here also cleans up after a
+                # write of an earlier event that landed late (#789).
+                logger.warning(f"Asset not found for indexing: {request.databaseId}/{request.assetId}; "
+                               "removing its document")
+                removed = delete_asset_document(request.databaseId, request.assetId)
                 return IndexOperationResponse(
-                    success=True,
-                    message="Asset not found, skipping indexing",
+                    success=removed,
+                    message="Asset not found, document removed" if removed else "Failed to remove asset document",
+                    documentId=build_asset_document_id(request.databaseId, request.assetId, False),
                     indexName=opensearch_asset_index,
-                    operation="skip"
+                    operation="delete"
+                )
+            if not asset_details:
+                logger.warning(f"Asset could not be read for indexing: {request.databaseId}/{request.assetId}")
+                return IndexOperationResponse(
+                    success=False,
+                    message="Asset could not be read, indexing not done",
+                    indexName=opensearch_asset_index,
+                    operation="error"
                 )
             
             # Get bucket details
@@ -805,6 +838,39 @@ def process_asset_index_request(request: AssetIndexRequest) -> IndexOperationRes
             success = index_asset_document(document)
             
             doc_id = build_asset_document_id(request.databaseId, request.assetId, False)
+
+            if success:
+                # A write can land after the asset is deleted or archived (#789): this function runs
+                # in concurrent invocations with nothing ordering one asset's events, and the client
+                # re-sends a write that timed out (retry_on_timeout), so the write of an earlier event
+                # can complete after a later REMOVE already deleted the document. Re-reading the row,
+                # strongly consistent, once the write has completed and removing the document when the
+                # row is gone closes that: a row deleted or archived (moved to the #deleted partition)
+                # before the write completed is seen as gone here, and one removed later has its own
+                # REMOVE event, whose delete then follows the write. A conditional or versioned write
+                # (if_seq_no, external versions) is not used because OpenSearch Serverless and
+                # provisioned domains do not offer the same document versioning; the re-read works
+                # on both.
+                written_id = build_asset_document_id(
+                    document.str_databaseid, document.str_assetid, document.bool_archived
+                )
+                still_there = asset_row_exists(request.databaseId, request.assetId)
+                if still_there is False:
+                    logger.warning(f"Asset {request.databaseId}/{request.assetId} was removed while it was "
+                                   f"indexed; removing document {written_id}")
+                    removed = delete_asset_document_id(written_id)
+                    return IndexOperationResponse(
+                        success=removed,
+                        message="Asset removed while indexed, document removed" if removed
+                        else "Failed to remove the document of a removed asset",
+                        documentId=written_id,
+                        indexName=opensearch_asset_index,
+                        operation="delete"
+                    )
+                if still_there is None:
+                    # Unconfirmed: report a failure so the record is processed again, which re-reads
+                    # the row and removes the document if the asset is gone
+                    success = False
             
             return IndexOperationResponse(
                 success=success,
