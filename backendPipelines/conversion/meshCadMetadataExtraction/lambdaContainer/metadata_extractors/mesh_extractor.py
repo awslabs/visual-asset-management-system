@@ -16,20 +16,23 @@ from common.logger import safeLogger
 # A child of the handler's logger (lambda.py), so its lines carry the keys the handler appends.
 logger = safeLogger(service="cadMetadataExtractionPipeline", child=True)
 
-def extract_mesh_metadata(file_path: str) -> Dict[str, Any]:
+def extract_mesh_metadata(file_path: str, display_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract metadata from mesh files using Trimesh.
     
     Args:
         file_path: Path to the mesh file
+        display_name: How to name the input in a failure message. The caller downloads the input
+            to a temporary path of its own, so the path above names that copy rather than the
+            file the operator selected; defaults to the local file name.
         
     Returns:
         Dictionary containing extracted metadata
     """
     logger.info(f"Extracting mesh metadata from {file_path}")
     
-    file_name = os.path.basename(file_path)
-    file_extension = os.path.splitext(file_name)[1].lower()
+    file_name = display_name or os.path.basename(file_path)
+    file_extension = os.path.splitext(file_path)[1].lower()
     
     try:
         # Load the mesh
