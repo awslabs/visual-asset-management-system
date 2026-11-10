@@ -15226,7 +15226,7 @@ components:
                 enrich:
                     type: boolean
                     default: true
-                    description: "When an OpenSearch mode is enabled, merge the file index document into _source."
+                    description: "When an OpenSearch mode is enabled, merge the file index document into _source. In asset mode each hit also gets its asset's location from the asset index: geo_MD_location and the location, latitude, lat, longitude, lon and long keys of MD_."
         nlpSegmentRef:
             type: object
             nullable: true

@@ -88,6 +88,15 @@ BATCH_GET_MAX_ATTEMPTS = 6
 BATCH_GET_BACKOFF_BASE_SECONDS = 0.05
 # Document ids per OpenSearch query of the constrain/enrich step; each query is sized to its own window.
 OPENSEARCH_ENRICH_WINDOW = 100
+# What the web's Map view plots for a hit (extractLocationData in
+# web/src/components/search/utils/locationUtils.ts): the geo_MD_location shape the indexers derive
+# (common/indexing/geoLocation.py), else these keys of the MD_ object, matched in any letter case.
+GEO_LOCATION_FIELD = "geo_MD_location"
+LOCATION_METADATA_KEYS = ("location", "latitude", "lat", "longitude", "lon", "long")
+# Where a file hit keeps its asset's location until _asset_hits copies it onto the asset hit
+ASSET_LOCATION_KEY = "assetLocation"
+# Keys of a hit the handler uses internally; never sent to the caller
+_INTERNAL_HIT_KEYS = ("asset", ASSET_LOCATION_KEY)
 DELETED_PARTITION_SUFFIX = "#deleted"
 INDEX_BUILDING_MESSAGE = "Vector index is being built"
 ROUTE_NOT_SERVED_MESSAGE = "Route is not served by this function"
@@ -399,6 +408,8 @@ def _asset_hits(file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "str_assettype": row.get("assetType", ""),
                 "list_tags": row.get("tags", []),
                 "bool_archived": src["bool_archived"],
+                # The asset's own location, when the enrichment read one (_add_asset_locations)
+                **hit.get(ASSET_LOCATION_KEY, {}),
             },
             "_vector": hit["_vector"],
             "asset": row,
@@ -407,7 +418,7 @@ def _asset_hits(file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _strip(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [{k: v for k, v in hit.items() if k != "asset"} for hit in hits]
+    return [{k: v for k, v in hit.items() if k not in _INTERNAL_HIT_KEYS} for hit in hits]
 
 
 def _aggregations(hits: List[Dict[str, Any]], fields: Tuple[str, ...]) -> Dict[str, Any]:
@@ -545,6 +556,9 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
                     merged["str_previewfilekey"] = source["str_previewfilekey"]
                 hit["_source"] = merged
                 kept.append(hit)
+        if request.enrich and request.entityTypes == ["asset"]:
+            # The Map view plots an asset hit from its asset's location (D83)
+            _add_asset_locations(manager, kept, request.size, warnings)
         return kept
     except Exception as e:
         if request.opensearch_only_fields():
@@ -553,6 +567,69 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
         logger.exception("OpenSearch enrichment failed")
         warnings.append(_warning("opensearch:enrichment_failed", ENRICHMENT_FAILED_MESSAGE))
         return file_hits
+
+
+def _location_fields(source: Dict[str, Any]) -> Dict[str, Any]:
+    """The location an indexed document carries, as the Map view reads it: its ``geo_MD_location`` and
+    the LOCATION_METADATA_KEYS of its ``MD_`` object, nothing else."""
+    fields: Dict[str, Any] = {}
+    geo = source.get(GEO_LOCATION_FIELD)
+    if isinstance(geo, dict) and geo:
+        fields[GEO_LOCATION_FIELD] = geo
+    metadata = source.get("MD_")
+    if isinstance(metadata, dict):
+        picked = {key: value for key, value in metadata.items()
+                  if isinstance(key, str) and key.lower() in LOCATION_METADATA_KEYS}
+        if picked:
+            fields["MD_"] = picked
+    return fields
+
+
+def _add_asset_locations(manager, file_hits: List[Dict[str, Any]], size: int, warnings: List[Dict[str, str]]) -> None:
+    """For an asset answer, read the location of the first ``size`` assets the file hits rank (the assets
+    ``_asset_hits`` returns) from their documents in the OpenSearch asset index, and keep it on each of
+    those assets' file hits under ASSET_LOCATION_KEY for ``_asset_hits`` to copy. A file document carries
+    its own file's location, never its asset's, so only the asset index holds it.
+
+    Each document is read by the id the asset indexer writes for the record the hit was authorized on
+    (``_authorize``): ``{databaseId}#{assetId}``, with ``#deleted`` on the database id of an archived
+    record. The fields therefore come from a record the caller may already open, and keyword search
+    returns them, with the rest of the asset's metadata, to the same caller. ``manager`` is the one the
+    file enrichment built (``_opensearch_step``, the vector family's one admitted OpenSearch import).
+    Never raises: the location is for display, so a failed lookup degrades to the
+    ``opensearch:enrichment_failed`` warning and the hits stay as they were, also under a constraint."""
+    try:
+        from common.indexing.documentIds import build_asset_document_id
+
+        assets: Dict[Tuple[str, str], str] = {}
+        for hit in file_hits:
+            key = (hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"])
+            if key not in assets and len(assets) < size:
+                archived = str(hit["asset"].get("databaseId") or "").endswith(DELETED_PARTITION_SUFFIX)
+                assets[key] = build_asset_document_id(key[0], key[1], archived)
+        ids = list(assets.values())
+        located: Dict[str, Dict[str, Any]] = {}
+        for start in range(0, len(ids), OPENSEARCH_ENRICH_WINDOW):
+            window_ids = ids[start:start + OPENSEARCH_ENRICH_WINDOW]
+            response = manager.client.search(
+                index=manager.asset_index,
+                body={
+                    "size": len(window_ids),
+                    "_source": [GEO_LOCATION_FIELD, "MD_"],
+                    "query": {"bool": {"filter": [{"ids": {"values": window_ids}}]}},
+                },
+            )
+            for hit in response.get("hits", {}).get("hits", []):
+                fields = _location_fields(hit.get("_source") or {})
+                if fields:
+                    located[hit["_id"]] = fields
+        for hit in file_hits:
+            doc_id = assets.get((hit["_source"]["str_databaseid"], hit["_source"]["str_assetid"]))
+            if doc_id in located:
+                hit[ASSET_LOCATION_KEY] = located[doc_id]
+    except Exception:
+        logger.exception("OpenSearch asset location lookup failed")
+        warnings.append(_warning("opensearch:enrichment_failed", ENRICHMENT_FAILED_MESSAGE))
 
 
 def _parse_request(event) -> NlpSearchRequestModel:
