@@ -137,7 +137,7 @@ vra iam plan --env prod
 
 For the VAMS commercial configuration of the package's test fixtures (Amazon CloudFront, Amazon OpenSearch
 Serverless, Amazon Location Service) the package lists 88 roles VAMS needs (13 used only during a deploy by AWS
-CloudFormation custom resources, 75 at run time) and one existing service-linked role VAMS references.
+AWS CloudFormation custom resources, 75 at run time) and one existing service-linked role VAMS references.
 An AWS GovCloud (US) configuration (VPC, provisioned Amazon OpenSearch Service, Application Load Balancer
 web hosting) lists 92 roles. The package directory holds:
 
@@ -260,7 +260,7 @@ writes the CDK boundary context into the build's own copy of `infra/cdk.json`, b
 only as an object.
 
 Switching an existing environment to `boundary` mode with a `rolePrefix` renames every VAMS role. AWS
-CloudFormation creates each replacement before it deletes the old role, so during that deploy the stack
+AWS CloudFormation creates each replacement before it deletes the old role, so during that deploy the stack
 holds about twice its roles (roughly 90 more). Check the account's IAM "Roles per account" quota before
 the switch. A deploy that crosses it fails with `Cannot exceed quota for RolesPerAccount` and rolls back.
 
@@ -313,11 +313,11 @@ know them before it starts.
     `<prefix><unique construct name>-<region>` on every role, also when the prefix is empty. Deploys need
     `CAPABILITY_NAMED_IAM`, and a role name collides if two stacks share a base name in one Region.
     Without a prefix the unique construct name starts with the core stack name without its hyphens
-    (`vamscore...` for config name `vams`); roles of the other VAMS stacks get CloudFormation names that
+    (`vamscore...` for config name `vams`); roles of the other VAMS stacks get AWS CloudFormation names that
     start with `<config name>-`. The scoped CDK execution policy
     (`iam/cloudformation/vra-cdk-execution-policy.yaml`, parameters `ConfigName` and `RoleNamePrefix` from the
     env's `configName` and `iam.rolePrefix`) creates, changes and passes only roles with these names, so
-    CloudFormation cannot reach the account's other roles, nor the `cdk-*` and `vra-*` roles. A role IT
+    AWS CloudFormation cannot reach the account's other roles, nor the `cdk-*` and `vra-*` roles. A role IT
     pre-creates for VAMS must start with the `RoleNamePrefix` the IT package's deploy role notes give (the
     env's `iam.rolePrefix`, or `<baseStackName>-` in `precreated` mode without one).
 -   **A discovery synth is not deployable.** With `generateReportOnly: true` the templates still contain the
@@ -339,7 +339,7 @@ know them before it starts.
     `sendEmail`, `subscriptionService`, `unsubscribeService` and the two `sqsBucketSync` handlers.
     VAMS builds the ARN with `Fn::Sub`, so the IAM report shows only an opaque token. The package grants
     these roles `arn:<partition>:sns:<region>:<account>:AssetTopic*`, as VAMS does. Without that grant,
-    asset creation fails with "Error creating SNS topic". All other SNS and DynamoDB tokens stay scoped
+    asset creation fails with "Error creating SNS topic". All other SNS and Amazon DynamoDB tokens stay scoped
     to the core stack name.
 -   **One trust can only be finished after the first deploy.** `AuthBuilder/Cognito/DefaultUnauthenticatedRole`
     trusts `cognito-identity.amazonaws.com` (`cognito-identity-us-gov.amazonaws.com` in AWS GovCloud (US))

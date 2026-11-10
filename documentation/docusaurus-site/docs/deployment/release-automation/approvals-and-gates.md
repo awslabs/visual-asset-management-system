@@ -102,7 +102,7 @@ the environment account attributes every call to a person. See
 
 When a run reference exists (any supported CI platform), a gated environment needs `--approval` naming
 a record bound to this run; records found in the ledger are not bound to the run and are not used. The
-CI templates write the record from the platform's own approval (CodePipeline manual approval, GitHub
+CI templates write the record from the platform's own approval (AWS CodePipeline manual approval, GitHub
 environment reviewers ([GitHub Actions](github-actions.md)), GitLab deployment approvals) with
 [`approval_record.py`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/cicd/codebuild/scripts/approval_record.py).
 Generic CI is accepted for a gated environment only when it sets `allowGenericCi: true`. See

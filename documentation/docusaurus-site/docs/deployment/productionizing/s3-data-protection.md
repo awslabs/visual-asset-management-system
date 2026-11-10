@@ -26,7 +26,7 @@ list and each bucket's removal behavior.
 
 ## Versioning
 
-VAMS enables S3 Versioning on its buckets, so an overwrite or delete keeps the previous version. Versioning
+VAMS enables Amazon S3 Versioning on its buckets, so an overwrite or delete keeps the previous version. Versioning
 is the base for every other control on this page: AWS Backup for Amazon S3, replication and Object Lock all
 require it. Do not suspend versioning on a VAMS data bucket.
 
@@ -55,16 +55,16 @@ lane, and verify after each deployment that they are still present.
 
 ## Replication
 
-[S3 Replication](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html) copies new
+[Amazon S3 Replication](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html) copies new
 objects to another bucket automatically.
 
 | Type                           | Use                                                                                      |
 | ------------------------------ | ---------------------------------------------------------------------------------------- |
 | Same-Region Replication (SRR)  | Copy to a bucket in a separate backup account in the same Region                         |
 | Cross-Region Replication (CRR) | Copy to a second Region for disaster recovery                                            |
-| S3 Batch Replication           | Replicate objects that existed before the rule was created, or retry failed replications |
+| Amazon S3 Batch Replication    | Replicate objects that existed before the rule was created, or retry failed replications |
 
-Replication rules apply to objects written after the rule exists. Use S3 Batch Replication to copy existing
+Replication rules apply to objects written after the rule exists. Use Amazon S3 Batch Replication to copy existing
 objects when you first enable replication.
 
 For a replica in another account, set the destination bucket owner as the replica owner so the backup
@@ -84,16 +84,16 @@ replication needs [explicit configuration](https://docs.aws.amazon.com/AmazonS3/
 Amazon S3 treats multi-Region AWS KMS keys as single-Region keys, so a multi-Region key does not remove the
 need to configure a replica key. See [Encryption keys](encryption-keys.md).
 
-### S3 Replication Time Control
+### Amazon S3 Replication Time Control
 
-[S3 Replication Time Control](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-time-control.html)
-(S3 RTC) replicates most objects in seconds and 99.9 percent of objects within 15 minutes, backed by a
+[Amazon S3 Replication Time Control](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-time-control.html)
+(Amazon S3 RTC) replicates most objects in seconds and 99.9 percent of objects within 15 minutes, backed by a
 service-level agreement, and publishes replication metrics. Enable it when your recovery point objective
 for files is measured in minutes, and alarm on its replication latency and pending-operation metrics.
 
 ## Object Lock
 
-[S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-configure.html) stores
+[Amazon S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-configure.html) stores
 object versions in a write-once, read-many model for a retention period or under a legal hold. It can be
 enabled on an existing versioned bucket.
 
@@ -111,7 +111,7 @@ records owner.
 
 ## Inventory
 
-[S3 Inventory](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory.html) produces a
+[Amazon S3 Inventory](https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory.html) produces a
 daily or weekly list of objects and their versions, encryption status and replication status. Use it to:
 
 -   Record which object versions existed at a backup point, so a restore can roll a bucket back to that
@@ -123,11 +123,11 @@ Deliver inventory reports to a bucket in the log archive or backup account.
 
 ## Restoring objects
 
-| Situation                               | Restore                                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| One object overwritten or deleted       | Copy the previous version over the current one, or delete the delete marker                             |
-| Many objects changed after a known time | Use an inventory report from before that time with S3 Batch Operations to copy the listed versions back |
-| Bucket lost                             | Restore from AWS Backup, or copy from the replica bucket                                                |
+| Situation                               | Restore                                                                                                        |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| One object overwritten or deleted       | Copy the previous version over the current one, or delete the delete marker                                    |
+| Many objects changed after a known time | Use an inventory report from before that time with Amazon S3 Batch Operations to copy the listed versions back |
+| Bucket lost                             | Restore from AWS Backup, or copy from the replica bucket                                                       |
 
 After restoring files, rebuild the search indexes so search results match storage (see
 [Search indexes](search-indexes.md)).

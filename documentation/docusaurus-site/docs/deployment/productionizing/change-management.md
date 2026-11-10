@@ -23,14 +23,14 @@ environments, a reviewed preview of each change, a checkpoint before every chang
 
 ## Before every change
 
-| Step                                                                                                                            | Purpose                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Read the release notes and [Update the solution](../../deployment/update-the-solution.md) for every version in the upgrade path | Find migrations, configuration changes and A/B requirements                                     |
-| Compare your configuration with the new configuration template                                                                  | Pick up new options and their defaults; remove options that no longer exist                     |
-| Run `npx cdk diff` and review it                                                                                                | Catch replacements of stateful resources (tables, buckets, user pools, keys, search domains)    |
-| Run the version's data migration in dry-run mode                                                                                | Confirm what the migration will change                                                          |
-| Take a checkpoint                                                                                                               | On-demand backups of every table and a record of S3 object versions (see [Backups](backups.md)) |
-| Confirm the rollback plan                                                                                                       | Know which parts of the change can be undone by redeploying and which need a restore            |
+| Step                                                                                                                            | Purpose                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Read the release notes and [Update the solution](../../deployment/update-the-solution.md) for every version in the upgrade path | Find migrations, configuration changes and A/B requirements                                            |
+| Compare your configuration with the new configuration template                                                                  | Pick up new options and their defaults; remove options that no longer exist                            |
+| Run `npx cdk diff` and review it                                                                                                | Catch replacements of stateful resources (tables, buckets, user pools, keys, search domains)           |
+| Run the version's data migration in dry-run mode                                                                                | Confirm what the migration will change                                                                 |
+| Take a checkpoint                                                                                                               | On-demand backups of every table and a record of Amazon S3 object versions (see [Backups](backups.md)) |
+| Confirm the rollback plan                                                                                                       | Know which parts of the change can be undone by redeploying and which need a restore                   |
 
 ## Rollback
 

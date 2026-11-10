@@ -19,10 +19,10 @@ A backup, replica or export is only recoverable if a key that can decrypt it is 
 
 | Copy                                                  | Encrypted with                                | Requirement                                                               |
 | ----------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
-| DynamoDB PITR and on-demand backups                   | The table's key                               | The source key stays enabled                                              |
+| Amazon DynamoDB PITR and on-demand backups            | The table's key                               | The source key stays enabled                                              |
 | AWS Backup recovery points copied to a backup account | The destination vault's key                   | The backup account owns the vault key; the source key must allow the copy |
-| S3 replicas                                           | The replica key named in the replication rule | A key in the destination account and Region                               |
-| DynamoDB exports                                      | The export's chosen encryption                | The reader has decrypt permission on that key                             |
+| Amazon S3 replicas                                    | The replica key named in the replication rule | A key in the destination account and Region                               |
+| Amazon DynamoDB exports                               | The export's chosen encryption                | The reader has decrypt permission on that key                             |
 
 :::danger[Do not delete keys that protect retained data]
 The VAMS-generated key is retained when the stack is destroyed, matching the retained tables and buckets it
@@ -37,9 +37,9 @@ Use a separate key, owned by the backup or disaster recovery account, for each c
 policy then belongs to the team that owns the copies, and a compromise of the production account cannot
 change it.
 
-For S3 replication of SSE-KMS objects, the replication role needs `kms:Decrypt` on the source key and
+For Amazon S3 replication of SSE-KMS objects, the replication role needs `kms:Decrypt` on the source key and
 `kms:Encrypt` on the replica key, granted both in IAM and in each key policy. If the destination bucket uses
-S3 Bucket Keys, the replica key policy also needs `kms:Decrypt` for the replication role. See
+Amazon S3 Bucket Keys, the replica key policy also needs `kms:Decrypt` for the replication role. See
 [Replicating encrypted objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-config-for-kms-objects.html).
 
 A replica key statement in the destination account:

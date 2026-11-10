@@ -19,13 +19,13 @@ patterns in [Disaster recovery of workloads on AWS](https://docs.aws.amazon.com/
 Set both with your business owner for each kind of event. The table gives indicative values for each
 mechanism; measure your own in drills, because table count, data volume and reindex time dominate.
 
-| Event                                     | Mechanism                                                       | Indicative RPO                                                              | Indicative RTO                           |
-| ----------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- |
-| Bad write or accidental change in a table | DynamoDB PITR restore                                           | Minutes (PITR lags the present by about five minutes)                       | Hours: restore, copy back, reindex       |
-| Failed upgrade or migration               | Pre-change on-demand backups, redeploy of previous version      | Time of the checkpoint                                                      | Hours                                    |
-| Overwritten or deleted files              | S3 Versioning                                                   | Zero for versioned objects                                                  | Minutes to hours                         |
-| Loss of the production account            | AWS Backup copies in a backup account; S3 replicas              | Time of the last copy (daily plan: up to a day; files with S3 RTC: minutes) | Hours to days: new account, deploy, load |
-| Loss of the Region                        | Cross-Region copies and replicas; deployment in a second Region | As above                                                                    | Hours to days, depending on strategy     |
+| Event                                     | Mechanism                                                       | Indicative RPO                                                                     | Indicative RTO                           |
+| ----------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------- |
+| Bad write or accidental change in a table | Amazon DynamoDB PITR restore                                    | Minutes (PITR lags the present by about five minutes)                              | Hours: restore, copy back, reindex       |
+| Failed upgrade or migration               | Pre-change on-demand backups, redeploy of previous version      | Time of the checkpoint                                                             | Hours                                    |
+| Overwritten or deleted files              | Amazon S3 Versioning                                            | Zero for versioned objects                                                         | Minutes to hours                         |
+| Loss of the production account            | AWS Backup copies in a backup account; Amazon S3 replicas       | Time of the last copy (daily plan: up to a day; files with Amazon S3 RTC: minutes) | Hours to days: new account, deploy, load |
+| Loss of the Region                        | Cross-Region copies and replicas; deployment in a second Region | As above                                                                           | Hours to days, depending on strategy     |
 
 ## Strategies
 
@@ -41,7 +41,7 @@ For most VAMS deployments, backup and restore or pilot light meets the objective
     if Region loss is in scope, in a second Region. At recovery, deploy VAMS from your version-controlled
     configuration, load the tables from the copies, restore the files, and reindex.
 -   **Pilot light.** Deploy a second VAMS stack (with a different `baseStackName`) in the recovery Region
-    ahead of time, and replicate the asset, auxiliary and artefacts buckets into its buckets with S3
+    ahead of time, and replicate the asset, auxiliary and artefacts buckets into its buckets with Amazon S3
     Cross-Region Replication. At recovery, load the tables from the latest copy, reindex, and move DNS. This
     removes the deploy and file-copy time from the RTO.
 
@@ -68,7 +68,7 @@ must have bucket names and other resource identifiers rewritten, as in an A/B de
 3. **Prepare the target.** For backup and restore, deploy VAMS at the same release and configuration in the
    recovery account or Region. For pilot light, confirm the standing stack is healthy.
 4. **Restore tables.** Restore each table's recovery point to a temporary table (start them in parallel;
-   DynamoDB limits how many tables can be created at once), stop writes (see
+   Amazon DynamoDB limits how many tables can be created at once), stop writes (see
    [Stop writes while tables are reloaded](backups.md#stop-writes-while-tables-are-reloaded)), then copy the
    items into the deployment's table, rewriting bucket names and other resource identifiers where they
    differ, and compare item counts with the temporary tables before you allow writes again.

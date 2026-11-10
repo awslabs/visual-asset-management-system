@@ -130,7 +130,7 @@ engineVersion: null
 | `build.cdkCli`                                       | `null`                                         | AWS CDK CLI version; `null` is the exact version in the fork's `infra/package-lock.json`, packed into the bundle         |
 | `cdk.qualifier`                                      | `hnb659fds`                                    | CDK bootstrap qualifier                                                                                                  |
 | `engineVersion`                                      | `null`                                         | The `vra` version this ledger is operated with; another version refuses gated actions                                    |
-| `automation`                                         | `mode: agent`                                  | Automation tier and the CodePipeline and GitHub Actions settings ([automation](#automation))                             |
+| `automation`                                         | `mode: agent`                                  | Automation tier and the AWS CodePipeline and GitHub Actions settings ([automation](#automation))                         |
 
 ### stateStore
 

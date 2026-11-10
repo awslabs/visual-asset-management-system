@@ -16,12 +16,12 @@ them on every change.
 VAMS supports these IAM setups through its IAM role customization (see the
 [configuration reference](../configuration-reference.md)). They can be combined.
 
-| Mode                           | How it works                                                                                              | Fits when                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| VAMS creates its roles         | Each deploy creates and updates the roles CloudFormation needs                                            | A dedicated account whose deploy role may create roles                     |
-| Permission boundary and prefix | VAMS creates the roles under a boundary and a name prefix your IT team defines                            | IT allows role creation only under a boundary (for example through an SCP) |
-| Pre-created roles              | IT creates every role before the deploy; VAMS references them by name and creates none                    | Only IT may create IAM roles                                               |
-| Custom bootstrap roles         | IT provides the CDK bootstrap roles (deploy, CloudFormation execution, lookup, asset publishing), or none | The CDK bootstrap template is not allowed as is                            |
+| Mode                           | How it works                                                                                                  | Fits when                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| VAMS creates its roles         | Each deploy creates and updates the roles AWS CloudFormation needs                                            | A dedicated account whose deploy role may create roles                     |
+| Permission boundary and prefix | VAMS creates the roles under a boundary and a name prefix your IT team defines                                | IT allows role creation only under a boundary (for example through an SCP) |
+| Pre-created roles              | IT creates every role before the deploy; VAMS references them by name and creates none                        | Only IT may create IAM roles                                               |
+| Custom bootstrap roles         | IT provides the CDK bootstrap roles (deploy, AWS CloudFormation execution, lookup, asset publishing), or none | The CDK bootstrap template is not allowed as is                            |
 
 :::warning[Permission boundary mode on VAMS v2.6.6 and earlier needs a fork fix]
 In VAMS v2.6.6 and earlier (GitHub issue #431) the `IamRoleTransform` aspect replaces the configured

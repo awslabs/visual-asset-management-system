@@ -45,14 +45,14 @@ CloudTrail to an organization trail in that account.
 
 ## Retention periods to set
 
-| Item                       | Where to set it                               | Consider                                                           |
-| -------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
-| DynamoDB PITR window       | Table setting (VAMS uses the service default) | Detection time for data corruption                                 |
-| AWS Backup recovery points | Backup plan rules                             | Records policy, legal holds                                        |
-| S3 noncurrent versions     | Bucket lifecycle rules                        | Recovery window for overwritten files, storage cost                |
-| S3 replicas                | Replica bucket lifecycle and Object Lock      | Immutability requirements                                          |
-| Log groups                 | Log group retention, archive account          | Audit requirements                                                 |
-| Exports and staged copies  | Staging bucket lifecycle                      | Delete promptly; staged exports are full copies of production data |
+| Item                          | Where to set it                               | Consider                                                           |
+| ----------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
+| Amazon DynamoDB PITR window   | Table setting (VAMS uses the service default) | Detection time for data corruption                                 |
+| AWS Backup recovery points    | Backup plan rules                             | Records policy, legal holds                                        |
+| Amazon S3 noncurrent versions | Bucket lifecycle rules                        | Recovery window for overwritten files, storage cost                |
+| Amazon S3 replicas            | Replica bucket lifecycle and Object Lock      | Immutability requirements                                          |
+| Log groups                    | Log group retention, archive account          | Audit requirements                                                 |
+| Exports and staged copies     | Staging bucket lifecycle                      | Delete promptly; staged exports are full copies of production data |
 
 ## Amazon Cognito
 

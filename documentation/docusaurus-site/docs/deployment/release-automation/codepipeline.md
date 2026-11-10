@@ -11,12 +11,12 @@ The `vra` CLI runs on any host. If your organization standardizes on managed CI/
 provides templates that run the same commands in a pipeline. No template re-implements a gate: every job
 calls `vra`, so switching between an operator host and a pipeline never changes what is allowed.
 
-| Template                                | Use it when                                                                                        |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| AWS CodePipeline and AWS CodeBuild      | Build hosts must run inside your AWS accounts; CodePipeline manual approvals gate each environment |
-| GitHub Actions                          | The fork or the home repository is on GitHub; see [GitHub Actions](github-actions.md)              |
-| GitLab CI                               | The home repository is on GitLab; protected environments with deployment approvals                 |
-| Generic (Jenkins, Azure Pipelines, ...) | Any other CI system, with the generic identity contract                                            |
+| Template                                | Use it when                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| AWS CodePipeline and AWS CodeBuild      | Build hosts must run inside your AWS accounts; AWS CodePipeline manual approvals gate each environment |
+| GitHub Actions                          | The fork or the home repository is on GitHub; see [GitHub Actions](github-actions.md)                  |
+| GitLab CI                               | The home repository is on GitLab; protected environments with deployment approvals                     |
+| Generic (Jenkins, Azure Pipelines, ...) | Any other CI system, with the generic identity contract                                                |
 
 Operators and pipelines can be mixed: a scheduled watch in CI, promotions from an operator host, or the
 reverse. They share one [shared home](shared-home.md), so they see the same runs, locks and history.
@@ -63,7 +63,7 @@ no `manifestSha256`; for those builds the bundle's own `manifest.sha256` is the 
 `vra --json ledger graph` defines the job graph. No template reads `env.yaml` itself, so no CI file can
 disagree with the engine about a gate:
 
--   **CodePipeline**: one stage per depth of the promotion graph, siblings in parallel, a manual approval
+-   **AWS CodePipeline**: one stage per depth of the promotion graph, siblings in parallel, a manual approval
     only before environments that require one. The Validate stage fails when the ledger's topology changed
     since the pipeline was deployed.
 -   **GitHub Actions, GitLab CI, generic**: `ci_graph.py render --platform github|gitlab|generic` prints the
@@ -95,10 +95,10 @@ flowchart LR
 ```
 
 The [`cicd/pipeline/`](https://github.com/awslabs/visual-asset-management-system/tree/main/tools/VamsReleaseAutomation/cicd/pipeline)
-AWS CDK app creates, in the tools account, the release and preview pipelines, one CodeBuild project pair
+AWS CDK app creates, in the tools account, the release and preview pipelines, one AWS CodeBuild project pair
 per environment (deploy projects run one build at a time), the scheduled watch, an AWS KMS key for
 artifacts and logs, and notifications. It applies the cdk-nag AwsSolutions checks; its tests fail on any
-unsuppressed finding. CodeBuild projects run as one IAM role per trust tier, and each environment's
+unsuppressed finding. AWS CodeBuild projects run as one IAM role per trust tier, and each environment's
 deploy role trusts only its own tier:
 
 | Tier role                             | Projects                                        | May assume                                  |
@@ -112,13 +112,13 @@ deploy role trusts only its own tier:
 
 The schedule and the build (which runs `npm ci`, unit suites and customer code in privileged Docker) hold
 no credential that can deploy a gated environment; the pipeline's tests assert it. Only the watch tier may
-write the S3 sources and start the pipelines, so the preview lane's upstream code cannot replace the
+write the Amazon S3 sources and start the pipelines, so the preview lane's upstream code cannot replace the
 release source.
 
 Every environment the pipeline runs therefore needs `deployRoleArn` in its `env.yaml` (IT deploys
 `vra-deploy-role.yaml` as `vra-deploy-<env>`, trusting that environment's tier role), plus
 `synthRoleArn` and, for isolated tests, `testRoleArn` (the same template with `CreateSynthRole=true` and
-`CreateTestRole=true`). A local profile or ambient credentials do not exist inside CodeBuild, so
+`CreateTestRole=true`). A local profile or ambient credentials do not exist inside AWS CodeBuild, so
 `vra ledger validate` refuses an environment the pipeline runs without `deployRoleArn`.
 
 ### Plan and deploy the pipeline with vra
@@ -154,21 +154,21 @@ plan` writes `state/iam/pipeline/<n>/`, and with `iamRoles.mode: precreated` a r
 | `codecommit`                                                                                       | An AWS CodeCommit repository that mirrors the fork, where CodeCommit is offered                                                                                                                                        |
 | `s3`                                                                                               | Without `bucketName` the stack creates an encrypted, versioned bucket that `vra pipeline push-source` feeds; with `bucketName`, your git host's CI uploads and the pipeline polls                                      |
 
-The `vra` package itself is a second source (`sources.vra`), usually an S3 object uploaded with
+The `vra` package itself is a second source (`sources.vra`), usually an Amazon S3 object uploaded with
 `vra pipeline push-source --package`. In `pipeline+actions` the fork source does not start executions on
 push; the GitHub hand-off starts each one for the commit that passed its checks.
 
 In AWS GovCloud (US) and the AWS European Sovereign Cloud, check the availability of CodeConnections (and the
-provider you need), CodeCommit, Amazon EventBridge Scheduler, CodePipeline V2 and the CodeBuild image before
-choosing a source. The `s3` source fed by `vra pipeline push-source` needs only Amazon S3, CodePipeline and
-CodeBuild. Keep the tools account in the partition of the environments.
+provider you need), CodeCommit, Amazon EventBridge Scheduler, AWS CodePipeline V2 and the AWS CodeBuild image before
+choosing a source. The `s3` source fed by `vra pipeline push-source` needs only Amazon S3, AWS CodePipeline and
+AWS CodeBuild. Keep the tools account in the partition of the environments.
 
 ### Dev ownership
 
 Pick one owner for `dev` deploys. In the pipeline tiers the scheduled `vra-watch` project runs `sync-merge`:
 `vra sync` detects new upstream release tags and development commits, `vra merge` opens the release lane's
 sync pull request (its merge into the trunk starts the release pipeline) or merges the preview lane (which
-starts the preview pipeline), and `vra pipeline push-source` feeds S3 sources. It never deploys.
+starts the preview pipeline), and `vra pipeline push-source` feeds Amazon S3 sources. It never deploys.
 
 ### Failed tests and parked runs
 
@@ -190,14 +190,14 @@ starts the preview pipeline), and `vra pipeline push-source` feeds S3 sources. I
 
 ### Trust tiers
 
-| Tier role          | Runs                                                      | May assume                 | Writes the S3 sources, starts pipelines |
-| ------------------ | --------------------------------------------------------- | -------------------------- | --------------------------------------- |
-| `BuildRole`        | unit suites, synth, bundle                                | `vra-synth-<env>` only     | no                                      |
-| `DevRole`          | Validate, ungated root environments                       | their `vra-deploy-<env>`   | no                                      |
-| `PreviewRole`      | dev-preview deploy and test (upstream `development` code) | `vra-deploy-<dev-preview>` | no                                      |
-| `WatchRole`        | the scheduled `sync-merge`, `vra pipeline push-source`    | none                       | yes (bucket policy: only this role)     |
-| `DeployRole-<env>` | deploy and promote of one environment                     | its `vra-deploy-<env>`     | no                                      |
-| `TestRole-<env>`   | isolated live tests                                       | its `vra-test-<env>`       | no                                      |
+| Tier role          | Runs                                                      | May assume                 | Writes the Amazon S3 sources, starts pipelines |
+| ------------------ | --------------------------------------------------------- | -------------------------- | ---------------------------------------------- |
+| `BuildRole`        | unit suites, synth, bundle                                | `vra-synth-<env>` only     | no                                             |
+| `DevRole`          | Validate, ungated root environments                       | their `vra-deploy-<env>`   | no                                             |
+| `PreviewRole`      | dev-preview deploy and test (upstream `development` code) | `vra-deploy-<dev-preview>` | no                                             |
+| `WatchRole`        | the scheduled `sync-merge`, `vra pipeline push-source`    | none                       | yes (bucket policy: only this role)            |
+| `DeployRole-<env>` | deploy and promote of one environment                     | its `vra-deploy-<env>`     | no                                             |
+| `TestRole-<env>`   | isolated live tests                                       | its `vra-test-<env>`       | no                                             |
 
 Setup steps and the three-environment example are in the
 [pipeline README](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/cicd/pipeline/README.md).
@@ -206,7 +206,7 @@ Setup steps and the three-environment example are in the
 
 GitHub Enterprise Cloud and GitHub Enterprise Server have their own page: pull request checks and security
 scans in the fork, `deploy.yml` and the upstream workflows in the home repository, OpenID Connect (OIDC)
-roles per GitHub environment, and the hand-off to CodePipeline. See [GitHub Actions](github-actions.md).
+roles per GitHub environment, and the hand-off to AWS CodePipeline. See [GitHub Actions](github-actions.md).
 
 ## GitLab CI
 
@@ -245,18 +245,18 @@ Every template turns the platform's own approval of this run into a `vra` approv
 [`approval_record.py`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/cicd/codebuild/scripts/approval_record.py),
 bound to the run (`source`), scoped to `promote` (`deploy` for a gated root) and valid for 24 hours.
 
-| Template     | Approver                                                                                           | Initiator                 | Binding (`source`)                      |
-| ------------ | -------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------- |
-| CodePipeline | The approval action's `updatedBy` in this execution (`ListActionExecutions` filtered by execution) | The execution's trigger   | `codepipeline:<pipeline>/<executionId>` |
-| GitHub       | A required reviewer of this run other than the triggering actor                                    | `GITHUB_TRIGGERING_ACTOR` | `github:<repo>/actions/runs/<id>`       |
-| GitLab       | A user who approved this deployment (Deployments API), never the user who played the job           | `GITLAB_USER_LOGIN`       | `gitlab:<project>/pipelines/<id>`       |
-| Generic      | Passed with `--approver` from the CI's approval step, never a run parameter                        | `VRA_INITIATOR`           | `VRA_RUN_REF`                           |
+| Template         | Approver                                                                                           | Initiator                 | Binding (`source`)                      |
+| ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------- |
+| AWS CodePipeline | The approval action's `updatedBy` in this execution (`ListActionExecutions` filtered by execution) | The execution's trigger   | `codepipeline:<pipeline>/<executionId>` |
+| GitHub           | A required reviewer of this run other than the triggering actor                                    | `GITHUB_TRIGGERING_ACTOR` | `github:<repo>/actions/runs/<id>`       |
+| GitLab           | A user who approved this deployment (Deployments API), never the user who played the job           | `GITLAB_USER_LOGIN`       | `gitlab:<project>/pipelines/<id>`       |
+| Generic          | Passed with `--approver` from the CI's approval step, never a run parameter                        | `VRA_INITIATOR`           | `VRA_RUN_REF`                           |
 
 The approver may add `scope: emergency`, `accept-drift` or `allow-replacements` in the approval comment
 (`ticket: CHG-1234; scope: emergency; notes: ...`). Restores, data copies and gated rollbacks are operator
 workflows run by a person with the home; a CI approval comment that asks for those scopes is refused. A CI
 deploy outside the change window stops with exit `20`; schedule the release inside the window. List
-approvers in `env.yaml` the way the platform records them; CodePipeline records an assumed-role ARN, so
+approvers in `env.yaml` the way the platform records them; AWS CodePipeline records an assumed-role ARN, so
 list those as ARNs or ARN globs.
 
 Human-only actions never run from a release job. The operator templates (`vra-operator.yml`, the GitLab
@@ -284,7 +284,7 @@ through the configured channel.
 
 ## Concurrency
 
-One job per environment at a time on every template: CodeBuild deploy projects run one build at a time,
+One job per environment at a time on every template: AWS CodeBuild deploy projects run one build at a time,
 GitHub uses the concurrency group `vra-env-<env>`, GitLab the `resource_group` `vra-<env>`, Jenkins
 `lock('vra-env-<env>')`. The `vra` environment lock is the second guard: every deploy step passes
 `--lock-wait` (`VRA_LOCK_WAIT_MINUTES`, default 30), so a lock an operator or another job holds is waited
@@ -312,13 +312,13 @@ Without internet egress:
 -   set `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL` and `UV_INDEX_URL` to an AWS CodeArtifact or internal mirror;
 -   mirror the upstream VAMS repository and point `vra.yaml` `upstream.url` at it;
 -   make the IAM endpoint reachable from the job (preflight runs `iam:SimulatePrincipalPolicy`) and run
-    CodeBuild projects in a VPC with the endpoints they need.
+    AWS CodeBuild projects in a VPC with the endpoints they need.
 
 ## Private API endpoints
 
 With `api.apiGatewayRest.endpointType: PRIVATE` in an environment's overlay, the VAMS API is reachable
 only inside its VPC. Set `liveTest.runner: in-vpc` in its `env.yaml`, and run that environment's live
-suites and customer hooks there: CodeBuild projects in the VPC with the `execute-api` VPC endpoint, or a
+suites and customer hooks there: AWS CodeBuild projects in the VPC with the `execute-api` VPC endpoint, or a
 self-hosted runner or agent inside it. Deploys call only AWS APIs and work from outside.
 
 ## Which identity runs what
@@ -348,7 +348,7 @@ AWS caps a role session obtained by role chaining (the CI role assuming `vra-dep
 and a VAMS deploy can take longer. `vra` never hands `cdk` static keys for a role-based environment: it
 writes a run-scoped AWS config profile whose `credential_process` runs `vra credential-process`, which
 assumes the role again whenever the credentials expire. Only the engine's own child processes can use it.
-Its own AWS calls use refreshable credentials too. The CI job's base identity (the CodeBuild service role
+Its own AWS calls use refreshable credentials too. The CI job's base identity (the AWS CodeBuild service role
 or the OIDC role) is not chained, so give it a session that outlives the longest run (OIDC roles allow up
 to 12 hours with `MaxSessionDuration`). `refreshCredentials: false` in `env.yaml` falls back to static keys.
 
@@ -361,7 +361,7 @@ with the [patched bootstrap template](prerequisites.md#cdk-bootstrap). If the CI
 source identity on the CI role session, it persists and `vra`'s value must match it.
 
 With `build.signing`, give the build job's identity `kms:Sign` on the key and every deploying identity only
-`kms:Verify` and `kms:GetPublicKey`: CodePipeline config `signingKeyArn`; OIDC role parameters
+`kms:Verify` and `kms:GetPublicKey`: AWS CodePipeline config `signingKeyArn`; OIDC role parameters
 `SigningKeyArn` on every CI role and `AllowSigning=true` on the build role only.
 
 ## Related pages

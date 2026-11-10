@@ -37,7 +37,7 @@ organizational security standards.
     granted. Where IT creates or bounds every IAM role, writes the full list of roles and policies VAMS
     needs, wires the names IT returns into the configuration, and stops a build that needs new roles.
 -   Runs from an operator or AI agent, from AWS CodePipeline, or with GitHub Actions in front of
-    CodePipeline, with the same gates in each.
+    AWS CodePipeline, with the same gates in each.
 
 ## Concepts
 
@@ -111,7 +111,7 @@ the first step that is not done, and re-checks every gate. See
 
 `automation.mode` in `vra.yaml` records who drives the release: `agent` (an operator or AI agent runs
 `vra`), `hybrid` (CI runs the watch, the build and dev; people promote), `pipeline` (AWS CodePipeline end
-to end) or `pipeline+actions` (GitHub Actions for checks and scans, CodePipeline for deploys). See
+to end) or `pipeline+actions` (GitHub Actions for checks and scans, AWS CodePipeline for deploys). See
 [Automation tiers](automation-tiers.md).
 
 ### Engine and agent

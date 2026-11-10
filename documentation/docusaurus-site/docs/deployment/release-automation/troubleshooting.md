@@ -103,7 +103,7 @@ A lock can be left behind when the host running `vra` is killed. Before you rele
 environment is in an `*_IN_PROGRESS` state. Prefer `vra resume <run-id>` on the machine that started the
 run; only when the run cannot be resumed, run
 `vra unlock --env <env> --run <run-id> --reason "<why>"` (human-only, recorded in the history). Never
-release a lock while a CloudFormation update is in progress.
+release a lock while an AWS CloudFormation update is in progress.
 
 A stopped CI build leaves the run lock of a build run, which belongs to no environment. Without a
 terminal, `vra --human-approval approvals/<env>/<record>.yaml resume <build-run-id> --takeover` takes it
@@ -143,11 +143,11 @@ These apply to environments whose `iam.mode` is not `standard`
     and list it in `core-patches.md`, or use `iam.mode: precreated`. Never deploy the build unbounded.
 -   **A first `precreated` deploy fails with "`<prefix>...-frameworkonEvent-...` is not authorized to perform:
     `lambda:GetFunction`" on a function named like `vams-core-<base>-us-east--<Logical>-<random>`.** The core
-    stack name is longer than 25 characters, and CloudFormation keeps only 25 of them in a generated Lambda
+    stack name is longer than 25 characters, and AWS CloudFormation keeps only 25 of them in a generated Lambda
     name. IAM packages planned by vra before 0.5.0's fix granted `function:<core stack>*`, which matches no such
     function. Run `vra iam plan --env <env>` again (the new package grants `function:<first 25 characters>*`),
     have IT apply it, then `vra iam apply` and resume. The IT request of the failed run names one exact function
-    that CloudFormation deleted on rollback; use the new package instead.
+    that AWS CloudFormation deleted on rollback; use the new package instead.
 -   **A `precreated` deploy or teardown of a pipeline registration fails with "`<prefix>...-frameworkonEvent-...`
     is not authorized to perform: `lambda:GetFunction`" on `importGlobalPipelineWorkflow`, often as
     `ROLLBACK_FAILED`.** IAM packages planned by vra before this 0.5.0 fix granted the provider role
@@ -221,12 +221,12 @@ These apply to environments whose `iam.mode` is not `standard`
     or the plan was made `--offline`. Run `vra pipeline plan` again.
 -   **The CodeConnections source stays failed.** A connection the stack created is `PENDING` until a person
     completes the handshake in the console.
--   **Validate stops `BLOCKED_ON_IT` with the CodeBuild tier role as the principal.** The environment has
+-   **Validate stops `BLOCKED_ON_IT` with the AWS CodeBuild tier role as the principal.** The environment has
     no `deployRoleArn`, so the job ran as its tier role, which may only assume `vra-deploy-<env>`. Do not
     widen the tier role: have IT deploy `vra-deploy-role.yaml` for the environment and set `deployRoleArn`
     (current versions refuse this in `vra ledger validate`).
--   **Build exits `2`: "cannot resolve '<id>' in the fork" with an S3 fork source.** The zip was uploaded
-    by an older `vra pipeline push-source` without `.vra-revision`, so the build took the S3 version id as
+-   **Build exits `2`: "cannot resolve '<id>' in the fork" with an Amazon S3 fork source.** The zip was uploaded
+    by an older `vra pipeline push-source` without `.vra-revision`, so the build took the Amazon S3 version id as
     the ref. Run `vra pipeline push-source` again (it uploads such an object once more) and redeploy the
     pipeline from the current package.
 -   **The post-deploy smoke fails with "vamscli not found".** Neither the deployed build's bundle nor the
@@ -241,7 +241,7 @@ These apply to environments whose `iam.mode` is not `standard`
     job. Update the engine package (`vra pipeline push-source --package`); the post-deploy smoke now reads
     with the deploy role. Do not add the deploy job to the test role's trust.
 -   **The first deploy of a new environment stops at the smoke: "cannot read the live-test secret".** A fresh
-    stack has no smoke user yet. Once the stack's Cognito user pool exists, create the user and store
+    stack has no smoke user yet. Once the stack's Amazon Cognito user pool exists, create the user and store
     `{"username", "password"}` as the secret named in `liveTest.auth.secret` (`vra/<baseStackName>/...`),
     then retry the pipeline action (or `vra resume <run-id>`); the run continues at the smoke. A denied
     read parks the run with an IT request instead.
@@ -257,11 +257,11 @@ Treat it as an incident for that environment.
 2. **Read the state.** `vra status <run-id>` and the step logs show whether the redeploy, the data
    restore or the smoke failed.
 3. **Check the stacks.** A stack in `UPDATE_ROLLBACK_FAILED` needs `continue-update-rollback` in AWS
-   CloudFormation, possibly skipping the failed resources. Resolve the cause first (often a resource
-   changed outside CloudFormation, or a missing permission). A failed first install left in
+   AWS CloudFormation, possibly skipping the failed resources. Resolve the cause first (often a resource
+   changed outside AWS CloudFormation, or a missing permission). A failed first install left in
    `ROLLBACK_FAILED` has to be deleted before the next deploy. When `cdk deploy` itself leaves a stack in
    one of these states, the run's message names the stuck stack and the first failure (for example an
-   account quota), and lists any permission errors that blocked CloudFormation's rollback. Granting
+   account quota), and lists any permission errors that blocked AWS CloudFormation's rollback. Granting
    those permissions alone does not make the deploy succeed: fix the first failure as well.
 4. **Check the data.** If a migration ran, data may be in the new shape while the code is old. Restore
    the run's checkpoint (`vra restore --env <env> --checkpoint <id> --approval <id|path>`), or restore

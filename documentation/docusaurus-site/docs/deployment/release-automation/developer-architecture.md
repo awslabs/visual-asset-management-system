@@ -93,13 +93,13 @@ so its lock is kept on failure.
 
 `state.Backend` gives every command one interface over two implementations.
 
-| Record          | Shared home (`home`)                                        | Amazon S3 and Amazon DynamoDB (`s3`)                            |
-| --------------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
-| Run state       | `state/runs/<run>/state.json`, `rev` compared under a flock | S3 object, `If-Match` on the ETag; `If-None-Match: *` to create |
-| Locks           | `state/locks/<key>.lock`, O_EXCL under a per-key flock      | DynamoDB item, conditional write on `ver`                       |
-| History         | `state/history/<env>/<seq>-<run>.json`, create-only         | S3 object per record, create-only                               |
-| Approval claims | `state/approvals-consumed/<env>/<sha256>.json`, create-only | S3 object, create-only                                          |
-| Bundles         | `artifacts/<buildId>/`                                      | S3, create-only upload                                          |
+| Record          | Shared home (`home`)                                        | Amazon S3 and Amazon DynamoDB (`s3`)                                   |
+| --------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Run state       | `state/runs/<run>/state.json`, `rev` compared under a flock | Amazon S3 object, `If-Match` on the ETag; `If-None-Match: *` to create |
+| Locks           | `state/locks/<key>.lock`, O_EXCL under a per-key flock      | Amazon DynamoDB item, conditional write on `ver`                       |
+| History         | `state/history/<env>/<seq>-<run>.json`, create-only         | Amazon S3 object per record, create-only                               |
+| Approval claims | `state/approvals-consumed/<env>/<sha256>.json`, create-only | Amazon S3 object, create-only                                          |
+| Bundles         | `artifacts/<buildId>/`                                      | Amazon S3, create-only upload                                          |
 
 Within a machine, decisions are serialized by flock mutexes in `.vra-local/`. Between machines, the home
 is pulled before a read and published after a write; a rejected push raises `Contention` (a

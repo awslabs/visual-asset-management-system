@@ -29,14 +29,14 @@ permission changes outside a change window.
 
 ## Data protection
 
-| Signal               | Source                                                                                | Alarm on                                                            |
-| -------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Backup job failures  | AWS Backup job events in Amazon EventBridge, or AWS Backup Audit Manager              | Any failed or expired backup or copy job                            |
-| PITR disabled        | AWS Config rule for DynamoDB PITR, or a scheduled `describe-continuous-backups` check | Any VAMS table without PITR                                         |
-| Versioning suspended | AWS Config rule for S3 versioning                                                     | Any VAMS data bucket                                                |
-| Replication lag      | S3 Replication metrics (with S3 RTC)                                                  | Latency above your file recovery point objective; operations failed |
-| Key state            | AWS KMS key state changes in AWS CloudTrail                                           | `DisableKey` or `ScheduleKeyDeletion` on a VAMS key                 |
-| Restore drill age    | Your drill records                                                                    | No successful drill within the planned interval                     |
+| Signal               | Source                                                                                       | Alarm on                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Backup job failures  | AWS Backup job events in Amazon EventBridge, or AWS Backup Audit Manager                     | Any failed or expired backup or copy job                            |
+| PITR disabled        | AWS Config rule for Amazon DynamoDB PITR, or a scheduled `describe-continuous-backups` check | Any VAMS table without PITR                                         |
+| Versioning suspended | AWS Config rule for Amazon S3 versioning                                                     | Any VAMS data bucket                                                |
+| Replication lag      | Amazon S3 Replication metrics (with Amazon S3 RTC)                                           | Latency above your file recovery point objective; operations failed |
+| Key state            | AWS KMS key state changes in AWS CloudTrail                                                  | `DisableKey` or `ScheduleKeyDeletion` on a VAMS key                 |
+| Restore drill age    | Your drill records                                                                           | No successful drill within the planned interval                     |
 
 ## Change and drift
 

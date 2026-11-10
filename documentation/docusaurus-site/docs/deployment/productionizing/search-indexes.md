@@ -13,7 +13,7 @@ restore or a migration.
 
 ## Recovery approach
 
-Treat the DynamoDB tables and Amazon S3 buckets as the source of truth and rebuild the indexes from them.
+Treat the Amazon DynamoDB tables and Amazon S3 buckets as the source of truth and rebuild the indexes from them.
 A rebuild always produces indexes that match the restored data, which a snapshot taken at a different
 moment does not. Use service snapshots for faster recovery of the search layer alone, when the tables and
 buckets were not affected.
@@ -29,7 +29,7 @@ buckets were not affected.
 ## Reindex from source
 
 VAMS includes a reindex utility in `infra/deploymentDataMigration/tools/reindex_utility.py`. It reads asset
-records from DynamoDB and file objects from Amazon S3 and rebuilds the asset and file indexes.
+records from Amazon DynamoDB and file objects from Amazon S3 and rebuilds the asset and file indexes.
 
 | Mode               | How it runs                                                  | When to use                                                                      |
 | ------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
@@ -61,7 +61,7 @@ that case, reindex from source.
 A provisioned domain [takes hourly automated snapshots and keeps up to 336 of them for 14 days](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/managedomains-snapshots.html).
 Automated snapshots are for recovering the same domain. To move indexes to another domain or keep them
 longer, register an Amazon S3 snapshot repository and take manual snapshots, which are stored in your
-bucket and billed at standard S3 rates.
+bucket and billed at standard Amazon S3 rates.
 
 ## Related pages
 

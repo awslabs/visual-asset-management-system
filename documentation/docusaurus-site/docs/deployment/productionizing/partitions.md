@@ -27,14 +27,14 @@ feature in this guide in your target partition and Region before relying on it.
 
 ## AWS GovCloud (US)
 
-| Topic                  | Note                                                                                                                                                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Configuration template | The GovCloud template uses an Application Load Balancer for the web application, FIPS endpoints, a VPC, AWS KMS customer-managed key encryption and provisioned OpenSearch. Review the template at your VAMS release for the current values |
-| Recovery Region        | The partition has two Regions, AWS GovCloud (US-West) and AWS GovCloud (US-East). AWS Backup supports cross-Region copy between these two Regions only                                                                                      |
-| AWS Backup             | At the time of writing, the feature table lists cross-account copy and management for GovCloud, and does not list restore testing; verify in the partition before you plan automated restore tests                                          |
-| Amazon Cognito         | VAMS does not use the Cognito Plus feature plan in GovCloud and uses the version of the pre-token generation trigger available there, so claims are added to ID tokens. An external identity provider is the stronger choice for production |
-| Amazon EventBridge     | Event buses do not support customer-managed keys in this partition; VAMS uses the default encryption for its orchestration bus                                                                                                              |
-| A/B deployments        | Because the Application Load Balancer path names some resources after the domain host, an A/B deployment on this path needs a longer cutover window. See [Update the solution](../../deployment/update-the-solution.md)                     |
+| Topic                  | Note                                                                                                                                                                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configuration template | The GovCloud template uses an Application Load Balancer for the web application, FIPS endpoints, a VPC, AWS KMS customer-managed key encryption and provisioned OpenSearch. Review the template at your VAMS release for the current values        |
+| Recovery Region        | The partition has two Regions, AWS GovCloud (US-West) and AWS GovCloud (US-East). AWS Backup supports cross-Region copy between these two Regions only                                                                                             |
+| AWS Backup             | At the time of writing, the feature table lists cross-account copy and management for GovCloud, and does not list restore testing; verify in the partition before you plan automated restore tests                                                 |
+| Amazon Cognito         | VAMS does not use the Amazon Cognito Plus feature plan in GovCloud and uses the version of the pre-token generation trigger available there, so claims are added to ID tokens. An external identity provider is the stronger choice for production |
+| Amazon EventBridge     | Event buses do not support customer-managed keys in this partition; VAMS uses the default encryption for its orchestration bus                                                                                                                     |
+| A/B deployments        | Because the Application Load Balancer path names some resources after the domain host, an A/B deployment on this path needs a longer cutover window. See [Update the solution](../../deployment/update-the-solution.md)                            |
 
 ## AWS European Sovereign Cloud
 
@@ -44,7 +44,7 @@ feature in this guide in your target partition and Region before relying on it.
 | Recovery Region        | Verify which Regions are available to you in the partition. At the time of writing, the AWS Backup feature table lists one Region in the partition and does not list cross-Region backup copy for it, so plan cross-account copies within the Region and confirm options for a second location with AWS |
 | AWS Backup             | At the time of writing, the feature table lists Amazon S3 support and cross-account copy and management, and does not list restore testing or AWS Backup Audit Manager; verify in the partition                                                                                                         |
 | Amazon EventBridge     | Event buses do not support customer-managed keys in this partition; VAMS uses the default encryption for its orchestration bus                                                                                                                                                                          |
-| Other services         | Verify S3 Replication Time Control, S3 Batch Replication, OpenSearch Serverless snapshots and Amazon Cognito features in the partition before relying on them                                                                                                                                           |
+| Other services         | Verify Amazon S3 Replication Time Control, Amazon S3 Batch Replication, OpenSearch Serverless snapshots and Amazon Cognito features in the partition before relying on them                                                                                                                             |
 
 ## Related pages
 

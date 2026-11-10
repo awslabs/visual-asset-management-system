@@ -53,7 +53,7 @@ and copies the items back into the CDK-owned table instead of replacing it:
    the checkpoint's. An object whose latest version already has the recorded ETag and size is not copied
    again.
 8. **Settle**: waits `writeFreeze.settleSeconds` (default 60) until the item counts are stable, and
-   reports the rows VAMS's own S3 event processing wrote in response to the rolled-back objects
+   reports the rows VAMS's own Amazon S3 event processing wrote in response to the rolled-back objects
    (`derivedWrites`; reported, not undone).
 9. The freeze is lifted, the Amazon OpenSearch Service indexes are rebuilt with the VAMS reindex utility,
    the temporary tables are deleted, and the history record is written.
@@ -190,7 +190,7 @@ with `cdk deploy` of the previous version.
 | Data migration that rewrites records       | The older build's code expects the older shape                                          | Restore the checkpoint, then redeploy the older build                           |
 | Resource replacement that discards data    | The old resource and its data are gone                                                  | Restore from the checkpoint or from PITR                                        |
 
-The data-protection gate flags Cognito schema and retention-policy changes; review the diff report and
+The data-protection gate flags Amazon Cognito schema and retention-policy changes; review the diff report and
 the VAMS release notes before you approve a promotion, and prefer A/B for schema-class changes.
 
 ## Related pages

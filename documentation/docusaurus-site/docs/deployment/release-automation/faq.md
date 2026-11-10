@@ -73,7 +73,7 @@ No. Amazon Cognito user pool schema changes and some data migrations are forward
 in-place deploy whose `cdk diff` replaces or removes a data-bearing resource (override with
 `--allow-replacements`, or use `--mode ab`), and stops before any migration whose upgrade-matrix entry
 lists manual steps until you confirm with `vra resume <run-id> --confirm`. The diff report also flags
-Cognito user pool schema changes and changed deletion/replace policies on data resources. Other
+Amazon Cognito user pool schema changes and changed deletion/replace policies on data resources. Other
 forward-only changes are not detected automatically; review the diff report and release notes before
 approving. See [Backups, restore and migrations](backups-restore-and-migrations.md#forward-only-changes).
 

@@ -12,19 +12,19 @@ production account or Region.
 
 ## What to back up
 
-| Data                                                           | Store                                               | Primary protection                  | Independent copy                                            |
-| -------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------- |
-| Databases, assets, metadata, permissions, pipelines, workflows | Amazon DynamoDB tables                              | Point-in-time recovery              | AWS Backup, on-demand backups, exports                      |
-| Asset files, previews, auxiliary files                         | Asset and auxiliary Amazon S3 buckets               | S3 Versioning                       | AWS Backup for Amazon S3, S3 replication                    |
-| Pipeline registration bundles, notebooks                       | Artefacts Amazon S3 bucket                          | S3 Versioning                       | AWS Backup for Amazon S3, S3 replication                    |
-| Search indexes                                                 | Amazon OpenSearch Service                           | Rebuilt from DynamoDB and Amazon S3 | Service snapshots (see [Search indexes](search-indexes.md)) |
-| Users and groups                                               | Amazon Cognito user pool                            | None built in                       | User export (see [Identity](identity.md))                   |
-| Deployment configuration                                       | `infra/config/config.json` and custom configuration | Your version control                | Your version control                                        |
+| Data                                                           | Store                                               | Primary protection                         | Independent copy                                            |
+| -------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- |
+| Databases, assets, metadata, permissions, pipelines, workflows | Amazon DynamoDB tables                              | Point-in-time recovery                     | AWS Backup, on-demand backups, exports                      |
+| Asset files, previews, auxiliary files                         | Asset and auxiliary Amazon S3 buckets               | Amazon S3 Versioning                       | AWS Backup for Amazon S3, Amazon S3 replication             |
+| Pipeline registration bundles, notebooks                       | Artefacts Amazon S3 bucket                          | Amazon S3 Versioning                       | AWS Backup for Amazon S3, Amazon S3 replication             |
+| Search indexes                                                 | Amazon OpenSearch Service                           | Rebuilt from Amazon DynamoDB and Amazon S3 | Service snapshots (see [Search indexes](search-indexes.md)) |
+| Users and groups                                               | Amazon Cognito user pool                            | None built in                              | User export (see [Identity](identity.md))                   |
+| Deployment configuration                                       | `infra/config/config.json` and custom configuration | Your version control                       | Your version control                                        |
 
-The DynamoDB tables and the Amazon S3 buckets are the system of record. Everything else is either
+The Amazon DynamoDB tables and the Amazon S3 buckets are the system of record. Everything else is either
 derived from them (search indexes) or held outside VAMS (configuration).
 
-## DynamoDB point-in-time recovery
+## Amazon DynamoDB point-in-time recovery
 
 VAMS enables [point-in-time recovery](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery_Howitworks.html)
 (PITR) on every table it creates. PITR keeps continuous backups for a recovery period of 1 to 35 days,
@@ -39,7 +39,7 @@ aws dynamodb describe-continuous-backups --table-name <TABLE_NAME> \
     --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription'
 ```
 
-When a table with PITR enabled is deleted, DynamoDB keeps a system backup of it for 35 days, which can be
+When a table with PITR enabled is deleted, Amazon DynamoDB keeps a system backup of it for 35 days, which can be
 restored to the state at deletion.
 
 :::note[PITR is not an off-account backup]
@@ -67,11 +67,11 @@ for TABLE in $(aws ssm get-parameters-by-path --path "${PREFIX}/dynamoTables" --
 done
 ```
 
-DynamoDB backup names allow letters, digits, `_`, `-` and `.` and are limited in length; shorten the
+Amazon DynamoDB backup names allow letters, digits, `_`, `-` and `.` and are limited in length; shorten the
 name if a long table name exceeds it.
 
 Record the checkpoint name with the change record. Also record the current object versions in the asset,
-auxiliary and artefacts buckets (for example with an S3 Inventory report, see
+auxiliary and artefacts buckets (for example with an Amazon S3 Inventory report, see
 [Amazon S3 data protection](s3-data-protection.md#inventory)), so objects can be restored to the same
 moment.
 
@@ -88,15 +88,15 @@ backups with retention rules, central monitoring, and copies to another account 
 
 | Plan rule | Suggested setting                                                                                   |
 | --------- | --------------------------------------------------------------------------------------------------- |
-| Resources | VAMS DynamoDB tables and the asset, auxiliary and artefacts buckets, selected by tag or ARN         |
+| Resources | VAMS Amazon DynamoDB tables and the asset, auxiliary and artefacts buckets, selected by tag or ARN  |
 | Frequency | Daily, plus weekly or monthly rules for longer retention                                            |
 | Retention | Set to your records policy; keep at least one recovery point older than your longest detection time |
 | Copy      | To a vault in a separate backup account, and optionally to a second Region                          |
 | Vault     | Encrypted with an AWS KMS key owned by the backup account                                           |
 
-Cross-account and cross-Region copy of DynamoDB backups requires the
-[AWS Backup advanced features for DynamoDB](https://docs.aws.amazon.com/aws-backup/latest/devguide/advanced-ddb-backup.html)
-to be enabled. Amazon S3 support in AWS Backup requires S3 Versioning, which VAMS enables on its data
+Cross-account and cross-Region copy of Amazon DynamoDB backups requires the
+[AWS Backup advanced features for Amazon DynamoDB](https://docs.aws.amazon.com/aws-backup/latest/devguide/advanced-ddb-backup.html)
+to be enabled. Amazon S3 support in AWS Backup requires Amazon S3 Versioning, which VAMS enables on its data
 buckets. Feature availability differs by resource type and Region; check the
 [AWS Backup feature availability](https://docs.aws.amazon.com/aws-backup/latest/devguide/backup-feature-availability.html)
 table for your Regions before you design copies.
@@ -118,8 +118,8 @@ settings are confirmed.
 
 ## Exports for long-term archive
 
-[DynamoDB export to Amazon S3](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.HowItWorks.html)
-writes a table's data to an S3 bucket from its PITR backup, without consuming table read capacity, and can
+[Amazon DynamoDB export to Amazon S3](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.HowItWorks.html)
+writes a table's data to an Amazon S3 bucket from its PITR backup, without consuming table read capacity, and can
 write to a bucket in another account or Region. Exports are useful for archives, analysis and data copies
 between environments. They are not a direct restore path: loading an export back into a VAMS-managed table
 requires a write process, because the table already exists.
@@ -131,7 +131,7 @@ requires a write process, because the table already exists.
 | Bad writes in the last 35 days       | PITR restore to a new table at a time just before the bad write         |
 | Roll back a failed change            | Restore the pre-change on-demand backup to a new table                  |
 | Account or Region loss               | Restore from the AWS Backup copy in the backup account or second Region |
-| Single object overwritten or deleted | Restore the previous S3 object version                                  |
+| Single object overwritten or deleted | Restore the previous Amazon S3 object version                           |
 
 Because AWS CloudFormation owns the VAMS tables, a restored table is a separate table that the stack does
 not manage. Either copy the items from the restored table back into the stack's table, or perform an A/B

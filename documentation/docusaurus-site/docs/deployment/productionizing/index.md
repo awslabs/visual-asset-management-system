@@ -19,20 +19,20 @@ Region, tested restore procedures, and a controlled change process.
 
 ## Pages in this guide
 
-| Page                                               | Topic                                                                                   |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [Environment strategy](environment-strategy.md)    | Separate accounts, AWS Organizations, service control policy guardrails                 |
-| [Backups](backups.md)                              | DynamoDB point-in-time recovery, on-demand checkpoints, AWS Backup plans, vault lock    |
-| [Amazon S3 data protection](s3-data-protection.md) | Versioning, replication, S3 Replication Time Control, Object Lock, lifecycle, inventory |
-| [Search indexes](search-indexes.md)                | Amazon OpenSearch Service snapshots and reindexing from source                          |
-| [Identity](identity.md)                            | Amazon Cognito user data, export limits, external identity providers                    |
-| [IAM governance](iam-governance.md)                | IAM modes, permission boundaries, IT-created roles, reviews on every upgrade            |
-| [Encryption keys](encryption-keys.md)              | AWS KMS customer-managed keys and key policies for replicas and copies                  |
-| [Retention](retention.md)                          | Which VAMS resources are retained on teardown and what that means for recovery          |
-| [Monitoring and alarms](monitoring.md)             | Signals to watch and where they come from                                               |
-| [Disaster recovery](disaster-recovery.md)          | Recovery objectives, strategies, runbook, restore drills                                |
-| [Change management](change-management.md)          | Promotion, approvals, pre-change checkpoints, rollback                                  |
-| [Partition notes](partitions.md)                   | AWS GovCloud (US) and AWS European Sovereign Cloud considerations                       |
+| Page                                               | Topic                                                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [Environment strategy](environment-strategy.md)    | Separate accounts, AWS Organizations, service control policy guardrails                        |
+| [Backups](backups.md)                              | Amazon DynamoDB point-in-time recovery, on-demand checkpoints, AWS Backup plans, vault lock    |
+| [Amazon S3 data protection](s3-data-protection.md) | Versioning, replication, Amazon S3 Replication Time Control, Object Lock, lifecycle, inventory |
+| [Search indexes](search-indexes.md)                | Amazon OpenSearch Service snapshots and reindexing from source                                 |
+| [Identity](identity.md)                            | Amazon Cognito user data, export limits, external identity providers                           |
+| [IAM governance](iam-governance.md)                | IAM modes, permission boundaries, IT-created roles, reviews on every upgrade                   |
+| [Encryption keys](encryption-keys.md)              | AWS KMS customer-managed keys and key policies for replicas and copies                         |
+| [Retention](retention.md)                          | Which VAMS resources are retained on teardown and what that means for recovery                 |
+| [Monitoring and alarms](monitoring.md)             | Signals to watch and where they come from                                                      |
+| [Disaster recovery](disaster-recovery.md)          | Recovery objectives, strategies, runbook, restore drills                                       |
+| [Change management](change-management.md)          | Promotion, approvals, pre-change checkpoints, rollback                                         |
+| [Partition notes](partitions.md)                   | AWS GovCloud (US) and AWS European Sovereign Cloud considerations                              |
 
 ## Shared responsibility
 

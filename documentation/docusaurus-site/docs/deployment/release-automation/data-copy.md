@@ -112,9 +112,9 @@ sequenceDiagram
     V->>V: History records, unlock
 ```
 
-1. **Export.** Each source table is exported with DynamoDB export to Amazon S3, which reads from the
+1. **Export.** Each source table is exported with Amazon DynamoDB export to Amazon S3, which reads from the
    PITR backup and consumes no table read capacity. PITR must be enabled on the source tables. See
-   [DynamoDB export to Amazon S3](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.HowItWorks.html).
+   [Amazon DynamoDB export to Amazon S3](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.HowItWorks.html).
 2. **Write freeze.** The target's running VAMS workflow executions are listed and reported. Writes to
    the target are frozen until the load and the object copy end, also when they fail. Only the target is
    frozen; the source is only read. See
@@ -148,7 +148,7 @@ default.
 | Any account | Registered asset buckets not named after the core stack, and their KMS keys | Read for the source roles, write for the target loader role: `AdditionalBucketArns` / `AdditionalKmsKeyArns` of each side's role stack, plus the bucket and key policy when they are in another account |
 | Production  | VAMS AWS KMS key (with `useKmsCmkEncryption`)                               | `kms:Decrypt` through Amazon S3 and Amazon DynamoDB for the source role                                                                                                                                 |
 | Production  | Staging bucket and staging key                                              | Write for the source role; read for the target loader role through the bucket and key policies                                                                                                          |
-| Test        | VAMS tables, buckets and key                                                | Write, and `kms:Decrypt` / `kms:Encrypt` / `kms:GenerateDataKey` through DynamoDB and S3, for the target loader role                                                                                    |
+| Test        | VAMS tables, buckets and key                                                | Write, and `kms:Decrypt` / `kms:Encrypt` / `kms:GenerateDataKey` through Amazon DynamoDB and Amazon S3, for the target loader role                                                                      |
 
 When the orchestrator may reach only the target side (for example a CI role pinned to the test
 environment), set `dataCopy.chainSourceRole: true` on the target and deploy both role stacks with
@@ -173,7 +173,7 @@ vra preflight --env prod --workflow data-copy-source
 vra --dry-run data-copy --from prod --to test --approval data-copy_prod --source-approval data-copy-to_test
 ```
 
-The dry run only reads. Its plan lists, per table, the source and target item counts (DynamoDB
+The dry run only reads. Its plan lists, per table, the source and target item counts (Amazon DynamoDB
 `ItemCount`, refreshed about every six hours, so approximate) and, per bucket, the object counts. Then
 stop writes to `test` (announce the window, pause integrations) and run the copy as a person, confirming
 the manual write freeze on the command:

@@ -13,11 +13,11 @@ external identity provider is recommended for production.
 
 ## What lives where
 
-| Data                                              | Store                    | Backed up with VAMS tables  |
-| ------------------------------------------------- | ------------------------ | --------------------------- |
-| VAMS roles, constraints and user-role assignments | Amazon DynamoDB          | Yes                         |
-| User accounts, passwords, MFA settings (Cognito)  | Amazon Cognito user pool | No                          |
-| User accounts and credentials (external provider) | Your identity provider   | No; managed by the provider |
+| Data                                                    | Store                    | Backed up with VAMS tables  |
+| ------------------------------------------------------- | ------------------------ | --------------------------- |
+| VAMS roles, constraints and user-role assignments       | Amazon DynamoDB          | Yes                         |
+| User accounts, passwords, MFA settings (Amazon Cognito) | Amazon Cognito user pool | No                          |
+| User accounts and credentials (external provider)       | Your identity provider   | No; managed by the provider |
 
 ## Amazon Cognito user data
 
@@ -51,10 +51,10 @@ deployment.
 
 ## External identity provider for production
 
-For production, federate sign-in to your organization's identity provider, either through Cognito SAML or
+For production, federate sign-in to your organization's identity provider, either through Amazon Cognito SAML or
 OIDC federation or through the external OAuth provider option. User accounts, credentials, MFA and
 lifecycle (joiners, movers and leavers) then stay in a system that your organization already backs up,
-audits and operates. A lost or replaced Cognito user pool can be recreated with the same federation
+audits and operates. A lost or replaced Amazon Cognito user pool can be recreated with the same federation
 settings, and users sign in again without password resets.
 
 The same provider can serve the test environment, which also lets user-role assignments copied from

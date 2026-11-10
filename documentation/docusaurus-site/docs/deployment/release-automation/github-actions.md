@@ -20,7 +20,7 @@ sandbox organization or repository with sandbox AWS accounts.
 ## Two repositories
 
 -   The customer's **VAMS fork** (the code): checks and scans of every branch and pull request, and in the
-    `pipeline+actions` tier the hand-off to CodePipeline.
+    `pipeline+actions` tier the hand-off to AWS CodePipeline.
 -   The private **home repository** (`vra-home.yaml`, `ledger/`, `state/`): upstream sync, the build,
     environment-protected deploys and the human-only operator actions.
 
@@ -51,7 +51,7 @@ synthesize; its `synth` job mirrors the upstream synth with cfn_nag.
 | ------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `agent`            | none (optional checks)                                               | none                                                                                           |
 | `hybrid`           | `pr-checks.yml`, `security-scan.yml`                                 | `upstream-release.yml`, `upstream-preview.yml` (or `vra-watch.yml`), `deploy.yml` for dev only |
-| `pipeline`         | none (CodePipeline end to end)                                       | none                                                                                           |
+| `pipeline`         | none (AWS CodePipeline end to end)                                   | none                                                                                           |
 | `pipeline+actions` | `pr-checks.yml`, `security-scan.yml`, `hand-off-to-codepipeline.yml` | `upstream-release.yml`                                                                         |
 
 See [Automation tiers](automation-tiers.md).
@@ -80,7 +80,7 @@ passes `requires-approval` from the ledger; `vra-deploy-env.yml` reads the ledge
 | `vra-watch`   | home       | none                                   | `DeployableEnvs=<autoDeploy environments>`                                                |
 | `<env>`       | home       | Gated environments: required reviewers | `CiEnvName=<env>`, in the environment's account                                           |
 | `<env>-tests` | home       | none                                   | Only with `isolate-tests`: `DeployableEnvs=none`, `TestEnvs=<env>`                        |
-| `vra-handoff` | fork       | none (CodePipeline approves)           | Starts executions of the release pipeline only                                            |
+| `vra-handoff` | fork       | none (AWS CodePipeline approves)       | Starts executions of the release pipeline only                                            |
 
 For a gated environment, set required reviewers, enable "Prevent self-review" and limit deployment branches
 to the default branch. List the reviewer logins in the environment's `env.yaml` `approvers` too. The deploy
@@ -128,7 +128,7 @@ The `vra-handoff` role holds no deploy rights. It allows only `codepipeline:Star
 set, the pipeline stack creates it (`<prefix>-actions-handoff-<region>`, trusting the configured OIDC
 subjects such as `repo:<org>/<fork>:environment:vra-handoff`) and lists it in the pipeline's IT package.
 
-## Hand-off to CodePipeline
+## Hand-off to AWS CodePipeline
 
 In `pipeline+actions` the release pipeline's fork source does not start an execution on push. When both
 `pr-checks.yml` and `security-scan.yml` passed for a trunk commit, `hand-off-to-codepipeline.yml` starts the
@@ -140,7 +140,7 @@ same commit returns the same execution. The gate counts only runs on the trunk (
 a dispatched SHA must be on the trunk (`compare` status `identical` or `behind`). It then reads the ASH
 summary of the counted scan run and stops on unsuppressed findings at or above `vars.VRA_ASH_FAIL_ON`
 (default `high`). On GitHub Enterprise Server with the v3 artifact actions the cross-run download is not
-available; keep `VRA_ASH_FAIL_ON` at `high` on the scan itself there. Deploys, approvals and tests then run in CodePipeline as described
+available; keep `VRA_ASH_FAIL_ON` at `high` on the scan itself there. Deploys, approvals and tests then run in AWS CodePipeline as described
 in [CI/CD and AWS CodePipeline](codepipeline.md).
 
 ## GitHub Enterprise Server notes
