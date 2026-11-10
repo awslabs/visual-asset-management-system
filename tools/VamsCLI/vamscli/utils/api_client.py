@@ -4989,11 +4989,17 @@ class APIClient(CustomAPIClientMixin):
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -5008,10 +5014,14 @@ class APIClient(CustomAPIClientMixin):
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Search query failed: {e}")
+                raise APIError(f"Search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
         except GlobalInfrastructureError:
             raise
@@ -5097,11 +5107,17 @@ class APIClient(CustomAPIClientMixin):
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -5116,10 +5132,14 @@ class APIClient(CustomAPIClientMixin):
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Simple search query failed: {e}")
+                raise APIError(f"Simple search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
         except GlobalInfrastructureError:
             raise
