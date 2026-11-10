@@ -34,6 +34,11 @@ _KEY_SEPARATOR = "#"
 # The key path percent-encodes the escape character and then the separator, so the separator never
 # occurs inside a path component of a sort key and a literal ``%23`` in a path stays distinct from ``#``.
 _KEY_PATH_ENCODING = (("%", "%25"), ("#", "%23"))
+# Opens the digest of a shortened key path. An encoded path never holds a ``%`` that is not followed by
+# ``25`` or ``23`` and never holds ``#``, so no whole encoded path ends in ``%`` and none equals the part
+# of a shortened key path in front of this marker: ``begins_with(SK, key_path + "#")`` for any short
+# path cannot reach a long file's items.
+_SHORTENED_MARKER = "%#"
 _VIDEO_SEGMENT_KEY_DIGITS = 10
 _TEXT_CHUNK_KEY_DIGITS = 6
 
@@ -76,16 +81,18 @@ def _encode_key_path(file_path: str) -> str:
 def vector_file_key_path(file_path: str) -> str:
     """The file-path part of a vector item's sort key; identical for every version of the file. The
     percent-encoded path when that fits FILE_PATH_KEY_BUDGET bytes, otherwise a byte-truncated prefix
-    of the encoded path, ``#`` and the SHA-256 hex digest of the plain path, which together fill the
-    budget. The separator therefore occurs in a key path only in front of a digest, so
-    ``begins_with(SK, key_path + "#")`` matches exactly one file."""
+    of the encoded path, the marker ``%#`` and the SHA-256 hex digest of the plain path, which together
+    fill at most the budget. The separator therefore occurs in a key path only in front of a digest,
+    behind a ``%`` that no encoded path can end in, so ``begins_with(SK, key_path + "#")`` matches
+    exactly one file: a short path whose encoding equals a long path's truncated prefix stays distinct."""
     encoded = _encode_key_path(file_path)
     encoded_utf8 = encoded.encode("utf-8")
     if len(encoded_utf8) <= FILE_PATH_KEY_BUDGET:
         return encoded
     digest = hashlib.sha256(file_path.encode("utf-8")).hexdigest()
-    prefix = encoded_utf8[: FILE_PATH_KEY_BUDGET - _SHA256_HEX_LENGTH - 1].decode("utf-8", errors="ignore")
-    return f"{prefix}{_KEY_SEPARATOR}{digest}"
+    prefix_budget = FILE_PATH_KEY_BUDGET - _SHA256_HEX_LENGTH - len(_SHORTENED_MARKER)
+    prefix = encoded_utf8[:prefix_budget].decode("utf-8", errors="ignore")
+    return f"{prefix}{_SHORTENED_MARKER}{digest}"
 
 
 def build_vector_file_version_key(file_path: str, version_id: Optional[str], segment_key: str = "") -> str:

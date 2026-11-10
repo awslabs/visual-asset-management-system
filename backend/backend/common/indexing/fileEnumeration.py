@@ -41,6 +41,9 @@ class FileRef:
     bucket_name: str
     base_assets_prefix: str
     s3_key: str
+    # The bucket registration the file was listed under; one bucket can hold several registrations
+    # (different baseAssetsPrefix values), so a continuation names the registration, not the bucket.
+    bucket_id: str = ""
 
 
 def normalize_base_prefix(base_prefix: Optional[str]) -> str:
@@ -128,16 +131,24 @@ def scan_bucket_registrations(buckets_table) -> List[Dict]:
     return buckets
 
 
-def encode_continuation(bucket_name: str, start_after: str) -> str:
-    """An opaque resumption token: the bucket being walked and the last key handled in it."""
-    return json.dumps({"bucket": bucket_name, "startAfter": start_after})
+def encode_continuation(bucket_name: str, start_after: str, bucket_id: Optional[str]) -> str:
+    """An opaque resumption token: the bucket registration being walked (bucket name and bucketId) and
+    the last key handled in it."""
+    return json.dumps({"bucket": bucket_name, "bucketId": bucket_id or "", "startAfter": start_after})
 
 
-def decode_continuation(token: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+def decode_continuation(token: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """(bucket name, last key handled, bucketId). The bucketId is None for a token written before tokens
+    named the registration; such a token resumes by bucket name alone."""
     if not token:
-        return None, None
+        return None, None, None
     decoded = json.loads(token)
-    return decoded.get("bucket"), decoded.get("startAfter")
+    return decoded.get("bucket"), decoded.get("startAfter"), decoded.get("bucketId")
+
+
+def _registration_order(bucket: Dict) -> Tuple[str, str, str]:
+    """The walk order of bucket registrations: bucket name, then bucketId, then base prefix."""
+    return (bucket["bucketName"], bucket.get("bucketId") or "", bucket.get("baseAssetsPrefix") or "")
 
 
 def enumerate_latest_live_files(
@@ -152,16 +163,18 @@ def enumerate_latest_live_files(
 ) -> Tuple[List[FileRef], Optional[str]]:
     """The current files of every live asset, and a continuation token when time ran out.
 
-    Buckets are walked in ``bucketName`` order. ``start_after`` is a token from a previous call; the
-    walk resumes after the key it names and skips the buckets ordered before its bucket. When
+    Bucket registrations are walked in (``bucketName``, ``bucketId``) order. ``start_after`` is a token
+    from a previous call; the walk skips the registrations ordered before the one it names and resumes
+    that one after the key it names, so a registration already finished is never listed again (two
+    registrations of one bucket with different prefixes are two entries of the walk). When
     ``time_remaining_fn`` reports fewer than ``min_remaining_ms`` milliseconds at a page boundary, the
     files gathered so far are returned with a token; a completed walk returns ``None`` for the token.
     ``database_id`` keeps only files whose asset resolves to that database.
     """
-    token_bucket, token_key = decode_continuation(start_after)
+    token_bucket, token_key, token_bucket_id = decode_continuation(start_after)
     buckets = sorted(
         (bucket for bucket in scan_bucket_registrations(buckets_table) if bucket.get("bucketName")),
-        key=lambda bucket: bucket["bucketName"],
+        key=_registration_order,
     )
     resolved: Dict[Tuple[str, str], Optional[str]] = {}
     refs: List[FileRef] = []
@@ -171,11 +184,20 @@ def enumerate_latest_live_files(
 
     for bucket in buckets:
         bucket_name = bucket["bucketName"]
-        if token_bucket is not None and bucket_name < token_bucket:
-            continue
-        base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix"))
         bucket_id = bucket.get("bucketId")
-        resume_key = token_key if bucket_name == token_bucket else None
+        if token_bucket is not None and token_bucket_id is not None:
+            position, token_position = (bucket_name, bucket_id or ""), (token_bucket, token_bucket_id)
+            if position < token_position:
+                continue
+            resume_key = token_key if position == token_position else None
+        elif token_bucket is not None:
+            # A token that names no registration resumes by bucket name, as it was written.
+            if bucket_name < token_bucket:
+                continue
+            resume_key = token_key if bucket_name == token_bucket else None
+        else:
+            resume_key = None
+        base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix"))
         last_key = resume_key
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(**list_objects_kwargs(bucket_name, base_prefix, resume_key)):
@@ -202,7 +224,8 @@ def enumerate_latest_live_files(
                     bucket_name=bucket_name,
                     base_assets_prefix=base_prefix,
                     s3_key=s3_key,
+                    bucket_id=bucket_id or "",
                 ))
             if last_key is not None and out_of_time():
-                return refs, encode_continuation(bucket_name, last_key)
+                return refs, encode_continuation(bucket_name, last_key, bucket_id)
     return refs, None

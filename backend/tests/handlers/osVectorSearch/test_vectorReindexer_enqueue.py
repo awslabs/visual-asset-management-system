@@ -30,7 +30,7 @@ def _context(remaining_ms=600000):
 def _ref(asset_id, relative_file_key, database_id="db1"):
     return SimpleNamespace(database_id=database_id, asset_id=asset_id, relative_file_key=relative_file_key,
                            bucket_name="assets", base_assets_prefix="prefix-a/",
-                           s3_key=f"prefix-a/{asset_id}{relative_file_key}")
+                           s3_key=f"prefix-a/{asset_id}{relative_file_key}", bucket_id="bucket-guid")
 
 
 def _bodies(sqs_client):
@@ -198,7 +198,7 @@ class TestFailedContinuation:
             reindexer.lambda_handler(_continuation(), _context())
         resume = _failure(excinfo)["resumePayload"]
         assert resume["continuation"]["enqueued"] == 20
-        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[19].s3_key)
+        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[19].s3_key, "bucket-guid")
         first = _bodies(reindexer.sqs_client)
 
         reindexer.sqs_client.send_message_batch.reset_mock(side_effect=True)
@@ -224,7 +224,7 @@ class TestFailedContinuation:
             reindexer.lambda_handler(_continuation(), _context())
         resume = _failure(excinfo)["resumePayload"]
         assert resume["continuation"]["enqueued"] == 24
-        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[23].s3_key)
+        assert resume["continuation"]["startAfter"] == reindexer.encode_continuation("assets", refs[23].s3_key, "bucket-guid")
         assert resume["continuation"]["chunk"] == 0
 
 

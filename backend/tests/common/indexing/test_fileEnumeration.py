@@ -146,10 +146,14 @@ class TestKeyHelpers:
             "Bucket": "b", "Prefix": "assets", "StartAfter": "assets/a1/x"}
 
     def test_continuation_round_trip(self, fe):
-        token = fe.encode_continuation("bucket-one", "a1/model.glb")
-        assert json.loads(token) == {"bucket": "bucket-one", "startAfter": "a1/model.glb"}
-        assert fe.decode_continuation(token) == ("bucket-one", "a1/model.glb")
-        assert fe.decode_continuation(None) == (None, None)
+        token = fe.encode_continuation("bucket-one", "a1/model.glb", "b1")
+        assert json.loads(token) == {"bucket": "bucket-one", "bucketId": "b1", "startAfter": "a1/model.glb"}
+        assert fe.decode_continuation(token) == ("bucket-one", "a1/model.glb", "b1")
+        assert fe.decode_continuation(None) == (None, None, None)
+
+    def test_a_token_written_before_registrations_were_named_decodes_without_one(self, fe):
+        token = json.dumps({"bucket": "bucket-one", "startAfter": "a1/model.glb"})
+        assert fe.decode_continuation(token) == ("bucket-one", "a1/model.glb", None)
 
 
 @pytest.mark.unit
@@ -235,8 +239,8 @@ class TestEnumerateLatestLiveFiles:
             fe, FakeS3(self.KEYS, page_size=2), FakeAssetTable(self.ROWS), [BUCKET_ONE, BUCKET_TWO],
             time_remaining_fn=lambda: next(clock), min_remaining_ms=90000)
         assert token is not None
-        bucket, start_after = fe.decode_continuation(token)
-        assert bucket == "bucket-one"
+        bucket, start_after, bucket_id = fe.decode_continuation(token)
+        assert (bucket, bucket_id) == ("bucket-one", "b1")
         # Pages of two: the guard fires after the second page, whose last key is the fourth sorted key.
         assert start_after == sorted(self.KEYS["bucket-one"])[3]
         assert [r.s3_key for r in first] == ["a1/dir/scan.e57", "a1/model.glb"]
@@ -250,7 +254,7 @@ class TestEnumerateLatestLiveFiles:
 
     def test_a_token_for_a_later_bucket_skips_earlier_buckets(self, fe):
         s3 = FakeS3(self.KEYS)
-        token = fe.encode_continuation("bucket-two", "assets/a2/img.png")
+        token = fe.encode_continuation("bucket-two", "assets/a2/img.png", "b2")
         refs, _ = _run(fe, s3, FakeAssetTable(self.ROWS), [BUCKET_ONE, BUCKET_TWO], start_after=token)
         assert [c["Bucket"] for c in s3.paginate_calls] == ["bucket-two"]
         assert [r.s3_key for r in refs] == ["assets/a2/notes.txt"]
@@ -262,3 +266,48 @@ class TestEnumerateLatestLiveFiles:
     def test_bucket_rows_without_a_name_are_skipped(self, fe):
         refs, _ = _run(fe, FakeS3(self.KEYS), FakeAssetTable(self.ROWS), [{"bucketId": "bx"}, BUCKET_ONE])
         assert {r.bucket_name for r in refs} == {"bucket-one"}
+
+
+SHARED_ZETA = {"bucketId": "b-a", "bucketName": "shared", "baseAssetsPrefix": "zeta/"}
+SHARED_ALPHA = {"bucketId": "b-b", "bucketName": "shared", "baseAssetsPrefix": "alpha/"}
+
+
+@pytest.mark.unit
+class TestTwoRegistrationsOfOneBucket:
+    """A continuation names the bucket registration, so resuming in the second registration of a bucket
+    never lists the first again: each file is enumerated once, so each gets one analysis run (A9)."""
+
+    KEYS = {"shared": ["alpha/a2/one.glb", "alpha/a2/two.glb", "alpha/a2/three.glb",
+                       "zeta/a1/one.glb", "zeta/a1/two.glb"]}
+    ROWS = {("b-a", "a1"): ["db1"], ("b-b", "a2"): ["db2"]}
+
+    def _walk_in_steps(self, fe, buckets):
+        """The whole walk with the clock running out after every page, resumed from each token."""
+        refs, token, rounds = [], None, 0
+        while True:
+            clock = iter([100000] + [1000] * 50)
+            page, token = _run(fe, FakeS3(self.KEYS, page_size=1), FakeAssetTable(self.ROWS), buckets,
+                               start_after=token, time_remaining_fn=lambda: next(clock), min_remaining_ms=90000)
+            refs.extend(page)
+            rounds += 1
+            assert rounds < 20
+            if token is None:
+                return refs
+
+    @pytest.mark.parametrize("scan_order", [(SHARED_ZETA, SHARED_ALPHA), (SHARED_ALPHA, SHARED_ZETA)])
+    def test_each_file_is_enumerated_once_across_continuations(self, fe, scan_order):
+        refs = self._walk_in_steps(fe, list(scan_order))
+        keys = [r.s3_key for r in refs]
+        assert sorted(keys) == sorted(self.KEYS["shared"])
+        assert len(keys) == len(set(keys))
+
+    def test_a_token_in_the_second_registration_skips_the_first(self, fe):
+        s3 = FakeS3(self.KEYS)
+        token = fe.encode_continuation("shared", "alpha/a2/one.glb", "b-b")
+        refs, _ = _run(fe, s3, FakeAssetTable(self.ROWS), [SHARED_ZETA, SHARED_ALPHA], start_after=token)
+        assert s3.paginate_calls == [{"Bucket": "shared", "Prefix": "alpha/", "StartAfter": "alpha/a2/one.glb"}]
+        assert sorted(r.s3_key for r in refs) == ["alpha/a2/three.glb", "alpha/a2/two.glb"]
+
+    def test_every_file_carries_its_registration(self, fe):
+        refs, _ = _run(fe, FakeS3(self.KEYS), FakeAssetTable(self.ROWS), [SHARED_ZETA, SHARED_ALPHA])
+        assert {(r.s3_key.split("/")[0], r.bucket_id) for r in refs} == {("alpha", "b-b"), ("zeta", "b-a")}

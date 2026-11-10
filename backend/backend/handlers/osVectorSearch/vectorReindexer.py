@@ -205,7 +205,7 @@ def _record_sent(state: Dict[str, Any], sent: List[FileRef]) -> None:
         return
     state['enqueued'] += len(sent)
     state['chunk'] = state['enqueued'] // FILES_PER_CHUNK
-    state['startAfter'] = encode_continuation(sent[-1].bucket_name, sent[-1].s3_key)
+    state['startAfter'] = encode_continuation(sent[-1].bucket_name, sent[-1].s3_key, sent[-1].bucket_id)
 
 
 def _send_launch_messages(refs: List[FileRef], state: Dict[str, Any], dry_run: bool) -> None:
