@@ -232,6 +232,15 @@ locators — the app's markup is not always guessable, and these were establishe
     toasts as a snapshot right after the answer: a toast hides after 5 s, so a polled
     `toHaveCount(0)` passes once it has gone. The notice stays until dismissed or the answer
     changes, so poll it.
+-   **A failed search is a toast, not a missing feature.** A `503` from either search route shows a
+    **Search failed** toast with the API's message, and the view switch, the mode switch and the
+    query band stay; do not read a failure as "search is off".
+-   **The count's explanation is a named button.** Beside a minimum count the table header has a
+    `button` named "About this count" (`getByRole("button", { name: "About this count" })`) that
+    opens its popover on click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it.** On `#/databases/<databaseId>/assets/`
+    the disabled Database multiselect reads the database id, not "All databases", so
+    `getByRole("button", { name: /^All databases/ })` finds nothing there.
 
 When a page's markup changes, fix the helper once; every spec follows.
 

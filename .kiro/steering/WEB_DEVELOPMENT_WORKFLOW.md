@@ -101,6 +101,8 @@ web/
       modals/
       search/               # ModernSearchContainer.tsx - unified keyword / natural-language search
                             #   (the body of the search page's "Search" view)
+                            #   SearchLayout/lockedDatabase.ts — trigger text of the Database filter
+                            #   a database route locks (names the database, not "All databases")
       searchSmall/
       selectors/
       single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -408,7 +410,7 @@ Cache.setItem("config", data);
 
 The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
-The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 ```typescript
 const { can } = useAllowedRoutes();
@@ -615,6 +617,8 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
     // Enable map features
 }
 ```
+
+`VECTORSEARCH` enables the natural-language mode of the search page's Search view; the Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs). Full flag list: `WEB_FRONTEND.md` section 9.3.
 
 ---
 
@@ -848,6 +852,42 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 `'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named after
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
+
+**Playwright specs for the search page (`web/e2e/`).** These drive the deployed search page and must pass
+against any sandbox. The core spec for a page outside the orchestration module is `{page}.spec.ts`
+(`search.spec.ts`), with its own `goto*` helper that waits on the page's own structure: `gotoSearch(page,
+{ databaseId?, tab? })` waits on the h1 and the view's first searchbox. The shared helpers in
+`e2e/support/fixtures.ts` are `gotoSearch`, `searchViewSwitch` / `searchViewSegment`, `searchPageHeading`,
+`searchCountBadge` / `searchCountBadgeText`, `searchSubmitButton`, `searchNotice`, `readFeaturesEnabled`,
+`expectSearchRendered` and `actionDisabledReason`. Selector facts:
+
+-   **Views switch from the title row**: one h1 every view shares, and a SegmentedControl
+    (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below 688 px) when more than one
+    view is available. There is no `role=tablist`. The asset list view is always there and the `Search`
+    view only when OpenSearch or vector search is on, so derive the expectation from
+    `readFeaturesEnabled(page)` (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture.
+    The active view is the `?tab=` hash query. The empty states read `No matches` (search table) and
+    `No assets to display.` (asset list); use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`). Compare
+    it through `searchCountBadgeText`, which adds the `+` only for `gte`.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment by its
+    `data-testid` (the view id) before pressing it.
+-   **A permission-gated action depends on the signed-in role.** A refused role sees the Button disabled
+    with its reason (named by `aria-describedby`), and "Checking your permissions." until the
+    allowed-routes check answers. Branch on `actionDisabledReason(button)`; never assume the admin role.
+-   **A finished search's count is announced, not toasted.** "Found N results" goes to a hidden polite
+    live region, followed by the Search notice's text. Rare natural-language warnings show in the
+    dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
+    as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
+-   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
+    the API's message, and the switches and the query band stay.
+-   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
+    opened by click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it**: the disabled multiselect reads the
+    database id, not "All databases".
+
+Claude Code counterpart: `web/e2e/CLAUDE.md` ("Selector facts worth not rediscovering", "Adding a core
+spec for a new page").
 
 **Lint and format (from project root):**
 
