@@ -223,9 +223,8 @@ def direct_inputs(ctx, env: str, names: dict, cfg: dict | None, base: str | None
             "--region", ctx.ledger.env(env)["region"]]
 
 
-def direct_reindex(ctx, env: str, build_id: str, sc, clear_indexes: bool = False, base: str | None = None,
-                   cfg: dict | None = None) -> dict:
-    """Run the bundle's reindex utility in direct mode (local process, no 15-minute limit)."""
+def _direct_argv(ctx, env: str, build_id: str, clear_indexes: bool, base: str | None, cfg: dict | None):
+    """The direct-mode command line, after the bundle and option checks (exit 20 when it cannot run)."""
     from vra import build as build_mod, vams_resources
     bdir = build_mod.build_dir(ctx, build_id)
     script = bdir / "migrations" / "tools" / "reindex_utility.py"
@@ -241,6 +240,13 @@ def direct_reindex(ctx, env: str, build_id: str, sc, clear_indexes: bool = False
             "--operation", "both", "--backend-path", str(backend), *direct_inputs(ctx, env, names, cfg, base)]
     if clear_indexes:
         argv.append("--clear-indexes")
+    return script, argv
+
+
+def direct_reindex(ctx, env: str, build_id: str, sc, clear_indexes: bool = False, base: str | None = None,
+                   cfg: dict | None = None) -> dict:
+    """Run the bundle's reindex utility in direct mode (local process, no 15-minute limit)."""
+    script, argv = _direct_argv(ctx, env, build_id, clear_indexes, base, cfg)
     child_env = ctx.aws.subprocess_env(env, "deploy")
     p = ctx.shell(sc.log_path).run(argv, cwd=str(script.parent), env=child_env, check=False, mutating=True,
                                    input_text="", timeout=24 * 3600)
@@ -269,6 +275,25 @@ def run(ctx, env: str, sc, mode: str | None = None, clear_indexes: bool = True, 
             raise NeedsHuman(f"direct reindex of {env} needs a deployed build bundle (none in the history)")
         return direct_reindex(ctx, env, build_id, sc, clear_indexes, base, cfg)
     return lambda_reindex(ctx, env, "deploy", clear_indexes, base)
+
+
+def preview(ctx, env: str, mode: str, clear_indexes: bool = False, build_id: str | None = None,
+            base: str | None = None, cfg: dict | None = None) -> dict:
+    """What ``run`` would do, resolved read-only (the dry run of ``vra reindex``): the reindexer Lambda, or the
+    direct-mode bundle and inputs. Stops (exit 20) where the real run would stop."""
+    from vra import vams_resources
+    out: dict[str, Any] = {"dryRun": True, "mode": mode, "clearIndexes": clear_indexes}
+    if mode == "direct":
+        if not build_id:
+            raise NeedsHuman(f"direct reindex of {env} needs a deployed build bundle (none in the history)")
+        script, argv = _direct_argv(ctx, env, build_id, clear_indexes, base, cfg)
+        out.update({"build": build_id, "script": str(script), "argv": argv[1:]})
+        return out
+    names = vams_resources.discover(ctx, env, "deploy", base)
+    fn = names["lambdas"].get(vams_resources.REINDEXER_KEY)
+    out.update({"function": fn} if fn else {"status": "skipped",
+                                            "note": "no reindexer Lambda published under the SSM prefix"})
+    return out
 
 
 def note_result(run_, env: str, res: dict, what: str) -> dict:
@@ -362,6 +387,8 @@ def wf_reindex(ctx, run_, args):
             return {"env": env, "skipped": "search is off in the deployed configuration (app.openSearch)"}
 
         def _run(sc):
+            if ctx.dry_run:
+                return preview(ctx, env, mode, bool(args.get("clearIndexes")), cur.get("build"), cfg=cfg)
             res = run(ctx, env, sc, mode=mode, clear_indexes=bool(args.get("clearIndexes")),
                       build_id=cur.get("build"), cfg=cfg)
             if res.get("status") == "failed":

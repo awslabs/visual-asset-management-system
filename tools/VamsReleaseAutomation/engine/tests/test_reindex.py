@@ -280,3 +280,52 @@ def test_reindex_mode_setting_and_direct_permissions(ctx, ledger):
     ledger.env("dev")["reindex"] = {"mode": "direct"}
     assert permissions.env_features(ctx, "dev")["reindexDirect"] == "on"
     assert permissions.placeholders(ctx, "dev")["SsmRoot"] == "/vams-dev-us-east-1"
+
+
+# ----------------------------------------------------------------- D20: the dry run resolves what the run would do
+def _deployed(ledger, build_id):
+    ledger.append_history("dev", {"action": "deploy", "build": build_id, "result": "SUCCEEDED",
+                                  "vamsVersion": "2.6.6"})
+
+
+def test_dry_run_direct_stops_on_a_bundle_without_the_reindexer(ctx, ledger, monkeypatch):
+    """Reindex smoke: `vra --dry-run reindex --mode direct` reported SUCCEEDED on a bundle made by an older engine,
+    which a real run refuses."""
+    _names(monkeypatch)
+    build_mod.build_dir(ctx, "cust-v2.6.6-11").mkdir(parents=True, exist_ok=True)
+    _deployed(ledger, "cust-v2.6.6-11")
+    monkeypatch.setattr("vra.permissions.preflight", lambda *a, **kw: {"ok": True})
+    ctx.dry_run = True
+    out = runner.start(ctx, "reindex", {"env": "dev", "mode": "direct"}, env="dev")
+    assert out.exit_code == errors.NEEDS_HUMAN and "no reindex utility" in out.message
+
+
+def test_dry_run_direct_resolves_the_inputs(ctx, ledger, monkeypatch):
+    from vra import vams_resources
+    monkeypatch.setattr(vams_resources, "discover", lambda *a, **kw: {
+        "prefix": "/vams-dev-us-east-1/resourceNames", "lambdas": {}, "buckets": {}, "all": {}, "tables": {
+            "dynamoTables/assetStorage": "A", "dynamoTables/s3AssetBucketsStorage": "B",
+            "dynamoTables/assetFileMetadataStorage": "C"}})
+    bdir = build_mod.build_dir(ctx, "cust-v2.7.0-1")
+    (bdir / "migrations" / "tools").mkdir(parents=True)
+    (bdir / "migrations" / "tools" / "reindex_utility.py").write_text("")
+    (bdir / "reindexer" / "backend" / "backend").mkdir(parents=True)
+    _deployed(ledger, "cust-v2.7.0-1")
+    monkeypatch.setattr("vra.permissions.preflight", lambda *a, **kw: {"ok": True})
+    ctx.dry_run = True
+    out = runner.start(ctx, "reindex", {"env": "dev", "mode": "direct"}, env="dev")
+    assert out.exit_code == 0, out.message
+    res = out.run.find_step("reindex.run")["result"]
+    assert res["dryRun"] is True and res["build"] == "cust-v2.7.0-1"
+    assert res["argv"][res["argv"].index("--asset-storage-table-name") + 1] == "A"
+
+
+def test_dry_run_lambda_names_the_reindexer(ctx, monkeypatch):
+    _names(monkeypatch)
+    ctx.aws = FakeAws(ctx.ledger, {"lambda": FakeLambda(exc=AssertionError("a dry run must not invoke"))})
+    monkeypatch.setattr("vra.permissions.preflight", lambda *a, **kw: {"ok": True})
+    ctx.dry_run = True
+    out = runner.start(ctx, "reindex", {"env": "dev"}, env="dev")
+    assert out.exit_code == 0, out.message
+    assert out.run.find_step("reindex.run")["result"]["function"] == "dev-reindexer"
+    assert ctx.ledger.history("dev") == []
