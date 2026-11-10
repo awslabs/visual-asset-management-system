@@ -23,11 +23,12 @@
  * partitions where the detection exists: commercial and EU Sovereign. GovCloud documents it as not
  * available and gets no property. The opt-out is a stopgap until the self-write is removed (#1207).
  *
- * The vector reindexer is the one other function that opts out: a reindex run continues itself by
- * asynchronous self-invocation every 15-minute window, and the detection would stop a run longer than
- * about 16 invocations part-way. Its handler caps the chain itself (`MAX_RUN_INVOCATIONS`). Same
- * partition rule; vector search ships on only in the commercial template, so the GovCloud branch is
- * reached by mutation below.
+ * The two vector functions that continue their own work opt out too: the vector reindexer continues a
+ * run by asynchronous self-invocation every 15-minute window, and the vector indexer continues an asset-
+ * or file-wide rule by sending a `vector.indexer.continue` message to the queue it consumes. The detection
+ * would stop either chain after about 16 hops. Each handler caps its chain itself (`MAX_RUN_INVOCATIONS`,
+ * `MAX_CONTINUATION_HOPS`). Same partition rule; vector search ships on only in the commercial template,
+ * so the GovCloud branch is reached by mutation below.
  */
 
 import * as Config from "../../config/config";
@@ -38,8 +39,11 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created";
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
 const REINDEXER_HANDLER = "handlers.osVectorSearch.vectorReindexer.lambda_handler";
+const INDEXER_HANDLER = "handlers.osVectorSearch.vectorIndexer.lambda_handler";
+/** The vector functions that continue their own work. */
+const VECTOR_SELF_CONTINUING_HANDLERS = [REINDEXER_HANDLER, INDEXER_HANDLER];
 /** The functions that may set `RecursiveLoop`, each only where the partition has the detection. */
-const OPTED_OUT_HANDLERS = [CREATED_HANDLER, REINDEXER_HANDLER];
+const OPTED_OUT_HANDLERS = [CREATED_HANDLER, ...VECTOR_SELF_CONTINUING_HANDLERS];
 
 /** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
 const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
@@ -157,14 +161,17 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         }
     });
 
-    test("the vector reindexer allows recursion where it is deployed and the partition has detection", () => {
-        const reindexers = functionsWithHandler(synth, REINDEXER_HANDLER);
-        // Only the commercial template ships vector search on.
-        expect(reindexers).toHaveLength(templateName === "commercial" ? 1 : 0);
-        for (const fn of reindexers) {
-            expect(fn.properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+    test.each(VECTOR_SELF_CONTINUING_HANDLERS)(
+        "%s allows recursion where it is deployed and the partition has detection",
+        (handler) => {
+            const fns = functionsWithHandler(synth, handler);
+            // Only the commercial template ships vector search on.
+            expect(fns).toHaveLength(templateName === "commercial" ? 1 : 0);
+            for (const fn of fns) {
+                expect(fn.properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+            }
         }
-    });
+    );
 
     test("no other function changes its recursive-loop setting", () => {
         const offenders = synth
@@ -252,11 +259,14 @@ describe("govcloud with vector search on: the vector DLQ alarms", () => {
         expect(alarms[0].properties.AlarmName).toMatch(dlqCase.alarmName("govcloud"));
     });
 
-    test("the vector reindexer omits RecursiveLoop in GovCloud, which has no detection", () => {
-        const reindexers = functionsWithHandler(synth, REINDEXER_HANDLER);
-        expect(reindexers).toHaveLength(1);
-        expect("RecursiveLoop" in reindexers[0].properties).toBe(false);
-    });
+    test.each(VECTOR_SELF_CONTINUING_HANDLERS)(
+        "%s omits RecursiveLoop in GovCloud, which has no detection",
+        (handler) => {
+            const fns = functionsWithHandler(synth, handler);
+            expect(fns).toHaveLength(1);
+            expect("RecursiveLoop" in fns[0].properties).toBe(false);
+        }
+    );
 
     test("the vector source queues stay unalarmed", () => {
         const vectorQueues = synth

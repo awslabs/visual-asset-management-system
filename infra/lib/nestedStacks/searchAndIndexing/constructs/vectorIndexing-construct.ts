@@ -144,6 +144,7 @@ export class VectorIndexingConstruct extends Construct {
             subnets,
             {
                 VECTOR_INDEXER_QUEUE_URL: this.vectorIndexerQueue.queueUrl,
+                VECTOR_INDEXER_DLQ_URL: vectorIndexerDlq.queueUrl,
                 WORKFLOW_LAUNCH_QUEUE_URL: this.systemWorkflowLaunchQueue.queueUrl,
             }
         );
@@ -174,8 +175,10 @@ export class VectorIndexingConstruct extends Construct {
             }
         );
 
-        // Asset- and file-wide rules that run out of time re-enqueue the rest of their work here.
+        // Asset- and file-wide rules that run out of time re-enqueue the rest of their work here, and a
+        // rule past the continuation cap is parked in the queue's DLQ, from which a redrive resumes it.
         this.vectorIndexerQueue.grantSendMessages(this.vectorIndexerFunction);
+        vectorIndexerDlq.grantSendMessages(this.vectorIndexerFunction);
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorReindexerFunction);
         // A restored file that was never embedded is queued onto the launch queue by the indexer.
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorIndexerFunction);
@@ -239,8 +242,10 @@ export class VectorIndexingConstruct extends Construct {
             [
                 "VectorIndexerDLQAlarm",
                 "vectorIndexerDLQ",
-                "Records that the VAMS vector indexer could not index are in this dead-letter queue. " +
-                    "Redrive it to the vector indexer queue after fixing the cause.",
+                "Records that the VAMS vector indexer could not index, and asset- or file-wide rules " +
+                    "that reached the indexer's 200-continuation cap, are in this dead-letter queue. " +
+                    "Redrive it to the vector indexer queue after fixing any cause; a parked rule " +
+                    "resumes where it stopped.",
                 vectorIndexerDlq,
             ],
             [

@@ -30,7 +30,12 @@ vector item:
   the asset, a permanent delete removes them; metadata, attribute and link stream records are ignored.
 * The indexer's own `vector.indexer.continue` messages: an asset- or file-wide rule pages through its
   item collection under the invocation's time budget, and when the store hands back a start key the rest
-  of the rule is re-enqueued here and resumed from that key by a later invocation.
+  of the rule is re-enqueued here and resumed from that key by a later invocation. AWS Lambda's
+  recursive-loop detection would stop that chain after about 16 hops, so it is turned off for this
+  function (`recursiveLoop: ALLOW` where the partition has it) and the chain is bounded here instead: each
+  message carries its hop count, a rule re-enters this queue at most MAX_CONTINUATION_HOPS times, and the
+  hand-off past the cap is sent to the indexer's dead-letter queue with its hop count reset, so redriving
+  that queue resumes the rule with a full budget.
 
 Every per-file rule reaches the store through the file's key-path prefix, so segment items follow their
 file through new versions, archive, unarchive and delete without a rule of their own. Every write is keyed
@@ -96,6 +101,9 @@ RULE_DELETE_FILE = 'deleteFile'
 RULE_SET_ARCHIVED_FOR_ASSET = 'setArchivedForAsset'
 RULE_DELETE_ASSET = 'deleteAsset'
 FILE_RULES = (RULE_SET_ARCHIVED_FOR_FILE, RULE_DELETE_FILE)
+# The most times one rule re-enqueues itself onto this queue. With recursive-loop detection off this bounds a
+# chain that never finishes; the hand-off past it goes to the dead-letter queue instead.
+MAX_CONTINUATION_HOPS = 200
 # The function's own timeout, reported as the time left when no Lambda context supplies one.
 FULL_BUDGET_MS = 900_000
 # Run-id prefix of the launch a restored, never-embedded file gets; its execution group reads
@@ -137,6 +145,8 @@ try:
     # Embedding documents live in the auxiliary bucket only; an event naming any other bucket is dropped.
     aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     vector_indexer_queue_url = os.environ["VECTOR_INDEXER_QUEUE_URL"]
+    # The source queue's dead-letter queue: a continuation past MAX_CONTINUATION_HOPS is parked there.
+    vector_indexer_dlq_url = os.environ["VECTOR_INDEXER_DLQ_URL"]
     # The system workflow's paced launch queue: a restored file with no item is embedded through it.
     workflow_launch_queue_url = os.environ["WORKFLOW_LAUNCH_QUEUE_URL"]
 except Exception as e:
@@ -182,17 +192,31 @@ def _time_left(context: Any) -> Callable[[], int]:
 
 
 def _continue_later(rule: str, pk: str, start_key: Dict[str, Any], key_path: Optional[str] = None,
-                    archived: Optional[bool] = None) -> str:
+                    archived: Optional[bool] = None, hops: int = 0) -> str:
     """Re-enqueue the rest of an asset- or file-wide rule to this function's own queue, from the store's
-    exclusive start key for the next page, and return the suffix the Outcome's detail records."""
+    exclusive start key for the next page, and return the suffix the Outcome's detail records.
+
+    `hops` is the hop count of the message being handled (0 for a record that is not a continuation); the
+    message sent carries one more. Past MAX_CONTINUATION_HOPS the message goes to the dead-letter queue
+    instead, with its hop count reset to 0, so a redrive of that queue resumes the rule from the same start
+    key with a full budget."""
     message: Dict[str, Any] = {'detailType': CONTINUE_DETAIL_TYPE, 'rule': rule, 'pk': pk}
     if key_path is not None:
         message['keyPath'] = key_path
     if archived is not None:
         message['archived'] = archived
     message['startKey'] = start_key
+    next_hops = hops + 1
+    if next_hops > MAX_CONTINUATION_HOPS:
+        message['hops'] = 0
+        message['stoppedAtHopCap'] = MAX_CONTINUATION_HOPS
+        sqs_client.send_message(QueueUrl=vector_indexer_dlq_url, MessageBody=json.dumps(message))
+        logger.error(f"{rule} for {pk} reached {MAX_CONTINUATION_HOPS} continuations and is parked in the "
+                     f"vector indexer dead-letter queue at {start_key}; redrive the queue to resume it")
+        return ' parked at the continuation cap'
+    message['hops'] = next_hops
     sqs_client.send_message(QueueUrl=vector_indexer_queue_url, MessageBody=json.dumps(message))
-    logger.info(f"{rule} for {pk} continues in a later invocation from {start_key}")
+    logger.info(f"{rule} for {pk} continues in a later invocation from {start_key} (hop {next_hops})")
     return ' continued'
 
 
@@ -619,12 +643,13 @@ def run_object_created(pk: str, key_path: str, time_left: Callable[[], int]) -> 
 
 
 def run_set_archived_for_file(pk: str, key_path: str, archived: bool, start_key: Optional[Dict[str, Any]],
-                              time_left: Callable[[], int]) -> Outcome:
+                              time_left: Callable[[], int], hops: int = 0) -> Outcome:
     changed, next_key = vector_store.set_archived_for_file(
         pk, key_path, archived, start_key=start_key, time_remaining_fn=time_left)
     note = ''
     if next_key is not None:
-        note = _continue_later(RULE_SET_ARCHIVED_FOR_FILE, pk, next_key, key_path=key_path, archived=archived)
+        note = _continue_later(RULE_SET_ARCHIVED_FOR_FILE, pk, next_key, key_path=key_path, archived=archived,
+                               hops=hops)
     action = 'archived' if archived else 'unarchived'
     return Outcome(True, action, f"{pk}{key_path}: {action}={changed}{note}")
 
@@ -661,12 +686,12 @@ def run_unarchive_file(pk: str, key_path: str, database_id: str, asset_id: str, 
 
 
 def run_delete_file(pk: str, key_path: str, start_key: Optional[Dict[str, Any]],
-                    time_left: Callable[[], int]) -> Outcome:
+                    time_left: Callable[[], int], hops: int = 0) -> Outcome:
     deleted, next_key = vector_store.delete_file(
         pk, key_path, start_key=start_key, time_remaining_fn=time_left)
     note = ''
     if next_key is not None:
-        note = _continue_later(RULE_DELETE_FILE, pk, next_key, key_path=key_path)
+        note = _continue_later(RULE_DELETE_FILE, pk, next_key, key_path=key_path, hops=hops)
     return Outcome(True, 'deleted', f"{pk}{key_path}: deleted={deleted}{note}")
 
 
@@ -726,21 +751,22 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
 # --- Asset table stream rules -------------------------------------------------------------------------
 
 def run_set_archived_for_asset(pk: str, archived: bool, start_key: Optional[Dict[str, Any]],
-                               time_left: Callable[[], int]) -> Outcome:
+                               time_left: Callable[[], int], hops: int = 0) -> Outcome:
     marked, next_key = vector_store.set_archived_for_asset(
         pk, archived, start_key=start_key, time_remaining_fn=time_left)
     note = ''
     if next_key is not None:
-        note = _continue_later(RULE_SET_ARCHIVED_FOR_ASSET, pk, next_key, archived=archived)
+        note = _continue_later(RULE_SET_ARCHIVED_FOR_ASSET, pk, next_key, archived=archived, hops=hops)
     word = 'archived' if archived else 'unarchived'
     return Outcome(True, f"asset-{word}", f"{pk}: {word}={marked}{note}")
 
 
-def run_delete_asset(pk: str, start_key: Optional[Dict[str, Any]], time_left: Callable[[], int]) -> Outcome:
+def run_delete_asset(pk: str, start_key: Optional[Dict[str, Any]], time_left: Callable[[], int],
+                     hops: int = 0) -> Outcome:
     deleted, next_key = vector_store.delete_asset(pk, start_key=start_key, time_remaining_fn=time_left)
     note = ''
     if next_key is not None:
-        note = _continue_later(RULE_DELETE_ASSET, pk, next_key)
+        note = _continue_later(RULE_DELETE_ASSET, pk, next_key, hops=hops)
     return Outcome(True, 'asset-deleted', f"{pk}: deleted={deleted}{note}")
 
 
@@ -791,14 +817,22 @@ def handle_continuation(message: Dict[str, Any], time_left: Callable[[], int]) -
     if rule in FILE_RULES and not key_path:
         logger.warning(f"continuation for {rule!r} on {pk} carries no keyPath; dropping")
         return Outcome(True, 'drop', 'file continuation without keyPath')
+    # A message written before the cap existed carries no hop count and starts at 0.
+    hops = message.get('hops', 0)
+    if isinstance(hops, bool) or not isinstance(hops, int) or hops < 0:
+        logger.warning(f"continuation for {rule!r} on {pk} carries an invalid hop count {hops!r}; dropping")
+        return Outcome(True, 'drop', 'continuation with an invalid hop count')
+    if message.get('stoppedAtHopCap'):
+        logger.info(f"{rule} for {pk} resumes from the dead-letter queue after the continuation cap")
     if rule == RULE_SET_ARCHIVED_FOR_FILE:
-        return run_set_archived_for_file(pk, key_path, bool(message.get('archived')), start_key, time_left)
+        return run_set_archived_for_file(pk, key_path, bool(message.get('archived')), start_key, time_left,
+                                         hops=hops)
     if rule == RULE_DELETE_FILE:
-        return run_delete_file(pk, key_path, start_key, time_left)
+        return run_delete_file(pk, key_path, start_key, time_left, hops=hops)
     if rule == RULE_SET_ARCHIVED_FOR_ASSET:
-        return run_set_archived_for_asset(pk, bool(message.get('archived')), start_key, time_left)
+        return run_set_archived_for_asset(pk, bool(message.get('archived')), start_key, time_left, hops=hops)
     if rule == RULE_DELETE_ASSET:
-        return run_delete_asset(pk, start_key, time_left)
+        return run_delete_asset(pk, start_key, time_left, hops=hops)
     logger.warning(f"continuation names an unknown rule {rule!r}; dropping")
     return Outcome(True, 'drop', f"unknown continuation rule {rule!r}")
 

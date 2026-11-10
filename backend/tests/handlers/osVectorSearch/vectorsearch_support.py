@@ -36,6 +36,8 @@ os.environ.setdefault("EMBEDDING_DIMENSIONS", "4")
 # (S3_ASSET_AUXILIARY_BUCKET); tests read the same name back from the environment.
 os.environ.setdefault("VECTOR_INDEXER_QUEUE_URL",
                       "https://sqs.us-east-1.amazonaws.com/123456789012/indexer-queue")
+os.environ.setdefault("VECTOR_INDEXER_DLQ_URL",
+                      "https://sqs.us-east-1.amazonaws.com/123456789012/indexer-dlq")
 os.environ.setdefault("WORKFLOW_LAUNCH_QUEUE_URL",
                       "https://sqs.us-east-1.amazonaws.com/123456789012/launch-queue")
 os.environ.setdefault("GENAI_METADATA_WORKFLOW_ID", "system-genai-metadata")
