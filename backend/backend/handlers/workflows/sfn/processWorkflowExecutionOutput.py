@@ -446,6 +446,28 @@ def _settle_ingest_ledger(workflow_execution_id, descriptors, landed, holder=Non
         [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
 
 
+def _remove_listed_staged_versions(descriptors, default_bucket):
+    """After outputs landed, delete the staged object VERSION each was listed at (#1291).
+
+    The provenance stamp copies each staged object onto itself, which on a versioned bucket writes a
+    NEW version, and the move deletes only the current (stamped) version, so the version the pipeline
+    wrote became current again and the output stayed staged. The listed version id is immutable and is
+    never the one the stamp wrote, so deleting exactly that version removes the original and nothing
+    else: not the stamped version a queued large-file copy still reads (the copy deletes it when done),
+    not another key's, not another version of this key. An unversioned bucket lists no id ('' or
+    'null' for a version written while versioning was off, which the stamp overwrote in place), and
+    nothing is deleted here. Best-effort: a failed delete leaves a staged copy behind, as before."""
+    for d in descriptors:
+        version_id = d.get("s3VersionId") or ""
+        key = d.get("s3Key") or ""
+        if not key or version_id in ("", "null"):
+            continue
+        try:
+            s3c.delete_object(Bucket=d.get("s3Bucket") or default_bucket, Key=key, VersionId=version_id)
+        except Exception as e:
+            logger.warning(f"Could not remove the staged version of {key} (non-critical): {e}")
+
+
 def _already_ingested(descriptor, ledger):
     row = ledger.get(eo.ingest_ledger_sort_key(descriptor))
     return bool(row) and row.get("ingestState") == eo.INGEST_STATE_INGESTED
@@ -1748,6 +1770,7 @@ def lambda_handler(event, context):
                                     _settle_ingest_ledger(
                                         ledger_execution_id, preview_descriptors, landed_previews,
                                         holder=attempt_holder)
+                                    _remove_listed_staged_versions(landed_previews, source_bucket)
                                 if all_ingested and result:
                                     logger.info("Preview upload completed successfully")
                                 else:
@@ -1861,6 +1884,7 @@ def lambda_handler(event, context):
                             if result:
                                 _settle_ingest_ledger(ledger_execution_id, file_descriptors, landed_files,
                                                       holder=attempt_holder)
+                                _remove_listed_staged_versions(landed_files, source_bucket)
                             if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:

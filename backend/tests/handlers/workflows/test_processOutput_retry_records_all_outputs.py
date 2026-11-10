@@ -103,10 +103,11 @@ def _tables():
     return ddb, uploads
 
 
-def _stage(s3, with_preview=False, with_large=False):
+def _stage(s3, with_preview=False, with_large=False, run_bucket_versioned=True):
     for bucket in (RUN_BUCKET, ASSET_BUCKET):
         s3.create_bucket(Bucket=bucket)
-        s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+        if bucket == ASSET_BUCKET or run_bucket_versioned:
+            s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
     for name in SMALL:
         s3.put_object(Bucket=RUN_BUCKET, Key=FILES_PREFIX + name, Body=b"small",
                       ContentType="model/gltf-binary")
@@ -138,7 +139,8 @@ class _Never(Exception):
     pass
 
 
-def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False):
+def _run(first_attempt, with_preview=False, with_large=False, old_code_first=False, real_stamp=False,
+         run_bucket_versioned=True, fail_upload_of=None):
     """Run attempt 0, which `first_attempt` ends, then the retries until one answers.
 
     'after_ingest' | 'mid_move' | 'during_record' kill attempt 0 at that point; 'finished' lets it
@@ -149,7 +151,7 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
     Returns the last answer, the asset versions per key, the outputs the last attempt recorded, the
     large-file queue calls, the staged keys left, the ingestion calls per attempt and the refusals."""
     s3 = boto3.client("s3", region_name=REGION)
-    _stage(s3, with_preview=with_preview, with_large=with_large)
+    _stage(s3, with_preview=with_preview, with_large=with_large, run_bucket_versioned=run_bucket_versioned)
     ddb, uploads = _tables()
     enforcer = MagicMock(**{"enforce.return_value": True, "enforceAPI.return_value": True})
     attempt = [0]
@@ -197,7 +199,11 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         p(po, "verify_get_path_objects", side_effect=lambda bucket, prefix: _listing(s3, prefix))
         p(po, "asset_upload_table", uploads)
         p(po, "dynamodb", ddb)
-        p(po, "_stamp_output_objects", return_value=True)
+        if real_stamp:
+            # The real provenance stamp: a copy of each staged object onto itself (a new version).
+            p(po, "s3r", boto3.resource("s3", region_name=REGION))
+        else:
+            p(po, "_stamp_output_objects", return_value=True)
         p(po, "_lambda_file_ingestion", side_effect=invoke_upload)
         # create=True keeps the harness runnable against code without these seams (the base branch).
         sleep = p(po, "_wait_sleep", create=True)
@@ -221,7 +227,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
             "bucketRegion": REGION})
         p(uf, "bucket_region_for_name", return_value=REGION)
         p(uf, "get_database_details", return_value={"databaseId": DATABASE_ID})
-        p(uf, "validateS3AssetExtensionsAndContentType", return_value=True)
+        p(uf, "validateS3AssetExtensionsAndContentType",
+          side_effect=lambda _bucket, key: not (fail_upload_of and key.endswith(fail_upload_of)))
         p(uf, "determine_asset_type", return_value=".glb")
         p(uf, "send_subscription_email")
         p(uf, "log_file_upload")
@@ -281,8 +288,11 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
                 (f["fileType"], f["relativeFilePath"].lstrip("/"))
                 for f in record.call_args.kwargs["output_files"])
         staged = sorted(o["Key"] for o in s3.list_objects_v2(Bucket=RUN_BUCKET).get("Contents", []))
+        staged_versions = sorted(
+            v["Key"] for v in s3.list_object_versions(Bucket=RUN_BUCKET).get("Versions", []))
     return {"answer": answer, "versions": versions, "recorded": recorded, "queued": queued,
-            "staged": staged, "ingestion_calls": ingestion_calls, "refusals": refusals,
+            "staged": staged, "staged_versions": staged_versions, "ingestion_calls": ingestion_calls,
+            "refusals": refusals,
             "first_answer": first.get("answer")}
 
 
@@ -331,6 +341,46 @@ class TestRetryAfterAMidMoveTimeout:
         assert landed["refusals"] == 1
         assert landed["answer"]["statusCode"] == 200
         assert landed["ingestion_calls"].count("MainThread") == 2
+
+
+@pytest.mark.unit
+@pytest.mark.aws
+class TestAMoveLeavesNothingStaged:
+    """#1291: the provenance stamp writes a new version of each staged object and the move deleted only
+    the current one, so the version the pipeline wrote became current again and every output stayed
+    staged. These run the real stamp."""
+
+    def test_no_version_remains_under_a_moved_staged_key(self):
+        with mock_aws():
+            landed = _run("finished", with_preview=True, real_stamp=True)
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["staged"] == []
+        assert landed["staged_versions"] == []
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+
+    def test_an_unversioned_run_bucket_is_left_empty_too(self):
+        with mock_aws():
+            landed = _run("finished", real_stamp=True, run_bucket_versioned=False)
+        assert landed["answer"]["statusCode"] == 200
+        assert landed["staged"] == []
+        for name in SMALL:
+            assert len(landed["versions"][_asset_key(name)]) == 1, landed["versions"]
+
+    def test_an_output_whose_move_failed_keeps_its_staged_source(self):
+        with mock_aws():
+            landed = _run("finished", real_stamp=True, fail_upload_of=SMALL[1])
+        assert landed["staged"] == [FILES_PREFIX + SMALL[1]]
+        assert _asset_key(SMALL[1]) not in landed["versions"]
+        assert FILES_PREFIX + SMALL[0] not in landed["staged_versions"]
+
+    def test_a_queued_large_output_keeps_the_version_its_copy_reads(self):
+        with mock_aws():
+            landed = _run("finished", real_stamp=True, with_large=True)
+        # The small outputs are gone; the large one keeps exactly its stamped version, which the
+        # asynchronous copy reads and then deletes.
+        assert landed["staged"] == [FILES_PREFIX + LARGE]
+        assert landed["staged_versions"] == [FILES_PREFIX + LARGE]
 
 
 @pytest.mark.unit
