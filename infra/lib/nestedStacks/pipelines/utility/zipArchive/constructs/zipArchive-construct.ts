@@ -54,6 +54,17 @@ export const ZIP_ARCHIVE_DATABASE_ID = "GLOBAL";
 export const ZIP_ARCHIVE_BATCH_TIMEOUT = cdk.Duration.hours(11);
 export const ZIP_ARCHIVE_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(11 * 60 + 30);
 
+/**
+ * Heartbeat timeout of the ZipArchiveBatchJob state (#1125 D26). The container heartbeats this
+ * state's task token every 2 minutes (zip_archive_pipeline/runner.py HEARTBEAT_SECONDS), so a
+ * container killed without a SIGTERM (out of memory, host loss) ends its run with
+ * States.HeartbeatTimeout within 30 minutes instead of at the 11-hour task timeout, and the read-time
+ * reconcile finalizes its job FAILED "The archive job stopped responding". The clock starts when the
+ * Batch job is submitted, so the 30 minutes also cover the job's wait in the Batch queue and its
+ * Fargate start; a job still queued after that ends the same way.
+ */
+export const ZIP_ARCHIVE_BATCH_HEARTBEAT = cdk.Duration.minutes(30);
+
 export interface ZipArchiveConstructProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
@@ -360,8 +371,10 @@ export class ZipArchiveConstruct extends Construct {
         }).next(pipelineEndTask);
         constructPipelineTask.addCatch(handleConstructPipelineError, { resultPath: "$.error" });
 
-        // The container answers this internal token with its terminal result and heartbeats the VAMS
-        // workflow's token while it runs; the 11-hour taskTimeout bounds the wait.
+        // The container answers this internal token with its terminal result (also on a SIGTERM no
+        // VAMS stopper recorded, error ZipArchiveContainerStopped) and heartbeats it and the VAMS
+        // workflow's token while it runs; the heartbeat timeout catches a container killed without a
+        // SIGTERM, and the 11-hour taskTimeout bounds the wait (#1125 D26).
         const archiveBatchJob = new tasks.LambdaInvoke(this, "ZipArchiveBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
@@ -374,6 +387,7 @@ export class ZipArchiveConstruct extends Construct {
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(ZIP_ARCHIVE_BATCH_TIMEOUT),
+            heartbeatTimeout: sfn.Timeout.duration(ZIP_ARCHIVE_BATCH_HEARTBEAT),
         })
             .addCatch(handleBatchError, { resultPath: "$.error" })
             .next(pipelineEndTask);

@@ -570,6 +570,58 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(definition).toContain('"ZipArchiveBatchJob"');
     });
 
+    // #1125 D26: a container killed outside VAMS ends its run instead of holding the job 11 h.
+    test("the batch job state keeps its 11 h timeout and gains a 30 min heartbeat timeout", () => {
+        const machine = synth
+            .ofType("AWS::StepFunctions::StateMachine")
+            .filter((r) => /ZipArchiveBuilder/.test(r.stack))[0];
+        const states = JSON.parse(SynthResult.flatten(machine.properties.DefinitionString)).States;
+        const job = states.ZipArchiveBatchJob;
+        expect(job.Resource).toContain("waitForTaskToken");
+        expect(job.TimeoutSeconds).toBe(39600);
+        expect(job.HeartbeatSeconds).toBe(1800);
+        // Every error, the heartbeat timeout and the container's stop answer included, reaches
+        // pipelineEnd, which answers the VAMS workflow's token.
+        expect(job.Catch).toEqual([
+            expect.objectContaining({ ErrorEquals: ["States.ALL"], Next: "HandleBatchError" }),
+        ]);
+        const container = fs.readFileSync(
+            path.join(
+                __dirname,
+                "../../../backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py"
+            ),
+            "utf8"
+        );
+        const interval = Number(/^HEARTBEAT_SECONDS = (\d+)$/m.exec(container)?.[1]);
+        expect(interval).toBe(120);
+        expect(interval * 5).toBeLessThan(job.HeartbeatSeconds);
+    });
+
+    test("the container job role may heartbeat and answer task tokens, in its own account only", () => {
+        const roles = synth
+            .ofType("AWS::IAM::Role")
+            .filter(
+                (r) =>
+                    /ZipArchiveBuilder/.test(r.stack) &&
+                    /ZipArchiveContainerJobRole/.test(r.logicalId)
+            );
+        expect(roles).toHaveLength(1);
+        type InlinePolicy = { PolicyDocument: { Statement: Record<string, unknown>[] } };
+        const statements = (roles[0].properties.Policies as InlinePolicy[]).flatMap(
+            (p) => p.PolicyDocument.Statement
+        );
+        const token = statements.filter((s) => actionsOf(s).includes("states:SendTaskHeartbeat"));
+        expect(token).toHaveLength(1);
+        expect(actionsOf(token[0]).sort()).toEqual([
+            "states:SendTaskFailure",
+            "states:SendTaskHeartbeat",
+            "states:SendTaskSuccess",
+        ]);
+        expect(SynthResult.flatten(([] as unknown[]).concat(token[0].Resource)[0])).toMatch(
+            /^arn:[^:]+:states:[^:]+:[^:]+:\*$/
+        );
+    });
+
     test("the system pipeline registers with fixed GLOBAL/utility-zip-archive ids", () => {
         const registrations = synth.where(
             "AWS::CloudFormation::CustomResource",

@@ -59,7 +59,7 @@ The container decides its mode from the run manifest:
 2. `openPipeline` starts the pipeline's AWS Step Functions state machine.
 3. `constructPipeline` validates the template configuration and builds the job definition. The AWS Batch command carries the location of the request manifest or the run manifest, not the file list, because AWS Batch bounds the size of a command override.
 4. `executeBatchJob` submits the AWS Fargate job with the task token.
-5. The container resolves the selection, checks every member, and writes the archive (see below). It heartbeats the task token every five minutes and reports success or failure on it.
+5. The container resolves the selection, checks every member, and writes the archive (see below). It heartbeats both task tokens (the VAMS workflow's and the Zip Archive state machine's own) every two minutes and reports success or failure on the state machine's token. If the container is stopped outside VAMS (an AWS Batch terminate), it reports the stop on that token; if it is killed without warning (out of memory, host loss), the missing heartbeats end the run within 30 minutes.
 6. `pipelineEnd` finalizes the workflow execution.
 
 ### Checks Before Writing
@@ -150,7 +150,7 @@ The following AWS resources are created when Download as Zip is enabled:
 | Job Definition               | AWS Batch          | Container configuration (`computeVcpu`, `computeMemoryGiB`)                                                |
 | Container Repository         | Amazon ECR         | Stores the Zip Archive container image (the CDK asset repository, or a VAMS-owned one with `useCodeBuild`) |
 | CodeBuild Project            | AWS CodeBuild      | Builds the container image, only with `useCodeBuild`                                                       |
-| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with a 12-hour task timeout and a task-token heartbeat                              |
+| Step Functions State Machine | AWS Step Functions | Pipeline orchestration with an 11-hour job timeout and a 30-minute task-token heartbeat timeout            |
 | Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, executeBatchJob, pipelineEnd)         |
 
 The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the auxiliary bucket, and the zip download API functions are deployed whether or not the feature is enabled. See [AWS Resources](../architecture/aws-resources.md).
@@ -168,6 +168,10 @@ The archive was refused because the named file is archived, a deleted version, i
 ### A Job Fails With "The archive job timed out"
 
 The run reached the 12-hour task timeout. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
+
+### A Job Fails With "The archive job was stopped" or "The archive job stopped responding"
+
+The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped without warning, for example because it ran out of memory or its host was lost, or the job waited in the AWS Batch queue for more than 30 minutes before it started. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`, or check the account's AWS Fargate vCPU quota and the other Batch jobs in the queue.
 
 ### A Job Fails With "Cancelled from workflow executions"
 

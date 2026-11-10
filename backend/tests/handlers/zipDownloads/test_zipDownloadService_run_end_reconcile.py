@@ -79,6 +79,47 @@ class TestEachRunStatus:
         _end(env, "FAILED")
         assert _row(env)["errorMessage"] == "The archive job was stopped"
 
+    # #1125 D26: a container stopped outside VAMS ends its run; the reconcile names how.
+    def test_a_terminate_outside_vams_shows_the_recorded_stop(self, env):
+        _row(env)["stopReason"] = "The archive job was stopped"
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveContainerStopped: See AWS cloudwatch logs "
+                            "for error cause.")
+        assert _row(env)["status"] == "FAILED"
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_STOPPED
+
+    def test_a_terminate_whose_stop_reason_was_not_recorded_shows_the_stop(self, env):
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveContainerStopped: See AWS cloudwatch logs "
+                            "for error cause.")
+        assert _row(env)["errorMessage"] == "The archive job was stopped"
+
+    def test_a_hard_kill_ends_on_the_heartbeat_timeout(self, env):
+        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout: See AWS cloudwatch logs "
+                            "for error cause.")
+        assert _row(env)["status"] == "FAILED"
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_LOST == "The archive job stopped responding"
+        assert env.s3.aborted == [(h.AUX, env.prefix + "x.zip", "u1")]
+        assert env.sweeps == [REQUEST_ID]
+
+    def test_a_recorded_stop_reason_wins_over_the_heartbeat_timeout(self, env):
+        _row(env)["stopReason"] = "The archive job was stopped"
+        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout")
+        assert _row(env)["errorMessage"] == "The archive job was stopped"
+
+    @pytest.mark.parametrize("error", ["ZipArchiveContainerStopped", "States.HeartbeatTimeout"])
+    def test_an_executions_abort_still_wins_over_the_containers_stop(self, env, error):
+        """D24 kept: an abort from the Executions page records ABORTED on the run before its Batch job
+        is terminated, so the container's answer never changes the run's status."""
+        _row(env)["stopReason"] = "The archive job was stopped"
+        _end(env, "ABORTED", "Pipeline Failure: " + error)
+        assert _row(env)["errorMessage"] == "Cancelled from workflow executions"
+        assert _row(env)["cancelledBy"] == "execution"
+
+    def test_a_user_cancel_still_wins_over_the_containers_stop(self, env):
+        _row(env).update(cancelRequestedAt="2026-11-10T00:00:00Z", cancelRequestedBy="user",
+                         stopReason="The archive job was stopped")
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveContainerStopped")
+        assert _row(env)["status"] == "CANCELLED"
+
     def test_a_running_run_leaves_the_job_alone(self, env):
         _end(env, "RUNNING")
         assert _row(env)["status"] == "RUNNING"

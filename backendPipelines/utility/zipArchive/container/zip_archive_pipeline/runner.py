@@ -49,7 +49,16 @@ EXTENSIONS = {"zip": ".zip", "tar": ".tar", "tar.gz": ".tar.gz"}
 PROGRESS_EVERY_BYTES = 64 * 1024 * 1024
 PROGRESS_EVERY_FILES = 100
 PROGRESS_EVERY_SECONDS = 30
-HEARTBEAT_SECONDS = 300
+# Heartbeat interval of both task tokens: the VAMS workflow's (externalSfnTaskToken) and the zipArchive
+# state machine's own (TASK_TOKEN). The ZipArchiveBatchJob state's heartbeat timeout
+# (infra zipArchive-construct.ts ZIP_ARCHIVE_BATCH_HEARTBEAT) is several intervals longer, so a
+# container killed without a SIGTERM (out of memory, host loss) ends its run with
+# States.HeartbeatTimeout instead of holding the job until the 11-hour task timeout (#1125 D26).
+HEARTBEAT_SECONDS = 120
+# The error the container answers its own task token with when it is stopped (SIGTERM) and no VAMS
+# stopper recorded the stop: a Batch terminate outside VAMS. The run then ends FAILED and the API's
+# read-time reconcile finalizes the job (backend common/zipDownloads.decide_finalization, #1125 D26).
+STOPPED_ERROR = "ZipArchiveContainerStopped"
 _NAME_ALLOWED = re.compile(r"[^A-Za-z0-9 ._()\-]")
 # The largest object Amazon S3 stores (CompleteMultipartUpload refuses a larger one).
 S3_MAX_OBJECT_BYTES = 5 * 1024 ** 4
@@ -193,25 +202,35 @@ class ProgressReporter:
 
 
 class Heartbeat:
-    """Heartbeats the VAMS workflow's task token while a long zipArchive job runs."""
+    """Heartbeats task tokens while a long zipArchive job runs: the VAMS workflow's token and the
+    zipArchive state machine's own (whose ZipArchiveBatchJob state times out without them, #1125
+    D26). ``tokens`` is one token or a list; empty ones are skipped."""
 
-    def __init__(self, sfn_client, token, interval=HEARTBEAT_SECONDS):
-        self._sfn, self._token, self._interval = sfn_client, token, interval
+    def __init__(self, sfn_client, tokens, interval=HEARTBEAT_SECONDS):
+        if isinstance(tokens, str):
+            tokens = [tokens]
+        self._sfn, self._interval = sfn_client, interval
+        self._tokens = [t for t in (tokens or []) if t]
         self._stop = threading.Event()
         self._thread = None
 
     def __enter__(self):
-        if self._token:
+        if self._tokens:
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
         return self
 
-    def _run(self):
-        while not self._stop.wait(self._interval):
+    def beat(self):
+        """One heartbeat of every token. A failed one is retried on the next interval."""
+        for token in self._tokens:
             try:
-                self._sfn.send_task_heartbeat(taskToken=self._token)
+                self._sfn.send_task_heartbeat(taskToken=token)
             except Exception:  # nosec B110 - a missed heartbeat is retried on the next interval
                 pass
+
+    def _run(self):
+        while not self._stop.wait(self._interval):
+            self.beat()
 
     def __exit__(self, *exc):
         self._stop.set()
@@ -259,6 +278,20 @@ class Job:
             self.sink.abort()
         self._record_stop()
         return True
+
+    def stop_recorded_by_vams(self):
+        """Whether a VAMS stopper recorded this stop (#1125 D26). Mode 1 only: the job row carries a
+        stopper's ``stopRequestedAt`` (the user's cancel, the read-time reconcile, a delete), or the job
+        already ended, is gone, or belongs to another run (StatusWriter.must_stop). Then the stopper
+        decides the outcome and the container leaves its token unanswered, as before (#1125 D24). A
+        read error answers True (keep that behaviour). Mode 2 has no job row: False."""
+        if self.status is None:
+            return False
+        try:
+            return bool(self.status.must_stop())
+        except Exception as e:
+            self.log(f"Could not read the job on stop: {e!r}")
+            return True
 
     def _is_own_archive(self, head):
         """Whether a HEAD describes the object THIS upload created: its version id when S3 returned
@@ -541,19 +574,39 @@ class Job:
             self._record_failure(reason)
 
 
-def sigterm_handler(job):
+def answer_stop(job, sfn_client, task_token, logger=print):
+    """After a SIGTERM stop: answer the zipArchive state machine's own token with STOPPED_ERROR
+    unless a VAMS stopper recorded the stop (#1125 D26). A Batch terminate outside VAMS otherwise
+    leaves the run waiting on the token until its 11-hour timeout, and the job Preparing. The stop
+    reason is already recorded (job.stop), so the read-time reconcile shows it. When a VAMS stopper
+    recorded the stop, nothing is sent: that stopper ends the run and decides the job (#1125 D24).
+    Best-effort: the container is about to exit."""
+    if not task_token or job.stop_recorded_by_vams():
+        return False
+    try:
+        sfn_client.send_task_failure(taskToken=task_token, error=STOPPED_ERROR,
+                                     cause=(REASON_PREFIX + STOPPED)[:256])
+        return True
+    except Exception as e:  # nosec B110 - the heartbeat timeout ends the run instead
+        logger(f"Could not report the stop on the task token: {e!r}")
+        return False
+
+
+def sigterm_handler(job, on_stop=None):
     """The SIGTERM handler for ``job``. job.stop() answers False while the archive's Complete is in
     flight: the handler then returns, the interrupted call resumes, and the Complete's own path
-    decides the outcome. Otherwise it exits 143."""
+    decides the outcome. Otherwise it calls ``on_stop`` (answer_stop) and exits 143."""
     def handler(signum, frame):
         if job.stop():
+            if on_stop is not None:
+                on_stop()
             raise SystemExit(143)
     return handler
 
 
-def install_sigterm(job):
+def install_sigterm(job, on_stop=None):
     """AWS Batch sends SIGTERM before SIGKILL on terminate (cancel, abort, timeout)."""
-    signal.signal(signal.SIGTERM, sigterm_handler(job))
+    signal.signal(signal.SIGTERM, sigterm_handler(job, on_stop))
 
 
 def main(argv, environ=os.environ):
@@ -562,11 +615,11 @@ def main(argv, environ=os.environ):
     sfn = boto3.client("stepfunctions", region_name=region, config=RETRY_CONFIG)
     dynamodb = boto3.resource("dynamodb", region_name=region, config=RETRY_CONFIG)
     job = Job(definition, Clients(definition.get("bucketRegions")), dynamodb)
-    install_sigterm(job)
     task_token = environ.get("TASK_TOKEN", "")
+    install_sigterm(job, lambda: answer_stop(job, sfn, task_token))
     started = time.time()
     try:
-        with Heartbeat(sfn, definition.get("externalSfnTaskToken", "")):
+        with Heartbeat(sfn, [definition.get("externalSfnTaskToken", ""), task_token]):
             result = job.run()
         print(json.dumps({"archive": result, "seconds": round(time.time() - started, 1)}))
         if task_token:

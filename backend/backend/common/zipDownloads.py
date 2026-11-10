@@ -122,6 +122,16 @@ MSG_ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item
 MSG_NOT_PRODUCED = "The archive was not produced"
 MSG_JOB_FAILED = "The archive job failed"
 MSG_JOB_TIMED_OUT = "The archive job timed out"
+# The zipArchive container was stopped outside VAMS (an AWS Batch terminate) and could not record why
+# (#1125 D26): the same words the container records as its stop reason (runner.STOPPED).
+MSG_JOB_STOPPED = "The archive job was stopped"
+# The zipArchive container stopped sending heartbeats (killed without a SIGTERM: out of memory, host
+# loss), so its run ended with States.HeartbeatTimeout (#1125 D26).
+MSG_JOB_LOST = "The archive job stopped responding"
+# Error names in a run's executionError that identify those two ends. The zipArchive pipelineEnd
+# reports the state's error as "Pipeline Failure: <Error>", which the workflow error handler records.
+CONTAINER_STOPPED_ERROR = "ZipArchiveContainerStopped"
+HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
 MSG_CANCELLED_FROM_EXECUTIONS = "Cancelled from workflow executions"
 MSG_NOT_READY = "The archive is not ready for download"
 MSG_EXPIRED = "This zip download has expired"
@@ -327,8 +337,11 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
       a prefixed execution error), else for TIMED_OUT the timeout message, else the stop the
-      container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else a
-      fixed message. Raw execution errors are never shown: they can carry internal resource names.
+      container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else, by
+      the error name in the execution error, MSG_JOB_STOPPED for the container's own stop answer
+      (CONTAINER_STOPPED_ERROR) or MSG_JOB_LOST for a heartbeat timeout (HEARTBEAT_TIMEOUT_ERROR, a
+      container killed without a SIGTERM; #1125 D26), else a fixed message. Raw execution errors are
+      never shown: they can carry internal resource names; only these fixed names are matched.
 
     The container never finalizes a job on SIGTERM; it only records ``stopReason`` and leaves the
     outcome to this rule, which knows ABORTED from TIMED_OUT or FAILED, so an abort from the
@@ -353,7 +366,15 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
         if not reason and execution_status == "TIMED_OUT":
             reason = MSG_JOB_TIMED_OUT
         if not reason:
-            reason = (row.get("stopReason") or "").strip()[:1024] or MSG_JOB_FAILED
+            reason = (row.get("stopReason") or "").strip()[:1024]
+        if not reason:
+            error = execution_error if isinstance(execution_error, str) else ""
+            if CONTAINER_STOPPED_ERROR in error:
+                reason = MSG_JOB_STOPPED
+            elif HEARTBEAT_TIMEOUT_ERROR in error:
+                reason = MSG_JOB_LOST
+            else:
+                reason = MSG_JOB_FAILED
         return STATUS_FAILED, {"error_message": reason}
     return None
 
