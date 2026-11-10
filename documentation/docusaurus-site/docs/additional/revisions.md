@@ -172,7 +172,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Newest search wins** — An older search's answer no longer replaces a newer one. (issue #1075)
 -   **"About this count" by keyboard** — The "About this count" icon can be reached and opened with the keyboard and has an accessible name. (issue #1136)
 -   **Unarchive Selected for roles that may not unarchive** — **Unarchive Selected** is disabled with its reason for a role that may not unarchive. (issue #943)
--   **CLI keyword search messages** — `vamscli search assets`, `files` and `simple` show their own messages for a refused or unavailable search. (issue #1265)
+-   **CLI and MCP keyword search messages** — The keyword search commands (`vamscli search assets`, `files` and `simple`) and the MCP `search_assets`, `search_files` and `find_and_summarize` tools show the server's reason for a `400`, `404` or `503`; a `503` reads as "Search Unavailable" with a retry hint. (issue #1265)
 -   **CLI keyword search hint printed once** — With OpenSearch off, the keyword search commands no longer print a second `Use 'vamscli assets list' instead.` line after their refusal. (PR #325)
 -   **`/generate-permissions` agent skill** — The deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and the operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
 -   **Assertion-shape guard passes on development** — The assetLinks batch_get helper test asserts the recorded `sleep` call count before asserting over its contents, so a zero-sleep test double fails instead of passing vacuously. (issue #414)
