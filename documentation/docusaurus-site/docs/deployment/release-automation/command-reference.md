@@ -76,6 +76,14 @@ human-only.
 | `vra restore --env E --checkpoint C [--approval A] [--include-auth-tables] [--write-freeze auto\|maintenance-mode\|manual] [--writes-stopped] [--abort-workflow-executions]`                         | Restore an environment to a checkpoint                                                                                                                                               |
 | `vra migrate --env E [--from V] [--to V] [--build B \| --source DIR]`                                                                                                                                | Chain the VAMS data migrations between two versions; unset values come from the deploy history or, for an imported environment, the deployed core stack and the build or source tree |
 | `vra data-copy --from E1 --to E2 --approval A [--source-approval S] [--databases ids] [--mask-hook cmd] [--method export\|scan] [--write-freeze B] [--writes-stopped] [--abort-workflow-executions]` | Copy data between environments                                                                                                                                                       |
+| `vra reindex --env E [--mode lambda\|direct] [--clear-indexes] [--approval A]`                                                                                                                       | Rebuild the Amazon OpenSearch Service indexes and confirm the result                                                                                                                 |
+
+`vra reindex` takes the environment lock, runs the permission preflight and, on gated environments,
+needs an approval scoped `reindex` (subject `reindex:<env>`). `lambda` mode (the default, or
+`reindex.mode` in `env.yaml`) invokes the deployed reindexer and waits for its answer; a Lambda error or
+reported failures exit `1`, and no answer within 16 minutes exits `20` as unconfirmed. `direct` mode runs
+the deployed build's `reindex_utility.py --mode direct` on the `vra` host, without the 15-minute Lambda
+limit. See [Backups, restore and migrations: search reindex](backups-restore-and-migrations.md#search-reindex).
 
 ## Permissions, runs and history
 

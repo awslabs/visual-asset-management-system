@@ -53,6 +53,7 @@ layer.
 | `tests_runner.py`                                   | Unit, synth, live and customer suites; JUnit; live-test sign-in                                                                                             |
 | `backup.py`, `restore.py`                           | Checkpoints; restore through temporary tables with verification and settle                                                                                  |
 | `datacopy.py`, `buckets.py`                         | Data copy with remapping; registered asset buckets, bucket map, shared-bucket guard                                                                         |
+| `reindex.py`                                        | Post-deploy reindex decision (upgrade matrix, search configuration, index names) and `vra reindex`; Lambda and direct modes with a confirmed result         |
 | `freeze.py`                                         | Write-freeze backends and running workflow executions                                                                                                       |
 | `migrate.py`                                        | Discovery and chaining of the VAMS data migrations, the upgrade matrix                                                                                      |
 | `permissions.py`, `preflight_cmd.py`                | Access-denied classification, IAM simulation, IT requests                                                                                                   |

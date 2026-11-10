@@ -73,6 +73,7 @@ tools/VamsReleaseAutomation/
       migrate.py             # VAMS data-migration discovery and chaining
       backup.py, restore.py  # checkpoints and restore
       datacopy.py, freeze.py # data copy between envs; write freeze and workflow executions
+      reindex.py             # search reindex: when a deploy needs one, lambda/direct runs with a confirmed result
       buckets.py             # registered asset buckets
       permissions.py         # denial classification, IAM simulation, IT requests
       preflight_cmd.py       # `vra preflight`

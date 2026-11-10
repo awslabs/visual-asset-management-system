@@ -55,8 +55,10 @@ and copies the items back into the CDK-owned table instead of replacing it:
 8. **Settle**: waits `writeFreeze.settleSeconds` (default 60) until the item counts are stable, and
    reports the rows VAMS's own Amazon S3 event processing wrote in response to the rolled-back objects
    (`derivedWrites`; reported, not undone).
-9. The freeze is lifted, the Amazon OpenSearch Service indexes are rebuilt with the VAMS reindex utility,
-   the temporary tables are deleted, and the history record is written.
+9. The freeze is lifted, the Amazon OpenSearch Service indexes are rebuilt (see
+   [Search reindex](#search-reindex); a reindex that fails or cannot be confirmed is a report note with
+   the `vra reindex` command to run), the temporary tables are deleted, and the history record is
+   written.
 
 The access tables (`apiKeyStorage`, `authEntitiesStorage`, `rolesStorage`, `userRolesStorage`) are left
 as they are, so a restore does not bring back revoked keys or roles. `--include-auth-tables` restores them
@@ -109,7 +111,11 @@ run stops with exit `20` and names the flag to pass. Reading the core stack need
 `cloudformation:DescribeStacks` on it (the `CoreStackVersionRead` statement of the migrate manifest).
 
 1. **Discover**: reads the migration directories of the bundle or the source tree.
-2. **Order**: builds the chain of transitions from the deployed version to the target.
+2. **Order**: builds the chain of transitions from the deployed version up to the highest transition
+   target at or below the target version. A release without a migration directory is skipped (2.5 to 2.7
+   runs `v2.5_to_v2.6` only, because 2.6 to 2.7 changes no data). A transition that starts after the
+   chain ends but below the target is a real gap (2.2 to 2.6 with `v2.3_to_v2.4` missing) and stops the
+   run with exit `20`.
 3. **Annotate**: reads
    [`upgrade-matrix.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/engine/vra/data/upgrade-matrix.yaml),
    which records per transition `requiresAB`, `resolvesViaSsm` (older scripts need explicit table names,
@@ -122,10 +128,52 @@ run stops with exit `20` and names the flag to pass. Reading the core stack need
 6. **Apply**: only after the deploy's checkpoint exists, each script runs with
    `--confirm-account <account-id> --yes`, so it can never run against another account.
 
+### Downgrades
+
+A move to an older version is allowed within a minor version (2.6.7 to 2.6.6) and across minor versions
+when no transition lies between them (2.7.0 to 2.6.6). A downgrade that crosses a transition (2.6.6 to
+2.5.3 crosses `v2.5_to_v2.6`) stops with exit `20`, because the older code cannot read migrated data. The
+message names the transitions and the checkpoint to restore: the pre-deploy checkpoint of the latest
+deploy that applied them. `vra deploy` stops in its migration plan, before `cdk deploy`. `vra rollback`
+(also with `--to-build`) stops the same way unless `--restore-checkpoint` is given. It also stops when a
+deploy that ran migrations then failed and was left on the environment (`rollbackPolicy: ask`). The
+automatic rollback of a failed deploy restores the deploy's checkpoint when migrations ran, as before.
+
 `vra deploy` embeds this chain: checkpoint, data-protection gate, migration plan and A/B check,
 `cdk deploy`, then per migration the window re-check, manual-step confirmation, dry run and apply, then
-the smoke. The dry runs happen after `cdk deploy`, because a new version's scripts can need tables the
-deploy creates.
+the reindex, then the smoke. The dry runs happen after `cdk deploy`, because a new version's scripts can
+need tables the deploy creates.
+
+## Search reindex
+
+After the migrations and before the smoke, `vra deploy` decides whether the Amazon OpenSearch Service
+indexes need a rebuild:
+
+| Source                                                                                                                                                                  | Decision                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`upgrade-matrix.yaml`](https://github.com/awslabs/visual-asset-management-system/blob/main/tools/VamsReleaseAutomation/engine/vra/data/upgrade-matrix.yaml) `versions` | Per target version, `required`, `recommended` or `none`, with the reason. 2.6.0 is `required` (index names rolled to v3, done by `v2.5_to_v2.6`), 2.7.0 `recommended` (#606) |
+| `app.openSearch` of the deployed and the new build                                                                                                                      | Search turned on or off, or a switch between serverless and provisioned: `required`                                                                                          |
+| Index names the two synthesized builds write to Parameter Store (`/aos/assetIndexName`, `/aos/fileIndexName`)                                                           | A change: `required`                                                                                                                                                         |
+
+A `required` reindex runs; a `recommended` one becomes a report note with the `vra reindex` command. The
+step is skipped, with a note, when search is off in the new build, when `app.openSearch.reindexOnCdkDeploy`
+is true (VAMS reindexes during `cdk deploy`), when a migration that reindexes (`v2.5_to_v2.6`) ran in the
+same deploy, or when the A/B slot copy already reindexed the new slot. Builds made before this engine
+version carry no effective config, so a configuration change against them is not detected (a report note
+says so).
+
+Restore and data copy do not run `cdk deploy`, so `reindexOnCdkDeploy` never covers them; they always
+reindex. Every reindex waits for its result, so a failure is never reported as success:
+
+| `reindex.mode` (`env.yaml`) | How                                                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lambda` (default)          | Invokes the deployed reindexer synchronously and checks its function error and reported failures. No answer within 16 minutes (the Lambda stops at 15) is unconfirmed         |
+| `direct`                    | Runs the deployed build's `tools/reindex_utility.py --mode direct` on the `vra` host with the table and parameter names VAMS publishes; no time limit, for large repositories |
+
+Direct mode needs the deploy role to read the asset tables and buckets and the `/aos/*` parameters (the
+`reindexDirect` statements of the reindex manifest), and a build made by this engine version or later.
+It cannot clear the indexes of a provisioned domain, whose endpoint is inside the VPC. Rerun a reindex
+with `vra reindex --env <env>`.
 
 ## In-place and A/B deployment
 
