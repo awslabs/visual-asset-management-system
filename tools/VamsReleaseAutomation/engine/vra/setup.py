@@ -306,7 +306,12 @@ def ask_iam(q, e: dict) -> dict | None:
         out["boundaryArn"] = q("iam.boundaryArn", "Permission boundary policy ARN from IT (blank: IT returns it "
                                                   f"with the role package; e.g. arn:{e['partition']}:iam::"
                                                   f"{e['account']}:policy/<boundary>)", None)
-        out["rolePrefix"] = q("iam.rolePrefix", "Role name prefix IT requires (blank for none)", None)
+        if "precreated" in modes:
+            # required: the scoped CDK execution policy passes IT's roles only by this prefix (vra.iam)
+            out["rolePrefix"] = q("iam.rolePrefix", "Role name prefix of IT's roles (required for precreated, "
+                                                    "e.g. ITVAMS-)", None, True)
+        else:
+            out["rolePrefix"] = q("iam.rolePrefix", "Role name prefix IT requires (blank for none)", None)
     if "bootstrap" in modes:
         cli = q("iam.cliCredentialsSynthesizer", "Deploy without CDK bootstrap roles (CliCredentialsStackSynthesizer: "
                                                  "the deploy role needs the CDK execution permissions itself)?",

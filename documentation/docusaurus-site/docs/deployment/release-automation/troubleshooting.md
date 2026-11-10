@@ -155,6 +155,10 @@ These apply to environments whose `iam.mode` is not `standard`
     report names the handler by `Ref`, its function name). Run `vra iam plan --env <env>` again, have IT apply
     the new package, then `vra iam apply`. A stack left in `ROLLBACK_FAILED` deletes cleanly once IT's role
     carries the new policy.
+-   **Exit `2` or a `ledger validate` error, "iam.mode precreated needs iam.rolePrefix".** In `precreated` mode IT's
+    roles must start with a prefix that is VAMS's alone, because the scoped CDK execution policy reaches them only
+    by it. Agree a prefix with IT (for example `ITVAMS-`), set `iam.rolePrefix` in the environment's `env.yaml`
+    and run `vra iam plan --env <env>` again.
 -   **HTTP 500 on every API route after switching to a `rolePrefix`, with
     `x-amzn-errortype: AuthorizerConfigurationException`.** The role replacement left the REST API stage
     on its old deployment, whose authorizer credentials name a deleted role (GitHub issue #1210). Add the

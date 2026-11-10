@@ -216,7 +216,7 @@ def test_engine_writes_yaml_only_through_the_alias_free_dumper():
 
 
 def test_govcloud_package_is_partition_clean(tmp_path):
-    c = make_ctx(tmp_path, prod_iam=None, gov_iam={"mode": "precreated"})
+    c = make_ctx(tmp_path, prod_iam=None, gov_iam={"mode": "precreated", "rolePrefix": "ITVAMS-"})
     res = plan_from(c, "gov", "govcloud-report", tmp_path)
     d = Path(res["dir"])
     assert res["counts"]["vamsRoles"] == 92 and res["counts"]["bootstrapRoles"] == 0
@@ -224,6 +224,18 @@ def test_govcloud_package_is_partition_clean(tmp_path):
                                                 if not p.name.startswith("vra-")]]:
         assert "arn:aws:" not in (d / f).read_text(), f
     assert "cognito-identity-us-gov.amazonaws.com" in (d / "it-roles.yaml").read_text()
+
+
+def test_precreated_mode_without_a_role_prefix_stops_plan_and_validate(tmp_path):
+    """The scoped CDK execution policy passes IT's roles only by the env's prefix; there is no fallback."""
+    from vra.ledger import Ledger
+    c = make_ctx(tmp_path, prod_iam=None, gov_iam={"mode": "precreated"})
+    out = tmp_path / "asm"
+    fx.write("govcloud-report", out)
+    o = runner.start(c, "iam-plan", {"env": "gov", "report": str(out / iam.REPORT), "modes": None}, env="gov")
+    assert o.exit_code == 2 and "needs iam.rolePrefix" in o.message
+    errs = Ledger(c.ledger.root).validate()["errors"]
+    assert any("envs/gov" in x and "needs iam.rolePrefix" in x for x in errs), errs
 
 
 def test_boundary_mode_lists_the_actions_the_boundary_must_allow(tmp_path):

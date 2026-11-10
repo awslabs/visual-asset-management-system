@@ -77,9 +77,11 @@ npx cdk bootstrap "aws://${ACCOUNT}/${REGION}" --template bootstrap-template.vra
     environments need because their sessions carry the initiator as source identity. Re-run it whenever the
     CDK CLI's bootstrap template changes.
 -   **VAMS roles only.** The scoped execution policy creates, changes, deletes and passes only roles named as
-    VAMS names them (`<ConfigName>core...`, `<ConfigName>-...`, `<RoleNamePrefix>...`), never the CDK bootstrap
-    or `vra-*` roles, so a template cannot reach the account's other roles. `ConfigName` is 1-12 letters and
-    digits. Environments that share an account share this policy: give them the same `configName` and
+    VAMS names them (`<CoreRoleNameStem>...` for the core stack, `<ConfigName>-...` for roles CloudFormation
+    names, `<RoleNamePrefix>...`), never the CDK bootstrap or `vra-*` roles, so a template cannot reach the
+    account's other roles. `CoreRoleNameStem` is the config name without its non-alphanumeric characters plus
+    `core`, cut to 16 characters; `vra iam plan` computes it. `iam.mode: precreated` requires `iam.rolePrefix`.
+    Environments that share an account share this policy: give them the same `configName` and
     `iam.rolePrefix`.
 -   **Permissions boundary.** The scoped execution policy refuses to create a role without its boundary.
     Set the boundary's name as `permissionsBoundaryName` in every environment of that account; `vra build`

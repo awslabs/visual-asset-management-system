@@ -145,6 +145,14 @@ def settings(e: dict) -> dict:
             "bootstrap": {k: bs.get(k) for k in BOOTSTRAP_KEYS if bs.get(k)}}
 
 
+# The scoped CDK execution policy (iam/cloudformation/vra-cdk-execution-policy.yaml) lets CloudFormation pass and
+# change IT's precreated roles only by the env's role-name prefix: without one there is no start of name that is
+# VAMS's alone, so precreated mode requires iam.rolePrefix.
+PRECREATED_PREFIX_REQUIRED = ("iam.mode precreated needs iam.rolePrefix: IT's roles must start with a prefix that is "
+                              "VAMS's alone (for example ITVAMS-), which the scoped CDK execution policy grants as "
+                              "RoleNamePrefix")
+
+
 def needs_package(s: dict) -> bool:
     return s["modes"] != ["standard"]
 
@@ -168,6 +176,8 @@ def validate_settings(e: dict, where: str) -> tuple[list[str], list[str]]:
         errors.append(f"{where}: iam.bootstrap.qualifier must be 1-10 letters, digits, - or _")
     if s["rolePrefix"] and not re.match(r"^[\w+=,.@-]{1,32}$", s["rolePrefix"]):
         errors.append(f"{where}: iam.rolePrefix must be 1-32 IAM role-name characters")
+    if "precreated" in s["modes"] and not s["rolePrefix"]:
+        errors.append(f"{where}: {PRECREATED_PREFIX_REQUIRED}")
     if s["modes"] == ["standard"] and (s["boundaryArn"] or s["rolePrefix"] or s["bootstrap"]):
         warnings.append(f"{where}: iam settings are ignored with iam.mode standard")
     if "boundary" in s["modes"] and not s["boundaryArn"]:
@@ -772,9 +782,9 @@ def vra_roles(ctx, env: str, s: dict) -> list[dict]:
     xp = execution_policy_parameters(e, env, s)
     deploy_notes = ["CloudFormation runs as the CDK execution role; use iam/cloudformation/vra-cdk-execution-"
                     "policy.yaml as its policy (RequiredPermissionsBoundaryArn = the env's boundary in boundary "
-                    "mode) with ConfigName=" + xp["ConfigName"] + " and RoleNamePrefix=" +
-                    (xp["RoleNamePrefix"] or '""') + ": it creates, changes and passes only roles with those "
-                    "names (also the IT-precreated VAMS roles), never cdk-* / vra-* roles"]
+                    "mode) with ConfigName=" + xp["ConfigName"] + ", CoreRoleNameStem=" + xp["CoreRoleNameStem"] +
+                    " and RoleNamePrefix=" + (xp["RoleNamePrefix"] or '""') + ": it creates, changes and passes "
+                    "only roles with those names (also the IT-precreated VAMS roles), never cdk-* / vra-* roles"]
     q = s["bootstrap"].get("qualifier") or ctx.ledger.project.get("cdk", {}).get("qualifier") or DEFAULT_QUALIFIER
     if "bootstrap" in s["modes"] and s["cliCredentialsSynthesizer"]:
         deploy_notes.append("bootstrap mode with cliCredentialsSynthesizer: there are no CDK bootstrap roles; this "
@@ -795,7 +805,8 @@ def vra_roles(ctx, env: str, s: dict) -> list[dict]:
             "arn": e.get("deployRoleArn"), "template": "iam/cloudformation/vra-deploy-role.yaml",
             "purpose": "vra deploy / backup / migrate / test / rollback / restore in this env",
             "trustPrincipals": ["tools / CI identity (TrustedPrincipalArns)"], "phase": "deploy",
-            "statements": statements(deploy_wfs), "notes": deploy_notes}]
+            "statements": statements(deploy_wfs), "notes": deploy_notes,
+            "executionPolicyParameters": xp}]
     if e.get("synthRoleArn") or e.get("requiresApproval"):
         out.append({"id": f"vra-synth-{env}", "kind": "vra", "name": _arn_name(e.get("synthRoleArn")) or
                     f"vra-synth-{env}", "arn": e.get("synthRoleArn"),
@@ -1076,15 +1087,29 @@ def env_info(ctx, env: str, asm: Assembly | None = None) -> dict:
             "rolePrefix": s["rolePrefix"], "nameBase": name_base(e, env)}
 
 
+def core_role_name_stem(config_name: str) -> str:
+    """The start every core-stack role name has without a role-name prefix.
+
+    VAMS's IamRoleTransform aspect (infra/lib/aspects/iam-role-transform.aspect.ts, getRoleName) names each role
+    ``<prefix><cdk.Names.uniqueResourceName(role, maxLength 40 - prefix length)>-<region>``. uniqueResourceName
+    drops every non-alphanumeric character of the construct path, which starts with the core stack id
+    ``<configName>-core-<baseStackName>``, and for a long path keeps its first 16 characters (then the last 16 and
+    a hash). So with no prefix every core role name starts with the first 16 characters of
+    ``<configName without non-alphanumerics>core<baseStackName...>``. The stem stops after ``core`` (or at 16),
+    so environments with different base stack names in one account share it."""
+    return (re.sub(r"[^A-Za-z0-9]", "", str(config_name)) + "core")[:16]
+
+
 def execution_policy_parameters(e: dict, env: str, s: dict | None = None) -> dict:
     """The ledger's values for iam/cloudformation/vra-cdk-execution-policy.yaml, which confines role changes and
-    iam:PassRole to VAMS's role names: ``ConfigName`` (the env's configName) and ``RoleNamePrefix`` (iam.rolePrefix;
-    in precreated mode without one, the start of the names the IT package suggests, ``<nameBase>-``)."""
+    iam:PassRole to VAMS's role names: ``ConfigName`` (the env's configName; CloudFormation names of roles in the
+    other VAMS stacks start with ``<ConfigName>-``), ``CoreRoleNameStem`` (core-stack role names without a prefix)
+    and ``RoleNamePrefix`` (iam.rolePrefix, required in precreated mode)."""
     s = s or settings(e)
-    prefix = s["rolePrefix"]
-    if not prefix and "precreated" in s["modes"]:
-        prefix = name_base(e, env) + "-"
-    return {"ConfigName": str(e.get("configName") or "vams"), "RoleNamePrefix": prefix}
+    if "precreated" in s["modes"] and not s["rolePrefix"]:
+        raise UsageError(f"envs/{env}: {PRECREATED_PREFIX_REQUIRED}")
+    name = str(e.get("configName") or "vams")
+    return {"ConfigName": name, "CoreRoleNameStem": core_role_name_stem(name), "RoleNamePrefix": s["rolePrefix"]}
 
 
 def name_base(e: dict, env: str) -> str:
@@ -1117,6 +1142,8 @@ def plan(ctx, env: str, asm: Assembly, modes: list[str] | None = None, source: d
     if not needs_package(s):
         raise UsageError(f"envs/{env}: iam.mode is standard (VAMS creates its own roles); set iam.mode (boundary, "
                          f"precreated, bootstrap) or pass --mode")
+    if "precreated" in s["modes"] and not s["rolePrefix"]:
+        raise UsageError(f"envs/{env}: {PRECREATED_PREFIX_REQUIRED}; set it in envs/{env}/env.yaml")
     info = env_info(ctx, env, asm)
     info["precreated"] = "precreated" in s["modes"]     # --mode may differ from env.yaml
     roles, refs = role_rows(asm, info)

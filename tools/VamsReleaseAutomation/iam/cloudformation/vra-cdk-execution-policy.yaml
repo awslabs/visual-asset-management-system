@@ -5,12 +5,13 @@ Description: >-
       cdk bootstrap --cloudformation-execution-policies arn:<partition>:iam::<account>:policy/vra-cdk-execution
     Allows the service surface VAMS (infra/lib) deploys, restricted to the allowed regions, and closes the
     escalation paths a synthesized template could otherwise use: roles can be created, changed, deleted and
-    passed only when their names are VAMS's own (ConfigName, RoleNamePrefix), never the cdk-* / vra-* roles;
+    passed only when their names are VAMS's own (CoreRoleNameStem, ConfigName, RoleNamePrefix), never the
+    cdk-* / vra-* roles;
     every role CloudFormation creates must carry a permissions boundary (created here by default); the
     execution policy and the vra/cdk policies cannot be rewritten; iam:PassRole also names the services VAMS
     passes roles to; AWS-managed admin policies cannot be attached; and CloudTrail trails / KMS keys that VAMS
-    does not own cannot be stopped, deleted or re-keyed. Deploy this stack in each env account BEFORE `cdk bootstrap`; set the env's
-    permissionsBoundaryName in the vra ledger so `vra build` applies the boundary at synth.
+    does not own cannot be stopped, deleted or re-keyed. Deploy this stack in each env account BEFORE
+    `cdk bootstrap` with the parameter values `vra iam plan` gives; set the env's permissionsBoundaryName in the vra ledger so `vra build` applies the boundary at synth.
     See iam/cdk-bootstrap.md. Partition-generic.
 
 Parameters:
@@ -26,24 +27,30 @@ Parameters:
     ConfigName:
         Type: String
         Default: vams
-        AllowedPattern: "^[A-Za-z0-9]{1,12}$"
-        ConstraintDescription: >-
-            1-12 letters and digits: VAMS names its core-stack roles from the stack name with every other character
-            removed and keeps 16 characters of it, so only such a name keeps "<ConfigName>core" at the start.
+        AllowedPattern: "^[A-Za-z][A-Za-z0-9-]*$"
+        ConstraintDescription: a VAMS config name (letters, digits and hyphens, starting with a letter)
         Description: >-
             VAMS config "name" (the env's configName in the vra ledger; `vra iam plan` writes the value). VAMS stack
             names (and so the aws:cloudformation:stack-name tag CloudFormation puts on the keys and trails it creates)
-            start with "<ConfigName>-"; trails and keys outside that prefix are protected. Roles: the core stack
-            names its roles "<ConfigName>core..." (no role-name prefix), every other VAMS stack's roles get
-            CloudFormation names "<ConfigName>-...". Only roles named so (or with RoleNamePrefix) can be created,
-            changed, deleted or passed.
+            start with "<ConfigName>-"; trails and keys outside that prefix are protected. Roles CloudFormation names
+            in the VAMS stacks (for example the cross-Region export providers) start with "<ConfigName>-".
+    CoreRoleNameStem:
+        Type: String
+        Default: vamscore
+        AllowedPattern: "^[A-Za-z0-9]{1,16}$"
+        ConstraintDescription: 1-16 letters and digits
+        Description: >-
+            Start of the names VAMS gives its core-stack roles without a role-name prefix: ConfigName without its
+            non-alphanumeric characters, then "core", cut to 16 characters (`my-vams` -> `myvamscore`). `vra iam plan`
+            computes it. Only roles named "<CoreRoleNameStem>...", "<ConfigName>-..." or "<RoleNamePrefix>..." can be
+            created, changed, deleted or passed.
     RoleNamePrefix:
         Type: String
         Default: ""
         AllowedPattern: "^[A-Za-z0-9+=,.@_-]{0,32}$"
         Description: >-
             The env's IAM role-name prefix (iam.rolePrefix in the vra ledger, cdk.json
-            environments.aws.IamRoleNamePrefix; for iam.mode precreated, the start of the names of IT's roles);
+            environments.aws.IamRoleNamePrefix; required for iam.mode precreated, where IT's roles start with it);
             `vra iam plan` writes the value. Empty: none. Roles named "<RoleNamePrefix>..." can be created, changed,
             deleted and passed too, except "<RoleNamePrefix>cdk-*" and "<RoleNamePrefix>vra-*".
     RequiredPermissionsBoundaryArn:
@@ -328,7 +335,7 @@ Resources:
                           - iam:UntagRole
                       Resource:
                           - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
-                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
                           - !If
                             - HasRoleNamePrefix
                             - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
@@ -342,7 +349,7 @@ Resources:
                       Action: iam:PassRole
                       Resource:
                           - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
-                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
                           - !If
                             - HasRoleNamePrefix
                             - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
@@ -375,7 +382,7 @@ Resources:
                             - iam:PutRolePermissionsBoundary
                         Resource:
                             - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
-                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
                             - !If
                               - HasRoleNamePrefix
                               - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
@@ -393,7 +400,7 @@ Resources:
                         Action: iam:CreateRole
                         Resource:
                             - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
-                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}core*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
                             - !If
                               - HasRoleNamePrefix
                               - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*

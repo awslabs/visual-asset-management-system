@@ -22,9 +22,10 @@ start with B and move to A without re-bootstrapping (add the deploy role, drop `
 
 ## 2. Deploy the scoped execution policy
 
-Run in each env account, in the VAMS region. Replace placeholders. `ConfigName` and `RoleNamePrefix` come
-from the ledger: the env's `configName` and `iam.rolePrefix` (empty when the env sets none). The deploy role
-notes of the IT package (`vra iam plan --env <env>`) name both values for each env.
+Run in each env account, in the VAMS region. Replace placeholders. `ConfigName`, `CoreRoleNameStem` and
+`RoleNamePrefix` come from the ledger: the env's `configName`, the stem computed from it, and `iam.rolePrefix`
+(empty when the env sets none). The deploy role entry of the IT package (`vra iam plan --env <env>`,
+`executionPolicyParameters` in `roles.json` and the deploy role notes) gives all three values for each env.
 
 ```bash
 # Commercial, CloudFront deployment (the CloudFront WAF stack lives in us-east-1)
@@ -32,25 +33,28 @@ aws cloudformation deploy \
   --stack-name vra-cdk-execution-policy \
   --template-file iam/cloudformation/vra-cdk-execution-policy.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AllowedRegions=us-east-1,us-west-2 ConfigName=vams RoleNamePrefix=
+  --parameter-overrides AllowedRegions=us-east-1,us-west-2 ConfigName=vams CoreRoleNameStem=vamscore RoleNamePrefix=
 
 # GovCloud (ALB deployment, no CloudFront), with a role-name prefix
 aws cloudformation deploy \
   --stack-name vra-cdk-execution-policy \
   --template-file iam/cloudformation/vra-cdk-execution-policy.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides AllowedRegions=us-gov-west-1 ConfigName=vams RoleNamePrefix=ITVAMS- \
+  --parameter-overrides AllowedRegions=us-gov-west-1 ConfigName=vams CoreRoleNameStem=vamscore \
+    RoleNamePrefix=ITVAMS- \
   --region us-gov-west-1
 ```
 
-The policy creates, changes, deletes and passes only VAMS's own roles. VAMS names the roles of its core stack
-`<ConfigName>core...` (from the stack name, without its hyphens), or `<RoleNamePrefix>...` with a prefix;
-CloudFormation names the roles of the other VAMS stacks `<ConfigName>-...`. The grants cover exactly those
-three name patterns, so `ConfigName` must be 1-12 letters and digits. `<RoleNamePrefix>cdk-*`,
-`<RoleNamePrefix>vra-*` and every `cdk-*` / `vra-*` role stay protected. In `iam.mode: precreated`, IT's role
-names must start with `RoleNamePrefix` (without a prefix, the IT package suggests `<baseStackName>-...`
-names, and `vra iam plan` gives that start as the value). Environments that share an account share its
-execution policy, so give them the same `ConfigName` and prefix, or separate accounts.
+The policy creates, changes, deletes and passes only VAMS's own roles. Without a prefix, VAMS names the
+roles of its core stack from the core stack name with every character but letters and digits removed, cut to
+16 characters, so they all start with `CoreRoleNameStem`: the config name without its non-alphanumeric
+characters, then `core`, cut to 16 (`vams` gives `vamscore`, `my-vams` gives `myvamscore`). With a prefix they
+start with `RoleNamePrefix`. Roles CloudFormation names itself, such as the cross-Region export providers of a
+CloudFront deployment outside us-east-1, start with `<ConfigName>-`. The grants cover exactly those three name
+patterns, for every config name VAMS accepts. `<RoleNamePrefix>cdk-*`, `<RoleNamePrefix>vra-*` and every
+`cdk-*` / `vra-*` role stay protected. In `iam.mode: precreated`, `iam.rolePrefix` is required and IT's role
+names must start with it: `vra ledger validate` and `vra iam plan` stop without one. Environments that share
+an account share its execution policy, so give them the same `configName` and prefix, or separate accounts.
 
 ## 3. Bootstrap
 
