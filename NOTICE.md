@@ -760,20 +760,21 @@ This software includes third party software subject to the following copyrights:
 
 **Release Automation CDK Pipeline (NPM, `tools/VamsReleaseAutomation/cicd/pipeline`)**
 
-| Package     | Version  | License    |
-| :---------- | :------- | :--------- |
-| aws-cdk-lib | 2.275.0  | Apache-2.0 |
-| cdk-nag     | 2.38.2   | Apache-2.0 |
-| constructs  | 10.8.1   | Apache-2.0 |
-| yaml        | 2.9.1    | ISC        |
-| @types/jest | 30.0.0   | MIT        |
-| @types/node | 22.20.5  | MIT        |
-| aws-cdk     | 2.1146.1 | Apache-2.0 |
-| jest        | 30.5.2   | MIT        |
-| ts-jest     | 29.4.15  | MIT        |
-| ts-node     | 10.9.2   | MIT        |
-| typescript  | 5.9.3    | Apache-2.0 |
+| Package     | Version  | License       |
+| :---------- | :------- | :------------ |
+| aws-cdk-lib | 2.275.0  | Apache-2.0    |
+| cdk-nag     | 2.38.2   | Apache-2.0    |
+| constructs  | 10.8.1   | Apache-2.0    |
+| yaml        | 2.9.1    | ISC           |
+| @types/jest | 30.0.0   | MIT           |
+| @types/node | 22.20.5  | MIT           |
+| aws-cdk     | 2.1146.1 | Apache-2.0    |
+| jest        | 30.5.2   | MIT           |
+| minimatch   | 11.0.1   | BlueOak-1.0.0 |
+| ts-jest     | 29.4.15  | MIT           |
+| ts-node     | 10.9.2   | MIT           |
+| typescript  | 5.9.3    | Apache-2.0    |
 
-The CDK pipeline lockfile resolves 352 packages. Their declared licences are MIT (284), ISC (32),
-Apache-2.0 (11), BSD-3-Clause (11), BlueOak-1.0.0 (8), BSD-2-Clause (2), (MIT OR CC0-1.0) (2),
+The CDK pipeline lockfile resolves 353 packages. Their declared licences are MIT (284), ISC (32),
+Apache-2.0 (11), BSD-3-Clause (11), BlueOak-1.0.0 (9), BSD-2-Clause (2), (MIT OR CC0-1.0) (2),
 CC-BY-4.0 (1) and 0BSD (1).

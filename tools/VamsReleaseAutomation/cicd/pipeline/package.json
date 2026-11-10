@@ -30,8 +30,12 @@
         "@types/node": "22.20.5",
         "aws-cdk": "2.1146.1",
         "jest": "30.5.2",
+        "minimatch": "11.0.1",
         "ts-jest": "29.4.15",
         "ts-node": "10.9.2",
         "typescript": "5.9.3"
+    },
+    "overrides": {
+        "minimatch@^10.0.0": "11.0.1"
     }
 }
