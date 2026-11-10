@@ -50,7 +50,9 @@ Each database record displays the following information:
 
 ## Asset Search Page
 
-The **Assets and Files** page is the primary interface for discovering and browsing assets. A switch in the page title row chooses between two views: **Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes; **Asset list**, always available, lists the assets you are authorized to see with archive, permanent-delete, and unarchive actions. With only the asset list available, the page shows no switch. The active view is carried in the URL (`?tab=`).
+The **Assets and Files** page is the primary interface for discovering and browsing assets. A switch in the page title row chooses between two views: **Search**, available when Amazon OpenSearch or natural-language search is enabled, offers keyword and natural-language queries with filters and multiple view modes; **Asset list**, always available, lists the assets you are authorized to see with archive, permanent-delete, and unarchive actions. In both views an action your role does not allow, such as **Unarchive Selected** for a role built from the `database-user` template, is shown disabled with the reason. With only the asset list available, the page shows no switch. The active view is carried in the URL (`?tab=`).
+
+The breadcrumb above the title ends with the page itself: on the all-databases page (`#/assets/`) it is the page title alone, and on a database's page it reads **Databases > Assets for {databaseId}**.
 
 ![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
 
@@ -58,11 +60,11 @@ The **Assets and Files** page is the primary interface for discovering and brows
 
 VAMS provides three ways to browse assets in the Search view:
 
-| View Mode      | Description                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| **Table view** | A detailed tabular layout with sortable columns. Best for reviewing asset properties in bulk.             |
-| **Card view**  | A grid of asset cards showing preview thumbnails. Best for visual browsing.                               |
-| **Map view**   | A geographic map display showing asset locations. Available only when Amazon Location Service is enabled. |
+| View Mode      | Description                                                                                                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Table view** | A detailed tabular layout with sortable columns. Best for reviewing asset properties in bulk.                                                                                                       |
+| **Card view**  | A grid of asset cards showing preview thumbnails. Best for visual browsing.                                                                                                                         |
+| **Map view**   | A geographic map display showing asset locations. Available only when Amazon Location Service is enabled. In natural-language mode it pages through the natural-language answer, as the table does. |
 
 ### Search and Filtering
 
@@ -70,7 +72,8 @@ The Search view provides several mechanisms for finding assets:
 
 -   **Keyword** / **Natural language** -- When both engines are enabled, choose how the query is read: keyword matching across indexed fields, or a natural-language description ranked by semantic similarity of each file's generated metadata, text, and renders. With only one engine enabled the control is fixed to that engine.
 -   **Text search** -- Enter keywords to search across asset names and properties.
--   **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector.
+-   **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector. On a database's page the filter is locked to that database and shows its name.
+-   **Search notice and failures** -- Rare natural-language warnings, such as "Some result details couldn't be loaded. The matches are still shown.", appear in a dismissible **Search notice** above the results. A search that cannot finish, for example "Search is busy right now. Try again in a moment.", shows a **Search failed** notification with the reason and keeps every search control. See [Search and Discovery](search-and-discovery.md#the-query-band).
 -   **Column customization** -- Show or hide table columns to focus on the properties that matter to you.
 -   **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic (keyword mode, or natural-language mode with Amazon OpenSearch enabled).
 

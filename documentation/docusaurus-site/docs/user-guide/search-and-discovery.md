@@ -13,7 +13,9 @@ The **Assets and Files** page is where you locate assets and files across every 
 | **Search**     | Amazon OpenSearch or natural-language search is enabled | Keyword search over assets and files, natural-language search over files, filters, and table, card, and map views                                                                                                      |
 | **Asset list** | Always                                                  | A paginated table of the assets you are authorized to see, with database locking, column preferences, a **Show archived** toggle, and the same **Delete Selected** / **Unarchive Selected** actions as the Search view |
 
-Choose a view with the switch at the right of the page title; the page has one title, **Assets and Files**, whichever view is shown. The page opens on the **Search** view when it is available and on **Asset list** otherwise, and a deployment that offers only the asset list shows no switch. The active view is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same view. A database-scoped link (`/#/search/{databaseId}/assets`) locks both views to that database, and the title names the database.
+Choose a view with the switch at the right of the page title; the page has one title, **Assets and Files**, whichever view is shown. The page opens on the **Search** view when it is available and on **Asset list** otherwise, and a deployment that offers only the asset list shows no switch. The active view is kept in the page URL (`?tab=asset-list`, `?tab=unified-search`), so a bookmark or shared link opens the same view. A database-scoped link (`/#/databases/{databaseId}/assets` or `/#/search/{databaseId}/assets`) locks both views to that database, and the title names the database (**Assets for {databaseId}**).
+
+The breadcrumb above the title ends with the page itself and never links back to it: on the all-databases page it is the page title alone, and on a database's page it reads **Databases > Assets for {databaseId}**, where **Databases** opens the database list.
 
 ## The query band
 
@@ -22,7 +24,15 @@ Below the page title, the Search view places the query in a band of its own: the
 -   **Keyword** matches asset and file names, descriptions, tags, and metadata. With an empty query it lists everything in scope, so results appear as soon as the view opens or a filter changes; filters narrow the list.
 -   **Natural language** matches on meaning across file contents — including image and video scenes — as well as names, descriptions, tags, and metadata. Nothing is searched until you describe what you are looking for: the table shows "Describe what you are looking for" instead of a result count, and filters take effect once a description is entered. Switching from **Keyword** with an empty box shows the same state; the keyword listing is not carried over.
 
-The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** in the title row resets the query and every filter.
+The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** in the title row resets the query and every filter; the count disappears until the reloaded list arrives. When searches overlap (a page change while a search is still running, for example), the page shows the answer to the newest one and stays in its loading state until that answer arrives.
+
+A search that cannot finish shows a **Search failed** notification with the reason, and the page keeps its previous results and every search control. For example:
+
+-   "The search filters could not be applied. Try again; if it keeps failing, contact your administrator." when a natural-language search asked for metadata, tag, or location filters that could not be applied at that moment. The search does not show unfiltered results instead.
+-   "Search is busy right now. Try again in a moment." when a natural-language search was throttled or timed out.
+-   "Search is temporarily unavailable. Try again in a moment." when a keyword search cannot reach Amazon OpenSearch.
+
+These are temporary failures of a search that is enabled, not a sign that search is turned off; run the search again.
 
 ## What to search for
 
@@ -45,7 +55,7 @@ The search box performs a general text query across all indexed fields. Type any
 
 The text query is combined with all other active filters using **AND** logic — results must match both the text query and any filters you have applied. For example, searching for "pump" with a database filter of "facility-db" returns only items that contain "pump" AND belong to "facility-db".
 
-Results include a relevance score. Choose the information icon next to any result to see which fields matched and why the result was returned.
+Results include a relevance score. With **Show result explanation** turned on (in **Display & Preferences**), choose the information icon next to any result to see which fields matched and why the result was returned. **Show result explanation** and the **Keyword Search Scope** toggle (**Include metadata field data in keyword search**, in **Advanced Filters**) shape keyword search only, so the sidebar offers them in keyword mode and not in natural-language mode.
 
 ![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
 
@@ -66,9 +76,9 @@ Choose **Natural language** to describe what you are looking for instead of nami
     -   "You don't have access to any database this search covers. Ask your administrator for access."
     -   "Not every database you can access was searched. Choose a database in the filters to search it fully."
     -   "Some filters aren't available for natural-language search in this deployment and weren't applied."
-    -   "Some result details, such as dates and metadata, couldn't be loaded, and metadata, tag and location filters weren't applied. The matches are still shown."
+    -   "Some result details couldn't be loaded. The matches are still shown." This notice appears only for a search without metadata, tag, or location filters; a search with such filters that cannot have them applied fails instead (see [The query band](#the-query-band)).
 -   A description can be up to 1,000 characters. Past that, the search box states the limit and how much to shorten the description, and **Search** stays unavailable until it fits.
--   The **Database**, **File type**, and **Include archived** filters apply in this mode in every deployment; the **File type** list offers the types found in the current results, with their counts. When the result count is a minimum (shown with `+`), the counts in the **Database**, **File type**, and other filter lists are minimums too and carry a `+`. When Amazon OpenSearch is also enabled, metadata, tag, and geospatial filters narrow the natural-language results too; without OpenSearch those filters are hidden.
+-   The **Database**, **File type**, and **Include archived** filters apply in this mode in every deployment; the **File type** list offers the types found in the current results, with their counts. When the result count is a minimum (shown with `+`), the counts in the **Database**, **File type**, and other filter lists are minimums too and carry a `+`. When Amazon OpenSearch is also enabled, metadata, tag, and geospatial filters narrow the natural-language results too; without OpenSearch those filters are hidden. The keyword-only **Keyword Search Scope** and **Show result explanation** toggles are not offered in this mode.
 -   Personal information in a file is masked before its text is embedded, so it cannot be searched for. With the deployment's default Amazon Bedrock guardrail (`bedrockGuardrail.create.piiFilter` set to `anonymize`), a person's name, an email address, a phone number, a postal address, and the other entity types the PII filter detects are replaced by type tokens such as `{NAME}` and `{EMAIL}`. A description that names a person or an email address therefore does not find a file by that value; the file is still found by everything else it contains. Keyword search, which indexes names, descriptions, tags, and metadata as they were entered, still matches a name typed into one of those fields. An administrator whose data holds no personal information can set `piiFilter` to `off`, or reference a guardrail of their own; see [Amazon Bedrock guardrail](../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail).
 -   A new or re-uploaded file becomes searchable once the SYSTEM GenAI metadata pipeline has analyzed it, which takes from one to several minutes after upload.
 
@@ -80,12 +90,14 @@ The sidebar provides several categories of filters that narrow search results in
 
 ### Basic filters
 
-| Filter             | Applies to    | Description                                                                                          |
-| ------------------ | ------------- | ---------------------------------------------------------------------------------------------------- |
-| **Database**       | Assets, Files | Restrict results to a specific database. Automatically locked when viewing a database-specific page. |
-| **Asset type**     | Assets        | Filter by the asset type classification (for example, `3D Model`, `Point Cloud`).                    |
-| **Tags**           | Assets        | Filter by one or more tags assigned to assets.                                                       |
-| **File extension** | Files         | Filter by file extension (for example, `.e57`, `.las`, `.pdf`).                                      |
+| Filter             | Applies to    | Description                                                                                                     |
+| ------------------ | ------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Database**       | Assets, Files | Restrict results to a specific database. On a database's page it is locked to that database and shows its name. |
+| **Asset type**     | Assets        | Filter by the asset type classification (for example, `3D Model`, `Point Cloud`).                               |
+| **Tags**           | Assets        | Filter by one or more tags assigned to assets.                                                                  |
+| **File extension** | Files         | Filter by file extension (for example, `.e57`, `.las`, `.pdf`).                                                 |
+
+Each option shows how many current results carry that value. The type and tag lists keep the values of the last unfiltered search, so you can still add another value once a filter narrows the results; their counts are always for the current results, and a value with no count in the current results shows none. When the result count is a minimum (shown with `+`), the filter counts are minimums too and carry a `+`.
 
 ### Advanced filters
 
@@ -126,7 +138,7 @@ VAMS provides multiple ways to view search results. Use the segmented control ab
 The default view displays results in a sortable, paginated table. Key features include:
 
 -   **Resizable columns** -- Drag column borders to adjust widths.
--   **Sortable columns** -- Choose any column header to sort ascending or descending. Sorting is performed server-side.
+-   **Sortable columns** -- Choose any column header to sort ascending or descending. In keyword mode sorting is performed server-side; in natural-language mode sorting and paging act on the top 100 hits in the browser.
 -   **Sticky header** -- Column headers remain visible as you scroll.
 -   **Dual scroll bars** -- A synchronized scroll bar appears above the table when content overflows horizontally.
 -   **Clickable links** -- Asset names link to the asset detail page. Database names link to the database asset listing. In Files mode, file paths link to the asset detail page and navigate directly to that file.
@@ -169,6 +181,8 @@ To place an asset on the map, add a `location` metadata field of type `geopoint`
 :::
 
 When you switch to map view, location-related metadata filters are automatically added so only geolocated results are returned. Choosing a map marker opens a popup with the entity's name, database, description, tags, and a **View Asset Details** button (or **View Parent Asset** for file results).
+
+In natural-language mode the map shows the same page of the natural-language answer as the table, and its page controls move through that answer's top matches without running another search; the results stay natural-language results on every page. In keyword mode each page is fetched from the server.
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
@@ -222,9 +236,9 @@ Column preferences are saved to your browser and persist across sessions.
 
 ## Sorting and pagination
 
--   **Sorting** is performed server-side. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
+-   **Sorting** is performed server-side in keyword mode; in natural-language mode sorting and paging act on the top 100 hits in the browser. Choose any sortable column header to sort results. The current sort field and direction are indicated in the column header.
 -   **Pagination** controls appear at the bottom of the results. Page sizes of 10, 25, 50, or 100 are available through preferences. Navigate between pages using the pagination controls.
--   The total result count is displayed in the table header. A `+` suffix means the count is a minimum: either more results exist than can be precisely counted, or some of your permission rules can only be counted as a minimum (see [Counts and permissions](../api/search.md#counts-and-permissions)). In natural-language mode the count is every match the search found that you can open, the same count the badge next to the title shows and screen readers announce when the search finishes, and the table lists the top 100 of them. There every count except zero carries a `+`: natural-language search finds the closest matches approximately, so it can miss a weak match, and a filled search window or a database that was not searched can leave out more.
+-   The total result count is displayed in the table header. A `+` suffix means the count is a minimum: either more results exist than can be precisely counted, or some of your permission rules can only be counted as a minimum (see [Counts and permissions](../api/search.md#counts-and-permissions)). The **About this count** info button beside a minimum explains it; it can be reached with **Tab** and opened with **Enter** or **Space**. In natural-language mode the count is every match the search found that you can open, the same count the badge next to the title shows and screen readers announce when the search finishes, and the table lists the top 100 of them. There every count except zero carries a `+`: natural-language search finds the closest matches approximately, so it can miss a weak match, and a filled search window or a database that was not searched can leave out more.
 
 ## Direct URL navigation to files
 
@@ -245,6 +259,8 @@ In Assets mode, you can select multiple assets using the checkboxes and perform 
 | **Delete Selected**    | Archive or permanently delete the selected assets. If any selected asset is already archived, the delete modal offers permanent deletion. |
 | **Unarchive Selected** | Restore a single archived asset. This button appears when exactly one archived asset is selected.                                         |
 | **Create Asset**       | Navigate to the upload page to create a new asset. From a database's asset page, the upload page opens with that database selected.       |
+
+The same actions appear in the **Asset list** view. Each is offered according to your role: an action your role does not allow, such as **Unarchive Selected** for a role built from the `database-user` or `database-readonly` template, is shown disabled with the reason, and VAMS still checks every request.
 
 :::warning
 Permanently deleting an archived asset cannot be undone. The asset and all its files are removed from the system.

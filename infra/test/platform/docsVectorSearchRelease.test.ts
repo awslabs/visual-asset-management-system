@@ -1022,7 +1022,7 @@ describe("concepts/vector-search.md — the vector search concept page", () => {
             "You don't have access to any ${Synonyms.database} this search covers. Ask your administrator for access.",
             "Not every ${Synonyms.database} you can access was searched. Choose a ${Synonyms.database} in the filters to search it fully.",
             "Some filters aren't available for natural-language search in this deployment and weren't applied.",
-            "Some result details, such as dates and metadata, couldn't be loaded, and metadata, tag and location filters weren't applied. The matches are still shown.",
+            "Some result details couldn't be loaded. The matches are still shown.",
         ]) {
             expect(warnings).toContain(text); // control: the web shows this text
             expect(guide).toContain(`"${text.replace(/\$\{Synonyms\.database\}/g, "database")}"`);
