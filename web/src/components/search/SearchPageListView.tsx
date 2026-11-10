@@ -382,6 +382,28 @@ const TruncatedCell: React.FC<{
     return <span title={isTruncated ? text : undefined}>{displayText}</span>;
 };
 
+/**
+ * The header text of a results column that has no header of its own: a short label, the
+ * FIELD_MAPPINGS label, or the field name without its type prefix. A cell that names itself after
+ * its column (a bool_ checkbox) uses the same text, so its name matches the header on screen.
+ */
+function fieldColumnLabel(name: string): string {
+    const shortLabels: Record<string, string> = {
+        str_assetname: Synonyms.Asset,
+        str_asset_version_id: "Version",
+        metadata: "Metadata",
+    };
+    return (
+        shortLabels[name] ||
+        (FIELD_MAPPINGS as any)[name]?.label ||
+        name
+            .split("_")
+            .slice(1)
+            .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+            .join(" ")
+    );
+}
+
 function columnRender(
     e: any,
     name: string,
@@ -555,10 +577,16 @@ function columnRender(
             </Box>
         );
     } else if (name.startsWith("bool_")) {
-        // Display all boolean fields as checkboxes
+        // Display all boolean fields as checkboxes, each named after its column header and value
+        // ("Archived: yes") so a screen reader can tell what the box states
+        const checked = value === true;
         return (
             <Box>
-                <Checkbox checked={value === true} disabled />
+                <Checkbox
+                    checked={checked}
+                    disabled
+                    ariaLabel={`${fieldColumnLabel(name)}: ${checked ? "yes" : "no"}`}
+                />
             </Box>
         );
     } else if (name === "num_filesize" || name === "num_size") {
@@ -895,20 +923,7 @@ function SearchPageListView({
             }
 
             // Use FIELD_MAPPINGS label if available, with overrides for brevity
-            const shortLabels: Record<string, string> = {
-                str_assetname: Synonyms.Asset,
-                str_asset_version_id: "Version",
-                metadata: "Metadata",
-            };
-
-            const fieldLabel =
-                shortLabels[name] ||
-                (FIELD_MAPPINGS as any)[name]?.label ||
-                name
-                    .split("_")
-                    .slice(1)
-                    .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
-                    .join(" ");
+            const fieldLabel = fieldColumnLabel(name);
 
             return {
                 id: name,
