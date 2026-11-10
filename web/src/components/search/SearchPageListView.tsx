@@ -1142,6 +1142,14 @@ function SearchPageListView({
                                 title="Describe what you are looking for"
                                 subtitle="Natural-language search runs once you enter a description. It matches on meaning across file contents, including image and video scenes."
                             />
+                        ) : state?.nlpNoDatabaseSearched ? (
+                            // No database was searched: no filter is the cause, so there is no action.
+                            // Generic on purpose: it names no database and says nothing of whether one
+                            // exists.
+                            <EmptyState
+                                title="No results"
+                                subtitle={`This search didn't cover a ${Synonyms.database} you can access.`}
+                            />
                         ) : (
                             <EmptyState
                                 title="No matches"

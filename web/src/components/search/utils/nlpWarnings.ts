@@ -29,6 +29,18 @@ const RARE_WARNING_TEXT: Record<string, () => string> = {
         `Not every ${Synonyms.database} you can access was searched. Choose a ${Synonyms.database} in the filters to search it fully.`,
 };
 
+/** The warning an answer carries when none of the databases it covers is one the user can access. */
+export const NO_ACCESSIBLE_DATABASE_CODE = "databases:none_accessible";
+
+/**
+ * True when a natural-language answer searched no database: its warnings carry
+ * NO_ACCESSIBLE_DATABASE_CODE. The results area then says the search covered no database the user can
+ * access, as the Search notice does, rather than reporting no matches and offering to clear filters.
+ */
+export function nlpSearchedNoDatabase(warnings: NlpSearchWarning[] | null | undefined): boolean {
+    return (warnings ?? []).some((w) => w.code === NO_ACCESSIBLE_DATABASE_CODE);
+}
+
 /** The text the page shows for one warning; a code it does not know shows the API's message. */
 export function nlpWarningText(warning: NlpSearchWarning): string {
     const text = RARE_WARNING_TEXT[warning.code];

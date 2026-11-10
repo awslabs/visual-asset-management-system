@@ -405,7 +405,6 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'indexing'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadata'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadataschema'),
-        os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'search'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'pipelines'),
         os.path.join(os.path.dirname(__file__), 'backend', 'models', 'assets'),
     ]

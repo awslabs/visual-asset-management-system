@@ -42,7 +42,11 @@ import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult, withNlpResultTotal } from "./utils/nlpResultPaging";
-import { rareNlpWarningText, rareNlpWarningTexts } from "./utils/nlpWarnings";
+import {
+    nlpSearchedNoDatabase,
+    rareNlpWarningText,
+    rareNlpWarningTexts,
+} from "./utils/nlpWarnings";
 import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
@@ -712,6 +716,13 @@ const ModernSearchContainer: React.FC<
         // Natural-language mode without its own answer (no query yet, or only a keyword listing
         // from before a switch): the table explains what to type rather than reporting no matches.
         nlpIdle: searchMode === "nlp" && answeredMode !== "nlp",
+        // The natural-language answer on screen searched no database (none it covers is one the user
+        // can access): the empty table says so, as the Search notice does, instead of "No matches"
+        // with a Clear filter action that suggests the filters are the cause.
+        nlpNoDatabaseSearched:
+            searchMode === "nlp" &&
+            answeredMode === "nlp" &&
+            nlpSearchedNoDatabase(nlpResult?.warnings),
     };
 
     // Render main content

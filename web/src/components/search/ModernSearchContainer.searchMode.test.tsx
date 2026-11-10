@@ -247,6 +247,98 @@ describe("ModernSearchContainer search modes", () => {
         await screen.findByText("No matches");
         expect(screen.queryByText("Describe what you are looking for")).toBeNull();
         expect(screen.getByText("0 results")).toBeInTheDocument();
+        // Positive control for the no-database empty state (D78): an answer that searched and found
+        // nothing keeps "We can't find a match." and its Clear filter action.
+        expect(screen.getByText("We can't find a match.")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
+        expect(screen.queryByText("No results")).toBeNull();
+    });
+
+    describe("an answer that searched no database (D78)", () => {
+        const noneAccessible = {
+            code: "databases:none_accessible",
+            message: "No searchable database is accessible to the caller",
+        };
+        const noDatabaseLine = "This search didn't cover a database you can access.";
+        const emptyAnswer = (warnings: Array<{ code: string; message: string }>) => ({
+            ...nlpEnvelope(false),
+            hits: { total: { value: 0, relation: "eq" }, hits: [] },
+            aggregationTotal: 0,
+            warnings,
+        });
+        const searchOnce = async (query: string) => {
+            const input = await screen.findByPlaceholderText(
+                "Describe what you are looking for..."
+            );
+            await userEvent.clear(input);
+            await userEvent.type(input, query);
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        };
+
+        it("says the search covered no database the user can access, with no filter action", async () => {
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            (searchNlp as jest.Mock).mockResolvedValue([true, emptyAnswer([noneAccessible])]);
+            renderContainer();
+            await searchOnce("gearbox");
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+            await screen.findByText("No results");
+            expect(screen.getByText(noDatabaseLine)).toBeInTheDocument();
+            // Nothing that blames the filters, and nothing that names a database or the API's words.
+            expect(screen.queryByText("No matches")).toBeNull();
+            expect(screen.queryByText("We can't find a match.")).toBeNull();
+            expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
+            expect(screen.queryByText(/caller/)).toBeNull();
+            expect(screen.queryByText(/db1/)).toBeNull();
+            // The count and the Search notice agree with it.
+            expect(screen.getByText("0 results")).toBeInTheDocument();
+            expect(screen.getByText("Search notice")).toBeInTheDocument();
+        });
+
+        it("keeps No matches for an empty answer whose only warning is another rare one", async () => {
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            (searchNlp as jest.Mock).mockResolvedValue([
+                true,
+                emptyAnswer([{ code: "opensearch:fields_ignored", message: "ignored: filters" }]),
+            ]);
+            renderContainer();
+            await searchOnce("gearbox");
+            await screen.findByText("No matches");
+            expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
+            expect(screen.queryByText("No results")).toBeNull();
+            expect(screen.queryByText(noDatabaseLine)).toBeNull();
+        });
+
+        it("follows the answer on screen: the next answer that searched a database reports No matches again", async () => {
+            setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+            // Answers in turn, then the last one again; no queued once-value can outlive this test.
+            const answers = [emptyAnswer([noneAccessible]), emptyAnswer([])];
+            let call = 0;
+            (searchNlp as jest.Mock).mockImplementation(async () => [
+                true,
+                answers[Math.min(call++, answers.length - 1)],
+            ]);
+            renderContainer();
+            await searchOnce("gearbox");
+            await screen.findByText("No results");
+            await searchOnce("gearbox housing");
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(2));
+            await screen.findByText("No matches");
+            expect(screen.queryByText("No results")).toBeNull();
+            expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
+        });
+
+        it("never applies to a keyword answer, warnings or not", async () => {
+            setFeatures([]);
+            (searchAssets as jest.Mock).mockResolvedValue([
+                true,
+                { ...keywordEnvelope, warnings: [noneAccessible] },
+            ]);
+            renderContainer();
+            await screen.findByText("No matches");
+            expect(screen.getByRole("button", { name: "Clear filter" })).toBeInTheDocument();
+            expect(screen.queryByText("No results")).toBeNull();
+            expect(screen.queryByText(noDatabaseLine)).toBeNull();
+        });
     });
 
     it("sends the natural-language body with size 100 and shows the truncated footer", async () => {
@@ -627,7 +719,8 @@ describe("ModernSearchContainer search modes", () => {
             );
             await userEvent.type(input, "gearbox{Enter}");
             await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-            await screen.findByText("No matches");
+            // No database was searched, so the empty table says so (D78).
+            await screen.findByText("No results");
             const announcement = `Found 0 results. ${noneAccessibleText}`;
             await waitFor(() => expect(countAnnouncement().textContent).toBe(announcement));
             await expectPoliteAnnouncement(announcement.replace(/\.$/, ""));

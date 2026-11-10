@@ -9,6 +9,8 @@
  */
 import {
     NLP_WINDOW_WARNING_CODES,
+    NO_ACCESSIBLE_DATABASE_CODE,
+    nlpSearchedNoDatabase,
     nlpWarningText,
     rareNlpWarningText,
     rareNlpWarningTexts,
@@ -111,5 +113,23 @@ describe("rareNlpWarningTexts", () => {
         ).toEqual([nlpWarningText(warning("databases:none_accessible")), "A new kind of notice"]);
         expect(rareNlpWarningTexts(null)).toEqual([]);
         expect(rareNlpWarningTexts([{ code: "future:code", message: "" }])).toEqual([]);
+    });
+});
+
+describe("nlpSearchedNoDatabase", () => {
+    it("is true only when the answer carries the no-accessible-database warning (D78)", () => {
+        expect(NO_ACCESSIBLE_DATABASE_CODE).toBe("databases:none_accessible");
+        expect(nlpSearchedNoDatabase([warning("databases:none_accessible")])).toBe(true);
+        expect(
+            nlpSearchedNoDatabase([
+                { code: "truncated:window", message: "m" },
+                warning("databases:none_accessible"),
+            ])
+        ).toBe(true);
+        expect(nlpSearchedNoDatabase([warning("opensearch:fields_ignored")])).toBe(false);
+        expect(nlpSearchedNoDatabase([warning("truncated:targets")])).toBe(false);
+        expect(nlpSearchedNoDatabase([])).toBe(false);
+        expect(nlpSearchedNoDatabase(undefined)).toBe(false);
+        expect(nlpSearchedNoDatabase(null)).toBe(false);
     });
 });
