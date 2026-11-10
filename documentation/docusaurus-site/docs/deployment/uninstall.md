@@ -274,6 +274,12 @@ The key named log groups are:
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
 
+The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
+
+```bash
+aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
+```
+
 ```bash
 # List VAMS-related log groups
 aws logs describe-log-groups \

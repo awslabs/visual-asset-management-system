@@ -293,6 +293,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Workflow outputs across an output-step retry** — When a run's output step is retried after a timeout, the execution details list every output an earlier attempt ingested, and neither the retry nor two queued copies of one large output write a second version of it. (issue #1271)
 -   **Retry after an output-step timeout** — A run whose output step's Lambda times out is retried instead of failing; existing workflows pick the retry up at their next launch. (issue #1290)
 -   **Staged outputs removed after the move** — Pipeline outputs no longer stay in the run's staging folder once they are in the asset. (issue #1291)
+-   **More than 10 deployments per Region** — The orchestration bus audit log group carries its own resource policy instead of adding an account-level Amazon CloudWatch Logs resource policy per deployment, which limited an account to 10 VAMS deployments per Region. The update removes the old policy. A provisioned Amazon OpenSearch Service domain still adds one account-level policy for its logs. (issue #1266)
 -   **Three.js Viewer point cloud selection** — A point cloud selected in the panel or the 3D view is drawn in the highlight green and returns to its own colours when deselected. Wireframe Mode applies to meshes only and says so. (issue #1275)
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
 -   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
@@ -306,6 +307,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 -   **Route listings follow the enabled add-ons** — The API route listing and the allowed-route check leave out the routes of an add-on the deployment has not enabled, such as the Physna viewer route without Physna Sync, so the constraint editor no longer offers them and no denial is recorded for them. (issue #1243)
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
+-   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 
 **Other changes:**
 
