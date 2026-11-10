@@ -232,6 +232,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
     -   `409` --> `AlreadyExistsError` variants
     -   `403` --> `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or `APIError`, raised by `_make_request` itself
     -   `429` --> `RateLimitExceededError` / `RetryExhaustedError`
+-   A method that maps its own status codes (catches `requests.exceptions.HTTPError` and raises its own error for a `400`, `404` or `503`) passes `raise_http_errors=True` to `post()` / `get()`. Without it the request wrapper turns every non-2xx into its generic error first, and the method's own branches never run. Its tests replace only `session.request`, so the call goes through the wrapper; a test that mocks `post()` cannot catch the gap (`search_nlp`, `search_query`, `search_simple`).
 
 **HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
 

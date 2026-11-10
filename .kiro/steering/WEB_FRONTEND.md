@@ -157,7 +157,8 @@ web/
       metadataSchema/
       metadataV2/
       modals/
-      search/               # ModernSearchContainer.tsx - main search UI
+      search/               # ModernSearchContainer.tsx - unified keyword / natural-language search
+                            #   (the body of the search page's "Search" view)
       searchSmall/
       selectors/
       single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -175,7 +176,7 @@ web/
       ListPage.tsx
       ListPageNoDatabase.tsx
       MetadataSchema.tsx
-      search/               # SearchPage.tsx
+      search/               # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/
       Tag/
 
@@ -229,6 +230,14 @@ web/
         VeerumViewerPlugin/
         VideoViewerPlugin/
         VntanaViewerPlugin/
+
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.5
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
+                            #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/            # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx
@@ -1638,6 +1647,7 @@ When in doubt about patterns, reference these well-structured files:
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |

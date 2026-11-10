@@ -99,7 +99,8 @@ web/
       metadataSchema/
       metadataV2/
       modals/
-      search/               # ModernSearchContainer.tsx - main search UI
+      search/               # ModernSearchContainer.tsx - unified keyword / natural-language search
+                            #   (the body of the search page's "Search" view)
       searchSmall/
       selectors/
       single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -112,7 +113,7 @@ web/
       Databases.tsx
       LandingPage.tsx
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/
+      search/               # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
       # Orchestration route shells rendering the matching features/orchestration component
       PipelinesPage2.tsx PipelineBuilderPage.tsx
@@ -128,6 +129,14 @@ web/
         viewerConfig.json   # Plugin configuration
       viewers/              # Individual viewer plugins
         manifest.ts
+
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.5
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
+                            #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/            # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
     constants/uploadLimits.ts
@@ -623,6 +632,7 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
