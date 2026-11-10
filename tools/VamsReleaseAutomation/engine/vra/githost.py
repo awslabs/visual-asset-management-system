@@ -19,6 +19,18 @@ from vra import util
 from vra.errors import UsageError
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib copies the request headers, the token included, to the redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def no_redirect_opener() -> urllib.request.OpenerDirector:
+    """An opener for token-bearing requests: a 3xx answer is an HTTPError, never followed."""
+    return urllib.request.build_opener(_NoRedirect)
+
+
 class GitHost:
     type = "base"
 
@@ -99,8 +111,9 @@ class BitbucketHost(GitHost):
                                      headers={"Authorization": f"Bearer {self._token()}",
                                               "Content-Type": "application/json"})
         # the URL is checked for https:// above
+        # no redirects: the Bearer token would go to the redirect target
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 # nosec B310 - https enforced above
+        with no_redirect_opener().open(req, timeout=30) as resp:  # noqa: S310 # nosec B310 - https enforced above
             return json.loads(resp.read().decode() or "{}")
 
     def find_pr(self, head, base):

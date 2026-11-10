@@ -45,6 +45,18 @@ import urllib.parse
 import urllib.request
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib copies the request headers, the token included, to the redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def no_redirect_opener() -> urllib.request.OpenerDirector:
+    """An opener for token-bearing requests: a 3xx answer is an HTTPError, never followed."""
+    return urllib.request.build_opener(_NoRedirect)
+
+
 def run_ref(provider: str, environ=None) -> str:
     """Must equal vra.identity.resolve(...).run_ref for the same job."""
     env = os.environ if environ is None else environ
@@ -227,8 +239,9 @@ def gitlab_deployment_of_job(environ=None) -> dict:
     def get(path: str):
         req = urllib.request.Request(f"{api}/projects/{project}{path}", headers={"PRIVATE-TOKEN": token})
         # the URL is checked for https:// above
+        # no redirects: the PRIVATE-TOKEN header would go to the redirect target
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 # nosec B310 - https enforced above
+        with no_redirect_opener().open(req, timeout=30) as r:  # noqa: S310 # nosec B310 - https enforced above
             return json.load(r)
     name = env.get("CI_ENVIRONMENT_NAME") or env.get("VRA_ENV")
     for d in get(f"/deployments?environment={urllib.parse.quote(name)}&order_by=id&sort=desc&per_page=50"):
