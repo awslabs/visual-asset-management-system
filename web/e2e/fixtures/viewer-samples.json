@@ -443,6 +443,19 @@
             }
         },
         {
+            "id": "threejs-ply-points",
+            "viewer": "threejs-viewer",
+            "path": "/threejs/fragment.ply",
+            "url": "https://raw.githubusercontent.com/isl-org/Open3D/a124f85e02d9e6d0c89d71ce57cb473dc4b9da62/examples/TestData/fragment.ply",
+            "size": 6081011,
+            "sha256": "96203542a5659c1efd2bcfe8a2dd7d3ffc9b88cf24680b4703515f6b21f67d99",
+            "licence": "MIT",
+            "source": "https://github.com/isl-org/Open3D/blob/a124f85e02d9e6d0c89d71ce57cb473dc4b9da62/LICENSE (Open3D v0.10.0 test data, MIT; examples/TestData has no separate licence; 196,133 RGB points, no faces)",
+            "expect": {
+                "vertexCount": 196133
+            }
+        },
+        {
             "id": "vntana-glb-box",
             "viewer": "vntana-viewer",
             "path": "/vntana/BoxTextured.glb",

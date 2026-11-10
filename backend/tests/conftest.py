@@ -390,6 +390,17 @@ _rn_spec = _s3mk_importlib_util.spec_from_file_location(
 _rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
 _rn_spec.loader.exec_module(_rn_module)
 sys.modules['common.resourceNames'] = _rn_module
+
+# snsTopicNames is pure naming logic; register the real module so handlers that
+# import it at load time collect cleanly under the MagicMock `common` package.
+_sns_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.snsTopicNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'snsTopicNames.py')
+)
+_sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
+_sns_spec.loader.exec_module(_sns_module)
+sys.modules['common.snsTopicNames'] = _sns_module
+sys.modules['common'].snsTopicNames = _sns_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:

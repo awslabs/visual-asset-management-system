@@ -120,6 +120,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)
 -   **OBJ material libraries in the Three.js viewer** — An OBJ file's `.mtl` library and its textures load from the asset, so the model renders with its materials. (issue #923)
 -   **COLLADA and 3DS textures in the Three.js viewer** — Textures load from the asset instead of being requested from the web site root, which answered 403. (issue #925)
 -   **CAD files in the Three.js viewer** — `.igs` files open like `.iges`, and a STEP, IGES or BREP file that cannot be read shows a short message instead of a script error. (issue #1199)
@@ -287,8 +288,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Viewer permission message** — When the API refuses a file's download with 403, the core viewers and the Text Diff Viewer say "You do not have permission to view or download this file." instead of a generic download error; a 401 asks the user to sign in again. (issue #1211)
 -   **Text Diff version hint on its own line** — In a side's notice, "Pick another version above to compare it instead." starts on a new line instead of running on from the message. (issue #1237)
 -   **SVG files display in the Image Viewer** — Download and stream links for a `.svg` file return it as `image/svg+xml` with an attachment disposition, so the Image Viewer and asset previews render it and opening the link directly downloads it. Stored files are unchanged. (issue #1201)
+-   **Three.js Viewer PLY point clouds and colours** — A PLY file with no faces draws as a point cloud instead of grey streaks, and a PLY's per-vertex colours are used for points and meshes; a PLY without colours stays grey. (issue #1257)
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
 -   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
+-   **SSM prefix comments and MCP tier table** — The data-migration tooling comments include the Region in the resource-name SSM parameter prefix, and the MCP tool tier table drops a stray "Adds" from each row. (issue #1149)
+-   **Deterministic exclusion test** — The backend test that compares an asset execution listing with and without `excludeStatus` pins the listing start date, so it no longer fails intermittently on the time-derived `filterStartDate` echo. (issue #1227)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 
