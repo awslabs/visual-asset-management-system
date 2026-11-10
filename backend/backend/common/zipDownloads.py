@@ -6,15 +6,15 @@
 A zip download is a job owned by the user who requested it: a row in the zip download requests
 table (PK ``userId``, SK ``requestId``), a request manifest and, once the zipArchive system pipeline
 has run, an archive under ``vams.preparedDownloads/`` in the asset auxiliary bucket. The API
-(``handlers/assets/zipDownloadService.py``), its terminal callback and delayed sweep
-branches, and the zipArchive container all write the row, so
+(``handlers/assets/zipDownloadService.py``, with its read-time reconcile and delayed sweep), and
+the zipArchive container all write the row, so
 the status machine is defined once here:
 
 - ``QUEUED`` -> ``RUNNING`` -> one of ``SUCCEEDED`` / ``FAILED`` / ``CANCELLED``.
 - Terminal statuses are final (monotonic). Every writer conditions on the row still being
   ``QUEUED`` or ``RUNNING``, so the first terminal write wins and every later one is a no-op.
 - A landed archive wins, with one outcome. Every writer that finalizes a job for a reason other
-  than the archive (the terminal callback, the read-time reconcile, the user's cancel, the
+  than the archive (the read-time reconcile, the user's cancel, the
   container's own failure and stop paths) first makes sure no archive landed: the API side aborts the
   job's open uploads and then checks that the key's object is the one THIS job's upload created
   (landed_archive: the row's archiveUploadToken, never presence or size) (finalize_ended_run, cancel_job); the
@@ -26,14 +26,18 @@ the status machine is defined once here:
   during the Complete, the archive stays unserved (only a SUCCEEDED job gets a download URL) until the
   job is deleted or the prepared-downloads retention rule expires it.
 - A user's cancel is recorded on the row (``cancelRequestedAt``, request_cancel) BEFORE anything stops
-  the run. From then on no writer records FAILED: the terminal callback, the read-time reconcile and
-  the container's own failure write all condition on the marker being absent, and a finalizer that
+  the run. From then on no writer records FAILED: the read-time reconcile and the container's own
+  failure write both condition on the marker being absent, and a finalizer that
   finds it records CANCELLED (by the user) instead (decide_finalization). So a cancel whose own stop
   made the run end before the cancel's CANCELLED write landed still ends CANCELLED (#1125 D22). A
   landed archive still wins over the cancel.
-- The container is the primary status source (live progress, its own refusal reason). The terminal
-  callback of the workflow run, and the read-time reconcile in the API, finalize a row the container
-  could not (a job that never started, a timeout, an abort from the workflow executions views).
+- The container is the primary status source (live progress, its own refusal reason). The
+  read-time reconcile in the API finalizes a row the container could not (a job that never started,
+  a timeout, an abort from the workflow executions views) from the run's status on its execution
+  row, found by the job's stored ``workflowExecutionId``, when the job is next read. The run sends
+  the job nothing when it ends (no terminal callback). Incomplete uploads no reader aborted are
+  removed by the ``vams.preparedDownloads/`` lifecycle rule after a day, and working objects of a job
+  that ended expire with the retention rule.
 
 This module has NO import-time AWS or environment dependency.
 """
@@ -76,12 +80,11 @@ CANCELLED_BY_EXECUTION = "execution"
 # container (zip_archive_pipeline/runner.py), pinned by its tests.
 ARCHIVE_UPLOAD_TOKEN_METADATA = VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
 
-# The zipArchive system workflow and the system trigger its zip-download runs are recorded under
-# (common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
+# The zipArchive system workflow, and the system trigger a zip-download run is launched with
+# (stored by common.workflows.systemPipelines.SYSTEM_TRIGGER_TYPE_TO_STORED).
 ZIP_ARCHIVE_WORKFLOW_ID_DEFAULT = "utility-zip-archive"
 ZIP_ARCHIVE_WORKFLOW_DATABASE_ID_DEFAULT = "GLOBAL"
 ZIP_DOWNLOAD_REQUEST_TRIGGER = "zipDownload"
-ZIP_DOWNLOAD_STORED_TRIGGER = "Zip-Download"
 
 # Version of the system execution context and of the request manifest the container reads.
 CONTEXT_VERSION = 1
@@ -248,7 +251,7 @@ def finalize_row(table, user_id: str, request_id: str, status: str, *, error_mes
     False when the row is missing or already terminal (the first terminal write wins).
 
     With ``expected_execution_id`` the write also requires the row to belong to that run, so a
-    callback for an older run never finalizes a row relaunched since. With
+    finalizer acting on an older run never finalizes a row relaunched since. With
     ``unless_cancel_requested`` it also requires that no user cancel was recorded
     (``cancelRequestedAt``, request_cancel): a FAILED write then loses to a pending cancel (#1125 D22)."""
     if status not in TERMINAL_STATUSES:
@@ -417,8 +420,8 @@ def _abort_then_reread(table, s3_client, bucket: str, row: dict, logger=None) ->
 
 def finalize_ended_run(table, s3_client, bucket: str, row: dict, execution_status: str,
                        execution_error: str = "", logger=None) -> Tuple[Optional[str], bool]:
-    """Finalize a non-terminal job whose workflow run ended: the terminal callback and the API's
-    read-time reconcile both come here. Returns ``(status, changed)``; ``(None, False)`` when there
+    """Finalize a non-terminal job whose workflow run ended: the API's read-time reconcile
+    (zipDownloadService._reconcile) comes here. Returns ``(status, changed)``; ``(None, False)`` when there
     is nothing to write.
 
     The job's open multipart uploads are aborted BEFORE the decision, so S3 refuses a
@@ -473,14 +476,14 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
     """The user's cancel of a non-terminal job. Same rule as finalize_ended_run: abort the open
     uploads, then a landed archive wins, decided by the job's upload token whatever the abort answered.
 
-    Returns CANCEL_CANCELLED when the job is CANCELLED (by this call, or by the terminal callback or
-    reconcile that found the recorded cancel), CANCEL_LANDED when the archive had landed (the job is
+    Returns CANCEL_CANCELLED when the job is CANCELLED (by this call, or by a reconcile that found
+    the recorded cancel), CANCEL_LANDED when the archive had landed (the job is
     SUCCEEDED, recorded here or by the container), or CANCEL_ENDED when the job had already ended
     before the cancel was recorded. Never deletes the job: the caller reports a job that ended.
 
     The cancel is recorded first (request_cancel, #1125 D22), before the stop marker reaches the
-    container: the run its stop ends can be finalized by the terminal callback at any point after
-    that, and that callback then records CANCELLED rather than FAILED."""
+    container: the run its stop ends can be finalized by a read-time reconcile at any point after
+    that, and that reconcile then records CANCELLED rather than FAILED."""
     def _outcome():
         fresh = table.get_item(Key=row_key(row["userId"], row["requestId"]),
                                ConsistentRead=True).get("Item") or {}
@@ -502,8 +505,8 @@ def cancel_job(table, s3_client, bucket: str, row: dict, cancelled_by: str, logg
             return CANCEL_LANDED
         return _outcome()
     if finalize_row(table, row["userId"], row["requestId"], STATUS_CANCELLED, cancelled_by=cancelled_by):
-        # A resolved manifest the container writes after this is removed by the terminal callback of
-        # the aborted run (the zip download service's terminal callback), which deletes them again for an ended job.
+        # A resolved manifest the container writes after this stays until the job is deleted or the
+        # vams.preparedDownloads/ retention rule expires it; it is never served.
         delete_working_objects(s3_client, bucket, row, logger)
         return CANCEL_CANCELLED
     return _outcome()
@@ -794,8 +797,8 @@ def archive_head(s3_client, bucket: str, key: str) -> Tuple[bool, Optional[int]]
 #
 # An abort's immediate answer is not final: on demo21 S3 answered an abort, ListParts right after it
 # answered NoSuchUpload, and the upload was listed again 2 to 8 minutes later with a part accepted
-# before the stop. So every stopper of a zip job (the user's cancel, the terminal callback, the
-# read-time reconcile, the delete of a job) also starts the job's delayed sweep: an execution of the
+# before the stop. So every stopper of a zip job (the user's cancel, the read-time reconcile, the
+# delete of a job) also starts the job's delayed sweep: an execution of the
 # zip download sweep state machine (infra lambdaBuilder/assetFunctions.ts: Wait
 # SWEEP_FIRST_WAIT_SECONDS, sweep, Wait SWEEP_SECOND_WAIT_SECONDS, sweep), whose passes run the
 # zip download service's ``sweep`` action (sweep_recorded_uploads). Deployed only with app.zipDownloads on.

@@ -5,7 +5,7 @@
 
 Every write is conditional on the row still being QUEUED or RUNNING and belonging to this run
 (``workflowExecutionId`` equal to this run's, or not yet recorded), the same terminal-is-final rule the
-API and the terminal callback use (backend ``common/zipDownloads.py``). A write that loses (the user
+API's writers use (backend ``common/zipDownloads.py``). A write that loses (the user
 cancelled, or another writer finalized the job) is ignored: the container then stops quietly.
 A landed archive wins: the runner never writes FAILED once its upload completed, and deletes an
 archive that landed after another writer finalized the job without it (runner.Job).
@@ -115,9 +115,9 @@ class StatusWriter:
 
         AWS Batch sends SIGTERM for a user cancel, an abort from the workflow executions views, a
         timeout and a terminate outside VAMS alike, and the container cannot tell them apart. The
-        terminal callback (and the read-time reconcile) finalize from the run's own status:
+        API's read-time reconcile finalizes from the run's own status:
         "Cancelled from workflow executions" for ABORTED, the timeout message for TIMED_OUT, this
-        reason for a FAILED run, CANCELLED for a recorded user cancel, and they clean the job's
+        reason for a FAILED run, CANCELLED for a recorded user cancel, and it cleans the job's
         working objects. No status change, so ``status`` stays QUEUED/RUNNING until then."""
         return self._update(["stopReason = :r"],
                             {":r": (reason or "The archive job was stopped")[:MAX_REASON_CHARS]})
@@ -125,7 +125,7 @@ class StatusWriter:
     def failed(self, reason):
         """FAILED with the container's reason, unless the user's cancel was recorded
         (``cancelRequestedAt``, backend common/zipDownloads.request_cancel): a pending cancel wins and
-        is finalized CANCELLED by the API or the terminal callback (#1125 D22)."""
+        is finalized CANCELLED by the API's cancel or read-time reconcile (#1125 D22)."""
         return self._update(["#status = :s", "errorMessage = :e", "completedAt = :c"],
                             {":s": "FAILED", ":e": (reason or "The archive job failed")[:MAX_REASON_CHARS],
                              ":c": _now()}, unless_cancel_requested=True)

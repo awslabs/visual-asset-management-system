@@ -1013,8 +1013,10 @@ export function storageResourcesBuilder(
             // Download as Zip archives and their manifests
             // (vams.preparedDownloads/<databaseId>/<assetId>/<userHash>/<requestId>/), expired after the
             // configured retention. Deployed whatever app.zipDownloads.enabled says, so turning the
-            // feature off never orphans an archive. A cancelled job's incomplete upload is aborted after
-            // a day (the bucket-wide rule above waits 14). Every other auxiliary object lives under
+            // feature off never orphans an archive. Any incomplete upload under the prefix is aborted
+            // after a day (the bucket-wide rule above waits 14): the backstop for an upload a cancelled
+            // or failed job left open that neither the read-time reconcile nor the delayed sweep
+            // aborted (no terminal callback finalizes a job). Every other auxiliary object lives under
             // <databaseId>/, and a database id has no dot, so these rules never match a database's data.
             {
                 id: "PreparedDownloadsExpiration",

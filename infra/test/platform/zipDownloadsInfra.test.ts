@@ -7,11 +7,12 @@
  * Download as Zip (app.zipDownloads) in the synthesized templates.
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
- * `vams.preparedDownloads/`, the table's SSM name, and one zip Lambda, the zip download service,
- * which serves the six routes, the terminal callback and the delayed sweep's passes. Only with
- * `enabled`: the zipArchive system pipeline stack, the ZIPDOWNLOADS feature switch, the service's
- * registration as the Zip-Download callback, the sweep state machine that invokes it, and its two
- * cross-call grants (launch and abort), each on an exact function ARN.
+ * `vams.preparedDownloads/` (including the one-day abort of incomplete uploads), the table's SSM
+ * name, and one zip Lambda, the zip download service, which serves the six routes and the delayed
+ * sweep's passes. Only with `enabled`: the zipArchive system pipeline stack, the ZIPDOWNLOADS feature
+ * switch, the sweep state machine that invokes the service, and its two cross-call grants (launch
+ * and abort), each on an exact function ARN. In no cell is the service a terminal callback: no
+ * terminal writer names it and no role but the sweep's may invoke it.
  */
 
 import {
@@ -21,7 +22,6 @@ import {
     TemplateName,
     synthTemplate,
 } from "../support/templateSynth";
-import { SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV } from "../../lib/lambdaBuilder/systemPipelineCallbacks";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -34,6 +34,8 @@ jest.setTimeout(900_000);
 
 const SERVICE_HANDLER = "handlers.assets.zipDownloadService.lambda_handler";
 const ARCHIVE_EXECUTE_HANDLER = "vamsExecuteZipArchivePipeline.lambda_handler";
+/** The terminal writers' callback registry variable (lambdaBuilder/systemPipelineCallbacks.ts). */
+const CALLBACK_REGISTRY_ENV = "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER";
 
 function enabledMutate(retentionDays: number) {
     return (c: any) => {
@@ -82,15 +84,49 @@ function zipApiFunctions(synth: SynthResult): Resource[] {
 }
 
 /**
- * One Lambda serves the routes, the terminal callback and the sweep: no second zip function, no
- * handler under the removed handlers/zipDownloads package, and no role or log group of the removed
- * callback function.
+ * One Lambda serves the routes and the sweep: no second zip function, no handler under the removed
+ * handlers/zipDownloads package, and no role or log group of the removed callback function.
  */
 function expectOneZipFunction(synth: SynthResult): void {
     const zip = zipApiFunctions(synth);
     expect(zip.map((r) => r.properties.Handler)).toEqual([SERVICE_HANDLER]);
     expect(synth.resources.filter((r) => /^zipDownloadCallback/i.test(r.logicalId))).toEqual([]);
     expect(synth.grep("zipDownloadCallback")).toEqual([]);
+}
+
+/**
+ * No terminal writer names the zip download service (no callback registry variable mentions it or
+ * the Zip-Download trigger), and the only IAM policy that grants lambda:InvokeFunction on the service
+ * is the one on the sweep state machine's role (`sweepRoleId`, or none when the sweep is not deployed).
+ */
+function expectNoZipCallback(synth: SynthResult, sweepRoleId?: string): void {
+    const service = functionByHandler(synth, SERVICE_HANDLER);
+    const serviceId = service.logicalId;
+    const naming = synth.where("AWS::Lambda::Function", (r) => {
+        const registry = envOf(r)[CALLBACK_REGISTRY_ENV];
+        if (registry === undefined) {
+            return false;
+        }
+        const flat = SynthResult.flatten(registry);
+        return flat.includes(serviceId) || flat.includes("Zip-Download");
+    });
+    expect(naming).toEqual([]);
+    const invokers = [
+        ...synth.ofType("AWS::IAM::Policy"),
+        ...synth.ofType("AWS::IAM::ManagedPolicy"),
+    ]
+        .filter((p) => p.stack === service.stack)
+        .filter((p) =>
+            (p.properties.PolicyDocument.Statement as any[]).some(
+                (st) =>
+                    actionsOf(st).includes("lambda:InvokeFunction") &&
+                    [].concat(st.Resource).some((r) => SynthResult.flatten(r).includes(serviceId))
+            )
+        );
+    const roles = invokers.flatMap((p) =>
+        (p.properties.Roles ?? []).map((r: { Ref?: string }) => r?.Ref ?? JSON.stringify(r))
+    );
+    expect(roles).toEqual(sweepRoleId ? [sweepRoleId] : []);
 }
 
 /** Every S3 action that writes, deletes or aborts is granted only under vams.preparedDownloads/. */
@@ -214,16 +250,12 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(invoke).toEqual([]);
     });
 
-    test("one zip Lambda serves the routes, the callback and the sweep", () => {
+    test("one zip Lambda serves the routes and the sweep", () => {
         expectOneZipFunction(synth);
     });
 
-    test("no terminal writer names the zip download service with the feature off", () => {
-        const writersWithRegistry = synth.where(
-            "AWS::Lambda::Function",
-            (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
-        );
-        expect(writersWithRegistry).toEqual([]);
+    test("the zip download service is no terminal callback, and nothing may invoke it", () => {
+        expectNoZipCallback(synth);
     });
 
     test("no zipArchive pipeline and no ZIPDOWNLOADS switch", () => {
@@ -338,7 +370,7 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         expect(env.EXECUTION_SERVICE_FUNCTION_NAME).toBeDefined();
     });
 
-    test("one zip Lambda serves the routes, the callback and the sweep; its S3 writes stay prefix-scoped", () => {
+    test("one zip Lambda serves the routes and the sweep; its S3 writes stay prefix-scoped", () => {
         expectOneZipFunction(synth);
         expectS3MutationsPrefixScoped(
             roleStatements(synth, functionByHandler(synth, SERVICE_HANDLER))
@@ -464,23 +496,15 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
         }
     });
 
-    test("the zip download service is registered under Zip-Download on the terminal writers", () => {
-        const serviceId = functionByHandler(synth, SERVICE_HANDLER).logicalId;
-        const writers = synth.where(
-            "AWS::Lambda::Function",
-            (r) => envOf(r)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV] !== undefined
-        );
-        expect(writers).toHaveLength(3);
-        for (const writer of writers) {
-            const registry = SynthResult.flatten(
-                envOf(writer)[SYSTEM_PIPELINE_CALLBACK_FUNCTIONS_ENV]
-            );
-            expect(registry).toContain('"Zip-Download"');
-            expect(registry).toContain(serviceId);
-        }
+    test("the zip download service is no terminal callback: only the sweep may invoke it", () => {
+        const machine = synth.where("AWS::StepFunctions::StateMachine", (r) =>
+            r.logicalId.startsWith("ZipDownloadSweepStateMachine")
+        )[0];
+        const sweepRoleId = machine.properties.RoleArn["Fn::GetAtt"][0];
+        expectNoZipCallback(synth, sweepRoleId);
     });
 
-    test("the lifecycle rule follows retentionDays", () => {
+    test("the lifecycle rule follows retentionDays and aborts incomplete uploads after a day", () => {
         const bucket = synth.where("AWS::S3::Bucket", (r) =>
             JSON.stringify(r.properties.LifecycleConfiguration ?? {}).includes(
                 "PreparedDownloadsExpiration"
@@ -490,6 +514,9 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
             (r) => r.Id === "PreparedDownloadsExpiration"
         );
         expect(rule.ExpirationInDays).toBe(14);
+        // The backstop for an upload no reader aborted: no terminal callback finalizes a job.
+        expect(rule.Prefix).toBe("vams.preparedDownloads/");
+        expect(rule.AbortIncompleteMultipartUpload).toEqual({ DaysAfterInitiation: 1 });
     });
 
     test("the ZIPDOWNLOADS feature switch is written", () => {

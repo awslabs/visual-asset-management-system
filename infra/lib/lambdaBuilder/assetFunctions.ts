@@ -688,17 +688,17 @@ export function buildAssetHistoryFunction(
 
 /**
  * Download as Zip (app.zipDownloads): one function, the zip download service
- * (backend handlers/assets/zipDownloadService.py), serves the six `/download/zip` routes, the
- * terminal callback of the zipArchive system pipeline and the passes of the delayed sweep. Its
- * handler dispatches on the event envelope: an API Gateway event (it always has `requestContext`)
- * takes the API path with the authorizer and Casbin checks; the callback and sweep payloads are
- * direct invokes no route can reach.
+ * (backend handlers/assets/zipDownloadService.py), serves the six `/download/zip` routes and the
+ * passes of the delayed sweep. Its handler dispatches on the event envelope: an API Gateway event (it
+ * always has `requestContext`) takes the API path with the authorizer and Casbin checks; a sweep pass
+ * is a direct invoke no route can reach. No terminal callback reaches it: a job follows its
+ * zipArchive run by the stored execution id, and the service's read-time reconcile finalizes it
+ * from the run's execution row on the next read.
  *
  * The function deploys whatever `app.zipDownloads.enabled` says, so a deployment that turns the
  * feature off keeps its job table readable and its routes answering (404 "not enabled"). With the
  * feature on, `grantZipDownloadLaunch` adds the two cross-calls the service makes (launch and abort),
- * apiBuilder2 registers the service under the `Zip-Download` system trigger value, and
- * `buildZipDownloadSweep` adds the sweep state machine that invokes it.
+ * and `buildZipDownloadSweep` adds the sweep state machine that invokes it.
  */
 
 /** The zipArchive system workflow every zip download job runs (database GLOBAL). */
@@ -739,9 +739,6 @@ export const ZIP_DOWNLOAD_ROUTES: ReadonlyArray<{
     },
 ];
 
-/** Stored system trigger value of a zip download run (systemPipelines.py SYSTEM_TRIGGER_TYPE_TO_STORED). */
-export const ZIP_DOWNLOAD_SYSTEM_TRIGGER = "Zip-Download";
-
 /** The zip download service's environment from app.zipDownloads (names read by zipDownloadService.py). */
 export function zipDownloadServiceEnvironment(config: Config.Config): Record<string, string> {
     const zip = config.app.zipDownloads;
@@ -772,10 +769,9 @@ function inVpc(config: Config.Config): boolean {
 
 /**
  * The zip download service: create, list (asset and global), get, cancel/delete and presigned URL,
- * one function for all six routes, plus the zipArchive terminal callback and the delayed sweep's
- * passes (finalize a job from its run's terminal status, abort a stopped job's recorded uploads).
- * Its own job table and its auxiliary-bucket prefix are granted as exact statements (the actions the
- * handler calls, the callback's and the sweep's included), the asset data read the way downloadAsset
+ * one function for all six routes, plus the delayed sweep's passes (abort a stopped job's recorded
+ * uploads). Its own job table and its auxiliary-bucket prefix are granted as exact statements (the
+ * actions the handler calls, the read-time reconcile's and the sweep's included), the asset data read the way downloadAsset
  * reads it, and the execution row read by GetItem only (read-time reconcile).
  */
 export function buildZipDownloadServiceFunction(
@@ -831,8 +827,8 @@ export function buildZipDownloadServiceFunction(
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
 
     // The job's own objects: manifest write, archive head and presign, cancel/delete cleanup, and the
-    // terminal callback's working-object cleanup (common/zipDownloads.delete_working_objects, confined
-    // by the handler to one job's keys).
+    // read-time reconcile's working-object cleanup (common/zipDownloads.delete_working_objects,
+    // confined by the handler to one job's keys).
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -849,7 +845,7 @@ export function buildZipDownloadServiceFunction(
         })
     );
     // s3:ListBucket also makes S3 answer a HeadObject on a missing archive key with 404, not 403: the
-    // terminal callback and the delayed sweep decide by the landed archive (#1125 D21).
+    // read-time reconcile and the delayed sweep decide by the landed archive (#1125 D21).
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -917,8 +913,8 @@ export function grantZipDownloadLaunch(
  * engine's sweep, no task timeout sets this bound: the container is the only writer of parts, uploads
  * no part after it sees the stop (stopRequestedAt, or AWS Batch's SIGTERM, with SIGKILL 30 s later)
  * and aborts again after its last part. The passes cover what S3 lists again after those aborts (2 to
- * 8 minutes later on demo21). The service's callback and sweep branches only abort, so its 15-minute
- * function timeout does not bound it either. Same values as backend common/zipDownloads.py
+ * 8 minutes later on demo21). The service's sweep branch only aborts, so its 15-minute function
+ * timeout does not bound it either. Same values as backend common/zipDownloads.py
  * SWEEP_FIRST_WAIT_SECONDS / SWEEP_SECOND_WAIT_SECONDS.
  */
 export const ZIP_DOWNLOAD_SWEEP_WAIT_SECONDS = { first: 300, second: 600 };

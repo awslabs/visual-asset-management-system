@@ -6,16 +6,16 @@ auxiliary bucket call for its Region without an asset buckets table read.
 
 D16 (the #1123 D5 rule). S3 keeps a part whose upload was in flight during an abort, and the upload
 stays listed with that part. ``abort_open_uploads`` aborted each upload once. Now every stopper (the
-user's cancel, the terminal callback, the read-time reconcile) first records ``stopRequestedAt`` on
+user's cancel, the read-time reconcile) first records ``stopRequestedAt`` on
 the open job (``request_stop``; the container's sink reads it before each part and uploads nothing
 further), then aborts until ListParts answers NoSuchUpload (bounded, waiting only while the upload is
 still listed). The landed-archive decision is unchanged.
 
 D17 (the #1123 D6 lesson). Both zip functions use the region-routing S3 client for the auxiliary
-bucket, which is not in the asset buckets table. Each call then queried bucketNameGSI; the callback's
-role holds no grant on that table, so every abort, list and delete logged AccessDenied at error level
-(a fault is never cached). The auxiliary bucket is the stack's own, in the deployment Region; both
-handlers now register it, so no lookup happens.
+bucket, which is not in the asset buckets table. Each call then queried bucketNameGSI; the zip
+function's role holds no grant on that table, so every abort, list and delete logged AccessDenied at error level
+(a fault is never cached). The auxiliary bucket is the stack's own, in the deployment Region; the
+zip download service registers it, so no lookup happens.
 
 Every test fails on dc9f8d591 except three guards that pass there too: a landed archive still wins,
 the response projection leaves the marker out, and the real routing resolves a registered name
@@ -78,7 +78,7 @@ def env():
 def _with_s3(env, **kwargs):
     s3 = LateS3(env.events, **kwargs)
     s3.uploads.append({"Bucket": h.AUX, "Key": env.prefix + "x.zip", "UploadId": "u1"})
-    env.svc.s3 = env.cb.s3 = s3
+    env.svc.s3 = s3
     return s3
 
 
@@ -112,18 +112,11 @@ class TestNoPartLeftBehind:
         assert waits == [env.zd.ABORT_SWEEP_WAIT_SECONDS]
 
     @pytest.mark.parametrize("execution_status", ["FAILED", "TIMED_OUT", "ABORTED"])
-    def test_the_terminal_callback_aborts_until_the_upload_is_gone(self, env, monkeypatch,
-                                                                   execution_status):
+    def test_the_read_time_reconcile_aborts_until_the_upload_is_gone(self, env, monkeypatch,
+                                                                     execution_status):
         _no_sleep(env, monkeypatch)
         s3 = _with_s3(env, late_aborts=2)
-        payload = {"callbackType": "systemPipelineTerminal", "schemaVersion": 1,
-                   "idempotencyKey": f"exec-1:{execution_status}", "workflowExecutionId": "exec-1",
-                   "triggerType": "Zip-Download", "executionStatus": execution_status,
-                   "executionError": "", "writer": "abort",
-                   "systemExecutionContext": {"v": 1, "requestId": REQUEST_ID, "userId": "alice",
-                                              "databaseId": "db1", "assetId": "asset1",
-                                              "manifestKey": "m"}}
-        env.cb.lambda_handler(payload, None)
+        h.end_run_and_reconcile(env, "alice", REQUEST_ID, execution_status)
         assert s3.uploads == []
         assert _row(env)["status"] == "FAILED"
         assert _row(env).get("stopRequestedAt")
@@ -162,21 +155,20 @@ class TestNoPartLeftBehind:
 
 
 class TestAuxiliaryBucketRegion:
-    """D17: no asset buckets table read for the auxiliary bucket, in either function."""
+    """D17: no asset buckets table read for the auxiliary bucket in the zip download service."""
 
-    @pytest.mark.parametrize("module", ["svc", "cb"])
-    def test_each_function_registers_the_auxiliary_bucket_region_at_load(self, module):
-        # The handlers import the region helpers of common.s3 (the tests' common.s3 double here);
+    def test_the_service_registers_the_auxiliary_bucket_region_at_load(self):
+        # The handler imports the region helpers of common.s3 (the tests' common.s3 double here);
         # the registration lands in that module's name -> Region map.
-        loaded = getattr(h.load_handlers(), module)
+        loaded = h.load_handlers().svc
         regions = sys.modules[loaded.register_bucket_region.__module__]._bucket_regions_by_name
         regions.clear()
-        loaded = getattr(h.load_handlers(), module)
+        loaded = h.load_handlers().svc
         assert regions[loaded.aux_bucket_name] == loaded.deployment_region()
 
     def test_a_registered_bucket_is_never_looked_up_in_the_buckets_table(self, monkeypatch):
         # The real routing (backend/common/s3.py): a registered name resolves without the
-        # bucketNameGSI Query that the callback's role cannot make.
+        # bucketNameGSI Query that the zip function's role cannot make.
         spec = importlib.util.spec_from_file_location(
             "common_s3_real_under_test",
             os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "common", "s3.py"))

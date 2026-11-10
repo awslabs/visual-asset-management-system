@@ -1,15 +1,16 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One function serves the zip download API routes, the zipArchive terminal callback and the
-delayed sweep passes: lambda_handler dispatches on the event's envelope.
+"""One function serves the zip download API routes and the delayed sweep passes: lambda_handler
+dispatches on the event's envelope. There is no terminal callback branch: a job follows its run by
+its stored workflowExecutionId and the read-time reconcile.
 
 - An API Gateway proxy event (it always has ``requestContext``) is an API request, whatever its body
   imitates and whatever top-level keys sit next to the ``requestContext``; it runs the API path with
-  Tier-1 authorization and never the callback or sweep branch.
-- A terminal callback payload (top-level ``callbackType``) and a sweep pass (top-level
-  ``action: sweep``) without a ``requestContext`` reach their own branch.
-- Any other shape is ignored: no read, no write, no invoke.
+  Tier-1 authorization and never the sweep branch.
+- A sweep pass (top-level ``action: sweep``) without a ``requestContext`` reaches its own branch.
+- Any other shape, a former terminal callback payload (top-level ``callbackType``) included, is
+  ignored: no read, no write, no invoke.
 """
 
 import json
@@ -27,6 +28,7 @@ SERVICE = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "
 
 
 def _callback_payload(status="ABORTED"):
+    """The terminal callback payload the workflow core used to send (no longer handled)."""
     return {"callbackType": "systemPipelineTerminal", "schemaVersion": 1,
             "idempotencyKey": "exec-1:" + status, "workflowExecutionId": "exec-1",
             "triggerType": "Zip-Download", "executionStatus": status, "executionError": "",
@@ -53,9 +55,9 @@ def env():
         "createdAt": "2026-11-09T00:00:00Z", "expiresAt": 4102444800}
     e.s3.uploads.append({"Bucket": h.AUX, "Key": prefix + "x.zip", "UploadId": "u1"})
     e.calls = []
-    # Spies on the three branches (a module without one of them has nothing to spy on, and every
+    # Spies on the two branches (a module without one of them has nothing to spy on, and every
     # test then fails on its own assertion).
-    real = {name: getattr(e.svc, name) for name in ("handle_api_request", "handle_callback", "handle_sweep")
+    real = {name: getattr(e.svc, name) for name in ("handle_api_request", "handle_sweep")
             if hasattr(e.svc, name)}
 
     def spy(name):
@@ -87,12 +89,6 @@ class TestEachShapeReachesItsBranch:
         assert env.calls == ["handle_api_request"]
         assert response["statusCode"] == 200
 
-    def test_a_terminal_callback_runs_the_callback_branch(self, env):
-        result = env.svc.lambda_handler(_callback_payload("ABORTED"), None)
-        assert env.calls == ["handle_callback"]
-        assert result["status"] == "finalized"
-        assert _row(env)["status"] == "FAILED"
-
     def test_a_sweep_pass_runs_the_sweep_branch(self, env):
         env.svc.lambda_handler(_sweep_payload(), None)
         assert env.calls == ["handle_sweep"]
@@ -109,8 +105,8 @@ class TestApiRequestsNeverTakeAnEventBranch:
                         body=body), None)
         assert env.calls == ["handle_api_request"]
         assert "statusCode" in response
-        # The callback would end this RUNNING job FAILED "Cancelled from workflow executions"
-        # (cancelledBy execution) and the sweep would abort its upload. Neither happened.
+        # Nothing ends this RUNNING job FAILED "Cancelled from workflow executions" (cancelledBy
+        # execution) and the sweep does not abort its upload.
         assert _row(env).get("cancelledBy") != "execution"
         assert _row(env).get("errorMessage") != "Cancelled from workflow executions"
         if method != "DELETE":
@@ -157,6 +153,8 @@ class TestUnknownShapesAreIgnored:
          "detail": {"name": "exec-1", "status": "ABORTED"}},
         {"action": "other", "zipSweep": {"userId": "alice", "requestId": REQUEST_ID}},
         {"callbackType": "other", "systemExecutionContext": {"userId": "alice", "requestId": REQUEST_ID}},
+        _callback_payload("ABORTED"),
+        _callback_payload("FAILED"),
         {"body": json.dumps(_callback_payload("ABORTED"))},
     ])
     def test_ignored_with_no_side_effect(self, env, event):
@@ -168,8 +166,11 @@ class TestUnknownShapesAreIgnored:
         assert _row(env)["status"] == "RUNNING"
 
 
-def test_the_separate_callback_module_is_gone():
-    """The callback lives in the service module; no second handler file exists."""
+def test_no_callback_module_or_branch_exists(env):
+    """No separate callback handler file, and no callback branch in the service."""
     handlers_dir = os.path.dirname(os.path.dirname(SERVICE))
     assert os.path.isfile(SERVICE)
     assert not os.path.exists(os.path.join(handlers_dir, "zipDownloads"))
+    assert not hasattr(env.svc, "handle_callback")
+    with open(SERVICE, encoding="utf-8") as source:
+        assert "callbackType" not in source.read()

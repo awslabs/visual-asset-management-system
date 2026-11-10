@@ -221,8 +221,8 @@ class Job:
     """One zipArchive job. ``stop()`` (the SIGTERM handler) aborts the upload and records the stop.
 
     Mode 1 follows the job row's monotonic rule (backend common/zipDownloads.py): a landed archive
-    wins with one outcome. Once the upload completed, no path writes FAILED (the terminal callback
-    finds the archive and records SUCCEEDED if this job could not); a failure or stop that cannot
+    wins with one outcome. Once the upload completed, no path writes FAILED (the API's read-time
+    reconcile finds the archive and records SUCCEEDED if this job could not); a failure or stop that cannot
     tell whether the upload completed checks the archive object first, whatever the abort answered;
     a stop that arrives while the Complete is in flight lets it finish (S3 does not refuse an abort
     sent then); and an archive that landed
@@ -247,8 +247,8 @@ class Job:
         returns False: S3 answers 204 to an abort sent then and the Complete can still land (#1123
         D1), so a FAILED written here could sit over this job's landed archive. The Complete returns
         instead, and its own path decides: the SUCCEEDED write while the job is open, else the
-        late-archive delete. If the container is killed first, the terminal callback decides by the
-        archive's upload token."""
+        late-archive delete. If the container is killed first, the API's read-time reconcile decides by
+        the archive's upload token."""
         self._stopped = True
         if self._landed is not None:
             return True
@@ -276,8 +276,8 @@ class Job:
         Asked only after the upload was aborted with no Complete in flight (stop() waits for one) or
         after the Complete call returned with an error, so the answer cannot change afterwards. An
         error answers True: skipping
-        the FAILED write is always safe, because the terminal callback finalizes the job from the
-        object's identity."""
+        the FAILED write is always safe, because the API's read-time reconcile finalizes the job from
+        the object's identity."""
         if self.sink is None:
             return False
         try:
@@ -296,8 +296,8 @@ class Job:
 
     def _record_stop(self):
         """A SIGTERM stop: record the reason on the open job, never its outcome (#1125 D24). The run's
-        own status (ABORTED, TIMED_OUT, FAILED) and a recorded user cancel decide it in the terminal
-        callback or the read-time reconcile, which also clean the job's working objects. Best-effort:
+        own status (ABORTED, TIMED_OUT, FAILED) and a recorded user cancel decide it in the API's
+        read-time reconcile, which also cleans the job's working objects. Best-effort:
         the container is about to exit either way."""
         if self.status is None:
             return
@@ -310,7 +310,7 @@ class Job:
         if self.status is None:
             return
         if self._landed is not None or self._archive_landed():
-            self.log("The archive landed; leaving its outcome to the success write or the terminal callback")
+            self.log("The archive landed; leaving its outcome to the success write or the read-time reconcile")
             return
         self.status.failed(reason)
 

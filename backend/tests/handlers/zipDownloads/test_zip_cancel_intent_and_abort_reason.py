@@ -10,12 +10,12 @@ job and its archive. The DELETE now takes ``intent=cancel``: with it a finished 
 answered ``ended`` (a CANCELLED one answers ``cancelled``); without it the route is unchanged.
 
 D24: the container's SIGTERM used to write FAILED "The archive job was stopped" and won the race
-with the abort's terminal callback, so the job lost its documented reason and cancelledBy, and the
-callback that lost left the manifests. The container now only records the stop; the callback or the
-read-time reconcile finalizes from the run's status, and cleans the working objects even when
-another writer finalized first.
+with the finalizer of the abort, so the job lost its documented reason and cancelledBy, and the
+finalizer that lost left the manifests. The container now only records the stop; the read-time
+reconcile finalizes from the run's status, and cleans the working objects even when another writer
+finalized first.
 
-Drives the REAL service routes and terminal callback against one table and one S3 double.
+Drives the REAL service routes and read-time reconcile against one table and one S3 double.
 """
 
 import pytest
@@ -56,14 +56,9 @@ def _delete(env, request_id, query=None):
                                               query=query), None)
 
 
-def _callback(env, request_id, status):
-    payload = {"callbackType": "systemPipelineTerminal", "schemaVersion": 1,
-               "idempotencyKey": f"exec-1:{status}", "workflowExecutionId": "exec-1",
-               "triggerType": "Zip-Download", "executionStatus": status, "executionError": "",
-               "writer": "status", "systemExecutionContext": {
-                   "v": 1, "requestId": request_id, "userId": "alice", "databaseId": "db1",
-                   "assetId": "asset1", "manifestKey": "m"}}
-    return env.cb.lambda_handler(payload, None)
+def _reconcile(env, request_id, status):
+    """The job's run ended with ``status``; the job's next read reconciles it."""
+    return h.end_run_and_reconcile(env, "alice", request_id, status)
 
 
 def _working_objects_left(env, row):
@@ -154,12 +149,12 @@ class TestExecutionsAbortReason:
                                        ":queued": "QUEUED", ":running": "RUNNING"})
 
     @pytest.mark.parametrize("stop_first", [True, False])
-    def test_abort_callback_records_the_documented_reason(self, env, stop_first):
+    def test_reconcile_of_an_abort_records_the_documented_reason(self, env, stop_first):
         request_id, row = _job(env)
         _store_working_objects(env, row)
         if stop_first:
             self._container_stop(env, row)
-        _callback(env, request_id, "ABORTED")
+        _reconcile(env, request_id, "ABORTED")
         if not stop_first:
             self._container_stop(env, row)   # loses: the job is already final
         final = env.zip.items[("alice", request_id)]
@@ -168,7 +163,7 @@ class TestExecutionsAbortReason:
         assert final["cancelledBy"] == env.zd.CANCELLED_BY_EXECUTION
         assert _working_objects_left(env, final) == []
 
-    def test_reconcile_of_an_aborted_run_records_the_documented_reason(self, env):
+    def test_the_shared_finalizer_of_an_aborted_run_records_the_documented_reason(self, env):
         request_id, row = _job(env)
         self._container_stop(env, row)
         status, changed = env.zd.finalize_ended_run(env.zip, env.s3, h.AUX, dict(row), "ABORTED")
@@ -181,7 +176,7 @@ class TestExecutionsAbortReason:
         """A Batch terminate outside VAMS: the run FAILED, the container recorded its stop."""
         request_id, row = _job(env)
         self._container_stop(env, row)
-        _callback(env, request_id, "FAILED")
+        _reconcile(env, request_id, "FAILED")
         final = env.zip.items[("alice", request_id)]
         assert final["status"] == "FAILED" and final["errorMessage"] == STOPPED
         assert not final.get("cancelledBy")
@@ -189,14 +184,14 @@ class TestExecutionsAbortReason:
     def test_a_timed_out_run_after_a_stop_shows_the_timeout(self, env):
         request_id, row = _job(env)
         self._container_stop(env, row)
-        _callback(env, request_id, "TIMED_OUT")
+        _reconcile(env, request_id, "TIMED_OUT")
         assert env.zip.items[("alice", request_id)]["errorMessage"] == env.zd.MSG_JOB_TIMED_OUT
 
     def test_a_recorded_user_cancel_still_wins_over_the_stop(self, env):
         request_id, row = _job(env)
         assert env.zd.request_cancel(env.zip, row, env.zd.CANCELLED_BY_USER)
         self._container_stop(env, row)
-        _callback(env, request_id, "ABORTED")
+        _reconcile(env, request_id, "ABORTED")
         final = env.zip.items[("alice", request_id)]
         assert final["status"] == "CANCELLED" and final["cancelledBy"] == "user"
 
@@ -208,9 +203,9 @@ class TestExecutionsAbortReason:
 
 
 class TestCleanupWhenAnotherWriterFinalizedFirst:
-    def test_callback_whose_write_lost_still_removes_the_working_objects(self, env):
-        """The live D24 shape: the callback read the row active, another writer (the old container's
-        FAILED) finalized it between the callback's re-read and its write. The callback's write loses
+    def test_reconcile_whose_write_lost_still_removes_the_working_objects(self, env):
+        """The live D24 shape: the reconcile read the row active, another writer (the old container's
+        FAILED) finalized it between the reconcile's re-read and its write. The reconcile's write loses
         and it still removes the working objects."""
         request_id, row = _job(env)
         _store_working_objects(env, row)
@@ -224,7 +219,7 @@ class TestCleanupWhenAnotherWriterFinalizedFirst:
                               completedAt="2026-11-08T00:00:00Z")
             return original(**kw)
         env.zip.update_item = update_item
-        _callback(env, request_id, "ABORTED")
+        _reconcile(env, request_id, "ABORTED")
         assert fired
         final = env.zip.items[("alice", request_id)]
         assert final["status"] == "FAILED" and final["errorMessage"] == "The archive job failed"

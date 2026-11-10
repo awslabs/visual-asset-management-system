@@ -4,13 +4,13 @@
 """A zip download job's status is monotonic and a landed archive wins with one outcome.
 
 Drives the REAL container job (zip_archive_pipeline.runner.Job) and the REAL API-side finalizers
-(backend common/zipDownloads.py: finalize_ended_run, which the terminal callback and the read-time
-reconcile call, and cancel_job, which the user's cancel calls) against one S3 double and one job-row
+(backend common/zipDownloads.py: finalize_ended_run, which the API's read-time reconcile
+calls, and cancel_job, which the user's cancel calls) against one S3 double and one job-row
 double, and interleaves them at each point that matters:
 
 - before the archive upload exists, while it is open, and after it completed but before the
   container recorded SUCCEEDED;
-- the user's cancel, and a run the terminal callback or the reconcile sees FAILED / TIMED_OUT /
+- the user's cancel, and a run the read-time reconcile sees FAILED / TIMED_OUT /
   ABORTED while its container is still writing (StopExecution and a Batch terminate do not stop it).
 
 Every case ends with ONE outcome: the row's terminal status, and an archive object present exactly
@@ -201,21 +201,21 @@ class TestCancelVersusArchiveCompletion:
 
     def test_run_stopped_by_the_cancel_and_finalized_first_ends_cancelled(self, monkeypatch):
         """#1125 D22: the cancel's stop marker makes the container stop and exit 0; the terminal
-        callback of that SUCCEEDED run finalizes before the cancel's own CANCELLED write. The job
+        reconcile of that SUCCEEDED run finalizes before the cancel's own CANCELLED write. The job
         ends CANCELLED by the user, not FAILED, and the cancel reports it cancelled."""
         s3, table, job = _setup()
         results = []
         original = zd.abort_open_uploads
         fired = []
 
-        def abort_then_callback(*a, **k):
+        def abort_then_reconcile(*a, **k):
             answer = original(*a, **k)
             if not fired:
                 fired.append(True)
-                # The run ended SUCCEEDED (the container stopped and exited 0): its callback.
+                # The run ended SUCCEEDED (the container stopped and exited 0): a reconcile.
                 zd.finalize_ended_run(table, s3, AUX, dict(table.row), "SUCCEEDED", "")
             return answer
-        monkeypatch.setattr(zd, "abort_open_uploads", abort_then_callback)
+        monkeypatch.setattr(zd, "abort_open_uploads", abort_then_reconcile)
         _hook(monkeypatch, "upload_open", _cancel(s3, table, results))
         _run(job)
         assert fired and results == [zd.CANCEL_CANCELLED]
@@ -273,7 +273,7 @@ class TestReconcileFailedVersusLateContainerSuccess:
 
 
 class TestContainerNeverFailsALandedArchive:
-    def test_transient_error_on_the_success_write_leaves_it_to_the_callback(self, monkeypatch):
+    def test_transient_error_on_the_success_write_leaves_it_to_the_reconcile(self, monkeypatch):
         s3, table, job = _setup()
 
         def throttled(self, *a, **k):
@@ -281,7 +281,7 @@ class TestContainerNeverFailsALandedArchive:
         monkeypatch.setattr(runner.StatusWriter, "succeeded", throttled)
         assert _run(job)["status"] == "raised"
         assert table.row["status"] == "RUNNING", "no FAILED over a landed archive"
-        # The run ends FAILED (the container exited non-zero); the terminal callback settles it.
+        # The run ends FAILED (the container exited non-zero); the read-time reconcile settles it.
         assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "FAILED")[0] == zd.STATUS_SUCCEEDED
         _assert_one_outcome(s3, table, zd.STATUS_SUCCEEDED)
 
@@ -417,8 +417,8 @@ def _working_objects_left(s3):
 ])
 class TestSigtermLeavesTheOutcomeToTheRunStatus:
     """#1125 D24: AWS Batch sends SIGTERM for an abort from the workflow executions views, a timeout
-    and a terminate outside VAMS alike. Whichever of the container and the run's finalizer (terminal
-    callback or read-time reconcile, both finalize_ended_run) acts first, the job ends with the
+    and a terminate outside VAMS alike. Whichever of the container and the run's finalizer (the API's
+    read-time reconcile, finalize_ended_run) acts first, the job ends with the
     reason of the run's own status, the executions abort records cancelledBy execution, and the job's
     working objects are removed."""
 
@@ -488,8 +488,8 @@ class TestSigtermLeavesTheOutcomeToTheRunStatus:
 class TestFinalizerCleansUpWhenAnotherWriterEnded:
     def test_container_failure_between_the_read_and_the_write_still_removes_the_working_objects(
             self, monkeypatch):
-        """A genuine container failure lands between the abort callback's re-read and its write: the
-        job keeps the container's FAILED reason, and the callback whose write lost still removes the
+        """A genuine container failure lands between the abort's reconcile re-read and its write: the
+        job keeps the container's FAILED reason, and the reconcile whose write lost still removes the
         working objects (#1125 D24; before, they stayed until the lifecycle rule)."""
         s3, table, job = _setup()
         original = zd.landed_archive
@@ -501,9 +501,9 @@ class TestFinalizerCleansUpWhenAnotherWriterEnded:
             return answer
         monkeypatch.setattr(zd, "landed_archive", container_fails_meanwhile)
 
-        def abort_callback():
+        def abort_reconcile():
             results.append(zd.finalize_ended_run(table, s3, AUX, dict(table.row), "ABORTED"))
-        _hook(monkeypatch, "upload_open", abort_callback)
+        _hook(monkeypatch, "upload_open", abort_reconcile)
         _run(job)
         assert results == [(zd.STATUS_FAILED, False)]
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)

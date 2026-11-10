@@ -20,6 +20,8 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 | `FAILED`    | The job did not produce an archive. `errorMessage` gives a user-safe reason. A run aborted from the workflow executions views ends `FAILED` with `Cancelled from workflow executions` and `cancelledBy` `execution`, unless its archive had already finished uploading, in which case the job is `SUCCEEDED`. A run that timed out ends with `The archive job timed out`; one whose archive job was stopped another way (for example, terminated in the AWS Batch console) ends with `The archive job was stopped`. |
 | `CANCELLED` | The caller cancelled the job with [Cancel or Delete Zip Download](#cancel-or-delete-zip-download) before it finished.                                                                                                                                                                                                                                                                                                                                                                                               |
 
+A job's status follows its Zip Archive run. When the run ends in a way the archive job could not record itself (an abort from the workflow executions views, a timeout, or a failure the job did not report), the job shows its final status the next time it is read: [Get Zip Download](#get-zip-download), either list, or [Get Zip Download URL](#get-zip-download-url).
+
 ---
 
 ## Endpoints

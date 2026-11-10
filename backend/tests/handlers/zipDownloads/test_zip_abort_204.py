@@ -9,8 +9,8 @@ in flight or after it succeeded, and the completed object stays at the key (the 
 no earlier zip test sent an abort that S3 answered 204 while the archive landed.
 
 Every API-side finalizer of a zip job aborts the job's open uploads first and then decides: the
-terminal callback, the read-time reconcile (job GET), and the user's cancel (DELETE). Each is driven
-here through its REAL handler with an S3 double that answers the abort as S3 does: 204 and the upload
+read-time reconcile (called directly, and through the job GET) and the user's cancel (DELETE). Each
+is driven here through its REAL handler with an S3 double that answers the abort as S3 does: 204 and the upload
 keeps completing, or NoSuchUpload, or an error. The outcome is the job's own landed archive (its
 upload token; P2b's shared helper common.s3MetadataKeys.is_own_upload_object), never the abort's
 answer, and never presence or size."""
@@ -47,8 +47,7 @@ def _env(answer="204"):
     h.AUTH.__init__()
     env = h.load_handlers()
     env.s3 = S3AbortAnswers(answer)
-    for module in (env.svc, env.cb):
-        module.s3 = env.s3
+    env.svc.s3 = env.s3
     h.put_asset(env)
     prefix = env.zd.request_prefix("db1", "asset1", "alice", REQUEST_ID)
     env.prefix = prefix
@@ -79,14 +78,9 @@ def _foreign_object(env, size=42):
                metadata={env.zd.ARCHIVE_UPLOAD_TOKEN_METADATA: "token-of-an-earlier-run"})
 
 
-def _payload(status):
-    return {"callbackType": "systemPipelineTerminal", "schemaVersion": 1,
-            "idempotencyKey": f"exec-1:{status}", "workflowExecutionId": "exec-1",
-            "workflowDatabaseId": "GLOBAL", "workflowId": "utility-zip-archive",
-            "triggerType": "Zip-Download", "executionStatus": status, "executionError": "",
-            "writer": "abort",
-            "systemExecutionContext": {"v": 1, "requestId": REQUEST_ID, "userId": "alice",
-                                       "databaseId": "db1", "assetId": "asset1", "manifestKey": "m"}}
+def _run_ended(env, status):
+    """The job's run ended with ``status``; the job's next read reconciles it."""
+    return h.end_run_and_reconcile(env, "alice", REQUEST_ID, status)
 
 
 def _abort_sent(env):
@@ -107,15 +101,15 @@ def _job_route(env, method):
 
 
 # ------------------------------------------------------------------------------------------------ #
-# The terminal callback
+# The read-time reconcile, called directly
 # ------------------------------------------------------------------------------------------------ #
 
 @pytest.mark.parametrize("status", EXECUTION_STATUSES)
-class TestCallbackAfterA204Abort:
+class TestReconcileAfterA204Abort:
     def test_a_204_is_not_read_as_nothing_landed(self, status):
         env = _env("204")
         _landed(env, size=77)
-        assert env.cb.lambda_handler(_payload(status), None)["status"] == "finalized"
+        assert _run_ended(env, status)["status"] == "SUCCEEDED"
         assert _abort_sent(env), "the abort was sent and answered 204"
         assert _row(env)["status"] == "SUCCEEDED"
         assert _row(env)["archiveSizeBytes"] == 77
@@ -124,35 +118,35 @@ class TestCallbackAfterA204Abort:
         # A Complete still in flight after the 204 lands later; its container then loses the
         # SUCCEEDED write and deletes it (container tests/test_abort_204.py).
         env = _env("204")
-        env.cb.lambda_handler(_payload(status), None)
+        _run_ended(env, status)
         assert _abort_sent(env)
         assert _row(env)["status"] == "FAILED"
 
     def test_an_earlier_object_of_the_same_size_is_not_this_jobs_archive(self, status):
         env = _env("204")
         _foreign_object(env)
-        env.cb.lambda_handler(_payload(status), None)
+        _run_ended(env, status)
         assert _row(env)["status"] == "FAILED"
 
 
 @pytest.mark.parametrize("answer", ["NoSuchUpload", "AccessDenied", "InternalError"])
-class TestCallbackWhateverTheAbortRaised:
+class TestReconcileWhateverTheAbortRaised:
     def test_the_landed_archive_still_wins(self, answer):
         env = _env(answer)
         _landed(env, size=5)
-        env.cb.lambda_handler(_payload("ABORTED"), None)
+        _run_ended(env, "ABORTED")
         assert _abort_sent(env)
         assert _row(env)["status"] == "SUCCEEDED" and _row(env)["archiveSizeBytes"] == 5
 
     def test_no_landed_archive_still_fails_the_job(self, answer):
         env = _env(answer)
-        env.cb.lambda_handler(_payload("ABORTED"), None)
+        _run_ended(env, "ABORTED")
         assert _row(env)["status"] == "FAILED"
         assert _row(env)["errorMessage"] == "Cancelled from workflow executions"
 
 
 # ------------------------------------------------------------------------------------------------ #
-# The read-time reconcile and the user's cancel
+# The read-time reconcile through the job GET, and the user's cancel
 # ------------------------------------------------------------------------------------------------ #
 
 @pytest.mark.parametrize("status", EXECUTION_STATUSES)

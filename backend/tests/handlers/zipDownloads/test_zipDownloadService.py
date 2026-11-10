@@ -861,8 +861,8 @@ class TestLostStatusEventBackstop:
 
 class TestCapReconcilesBeforeRefusing:
     """At the per-user cap a create reconciles the caller's active jobs first, so a job whose run
-    ended while every delivery of that end was lost (the terminal callback and the status change
-    event) frees its slot on the next create, not only on the next list or open."""
+    ended without the job recording it yet (no read since, or the status change event was lost)
+    frees its slot on the next create, not only on the next list or open."""
 
     _backstop = TestLostStatusEventBackstop()
 

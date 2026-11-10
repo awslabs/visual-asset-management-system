@@ -372,7 +372,7 @@ class TestZipDownloadMode:
         job.sink = Sink()
         job.stop()
         row = job.status._table.row
-        # #1125 D24: the stop is recorded, the outcome is left to the run's terminal callback.
+        # #1125 D24: the stop is recorded, the outcome is left to the API's read-time reconcile.
         assert Sink.aborted and row["stopReason"] == runner.STOPPED
         assert row["status"] == "RUNNING" and "errorMessage" not in row
 

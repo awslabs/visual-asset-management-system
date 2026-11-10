@@ -10,7 +10,7 @@ on abort and so refuses the Complete afterwards, which only models an abort sent
 
 Here the same REAL container job and REAL API-side finalizers (backend common/zipDownloads.py) run
 against an S3 double that answers the abort as S3 does, with the decider (the user's cancel, the
-terminal callback / read-time reconcile, the container's own SIGTERM) placed while the archive's
+read-time reconcile, the container's own SIGTERM) placed while the archive's
 Complete is in flight and after it returned:
 
 - a decider during the Complete answers "not landed" (the 204 does not stop the Complete); the
@@ -19,7 +19,7 @@ Complete is in flight and after it returned:
   archive by its upload token and records SUCCEEDED;
 - a SIGTERM during the Complete neither aborts nor writes FAILED (the handler returns, the Complete
   finishes, its own path decides), and a container killed after the Complete reached S3 leaves the
-  decision to the terminal callback, which finds the archive by its token.
+  decision to the API's read-time reconcile, which finds the archive by its token.
 """
 
 import pytest
@@ -107,7 +107,7 @@ class TestDeciderDuringTheComplete:
         assert s3.deleted == [(ARCHIVE_KEY, "m1")], "only this upload's version is removed"
 
     @pytest.mark.parametrize("execution_status", STOP_STATUSES)
-    def test_the_terminal_callback_ends_failed_and_the_late_archive_is_deleted(self, execution_status):
+    def test_the_reconcile_ends_failed_and_the_late_archive_is_deleted(self, execution_status):
         s3, table, job = _setup()
         _answer_aborts_like_s3(s3, during_complete=_reconcile(s3, table, execution_status))
         assert _run(job)["status"] == "stopped"
@@ -133,7 +133,7 @@ class TestDeciderAfterTheComplete:
         assert not getattr(s3, "deleted", [])
 
     @pytest.mark.parametrize("execution_status", STOP_STATUSES + ["SUCCEEDED"])
-    def test_the_terminal_callback_keeps_the_landed_archive(self, monkeypatch, execution_status):
+    def test_the_reconcile_keeps_the_landed_archive(self, monkeypatch, execution_status):
         s3, table, job = _setup()
         _answer_aborts_like_s3(s3, list_completed=True)
         _hook(monkeypatch, "landed_unrecorded", _reconcile(s3, table, execution_status))
@@ -171,7 +171,7 @@ class TestSigtermDuringTheComplete:
         assert s3.deleted == [(ARCHIVE_KEY, "m1")]
 
     @pytest.mark.parametrize("execution_status", STOP_STATUSES)
-    def test_killed_after_the_complete_reached_s3_the_callback_decides_by_token(self, execution_status):
+    def test_killed_after_the_complete_reached_s3_the_reconcile_decides_by_token(self, execution_status):
         s3, table, job = _setup()
 
         def terminate_then_kill():
@@ -198,7 +198,7 @@ class TestSigtermDuringTheComplete:
         _hook(monkeypatch, "upload_open", terminate)
         assert _run(job)["status"] == "raised"   # S3 refused the Complete of the aborted upload
         assert exits == [143]
-        # #1125 D24: the container records the stop only; the run's callback decides the outcome.
+        # #1125 D24: the container records the stop only; the read-time reconcile decides the outcome.
         assert table.row["status"] == "RUNNING" and table.row["stopReason"] == runner.STOPPED
         assert zd.finalize_ended_run(table, s3, AUX, dict(table.row), "FAILED")[0] == zd.STATUS_FAILED
         _assert_one_outcome(s3, table, zd.STATUS_FAILED)

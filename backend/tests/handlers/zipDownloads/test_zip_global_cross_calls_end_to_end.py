@@ -17,10 +17,11 @@ Here the zip service's REAL cross-calls are served by the REAL receiving handler
    into the zip service.
 2. Abort (the user's cancel, the executions view): the zip service's abort body ->
    executionService.lambda_handler (route, executionId validation, Tier-1, the guarded main-row write
-   on the GLOBAL sort key) -> the system-pipeline terminal callback -> the REAL zip download callback.
-3. Run check (lost status change event backstop): the zip service's details body ->
-   executionService.lambda_handler details route -> the read-path reconcile of the GLOBAL main row ->
-   the terminal callback -> the zip download callback.
+   on the GLOBAL sort key); the job's next read (the zip service's REAL read-time reconcile) then
+   finds the run ABORTED on that row and finalizes the job. The run sends the job nothing.
+3. Run check (lost status change event backstop): the zip service's read-time reconcile of an idle
+   job -> its details body -> executionService.lambda_handler details route -> the read-path
+   reconcile of the GLOBAL main row; the zip reconcile then re-reads the row and finalizes the job.
 
 Identity, Casbin and the Step Functions / S3 calls are stubbed; routing, validation, models and the
 guarded writes are real. Mode 2 (archive into the asset) is in
@@ -44,7 +45,6 @@ tew = hooks._harness()
 GLOBAL = "GLOBAL"
 WORKFLOW_ID = "utility-zip-archive"
 SORT_KEY = f"{GLOBAL}:{WORKFLOW_ID}"
-CALLBACK_FN = "vams-zip-callback"
 
 # The zipArchive workflow and pipeline AS THE DEPLOYMENT REGISTERS THEM: the shipped bundle through
 # the real importer and create request models (zipBundle). Before #1125 D9 these were written here by
@@ -186,7 +186,7 @@ def test_a_selection_the_registered_workflow_refuses_answers_400(env):
 
 
 # ------------------------------------------------------------------------------------------------ #
-# 2) and 3) Abort and run check through the execution service, callback into the zip callback
+# 2) and 3) Abort and run check through the execution service, then the job's next read
 # ------------------------------------------------------------------------------------------------ #
 
 class _ExecutionServiceLambda:
@@ -201,20 +201,6 @@ class _ExecutionServiceLambda:
         response = le.lambda_handler(json.loads(json.dumps(event)), MagicMock())
         self.responses.append(response)
         return {"Payload": io.BytesIO(json.dumps(response).encode("utf-8"))}
-
-
-class _CallbackLambda:
-    """The terminal callback's Lambda client: an asynchronous invoke runs the REAL zip callback."""
-
-    def __init__(self, env):
-        self.env, self.payloads = env, []
-
-    def invoke(self, FunctionName, InvocationType, Payload):  # noqa: N803 - mirrors boto3
-        assert FunctionName == CALLBACK_FN and InvocationType == "Event"
-        payload = json.loads(Payload.decode("utf-8"))
-        self.payloads.append(payload)
-        self.env.cb.lambda_handler(payload, None)
-        return {"StatusCode": 202}
 
 
 def _running(env):
@@ -233,13 +219,11 @@ def _execution_service(stack, env, table):
     stack.enter_context(patch(f"{ES}.CasbinEnforcer", enforcer))
     stack.enter_context(patch.object(le.dynamodb, "Table", side_effect=lambda name: table
                                      if name == le.workflow_execution_database_v2 else MagicMock()))
-    stack.enter_context(patch.dict("os.environ", {sp.CALLBACK_REGISTRY_ENV: json.dumps(
-        {"Zip-Download": CALLBACK_FN})}))
-    callbacks = _CallbackLambda(env)
-    stack.enter_context(patch.object(sp, "_default_lambda_client", return_value=callbacks))
     service = _ExecutionServiceLambda()
     env.svc.lambda_client = service
-    return service, callbacks
+    # The zip service reads the run's main row from the same table the execution service writes.
+    env.svc.executions_table = table
+    return service
 
 
 def _stored(table, execution_id):
@@ -250,11 +234,11 @@ def _stored(table, execution_id):
 @pytest.mark.unit
 @pytest.mark.aws
 class TestAbortThroughTheExecutionService:
-    def test_the_abort_route_aborts_the_global_run_and_the_callback_finalizes_the_job(self, env):
+    def test_the_abort_route_aborts_the_global_run_and_the_next_read_finalizes_the_job(self, env):
         row, main = _running(env)
         execution_id = main["workflowExecutionId"]
         with hooks._main_table(main) as table, ExitStack() as stack:
-            service, callbacks = _execution_service(stack, env, table)
+            service = _execution_service(stack, env, table)
             stack.enter_context(patch(f"{ES}.authorize_abort", return_value=(True, "")))
             stack.enter_context(patch(f"{ES}.get_pipeline_execution_rows", return_value=[]))
             stack.enter_context(patch.object(le.sfn, "stop_execution", return_value={}))
@@ -264,20 +248,25 @@ class TestAbortThroughTheExecutionService:
             assert env.svc._abort_execution(execution_id) is True
             assert service.responses[0]["statusCode"] == 200, service.responses[0]["body"]
             assert _stored(table, execution_id)["executionStatus"] == "ABORTED"
-        assert [p["workflowDatabaseId"] for p in callbacks.payloads] == [GLOBAL]
+            # Nothing reached the job when the run ended.
+            assert env.zip.items[(row["userId"], row["requestId"])]["status"] == "RUNNING"
+            env.svc._reconcile(dict(env.zip.items[(row["userId"], row["requestId"])]))
         job = env.zip.items[(row["userId"], row["requestId"])]
         assert job["status"] == "FAILED"
         assert job["errorMessage"] == "Cancelled from workflow executions"
+        assert job["cancelledBy"] == "execution"
 
 
 @pytest.mark.unit
 @pytest.mark.aws
 class TestRunCheckThroughTheDetailsRoute:
-    def test_the_details_read_reconciles_the_global_run_and_the_callback_finalizes_the_job(self, env):
+    def test_the_reconcile_of_an_idle_job_checks_the_global_run_and_finalizes_the_job(self, env):
         row, main = _running(env)
         execution_id = main["workflowExecutionId"]
+        # Idle past the run-check threshold: the container has written nothing for a while.
+        row["updatedAt"] = "2026-01-01T00:00:00Z"
         with hooks._main_table(main) as table, ExitStack() as stack:
-            service, callbacks = _execution_service(stack, env, table)
+            service = _execution_service(stack, env, table)
             stack.enter_context(patch(f"{ES}.get_workflow_execution_configuration_row", return_value={}))
             stack.enter_context(patch(f"{ES}.authorize_execution_access", return_value=(True, "")))
             stack.enter_context(patch(f"{ES}.assemble_execution_details",
@@ -287,10 +276,9 @@ class TestRunCheckThroughTheDetailsRoute:
             stack.enter_context(patch.object(le, "SFN_SYNC_MIN_INTERVAL_SECONDS", 0))
             stack.enter_context(patch.object(le.sfn, "describe_execution",
                                              return_value=hooks._stopped("TIMED_OUT")))
-            assert env.svc._check_run_ended(execution_id) is True
+            env.svc._reconcile(dict(env.zip.items[(row["userId"], row["requestId"])]))
+            assert len(service.responses) == 1
             assert service.responses[0]["statusCode"] == 200, service.responses[0]["body"]
             assert _stored(table, execution_id)["executionStatus"] == "TIMED_OUT"
-        assert [(p["workflowDatabaseId"], p["writer"]) for p in callbacks.payloads] == [
-            (GLOBAL, "reconcileDetails")]
         job = env.zip.items[(row["userId"], row["requestId"])]
         assert job["status"] == "FAILED" and job["errorMessage"] == "The archive job timed out"

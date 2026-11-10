@@ -20,18 +20,19 @@ job named under another asset's path, answers the same 404 as a missing one.
 A create resolves and checks the selection (refusing the whole job on any archived, delete-marker,
 archive-storage-class or blocked file, owner decision), writes the request manifest and a QUEUED row,
 and launches the zipArchive system workflow as SYSTEM_USER through the system-pipeline cross-call
-(common/workflows/systemPipelines.py). The zipArchive container writes progress and the final status;
-the terminal callback and the read-time reconcile here finalize what it could not.
+(common/workflows/systemPipelines.py), recording the run's id (workflowExecutionId) on the job. The
+zipArchive container writes progress and the final status; the read-time reconcile here (_reconcile)
+finalizes what it could not, from the run's status on its workflow execution row, whenever the job is
+next read (get, list, presigned URL, the per-user cap check). No terminal callback reaches this
+function: the job follows its run by the stored id only. Incomplete uploads a run leaves behind that
+no reader aborts are removed by the ``vams.preparedDownloads/`` lifecycle rule after a day.
 
-The same function also serves two direct invokes that no API route reaches (lambda_handler
-dispatches on the event's envelope, never on a request body):
-  - the zipArchive system pipeline's terminal callback (system trigger ``Zip-Download``), sent
-    asynchronously by whichever terminal writer records a run's terminal status
-    (common/workflows/systemPipelines.py CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER);
-  - a pass of a stopped job's delayed sweep, invoked by the zip download sweep state machine.
-API Gateway builds every proxy event with a ``requestContext`` and cannot add top-level keys, so an
-event with one is always an API request, whatever its body says; an event without one is an
-internal invoke and never reaches the API dispatch. Any other shape is logged and ignored.
+The same function also serves one direct invoke that no API route reaches: a pass of a stopped job's
+delayed sweep, sent by the zip download sweep state machine. lambda_handler dispatches on the event's
+envelope, never on a request body: API Gateway builds every proxy event with a ``requestContext`` and
+cannot add top-level keys, so an event with one is always an API request, whatever its body says; an
+event without one is an internal invoke and never reaches the API dispatch. Any other shape is
+logged and ignored.
 """
 
 import base64
@@ -166,7 +167,7 @@ asset_table = dynamodb.Table(asset_table_name)
 buckets_table = dynamodb.Table(buckets_table_name)
 executions_table = dynamodb.Table(executions_table_name)
 # The auxiliary bucket is the stack's own, in this deployment's Region: its manifest writes, aborts,
-# lists, deletes and presigns (and the terminal callback's and the delayed sweep's aborts, lists and
+# lists, deletes and presigns (and the reconcile's and the delayed sweep's aborts, lists and
 # deletes) are signed for that Region without an asset buckets table read (#1125 D17).
 register_bucket_region(aux_bucket_name, deployment_region())
 
@@ -594,8 +595,9 @@ def _launch_retrying_once(row, request_entries, pinned):
 
 def _abort_execution(execution_id):
     """Abort the job's workflow run through the execution service's abort route (SYSTEM_USER
-    cross-call), which also stops its Batch job. Best-effort: the terminal callback and the
-    abort-incomplete-multipart lifecycle rule are the backstops."""
+    cross-call), which also stops its Batch job. Best-effort: the job is already finalized, the
+    container stops when it finds that, and the delayed sweep and the abort-incomplete-multipart
+    lifecycle rule are the backstops for its uploads."""
     if not execution_id or not EXECUTION_SERVICE_FUNCTION:
         return False
     invoke_event = {
@@ -704,9 +706,9 @@ def _check_run_ended(execution_id):
     checks Step Functions (_reconcile_main_status). The zip routes read the main row directly and the
     executions views hide system runs, so without this a lost event leaves the job active, holding a
     slot of the per-user cap, until it expires. The details read, made as SYSTEM_USER through the
-    same cross-call as the abort, writes the end under the shared terminal guard, settles the run's
-    locks and pipeline rows and sends the terminal callback, exactly as when someone opens the run;
-    the caller then re-reads the main row and decides with the same rule. Best-effort: False when the
+    same cross-call as the abort, writes the end under the shared terminal guard and settles the
+    run's locks and pipeline rows, exactly as when someone opens the run; the caller then re-reads
+    the main row and finalizes the job from it (finalize_ended_run). Best-effort: False when the
     read did not answer 200."""
     if not execution_id or not EXECUTION_SERVICE_FUNCTION:
         return False
@@ -734,6 +736,14 @@ def _check_run_ended(execution_id):
 def _reconcile(row, run_check_budget=None):
     """Finalize a non-terminal row whose run already ended (or never started). Returns the row as it
     reads after any write.
+
+    This is the only finalizer of a job besides the container and the user's cancel/delete: the run
+    sends the job nothing when it ends. From the run's status on its main execution row (by the stored
+    workflowExecutionId) finalize_ended_run first records the stop and aborts the job's open uploads,
+    starts the delayed sweep, then decides: the job's own landed archive wins (SUCCEEDED); a recorded
+    user cancel wins next (CANCELLED); otherwise a run that SUCCEEDED without the archive, was ABORTED
+    (from the workflow executions views), FAILED or TIMED_OUT ends FAILED with its documented message,
+    and the job's working objects are removed.
 
     ``run_check_budget`` is a one-element list counting the run checks (_check_run_ended) this call
     may still make; None allows the one check a single-job route needs."""
@@ -796,8 +806,8 @@ def _active_job_count(user_id) -> int:
 
 def _cap_reached(user_id) -> bool:
     """Whether the caller holds MAX_ACTIVE_PER_USER active jobs. At the cap, each active job is first
-    reconciled like a list does (same run-check budget), so a job whose run ended while every
-    delivery of that end was lost (the terminal callback, the status change event) frees its slot here
+    reconciled like a list does (same run-check budget), so a job whose run ended without the job
+    recording it yet (no read since, or the run's status change event was lost) frees its slot here
     rather than only when the caller next lists or opens it."""
     if _active_job_count(user_id) < MAX_ACTIVE_PER_USER:
         return False
@@ -1102,76 +1112,15 @@ def delete_job(event, database_id, asset_id, request_id):
 
 
 # ---------------------------------------------------------------------------
-# Terminal callback and delayed sweep (direct invokes; no API route reaches them)
+# Delayed sweep (a direct invoke; no API route reaches it)
 # ---------------------------------------------------------------------------
 #
-# The terminal callback finalizes the job row the container could not
-# (common/zipDownloads.finalize_ended_run): a run that succeeded without the archive object, a run
-# aborted from the executions views ("Cancelled from workflow executions"), a failure or timeout the
-# container never reported. It aborts the job's open uploads before it decides, and an archive that
-# already landed wins (SUCCEEDED) whatever the run's status. It is idempotent: every write conditions
-# on the row still being non-terminal and on the row belonging to this run, and Lambda's asynchronous
-# retries replay the same payload. It trusts only the stored row and the server-only context; the
-# payload's status decides which rule applies. Only the terminal writers' roles may invoke it with
-# a callback payload, and only the sweep state machine sends a sweep pass.
+# Only the sweep state machine sends a sweep pass. The run of a job sends this function nothing when
+# it ends: _reconcile finalizes the job from the run's status on its next read.
 
 # Top-level marker of a delayed sweep pass (the sweep state machine's LambdaInvoke payload,
 # infra lambdaBuilder/assetFunctions.ts buildZipDownloadSweep).
 SWEEP_ACTION = "sweep"
-
-
-def _ignored(reason):
-    logger.info(f"Zip download callback ignored: {reason}")
-    return {"status": "ignored", "reason": reason}
-
-
-def handle_callback(payload) -> dict:
-    if not isinstance(payload, dict):
-        return _ignored("payload is not an object")
-    if payload.get("callbackType") != sp.CALLBACK_TYPE:
-        return _ignored("not a system pipeline terminal callback")
-    if payload.get("schemaVersion") != sp.CALLBACK_SCHEMA_VERSION:
-        return _ignored("unsupported callback schema version")
-    if payload.get("triggerType") != zd.ZIP_DOWNLOAD_STORED_TRIGGER:
-        return _ignored("not a zip download run")
-    context = payload.get("systemExecutionContext")
-    if not isinstance(context, dict):
-        return _ignored("no system execution context")
-    user_id, request_id = context.get("userId"), context.get("requestId")
-    if not isinstance(user_id, str) or not user_id or not zd.is_request_id(request_id):
-        return _ignored("context does not name a zip download")
-    execution_id = payload.get("workflowExecutionId") or ""
-
-    row = zip_table.get_item(Key=zd.row_key(user_id, request_id), ConsistentRead=True).get("Item")
-    if not row:
-        return _ignored("zip download no longer exists")
-    if row.get("databaseId") != context.get("databaseId") or row.get("assetId") != context.get("assetId"):
-        logger.warning(f"Zip download callback context does not match job {request_id}")
-        return _ignored("context does not match the job")
-    row_execution = row.get("workflowExecutionId") or ""
-    if row_execution and execution_id and row_execution != execution_id:
-        return _ignored("callback is for another run of the job")
-
-    # Aborts the job's open uploads before deciding, so a landed archive wins (finalize_ended_run).
-    status, changed = zd.finalize_ended_run(
-        zip_table, s3, aux_bucket_name, row, payload.get("executionStatus", ""),
-        payload.get("executionError", "") or "", logger)
-    if not status:
-        # Already terminal (the container, the user's cancel or an earlier delivery won). A run that
-        # did not succeed still gets its incomplete uploads cleaned, which is idempotent.
-        if payload.get("executionStatus") != "SUCCEEDED" and row.get("status") != zd.STATUS_SUCCEEDED:
-            prefix = zd.request_prefix(row["databaseId"], row["assetId"], row["userId"], row["requestId"])
-            zd.abort_open_uploads(s3, aux_bucket_name, prefix, logger)
-            # Not final either: the delayed sweep aborts the recorded upload again later.
-            zd.schedule_delayed_sweep(row, logger)
-        # A job that ended without an archive (the container's FAILED, the user's cancel) keeps no
-        # working objects: this also removes a resolved manifest the container wrote after a cancel.
-        if row.get("status") in (zd.STATUS_FAILED, zd.STATUS_CANCELLED):
-            zd.delete_working_objects(s3, aux_bucket_name, row, logger)
-        return {"status": "unchanged", "jobStatus": row.get("status", "")}
-    logger.info(f"Zip download {request_id}: run {execution_id} ended "
-                f"{payload.get('executionStatus')}; job {'set to ' + status if changed else 'unchanged'}")
-    return {"status": "finalized" if changed else "unchanged", "jobStatus": status}
 
 
 def handle_sweep(event) -> dict:
@@ -1207,13 +1156,6 @@ def lambda_handler(event, context: LambdaContext):
     if _is_internal_event(event, "action", SWEEP_ACTION):
         # Raises on a failed check or listing, so the state machine retries the pass.
         return handle_sweep(event)
-    if _is_internal_event(event, "callbackType", sp.CALLBACK_TYPE):
-        try:
-            return handle_callback(event)
-        except Exception as e:
-            # Raising makes Lambda retry the asynchronous delivery, which is safe (idempotent writes).
-            logger.exception(f"Zip download callback failed: {e}")
-            raise
     # Neither an API request nor a marked internal invoke: no read, no write, no retry.
     logger.warning("Zip download service ignored an event of an unknown shape")
     return {"status": "ignored", "reason": "unknown event shape"}

@@ -6,9 +6,9 @@ answer is not final.
 
 On demo21 every copy cancel path ended its cleanup on ListParts = NoSuchUpload right after its own
 abort, yet the upload was listed again 2 to 8 minutes later with a part accepted before the stop. The
-zip stoppers (the user's cancel, the terminal callback, the read-time reconcile, the delete) had the
-same immediate-only sweep. Now each also starts the job's delayed sweep (schedule_delayed_sweep, once
-per job), whose passes (the callback's ``sweep`` action, about 5 and 15 minutes later) abort only
+zip stoppers (the user's cancel, the read-time reconcile, the delete) had the same immediate-only
+sweep. Now each also starts the job's delayed sweep (schedule_delayed_sweep, once per job), whose
+passes (the zip download service's ``sweep`` action, about 5 and 15 minutes later) abort only
 the archive uploads the container recorded on the job row (archiveUploadIds) when still listed at
 the job's exact archive key, unless the job's archive landed.
 
@@ -83,7 +83,7 @@ def env(monkeypatch):
 def _ghost(env, hidden_for):
     s3 = GhostS3(hidden_for)
     s3.uploads.append({"Bucket": h.AUX, "Key": env.key, "UploadId": "u1"})
-    env.svc.s3 = env.cb.s3 = s3
+    env.svc.s3 = s3
     return s3
 
 
@@ -100,18 +100,14 @@ def _run_sweep_execution(env, s3, start):
     assert start["stateMachineArn"] == MACHINE_ARN
     request = json.loads(start["input"])["zipSweep"]
     s3.now = env.zd.SWEEP_FIRST_WAIT_SECONDS
-    env.cb.lambda_handler({"action": "sweep", "zipSweep": request, "final": False}, None)
+    env.svc.lambda_handler({"action": "sweep", "zipSweep": request, "final": False}, None)
     s3.now = env.zd.SWEEP_FIRST_WAIT_SECONDS + env.zd.SWEEP_SECOND_WAIT_SECONDS
-    return env.cb.lambda_handler({"action": "sweep", "zipSweep": request, "final": True}, None)
+    return env.svc.lambda_handler({"action": "sweep", "zipSweep": request, "final": True}, None)
 
 
-def _callback_payload(status):
-    return {"callbackType": "systemPipelineTerminal", "schemaVersion": 1,
-            "idempotencyKey": f"exec-1:{status}", "workflowExecutionId": "exec-1",
-            "triggerType": "Zip-Download", "executionStatus": status, "executionError": "",
-            "writer": "abort",
-            "systemExecutionContext": {"v": 1, "requestId": REQUEST_ID, "userId": "alice",
-                                       "databaseId": "db1", "assetId": "asset1", "manifestKey": "m"}}
+def _run_ended(env, status):
+    """The job's run ended with ``status``; the job's next read reconciles it."""
+    return h.end_run_and_reconcile(env, "alice", REQUEST_ID, status)
 
 
 def _listed(s3, key):
@@ -143,9 +139,10 @@ def test_the_users_cancel_leaves_no_upload_after_the_delayed_sweep(env, hidden_f
 
 
 @pytest.mark.parametrize("execution_status", ["FAILED", "TIMED_OUT", "ABORTED"])
-def test_the_terminal_callback_leaves_no_upload_after_the_delayed_sweep(env, execution_status):
+def test_the_read_time_reconcile_of_an_ended_run_leaves_no_upload_after_the_sweep(
+        env, execution_status):
     s3 = _ghost(env, 300)
-    env.cb.lambda_handler(_callback_payload(execution_status), None)
+    _run_ended(env, execution_status)
     assert _row(env)["status"] == "FAILED"
     starts = _starts(env)
     assert len(starts) == 1
@@ -153,16 +150,15 @@ def test_the_terminal_callback_leaves_no_upload_after_the_delayed_sweep(env, exe
     assert s3.uploads == []
 
 
-def test_a_container_failure_already_recorded_still_gets_the_delayed_sweep(env):
-    """The container wrote FAILED itself; the callback's already-terminal path schedules too."""
+def test_a_container_failure_already_recorded_is_left_to_the_lifecycle_rule(env):
+    """The container wrote FAILED itself (after its own abort). A read of the final job writes
+    nothing and starts no sweep: an upload S3 lists again later is aborted by the
+    vams.preparedDownloads/ lifecycle rule after a day (infra zipDownloadsInfra.test.ts)."""
     s3 = _ghost(env, 200)
     _row(env)["status"] = "FAILED"
     s3.abort_multipart_upload(h.AUX, env.key, "u1")  # the sink's own abort (answered, not removed)
-    env.cb.lambda_handler(_callback_payload("FAILED"), None)
-    starts = _starts(env)
-    assert len(starts) == 1
-    _run_sweep_execution(env, s3, starts[0])
-    assert s3.uploads == []
+    assert _run_ended(env, "FAILED")["status"] == "FAILED"
+    assert _starts(env) == []
 
 
 def test_the_read_time_reconcile_schedules_the_delayed_sweep(env):
@@ -191,12 +187,12 @@ def test_a_job_deleted_before_the_sweep_is_swept_from_its_snapshot(env):
 def _plain(env):
     s3 = h.FakeS3()
     s3.uploads.append({"Bucket": h.AUX, "Key": env.key, "UploadId": "u1"})
-    env.svc.s3 = env.cb.s3 = s3
+    env.svc.s3 = s3
     return s3
 
 
 def _pass(env, final=True):
-    return env.cb.lambda_handler({"action": "sweep", "final": final,
+    return env.svc.lambda_handler({"action": "sweep", "final": final,
                                   "zipSweep": env.zd.sweep_request(_row(env))}, None)
 
 
@@ -288,7 +284,7 @@ def test_a_snapshot_outside_the_jobs_prefix_is_refused(env):
     request = env.zd.sweep_request(_row(env))
     del env.zip.items[("alice", REQUEST_ID)]
     for key in ("vams.preparedDownloads/other/x.zip", env.prefix + "sub/x.zip", ""):
-        result = env.cb.lambda_handler({"action": "sweep", "final": True,
+        result = env.svc.lambda_handler({"action": "sweep", "final": True,
                                         "zipSweep": {**request, "archiveKey": key}}, None)
         assert result["swept"] is False
     assert s3.aborted == []
@@ -296,7 +292,7 @@ def test_a_snapshot_outside_the_jobs_prefix_is_refused(env):
 
 def test_a_sweep_input_without_a_job_raises(env):
     with pytest.raises(ValueError):
-        env.cb.lambda_handler({"action": "sweep", "zipSweep": {"userId": "alice"}}, None)
+        env.svc.lambda_handler({"action": "sweep", "zipSweep": {"userId": "alice"}}, None)
 
 
 def test_a_job_without_recorded_uploads_is_not_swept(env):
@@ -377,8 +373,8 @@ def _abort_route_fails(env, how):
 @pytest.mark.parametrize("how", ["run-gone", "invoke-fails"])
 def test_a_cancel_that_stops_no_run_still_gets_the_delayed_sweep(env, how):
     """The DELETE route's cancel when the run's abort makes no stop (the run is gone, or the abort
-    call fails): no terminal callback follows, so cancel_job's own schedule_delayed_sweep call is
-    the only scheduler. Fails when that call is removed."""
+    call fails): no reconcile follows (the job is already CANCELLED), so cancel_job's own
+    schedule_delayed_sweep call is the only scheduler. Fails when that call is removed."""
     s3 = _ghost(env, 480)
     h.put_asset(env)
     _abort_route_fails(env, how)

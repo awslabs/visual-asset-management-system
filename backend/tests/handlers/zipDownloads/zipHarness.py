@@ -339,8 +339,8 @@ def _module_overrides():
 
 
 def load_handlers(enabled=True, env=None):
-    """Load a fresh copy of the zip download service (API routes, terminal callback and delayed
-    sweep in one handler) wired to new doubles."""
+    """Load a fresh copy of the zip download service (API routes and delayed sweep in one handler)
+    wired to new doubles."""
     environ = {"ZIPDOWNLOADS_ENABLED": "true" if enabled else "false",
                "EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME": "executeFn",
                "EXECUTION_SERVICE_FUNCTION_NAME": "executionServiceFn",
@@ -351,11 +351,8 @@ def load_handlers(enabled=True, env=None):
             patch("boto3.client", return_value=MagicMock()), \
             patch("boto3.resource", return_value=MagicMock()):
         svc = _load("zipDownloadService_under_test", "handlers/assets/zipDownloadService.py")
-    # One function serves the API routes, the terminal callback and the delayed sweep: ``cb`` is
-    # the same module, kept as a name so callback tests read as such.
-    cb = svc
     env_obj = types.SimpleNamespace(
-        svc=svc, cb=cb, s3=FakeS3(), lam=FakeLambda(),
+        svc=svc, s3=FakeS3(), lam=FakeLambda(),
         zip=FakeTable("userId", "requestId", {"UserAssetIndex": "userAssetKey"}),
         assets=FakeTable("databaseId", "assetId"),
         buckets=FakeTable("bucketId", None),
@@ -375,6 +372,28 @@ def load_handlers(enabled=True, env=None):
     # upload listed (a 204 answer); the doubles do not need the wait.
     env_obj.zd._sleep = lambda seconds: None
     return env_obj
+
+
+MAIN_SORT_KEY = "GLOBAL:utility-zip-archive"
+
+
+def set_run_status(env, execution_id, status, error=""):
+    """The zipArchive run's main execution row, as the workflow core's terminal writers (or the
+    status change event) record it. The run sends the job nothing; the job reads this row."""
+    env.executions.items[(execution_id, MAIN_SORT_KEY)] = {
+        "workflowExecutionId": execution_id, "workflowDatabaseId:workflowId": MAIN_SORT_KEY,
+        "executionStatus": status, "executionError": error}
+
+
+def end_run_and_reconcile(env, user_id, request_id, status, error=""):
+    """The job's run ended with ``status``; the next read of the job reconciles it (the service's
+    _reconcile on the stored row, as a GET, list or cap check does). Returns the row as the read
+    answers it ({} when the job no longer exists)."""
+    row = env.zip.items.get((user_id, request_id))
+    if not row:
+        return {}
+    set_run_status(env, row.get("workflowExecutionId") or "exec-1", status, error)
+    return env.svc._reconcile(dict(row))
 
 
 UPLOAD_TOKEN = "tok-this-job"

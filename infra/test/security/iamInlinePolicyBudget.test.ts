@@ -24,7 +24,6 @@
 
 import * as fs from "fs";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
-import * as seam from "../../lib/lambdaBuilder/systemPipelineCallbacks";
 import {
     IAM_INLINE_POLICY_LIMIT,
     IAM_MANAGED_POLICY_LIMIT,
@@ -45,11 +44,11 @@ interface Cell {
     template: TemplateName;
     mutate?: (c: any) => void;
     /**
-     * A cell with Download as Zip on, which registers its terminal callback (Zip-Download) in the
-     * system pipeline registry: the three terminal-writer roles' inline sizes must equal those of the
-     * named twin, whose registry is empty, because the grant is a managed policy.
+     * A cell with Download as Zip on. The zip download service registers no terminal callback (a job
+     * follows its run by the stored execution id), so the three terminal-writer roles' inline sizes
+     * must equal those of the named twin (feature off) and they carry no callback invoke policy.
      */
-    registeredCallbackOf?: string;
+    zipOnTwinOf?: string;
 }
 
 /** Download as Zip on; its zipArchive pipeline requires the global VPC (Lambdas stay outside it). */
@@ -88,19 +87,19 @@ const CELLS: Cell[] = [
         name: "commercial-zip",
         template: "commercial",
         mutate: enableZipDownloads,
-        registeredCallbackOf: "commercial",
+        zipOnTwinOf: "commercial",
     },
     {
         name: "govcloud-zip",
         template: "govcloud",
         mutate: enableZipDownloads,
-        registeredCallbackOf: "govcloud",
+        zipOnTwinOf: "govcloud",
     },
     {
         name: "eusovereign-zip",
         template: "eusovereign",
         mutate: enableZipDownloads,
-        registeredCallbackOf: "eusovereign",
+        zipOnTwinOf: "eusovereign",
     },
     {
         name: "commercial-worst-zip",
@@ -112,7 +111,7 @@ const CELLS: Cell[] = [
             c.app.useGlobalVpc.useForAllLambdas = true;
             c.app.zipDownloads.enabled = true;
         },
-        registeredCallbackOf: "commercial-worst",
+        zipOnTwinOf: "commercial-worst",
     },
 ];
 
@@ -234,26 +233,26 @@ describe.each(CELLS)("API Lambda role inline policy budget ($name)", (cell) => {
     });
 });
 
-test.each(CELLS.filter((c) => c.registeredCallbackOf))(
-    "a registered callback adds nothing to the terminal writers' inline policies ($name)",
+/** Construct id of the terminal writers' callback invoke policy (lambdaBuilder/systemPipelineCallbacks.ts). */
+const CALLBACK_INVOKE_POLICY_ID = "SystemPipelineCallbackInvokePolicy";
+
+test.each(CELLS.filter((c) => c.zipOnTwinOf))(
+    "Download as Zip adds nothing to the terminal writers' roles ($name)",
     (cell) => {
         // Runs after the cells above have filled the report.
         const registered = report[cell.name];
-        const base = report[cell.registeredCallbackOf!];
+        const base = report[cell.zipOnTwinOf!];
         for (const prefix of TERMINAL_WRITER_ROLES) {
             const re = new RegExp(`^${prefix}[0-9A-F]{8}$`);
             const roleId = Object.keys(registered).find((k) => re.test(k));
             expect(roleId).toBeDefined();
             expect(registered[roleId!]).toBe(base[roleId!]);
-            // The grant is carried by the one managed policy instead, measured by the cell's
-            // managed-policy budget test.
+            // No terminal callback is registered, so no callback invoke policy is attached.
             expect(
                 Object.keys(registered).some(
-                    (k) =>
-                        k.startsWith(`${roleId}:`) &&
-                        k.includes(seam.SYSTEM_PIPELINE_CALLBACK_POLICY_ID)
+                    (k) => k.startsWith(`${roleId}:`) && k.includes(CALLBACK_INVOKE_POLICY_ID)
                 )
-            ).toBe(true);
+            ).toBe(false);
         }
     }
 );
