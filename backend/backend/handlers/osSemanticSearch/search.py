@@ -617,6 +617,55 @@ class FieldClassifier:
         escaped = FieldClassifier.escape_opensearch_query_string(value.strip(), preserve_wildcards=True)
         return re.sub(r'(\s)', r'\\\1', escaped)
 
+    # The metadata (MD_) and attribute (AB_, file index only) objects are mapped `flat_object`. OpenSearch
+    # indexes three Lucene fields for one: `<root>._value` (each leaf value), `<root>._valueAndPath`
+    # (`<root>.<key>=<value>`) and `<root>` itself (the key paths, `<root>.<key>`). A query names the root
+    # or a key (`<root>.<key>`) and the field type rewrites it onto those fields (#1285):
+    #
+    # * Exact (term, phrase) and prefix queries are rewritten by both engines: on the root to the values,
+    #   on a key to that key's value. A name such as `MD_._value` is read as a key called `_value`, which
+    #   no record has, so an exact or prefix query on it matches nothing.
+    # * Other wildcard queries (a leading `*`, a `?`, an inner `*`) differ. Amazon OpenSearch Serverless
+    #   does not rewrite them: on the root they match the key paths, on a key nothing, and on
+    #   `<root>._value` / `<root>._valueAndPath` the values / `path=value` terms (observed on a test
+    #   collection). OpenSearch 2.18 and later, the engines VAMS deploys on provisioned domains
+    #   (OPENSEARCH_VERSION, 3.5; 2.19 in the EU Sovereign Cloud), rewrite them like the others
+    #   (FlatObjectFieldMapper.FlatObjectFieldType.wildcardQuery), so there the root and the key are the
+    #   fields to name and the internal names match nothing.
+
+    @staticmethod
+    def flat_object_roots(index_type: str) -> List[str]:
+        """The flat_object fields a value search of ``index_type`` covers."""
+        return ["MD_", "AB_"] if index_type == "file" else ["MD_"]
+
+    @staticmethod
+    def is_prefix_pattern(value: str) -> bool:
+        """Whether the caller's ``value`` is a prefix pattern: its only wildcard one trailing ``*``.
+        query_string turns such a term into a prefix query, which both engines rewrite."""
+        stripped = value.strip()
+        return stripped.endswith("*") and "*" not in stripped[:-1] and "?" not in stripped
+
+    @staticmethod
+    def flat_object_value_fields(index_type: str, wildcard: bool) -> List[str]:
+        """The fields a query_string over every metadata (and attribute) value names: the flat_object
+        roots for an exact or prefix term, and for a wildcard term (``wildcard``) the `._value` subfields
+        on OpenSearch Serverless, which does not rewrite a wildcard on the root."""
+        roots = FieldClassifier.flat_object_roots(index_type)
+        if wildcard and opensearch_type == "serverless":
+            return [f"{root}._value" for root in roots]
+        return roots
+
+    @staticmethod
+    def flat_object_key_pattern_query(prefix: str, escaped_key: str, value: str) -> str:
+        """query_string text matching the caller's wildcard ``value`` against one key's whole value.
+        A prefix pattern, and every pattern on an engine that rewrites wildcards, names the key; a
+        wildcard pattern on OpenSearch Serverless names the `path=value` field instead, anchored on the
+        key (`MD_._valueAndPath:MD_.Plant\\=*3`)."""
+        pattern = FieldClassifier.whole_value_pattern(value)
+        if opensearch_type == "serverless" and not FieldClassifier.is_prefix_pattern(value):
+            return f"{prefix}._valueAndPath:{prefix}.{escaped_key}\\={pattern}"
+        return f"{prefix}.{escaped_key}:{pattern}"
+
 #######################
 # Geo Filter Helper
 #######################
@@ -1215,15 +1264,15 @@ class SimpleSearchQueryBuilder:
             # Check if user provided wildcards
             has_wildcards = '*' in request.metadataValue or '?' in request.metadataValue
             
-            # Search across all values in flat objects
-            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
-            
+            # Search across all values in flat objects; the fields depend on the query kind (#1285)
+            prefix_only = has_wildcards and self.field_classifier.is_prefix_pattern(request.metadataValue)
+
             if has_wildcards:
                 # The caller's pattern, matched against each whole value
                 search_queries.append({
                     "query_string": {
                         "query": self.field_classifier.whole_value_pattern(request.metadataValue),
-                        "fields": fields,
+                        "fields": self.field_classifier.flat_object_value_fields(index_type, wildcard=not prefix_only),
                         "default_operator": "OR",
                         "analyze_wildcard": True,
                         "lenient": True
@@ -1234,7 +1283,8 @@ class SimpleSearchQueryBuilder:
                 search_queries.append({
                     "query_string": {
                         "query": self.field_classifier.every_word_anywhere_in_values_query(request.metadataValue),
-                        "fields": fields,
+                        # *word* terms are wildcards
+                        "fields": self.field_classifier.flat_object_value_fields(index_type, wildcard=True),
                         "default_operator": "OR",
                         "analyze_wildcard": True,
                         "lenient": True
@@ -1325,16 +1375,15 @@ class SimpleSearchQueryBuilder:
                 "list_tags", "str_asset_version_comment",
                 "str_assetid", "str_databaseid",
                 "str_bucketid", "str_bucketname", "str_bucketprefix",
-                "MD_._value"
-            ]
+            ] + self.field_classifier.flat_object_value_fields("asset", wildcard=True)
         elif index_type == "file":
+            # The general query's *word* terms are wildcards (FieldClassifier.flat_object_value_fields)
             return [
                 "str_key", "str_assetname", "str_fileext", "str_etag",
                 "list_tags",
                 "str_assetid", "str_databaseid",
                 "str_bucketid", "str_bucketname", "str_bucketprefix",
-                "MD_._value", "AB_._value"
-            ]
+            ] + self.field_classifier.flat_object_value_fields("file", wildcard=True)
         return []
 
 #######################
@@ -1656,7 +1705,9 @@ class DualIndexQueryBuilder:
         if has_wildcards:
             # The caller's pattern, matched against the key's whole value (#1282): unescaped, the
             # space ended the term and every word after it was searched in every field
-            query_str = f"{prefix}.{escaped_field_name}:{self.field_classifier.whole_value_pattern(value_part)}"
+            # space ended the term and every word after it was searched in every field. A pattern
+            # that is not a prefix names the path=value field on OpenSearch Serverless (#1285).
+            query_str = self.field_classifier.flat_object_key_pattern_query(prefix, escaped_field_name, value_part)
         else:
             # Exact match - quote the value for phrase matching
             query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
@@ -1705,12 +1756,14 @@ class DualIndexQueryBuilder:
             if has_wildcards:
                 # The caller's pattern, matched against each whole value (#1282)
                 query_str = self.field_classifier.whole_value_pattern(term)
+                wildcard = not self.field_classifier.is_prefix_pattern(term)
             else:
                 # For value-only search, use wildcards to find partial matches: every word (#1282)
                 query_str = self.field_classifier.every_word_anywhere_in_values_query(term)
+                wildcard = True
             
-            # Search across all values in flat objects
-            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            # Search across all values in flat objects; the fields depend on the query kind (#1285)
+            fields = self.field_classifier.flat_object_value_fields(index_type, wildcard=wildcard)
             
             return {
                 "query_string": {
@@ -1727,12 +1780,14 @@ class DualIndexQueryBuilder:
             if has_wildcards:
                 # The caller's pattern, matched against each whole value (#1282)
                 query_str = self.field_classifier.whole_value_pattern(term)
+                wildcard = not self.field_classifier.is_prefix_pattern(term)
             else:
                 # Exact match for "both" mode
                 query_str = f'"{escaped_query}"'
+                wildcard = False
             
-            # Search across all values in flat objects
-            fields = ["MD_._value", "AB_._value"] if index_type == "file" else ["MD_._value"]
+            # Search across all values in flat objects; the fields depend on the query kind (#1285)
+            fields = self.field_classifier.flat_object_value_fields(index_type, wildcard=wildcard)
             
             return {
                 "query_string": {
@@ -1939,13 +1994,10 @@ class DualIndexQueryBuilder:
         core_fields = self.field_classifier.get_searchable_core_fields(index_type)
         
         if include_metadata:
-            # Add flat object _value fields to search all metadata/attribute values
-            if index_type == "file":
-                # Files have both MD_ and AB_ flat objects
-                return core_fields + ["MD_._value", "AB_._value"]
-            else:
-                # Assets only have MD_ flat object
-                return core_fields + ["MD_._value"]
+            # Add the fields that search all metadata/attribute values (files have MD_ and AB_, assets
+            # MD_ only). The general query's *word* terms are wildcards, so on OpenSearch Serverless
+            # these are the `._value` subfields (FieldClassifier.flat_object_value_fields, #1285).
+            return core_fields + self.field_classifier.flat_object_value_fields(index_type, wildcard=True)
         else:
             return core_fields
 

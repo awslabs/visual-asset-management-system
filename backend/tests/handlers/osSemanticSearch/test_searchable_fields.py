@@ -149,11 +149,15 @@ class TestMetadataSearchModes:
         should = clause["bool"]["should"]
         assert clause["bool"]["minimum_should_match"] == 1
         assert [entry["query_string"]["query"] for entry in should] == ["*x*", "*y*"]
-        assert all(entry["query_string"]["fields"] == ["MD_._value"] for entry in should)
+        # The fields each engine answers a wildcard value search on (#1285; field names per engine in
+        # tests/handlers/authz/test_search_metadata_exact_and_prefix_values.py)
+        values = search_module.FieldClassifier.flat_object_value_fields("asset", wildcard=True)
+        assert all(entry["query_string"]["fields"] == values for entry in should)
 
     def test_value_mode_term_with_colon_is_a_value(self, search_module):
         clause = _query_builder(search_module)._build_metadata_search_query("12:30", "value", "asset")
-        assert clause["query_string"]["fields"] == ["MD_._value"]
+        assert clause["query_string"]["fields"] == search_module.FieldClassifier.flat_object_value_fields(
+            "asset", wildcard=True)
         assert clause["query_string"]["query"] == "*12\\:30*"
 
     def test_both_mode_still_parses_field_value_pairs(self, search_module):
