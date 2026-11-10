@@ -10,7 +10,7 @@
  * Functions (the task-token callback), Amazon Transcribe and Amazon Bedrock Runtime.
  *
  * The two Bedrock arms are the point of the file. Bedrock Runtime's Lambda-side gate is
- * `useForAllLambdas && (useSystemGenAiMetadata.enabled || vectorSearch.enabled)`; the container has no
+ * `useForAllLambdas && ((useSystemGenAiMetadata.enabled && useGenAiAnalysis !== false) || vectorSearch.enabled)`; the container has no
  * NAT, so with that gate alone every Bedrock call from this pipeline would resolve the public hostname
  * and hang until the connect timeout. The gate is the OR of named booleans, and the control and the
  * negative arm pin that widening it for the container did not loosen the Lambda half: the SYSTEM GenAI

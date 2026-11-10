@@ -683,20 +683,23 @@ describe("SYSTEM GenAI metadata pipeline construct", () => {
         expect(assetActions).toContain("s3:DeleteObject*");
     });
 
-    test("with vector search off the segment function is granted the analysis model only", () => {
+    test("with vector search off neither the segment function nor the embedding function holds a model grant", () => {
+        // Neither GenerateEmbeddingTask nor the video-segment Map runs with vector search off.
         const off = synth("SearchOff", (c) => {
             c.app.vectorSearch.enabled = false;
         });
-        const bedrock = withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel");
-        expect(bedrock).toHaveLength(1);
-        expect(actionsOf(bedrock)).toEqual(["bedrock:InvokeModel"]);
-        expect(JSON.stringify(bedrock[0].Resource)).toContain(
-            ":inference-profile/global.anthropic"
-        );
-        // Control: the whole-file embedding function keeps its grant regardless of the flag.
+        expect(
+            withActions(statementsOf(off, "SegmentAnalyze"), "bedrock:InvokeModel")
+        ).toHaveLength(0);
         expect(
             withActions(statementsOf(off, "GenerateEmbedding"), "bedrock:InvokeModel")
-        ).toHaveLength(1);
+        ).toHaveLength(0);
+        // Control: the whole-file analysis keeps the analysis model.
+        const analysis = withActions(statementsOf(off, "GenerateMetadata"), "bedrock:InvokeModel");
+        expect(analysis).toHaveLength(1);
+        expect(JSON.stringify(analysis[0].Resource)).toContain(
+            ":inference-profile/global.anthropic"
+        );
     });
 
     test("with the GenAI layer off no function holds the analysis model, the embedding grants stay, and the env says so", () => {

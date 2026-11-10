@@ -109,13 +109,15 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         expect(vpcOn.ofType("AWS::EC2::VPCEndpoint").length).toBeGreaterThan(0);
     });
 
-    it("creates the Bedrock Runtime endpoint iff every Lambda is in the VPC and the pipeline is on, or the search placement is in the VPC", () => {
+    it("creates the Bedrock Runtime endpoint iff every Lambda is in the VPC and the pipeline calls Bedrock, or the search placement is in the VPC", () => {
+        // The GenAI layer is set on here: the EU Sovereign template ships it off.
         const on = synthTemplate(name, {
             mutate: (c) => {
                 inVpcAllLambdas(c);
                 enable(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = true;
             },
-            mutateKey: "sysgenai-vpc-all-on",
+            mutateKey: "sysgenai-vpc-all-on-genai",
         });
         expect(endpoints(on, "bedrock-runtime")).toHaveLength(1);
 
@@ -132,6 +134,25 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
             {
                 description: "Bedrock endpoints in the enabled control",
                 count: endpoints(on, "bedrock-runtime").length,
+            }
+        );
+
+        // An attributes-only pipeline (GenAI layer off) with vector search off calls no Bedrock API, so
+        // every Lambda in the VPC demands no Bedrock Runtime endpoint: the EU Sovereign template's shape.
+        const attributesOnly = synthTemplate(name, {
+            mutate: (c) => {
+                inVpcAllLambdas(c);
+                enable(c);
+                c.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+            },
+            mutateKey: "sysgenai-vpc-all-attributes-only",
+        });
+        expectAbsent(
+            "Bedrock endpoint for an attributes-only pipeline with vector search off",
+            endpoints(attributesOnly, "bedrock-runtime"),
+            {
+                description: "interface endpoints in the attributes-only arm",
+                count: attributesOnly.ofType("AWS::EC2::VPCEndpoint").length,
             }
         );
 
@@ -162,56 +183,75 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         );
     });
 
-    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured, once per analysis function and once for the embedding function", () => {
+    it("grants bedrock:ApplyGuardrail on the exact guardrail iff configured, to the analysis functions and, with vector search on, the embedding and segment functions", () => {
+        const ownGuardrail = (c: any) => {
+            c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
+                guardrailIdentifier: "kb4v3hkqvi6f",
+                guardrailVersion: "1",
+                create: {
+                    enabled: false,
+                    promptAttackInputStrength: "LOW",
+                    piiFilter: "anonymize",
+                },
+            };
+        };
         const withGuardrail = synthTemplate(name, {
             mutate: (c) => {
                 enable(c);
-                c.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
-                    guardrailIdentifier: "kb4v3hkqvi6f",
-                    guardrailVersion: "1",
-                    create: {
-                        enabled: false,
-                        promptAttackInputStrength: "LOW",
-                        piiFilter: "anonymize",
-                    },
-                };
+                ownGuardrail(c);
             },
             mutateKey: "sysgenai-guardrail",
         });
-        // The whole-file analysis Lambda, the per-segment analysis Lambda, the embedding Lambda (which
-        // screens the text it embeds) and the asset summary's summary step, each on the exact ARN. The EU
-        // Sovereign template ships the GenAI layer off and cannot enable vector search, so neither analysis
-        // function calls Bedrock there, the asset summary is not built, and only the embedding function
-        // (built regardless) keeps the grant.
+        // Vector search off: the whole-file analysis Lambda and the asset summary's summary step, each on
+        // the exact ARN. The embedding and per-segment functions run only on the vector search path, so
+        // they hold no grant. The EU Sovereign template ships the GenAI layer off, so nothing calls
+        // Amazon Bedrock there and no function is granted.
         const grants = statementsWith(withGuardrail, "bedrock:ApplyGuardrail");
-        expect(grants).toHaveLength(name === "eusovereign" ? 1 : 4);
+        expect(grants).toHaveLength(name === "eusovereign" ? 0 : 2);
         for (const grant of grants) {
             expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
             expect(SynthResult.flatten(grant.Resource)).not.toContain("*");
         }
         expect(withGuardrail.countOfType("AWS::Bedrock::Guardrail")).toBe(0);
 
-        // The shipped template: the commercial one creates the guardrail and grants its ARN; the
-        // restricted-partition templates create none (Guardrails availability there is unverified).
+        if (name !== "eusovereign") {
+            // Vector search on adds the embedding Lambda (which screens the text it embeds) and the
+            // per-segment analysis Lambda.
+            const withSearch = synthTemplate(name, {
+                mutate: (c) => {
+                    enableWithSearch(c);
+                    ownGuardrail(c);
+                },
+                mutateKey: "sysgenai-guardrail-search",
+            });
+            const searchGrants = statementsWith(withSearch, "bedrock:ApplyGuardrail");
+            expect(searchGrants).toHaveLength(4);
+            for (const grant of searchGrants) {
+                expect(SynthResult.flatten(grant.Resource)).toContain(":guardrail/kb4v3hkqvi6f");
+            }
+        }
+
+        // The shipped template: the commercial and GovCloud ones create the guardrail and grant its ARN;
+        // the EU Sovereign one, attributes-only, creates none.
         const shipped = synthTemplate(name, { mutate: enable, mutateKey: "sysgenai-on" });
         const shippedCreates =
             TEMPLATES[name].app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled ===
             true;
-        expect(shippedCreates).toBe(name === "commercial");
+        expect(shippedCreates).toBe(name !== "eusovereign");
         if (shippedCreates) {
             const guardrail = shipped.ofType("AWS::Bedrock::Guardrail");
             expect(guardrail).toHaveLength(1);
             expect(shipped.countOfType("AWS::Bedrock::GuardrailVersion")).toBe(1);
-            // The three pipeline functions name the guardrail in its own stack; the asset summary's summary
+            // The whole-file analysis names the guardrail in its own stack; the asset summary's summary
             // step, built in the parent builder stack, names it through that nested stack's output.
             const created = statementsWith(shipped, "bedrock:ApplyGuardrail");
-            expect(created).toHaveLength(4);
+            expect(created).toHaveLength(2);
             const direct = created.filter(
                 (grant) =>
                     JSON.stringify(grant.Resource) ===
                     JSON.stringify({ "Fn::GetAtt": [guardrail[0].logicalId, "GuardrailArn"] })
             );
-            expect(direct).toHaveLength(3);
+            expect(direct).toHaveLength(1);
             const viaOutput = created.filter((grant) => !direct.includes(grant));
             expect(JSON.stringify(viaOutput[0].Resource)).toMatch(
                 /SystemGenAiMetadataPipeline.*Outputs\..*GuardrailArn/
@@ -302,8 +342,10 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])("%s",
         expect(analysisOnly.length + embeddingOnly.length + both.length).toBe(resources.length);
         if (name === "eusovereign") {
             // The template ships useGenAiAnalysis false and vector search is unavailable in aws-eusc: no
-            // function holds the analysis model, and only generateEmbedding holds the embedding model.
-            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([0, 1, 0]);
+            // function holds the analysis model, and generateEmbedding, which runs only on the vector
+            // search path, holds no embedding model either.
+            expect([analysisOnly.length, embeddingOnly.length, both.length]).toEqual([0, 0, 0]);
+            expect(invoke).toEqual([]);
         } else {
             // generateMetadata and the asset summary's summary step (the analysis model answers it while no
             // text model is set); generateEmbedding and the search API; segmentAnalyze on both.

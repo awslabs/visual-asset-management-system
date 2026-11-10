@@ -518,19 +518,22 @@ export function buildGenerateEmbeddingFunction(
     // content-chunk count row to it, so the asset buckets are read-write like generateMetadata's.
     grantReadWritePermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
-    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
-    // The embedding model, whether a plain id or a cross-Region inference profile. An empty id (vector
-    // search off, as the EU Sovereign Cloud template ships) names no model, so nothing is granted.
-    if (embeddingModelId.trim() !== "") {
-        grantBedrockInvokeModel(fun, config, [embeddingModelId]);
+    // The state machine reaches GenerateEmbeddingTask only when vector search is on (VectorSearchChoice
+    // reads VECTOR_SEARCH_ENABLED through constructPipeline), so the calls the step makes are granted on
+    // that path alone: the embedding model (a plain id or a cross-Region inference profile), the one
+    // guardrail the composed text and the content chunks are screened with (ApplyGuardrail) before the
+    // model receives them, and the vector.embedding.ready event it publishes.
+    if (config.app.vectorSearch.enabled) {
+        if (embeddingModelId.trim() !== "") {
+            grantBedrockInvokeModel(fun, config, [embeddingModelId]);
+        }
+        grantApplyGuardrail(fun, guardrail);
+        orchestrationBus.grantPutEventsTo(fun);
     }
-    // The one guardrail the composed text and the content chunks are screened with (ApplyGuardrail)
-    // before the embedding model receives them.
-    grantApplyGuardrail(fun, guardrail);
 
     suppressCdkNagLambda(fun);
     return fun;
@@ -716,23 +719,24 @@ export function buildSegmentAnalyzeFunction(
     // Reads the file from its asset bucket and writes the segment's result there; the embedding
     // document and the frames it decodes go to the auxiliary bucket.
     grantImageFunction(scope, fun, assetAuxiliaryBucket, config, kmsKey);
-    orchestrationBus.grantPutEventsTo(fun);
 
-    // The Map runs only when vector search is on AND the GenAI layer is on (a window is described by
-    // the analysis model from its frames before it is embedded), so both models are granted on that
-    // path alone.
-    const segmentModels: string[] = [];
-    if (analysisModelId.trim() !== "") {
-        segmentModels.push(analysisModelId);
-    }
+    // The Map runs only after a SUCCEEDED whole-file embedding, so only when vector search is on, and a
+    // window is described by the analysis model from its frames before it is embedded, so only with the
+    // GenAI layer on. The models, the guardrail the per-segment prompts and embedding texts are screened
+    // with, and the segment event are granted on that path alone; with vector search off, nothing.
     if (config.app.vectorSearch.enabled) {
-        segmentModels.push(embeddingModelId);
-    }
-    grantBedrockInvokeModel(fun, config, segmentModels);
-    // The one guardrail the per-segment analysis prompts and embedding texts are screened with; a
-    // function that calls no model screens nothing.
-    if (segmentModels.length > 0) {
-        grantApplyGuardrail(fun, guardrail);
+        const segmentModels: string[] = [];
+        if (analysisModelId.trim() !== "") {
+            segmentModels.push(analysisModelId);
+        }
+        if (embeddingModelId.trim() !== "") {
+            segmentModels.push(embeddingModelId);
+        }
+        grantBedrockInvokeModel(fun, config, segmentModels);
+        if (segmentModels.length > 0) {
+            grantApplyGuardrail(fun, guardrail);
+        }
+        orchestrationBus.grantPutEventsTo(fun);
     }
     return fun;
 }

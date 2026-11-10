@@ -299,6 +299,48 @@ describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
 
 const DOCS_ROOT = path.join(__dirname, "..", "../../documentation/docusaurus-site/docs");
 
+describe("the v2.6 to v2.7 vectorBackfill grant names the function the script resolves", () => {
+    // CloudFormation generates the reindexer's name from the construct path and truncates it
+    // (`<prefix>-VectorIndexingvectorRein-<suffix>`), so a pattern on the handler's name grants nothing.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const readme = readMigrationFile(release, release.readme);
+    const script = readMigrationFile(release, release.script);
+    const policyBlock = readme.slice(
+        readme.indexOf("### Required IAM Permissions"),
+        readme.indexOf("### Python Dependencies")
+    );
+
+    it("scopes lambda:InvokeFunction to the function name, not to a pattern on the handler name", () => {
+        const policy = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(policyBlock)![1]);
+        const invoke = policy.Statement.filter((s: any) =>
+            [].concat(s.Action).includes("lambda:InvokeFunction" as never)
+        );
+        expect(invoke).toHaveLength(1);
+        expect(invoke[0].Resource).toBe(
+            "arn:*:lambda:*:*:function:<VECTOR_REINDEXER_FUNCTION_NAME>"
+        );
+        expect(policyBlock).not.toContain("*vectorReindexer*");
+    });
+
+    it("tells the operator to read the name from the SSM key the script reads", () => {
+        expect(policyBlock).toContain("/lambdaFunctions/vectorReindexer");
+        expect(policyBlock).toContain("aws ssm get-parameter");
+        // The script resolves the same key (ssm_resource_lookup.ResourceParamKeys.VECTOR_REINDEXER_FUNCTION).
+        expect(script).toContain("VECTOR_REINDEXER_FUNCTION");
+        const lookup = fs.readFileSync(
+            path.join(MIGRATIONS_ROOT, "tools", "ssm_resource_lookup.py"),
+            "utf8"
+        );
+        expect(lookup).toMatch(/VECTOR_REINDEXER_FUNCTION = "lambdaFunctions\/vectorReindexer"/);
+    });
+
+    it("the AccessDenied message names the resolved function", () => {
+        const denied = script.slice(script.indexOf("elif error_code == 'AccessDeniedException':"));
+        expect(denied.slice(0, 400)).toContain("'{function_name}'");
+    });
+});
+
 describe(`${CURRENT.dir} steps are documented where the operator looks`, () => {
     const script = readMigrationFile(CURRENT, CURRENT.script);
     const choicesLine = script.match(/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m);

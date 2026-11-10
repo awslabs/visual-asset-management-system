@@ -1056,7 +1056,9 @@ describe("system GenAI metadata pipeline validation", () => {
                 return "";
             })();
             expect(message).toMatch(NO_GUARDRAIL);
-            expect(message).toContain("the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)");
+            expect(message).toContain(
+                "the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)"
+            );
             expect(message).not.toContain("vector search (app.vectorSearch.enabled)");
             expect(message).toContain("prompt-attack input filter");
             expect(message).toContain("bedrockGuardrail.create.enabled to true");

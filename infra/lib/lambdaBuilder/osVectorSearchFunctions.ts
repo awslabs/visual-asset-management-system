@@ -122,7 +122,9 @@ export function buildVectorIndexerFunction(
  * GovCloud (US) user guide lists it as not available, so `aws-us-gov` and any other partition omit the
  * property and the function template stays unchanged there.
  */
-export function vectorReindexerRecursiveLoop(config: Config.Config): lambda.RecursiveLoop | undefined {
+export function vectorReindexerRecursiveLoop(
+    config: Config.Config
+): lambda.RecursiveLoop | undefined {
     const partition = config.env.partition;
     return partition === "aws" || partition === "aws-eusc" ? lambda.RecursiveLoop.ALLOW : undefined;
 }

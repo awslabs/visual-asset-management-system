@@ -397,6 +397,8 @@ describe("Bedrock Runtime endpoint condition", () => {
         expect(conditionBlock).toContain("bedrockFromAllLambdas || bedrockFromSearch");
         expect(predicateBlock).toContain("useForAllLambdas");
         expect(predicateBlock).toContain("useSystemGenAiMetadata.enabled");
+        // An attributes-only pipeline (GenAI layer off) with vector search off calls no Bedrock API.
+        expect(predicateBlock).toContain("useSystemGenAiMetadata.useGenAiAnalysis !== false");
         expect(predicateBlock).toContain("vectorSearch.enabled");
         expect(predicateBlock).toContain("searchLambdasInVpc(props.config)");
         // In the isolated subnets, where the pipeline and search Lambdas sit.

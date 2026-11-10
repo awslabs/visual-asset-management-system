@@ -301,10 +301,8 @@ describe("an empty embedding model id", () => {
             models(c).embeddingModelId = "";
         });
         expect(invokeStatements(template, "GenerateEmbedding")).toHaveLength(0);
-        // The segment child keeps its analysis model and holds no embedding grant.
-        expect(resourcesOf(invokeStatements(template, "SegmentAnalyze"))).toEqual([
-            profileGrant(ANALYSIS),
-        ]);
+        // The segment child runs only on the vector search path, so it holds no model grant either.
+        expect(invokeStatements(template, "SegmentAnalyze")).toHaveLength(0);
         const all = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
             (p: any) => p.Properties.PolicyDocument.Statement
         );

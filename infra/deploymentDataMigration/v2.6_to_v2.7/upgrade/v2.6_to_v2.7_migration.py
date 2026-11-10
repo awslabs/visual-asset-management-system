@@ -551,8 +551,9 @@ def invoke_vector_reindexer(lambda_client, function_name: str, payload: Dict,
                          "only when app.vectorSearch.enabled is true; check the SSM parameter "
                          "lambdaFunctions/vectorReindexer under the deployment's resourceNames prefix.")
         elif error_code == 'AccessDeniedException':
-            logger.error("Access denied. Ensure your IAM principal has lambda:InvokeFunction on the "
-                         "vectorReindexer function.")
+            logger.error(f"Access denied. Ensure your IAM principal has lambda:InvokeFunction on the "
+                         f"function '{function_name}' (the vectorReindexer name published at "
+                         "lambdaFunctions/vectorReindexer under the deployment's resourceNames prefix).")
         return {'error': error_message, 'error_code': error_code}
 
     elapsed = time.time() - start_time

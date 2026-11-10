@@ -775,11 +775,14 @@ export class VPCBuilderNestedStack extends NestedStack {
             // Amazon Bedrock Runtime endpoint. A VPC allows one private-DNS endpoint per service, so its
             // in-VPC callers share it and only its condition is the union: the SYSTEM GenAI analysis and
             // embedding Lambdas, which call Bedrock from the isolated subnets when every Lambda runs in
-            // the VPC; the vector search Lambda, whenever the search stack's placement puts it in the
-            // VPC; and the video SOP/BOM Batch container, which always runs in the isolated subnets.
+            // the VPC and the pipeline makes Bedrock calls (its GenAI analysis layer, or the embeddings
+            // vector search needs; an attributes-only pipeline with vector search off calls none); the
+            // vector search Lambda, whenever the search stack's placement puts it in the VPC; and the
+            // video SOP/BOM Batch container, which always runs in the isolated subnets.
             const bedrockFromAllLambdas =
                 props.config.app.useGlobalVpc.useForAllLambdas &&
-                (props.config.app.pipelines.useSystemGenAiMetadata.enabled ||
+                ((props.config.app.pipelines.useSystemGenAiMetadata.enabled &&
+                    props.config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis !== false) ||
                     props.config.app.vectorSearch.enabled);
             const bedrockFromSearch =
                 props.config.app.vectorSearch.enabled && searchLambdasInVpc(props.config);

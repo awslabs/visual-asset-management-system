@@ -77,7 +77,9 @@ class TestInvocationCap:
     def test_an_invocation_at_the_cap_that_finishes_its_work_completes(self, reindexer):
         body = json.loads(
             reindexer.lambda_handler(_continuation(CAP - 1, CURSOR, deleted=2), _context(600000))["body"])
-        assert (body["phase"], body["continued"], body["deleted"]) == ("done", False, 3)
+        assert body["phase"] == "done"
+        assert body["continued"] is False
+        assert body["deleted"] == 3
         reindexer.lambda_client.invoke.assert_not_called()
 
     def test_the_resume_payload_from_the_cap_continues_the_run(self, reindexer):
