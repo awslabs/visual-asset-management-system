@@ -511,9 +511,9 @@ function buildGovCloud(): ConfigShape {
     // Off in the restricted partitions; Amazon Bedrock model access there is a manual, two-account step.
     cfg.app.vectorSearch.enabled = false;
     cfg.app.pipelines.useSystemGenAiMetadata.enabled = false;
-    // Amazon Bedrock Guardrails availability in the restricted partitions is unverified, so the
-    // deployment does not create one there.
-    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
+    // Amazon Bedrock Guardrails is offered in AWS GovCloud (US), and getConfig() refuses a pipeline that
+    // calls Amazon Bedrock with no guardrail, so the deployment creates one there as in commercial.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = true;
     // The GovCloud preset names the "us-gov." inference profile; getConfig() also accepts a "us."
     // profile there, with a warning.
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
@@ -558,6 +558,9 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
     cfg.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+    // Amazon Bedrock Guardrails availability there is unverified and the attributes-only pipeline makes
+    // no Amazon Bedrock call, so no guardrail is created; turning on the GenAI layer requires one.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
     // CodeBuild is not offered in the EU Sovereign Cloud (config.ts codeBuildSupportedPartitions).
     cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
     // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.

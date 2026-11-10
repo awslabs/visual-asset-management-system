@@ -73,6 +73,8 @@ const API_CUSTOM_DOMAIN_HOST_PATTERN =
 const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+// config.ts VECTOR_SEARCH_PARTITIONS.
+const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
 /**
  * Region-name prefix to partition name and DNS suffix, matching what
  * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
@@ -3348,37 +3350,57 @@ export const RULES: Rule[] = [
         message:
             "pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled is true while guardrailIdentifier names an operator-owned guardrail. Turn the created guardrail off to use the operator-owned one, or clear guardrailIdentifier and guardrailVersion.",
     },
+    // (config.ts: "Every Amazon Bedrock call the system GenAI metadata pipeline makes carries a guardrail")
     {
-        id: "system-genai-no-guardrail",
-        severity: "warning",
+        id: "system-genai-guardrail-required",
+        severity: "error",
         fieldPaths: [
             "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+            "app.vectorSearch.enabled",
             "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
             "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
         ],
-        appliesWhen: (c) =>
-            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
-            g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") ===
-                false &&
-            isBlank(
-                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
-            ),
+        // The analysis Converse calls (GenAI layer on) and the screen of the embedded text (vector search
+        // on) both go through the guardrail, in every partition. getConfig() fills an absent
+        // create.enabled with true when no guardrail is named and an absent useGenAiAnalysis with true.
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const analysis = g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis");
+            const analysisOn = isAbsent(analysis) ? true : analysis === true;
+            const vectorOn = g(c, "app.vectorSearch.enabled") === true;
+            if (!analysisOn && !vectorOn) return false;
+            return (
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") ===
+                    false &&
+                isBlank(
+                    g(
+                        c,
+                        "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"
+                    )
+                )
+            );
+        },
         message:
-            "useSystemGenAiMetadata is enabled without a bedrockGuardrail. The analysis prompts (file content, rendered views, operator vocabulary) are sent to Amazon Bedrock with no guardrail; turn on bedrockGuardrail.create.enabled, or create one with prompt-attack and content filters in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail creates no guardrail and names none, while the GenAI analysis or vector search sends file content to Amazon Bedrock. Turn on bedrockGuardrail.create.enabled, or create a guardrail with a prompt-attack input filter in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
     },
 
-    // ----- Vector search (config.ts: "DynamoDB vector search is not available in the European Sovereign
-    // Cloud", "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.enabled",
+    // ----- Vector search (config.ts: "Vector search runs on Amazon DynamoDB vector search and an Amazon
+    // Bedrock embedding model", "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.enabled",
     // "vectorSearch.indexingConcurrency must be an integer between") -----
     {
-        id: "vector-search-eusc",
+        id: "vector-search-partition",
         severity: "error",
         fieldPaths: ["app.vectorSearch.enabled", "env.region"],
-        appliesWhen: (c) =>
-            !!g(c, "app.vectorSearch.enabled") &&
-            partitionForRegionName(g(c, "env.region")) === "aws-eusc",
+        // An allow-list (config.ts VECTOR_SEARCH_PARTITIONS): the European Sovereign Cloud has no DynamoDB
+        // vector search, and China and the ISO partitions are unverified. Silent while the region is unset.
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && !VECTOR_SEARCH_PARTITIONS.includes(partition);
+        },
         message:
-            "DynamoDB vector search is not available in the AWS European Sovereign Cloud. Set app.vectorSearch.enabled to false.",
+            "Vector search (DynamoDB vector search with an Amazon Bedrock embedding model) is supported only in the commercial (aws) and AWS GovCloud (US) (aws-us-gov) partitions. Set app.vectorSearch.enabled to false in this Region's partition.",
     },
     {
         id: "vector-search-govcloud-model-access",
