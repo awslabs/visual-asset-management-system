@@ -278,6 +278,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 -   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
+-   **Versions table action labels** — The Actions column on the asset page's Versions tab carries a minimum width, so its button labels no longer wrap inside their words. (issue #1229)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
 
