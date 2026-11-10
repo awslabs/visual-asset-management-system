@@ -406,15 +406,6 @@ const ModernSearchContainer: React.FC<
         searchMode,
     ]);
 
-    // Entering or leaving the Map view re-runs a keyword search, whose request adds or drops the
-    // location scope. In natural-language mode the map pages through the answer already held, as
-    // the table does, so no search runs (and no query is embedded again).
-    useEffect(() => {
-        if (hasInitialLoad && searchMode !== "nlp") {
-            debouncedAutoRefresh(searchState.query);
-        }
-    }, [mapScoped]);
-
     // Add/remove Archived column when includeArchived filter changes
     useEffect(() => {
         const hasArchivedFilter = !!searchState.filters.bool_archived;
@@ -565,9 +556,15 @@ const ModernSearchContainer: React.FC<
     const handleViewChange = (view: "table" | "card" | "map") => {
         if (view === currentView) return;
         setCurrentView(view);
-        // A keyword search on the map covers other records than the table's: start at page 1.
         if ((view === "map") !== (currentView === "map")) {
+            // A keyword search on the map covers other records than the table's: it runs again,
+            // with or without the location scope, from page 1. In natural-language mode the map
+            // pages through the answer already held, as the table does, so no search runs and the
+            // query is not embedded again.
             searchState.setPagination({ from: 0 });
+            if (hasInitialLoad && searchMode !== "nlp") {
+                debouncedAutoRefresh(searchState.query);
+            }
         }
     };
 
