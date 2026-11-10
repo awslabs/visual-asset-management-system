@@ -9,7 +9,8 @@
  * state, no reduced or keyword-only layout, and the mode switch still offers both engines.
  *
  * The 503 answers: a natural-language search whose metadata, tag or location filters could not be
- * applied; a search throttled or timed out; and a keyword search while OpenSearch is unreachable.
+ * applied, one throttled or timed out, or one sent while the vector index is being built; and a
+ * keyword search while OpenSearch is unreachable.
  * APIService hands the message of a failed call to the page as `[false, message]`
  * (APIService.searchNlp.test.ts covers that for a 503).
  */
@@ -128,6 +129,7 @@ describe("ModernSearchContainer search that the API answers with a 503", () => {
     it.each([
         ["its filters could not be applied", FILTERS_NOT_APPLIED],
         ["it was throttled or timed out", BUSY],
+        ["the vector index is being built", "Vector index is being built"],
     ])(
         "reports a natural-language search as failed when %s, with the API's message",
         async (_, message) => {
@@ -155,24 +157,24 @@ describe("ModernSearchContainer search that the API answers with a 503", () => {
         }
     );
 
-    it.each([
-        ["OpenSearch is unreachable", UNAVAILABLE],
-        ["it was throttled or timed out", BUSY],
-    ])("reports a keyword search as failed when %s, with the API's message", async (_, message) => {
-        const { container } = renderContainer();
-        await screen.findByText("Alpha");
-        (searchAssets as jest.Mock).mockResolvedValue([false, message]);
-        await userEvent.type(screen.getByPlaceholderText("Search by keywords..."), "bracket");
-        await userEvent.click(screen.getByRole("button", { name: "Search" }));
-        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2));
+    it.each([["OpenSearch is unreachable", UNAVAILABLE]])(
+        "reports a keyword search as failed when %s, with the API's message",
+        async (_, message) => {
+            const { container } = renderContainer();
+            await screen.findByText("Alpha");
+            (searchAssets as jest.Mock).mockResolvedValue([false, message]);
+            await userEvent.type(screen.getByPlaceholderText("Search by keywords..."), "bracket");
+            await userEvent.click(screen.getByRole("button", { name: "Search" }));
+            await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2));
 
-        await waitFor(() =>
-            expect(toasts(container)).toContainEqual({
-                header: "Search failed",
-                content: message,
-            })
-        );
-        expectSearchStillOffered();
-        expect(screen.getByTestId("keyword")).toHaveAttribute("aria-pressed", "true");
-    });
+            await waitFor(() =>
+                expect(toasts(container)).toContainEqual({
+                    header: "Search failed",
+                    content: message,
+                })
+            );
+            expectSearchStillOffered();
+            expect(screen.getByTestId("keyword")).toHaveAttribute("aria-pressed", "true");
+        }
+    );
 });

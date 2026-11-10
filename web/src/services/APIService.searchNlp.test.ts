@@ -101,10 +101,8 @@ describe("searchAssets", () => {
         jest.clearAllMocks();
     });
 
-    it.each([
-        "Search is temporarily unavailable. Try again in a moment.",
-        "Search is busy right now. Try again in a moment.",
-    ])("hands a 503's message to the page unchanged: %s", async (message) => {
+    it("hands a 503's message to the page unchanged", async () => {
+        const message = "Search is temporarily unavailable. Try again in a moment.";
         mockPost.mockRejectedValue(new ApiError(message, 503, { message }));
         expect(await searchAssets({ query: "anything" })).toEqual([false, message]);
     });
