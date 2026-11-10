@@ -610,6 +610,8 @@ The `sort` field accepts an array of sort specifications. Each item can be a str
 When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_filesize`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
 :::
 
+Records equal on every sort key you give are ordered by their database ID, asset ID, archive state and, for files, file path, all ascending. The search adds these keys after your sort (a key your sort already names keeps your direction), so every record has one place in the order: following `from`/`size` pages lists each record once, also when records are re-indexed between pages without a change to the values they are sorted by. `POST /search/simple` sorts by `_score` with the same keys after it.
+
 ---
 
 ## Geospatial Search

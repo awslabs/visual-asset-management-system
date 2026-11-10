@@ -229,7 +229,8 @@ class DualIndexSearchManager:
         Hits merged from two indexes can carry different types (or nothing) for the same
         sort field, and comparing those directly raises TypeError, which would discard the
         ordering entirely. The leading rank groups missing / numeric / textual values so
-        every pair is comparable.
+        every pair is comparable. A string compares by code point, which is the order of its
+        UTF-8 bytes, the order OpenSearch sorts a keyword in.
         """
         if value is None:
             return (0, "")
@@ -240,6 +241,23 @@ class DualIndexSearchManager:
         if isinstance(value, (list, tuple)):
             return DualIndexSearchManager._sort_value(value[0]) if value else (0, "")
         return (2, str(value))
+
+    @staticmethod
+    def _merge_sort_key(value: Any, descending: bool) -> Tuple[int, Tuple[int, Any]]:
+        """The key one sort pass of the merge orders a hit by, as OpenSearch orders the same value.
+
+        OpenSearch puts a document without a value last in either direction, and sorts a document
+        with several values by its smallest value ascending and its largest descending. The merge
+        must order two hits of the same index exactly as that index did, or the merged list stops
+        being in true order (see ``_ordered_prefix_length``) and pages repeat or skip records.
+        """
+        values = [v for v in (value if isinstance(value, (list, tuple)) else [value]) if v is not None]
+        if not values:
+            # Last in either direction: after every value ascending, and, because the pass runs
+            # with reverse=True, still after every value descending.
+            return (0 if descending else 1, (0, ""))
+        keys = [DualIndexSearchManager._sort_value(v) for v in values]
+        return (1 if descending else 0, max(keys) if descending else min(keys))
 
     def _sort_combined_results(self, hits: List[Dict], sort_config: List) -> List[Dict]:
         """Order hits merged from the asset and file indexes into one sequence.
@@ -274,7 +292,7 @@ class DualIndexSearchManager:
                                  reverse=descending)
                 else:
                     ordered.sort(
-                        key=lambda hit: self._sort_value(hit.get("_source", {}).get(field)),
+                        key=lambda hit: self._merge_sort_key(hit.get("_source", {}).get(field), descending),
                         reverse=descending,
                     )
                 applied += 1
@@ -389,7 +407,10 @@ class DualIndexSearchManager:
             # Merge-sort the two indexes' hits into one global order. Appending the file
             # hits after the asset hits puts every asset ahead of every file, so the page
             # the response processor slices off the head would carry asset hits only.
-            sort_config = asset_query.get("sort") or file_query.get("sort") or ["_score"]
+            # The file query's sort comes first: its tiebreaker keys extend the asset
+            # query's (SORT_TIEBREAKER_FIELDS), so the merge orders two hits of either
+            # index exactly as that index did.
+            sort_config = file_query.get("sort") or asset_query.get("sort") or ["_score"]
             if indexes_with_hits > 1:
                 results["hits"]["hits"] = self._sort_combined_results(
                     results["hits"]["hits"], sort_config
@@ -649,6 +670,40 @@ AGGREGATED_FIELDS = {
     FILE_INDEX: ("str_fileext", "str_databaseid", "str_assetid", "list_tags"),
 }
 AGGREGATION_BUCKET_LIMIT = 1000
+
+# Sort keys appended, ascending, after every keyword search sort (/search, /search/simple and each
+# larger window of the page fill). Documents equal on every requested key (every hit of a query
+# without text scores the same; every file of one asset has the same asset name) otherwise have no
+# defined order: OpenSearch can return them in another order on the next request, after a document
+# is rewritten or from another shard copy, and pages cut from separate requests then repeat some
+# records and skip others. Together the keys are unique per document of each index, because they are
+# what its document id is built from (common.indexing.documentIds): an asset document's database,
+# asset and archive state, a file document's database, asset and asset-relative path. They are the
+# keyword subfields and the boolean the index schema maps explicitly (deployschema.ts) and every
+# document carries, sorted from doc values on OpenSearch Serverless and provisioned domains alike, so
+# existing indexes need no mapping change or reindex. `_id` is not used: sorting on it needs field
+# data for the id field, which OpenSearch documents as discouraged and a domain can turn off. The
+# file keys extend the asset keys, so the merge of a search over both indexes, which applies the
+# file query's sort, orders two hits of either index exactly as that index did.
+SORT_TIEBREAKER_FIELDS = {
+    ASSET_INDEX: ("str_databaseid.keyword", "str_assetid.keyword", "bool_archived"),
+    FILE_INDEX: ("str_databaseid.keyword", "str_assetid.keyword", "bool_archived", "str_key.keyword"),
+}
+
+
+def with_unique_tiebreaker(sort: List[Any], index_type: str) -> List[Any]:
+    """``sort`` followed by each SORT_TIEBREAKER_FIELDS key of ``index_type`` it does not already
+    name, ascending, so the order is total. A key ``sort`` names keeps the caller's direction."""
+    named = set()
+    for entry in sort:
+        field, _ = DualIndexSearchManager._sort_entry(entry)
+        if field:
+            named.add(field)
+    tiebreakers = [{field: {"order": "asc"}} for field in SORT_TIEBREAKER_FIELDS.get(index_type, ())]
+    return list(sort) + [
+        entry for entry in tiebreakers
+        if DualIndexSearchManager._sort_entry(entry)[0] not in named
+    ]
 
 
 def build_search_authz_filters(claims_and_roles: Dict[str, Any]) -> Optional[Dict[str, SearchAuthzFilter]]:
@@ -922,7 +977,7 @@ class SimpleSearchQueryBuilder:
             query = {
                 "from": 0,
                 "size": opensearch_size,
-                "sort": ["_score"],
+                "sort": with_unique_tiebreaker(["_score"], index_type),
                 "query": query_clause,
                 "highlight": self._build_simple_highlight_config(index_type),
                 "_source": True,
@@ -1624,7 +1679,7 @@ class DualIndexQueryBuilder:
         
         if not sort_config:
             logger.info(f"[Sort] No sort config provided, using default _score")
-            return ["_score"]
+            return with_unique_tiebreaker(["_score"], index_type)
         
         sanitized_sort = []
         
@@ -1682,6 +1737,9 @@ class DualIndexQueryBuilder:
         if not sanitized_sort:
             logger.info(f"[Sort] No valid sort items, using default _score")
             sanitized_sort = ["_score"]
+
+        # A unique last key, so pages cut from separate requests neither repeat nor skip a record
+        sanitized_sort = with_unique_tiebreaker(sanitized_sort, index_type)
         
         logger.info(f"[Sort] Final sort config for {index_type}: {sanitized_sort}")
         return sanitized_sort
