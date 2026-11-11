@@ -62,6 +62,19 @@ pip install -e .
 vams-mcp        # stdio transport; uses your active vamscli profile
 ```
 
+The server sends the client a short usage guide (MCP `instructions`): how VAMS identifies assets and
+files, where to start, what a bounded result means, and that the agent should use these tools rather
+than a shell, the CLI or the source code. The most-used reads also publish an `outputSchema` and
+return the same JSON as structured content.
+
+**Without a sign-in the server still starts.** When the profile is not set up, nobody is signed in,
+or the sign-in expires during a session, every tool returns
+`{"error": ..., "error_type": "NotAuthenticated", "user_action": ...}`. The error asks the agent to
+have you sign in; `user_action` names the command you run (`vamscli auth login -u <user>`, with
+`--profile` when `VAMS_PROFILE` is set). The next call after you sign in works without a restart;
+add-on tools appear after a restart. `vams_status` always answers: profile, API URL, signed-in user,
+feature switches, which tool tiers are on, and the MCP and CLI versions.
+
 ## Configure (optional)
 
 All configuration is via environment variables — none are required. Set them in the `env` block
@@ -89,15 +102,45 @@ secrets** — just the command:
             "env": {},
             "disabled": false,
             "autoApprove": [
+                "vams_status",
                 "list_allowed_api_routes",
                 "list_api_routes",
                 "list_constraint_permission_objects",
                 "list_databases",
                 "get_database",
+                "list_buckets",
                 "list_assets",
                 "get_asset",
+                "list_asset_files",
+                "get_asset_metadata",
+                "get_database_metadata",
+                "list_asset_versions",
+                "get_asset_version",
+                "get_asset_history",
+                "get_asset_links",
                 "search_assets",
+                "search_files",
+                "get_search_fields",
+                "list_workflows",
+                "list_workflow_executions",
+                "list_tags",
+                "list_tag_types",
+                "list_metadata_schemas",
                 "find_and_summarize",
+                "list_pipelines",
+                "get_pipeline",
+                "list_pipeline_templates",
+                "get_pipeline_template",
+                "get_pipeline_template_tag_schema",
+                "get_workflow",
+                "list_workflow_triggers",
+                "get_workflow_trigger",
+                "list_executions",
+                "get_execution_details",
+                "page_execution_detail_metadata",
+                "page_execution_detail_files",
+                "get_execution_results",
+                "get_execution_logs",
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
@@ -124,7 +167,7 @@ in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
 
 ### Read / search (always available)
 
-`list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
+`vams_status`, `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
 `list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
 `list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
 `list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
@@ -488,6 +531,13 @@ and is the better first move.
     caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
+-   Every tool carries MCP annotations matching its gate: reads are `readOnlyHint: true`, writes
+    `readOnlyHint: false` with `destructiveHint: false`, destructive tools `destructiveHint: true`,
+    and the tools that start, stop or extend billed compute `openWorldHint: true`. The hints are
+    advice to the client, not a control. The presigned-URL tools above are reads, so they carry
+    `readOnlyHint: true`: a client set to approve every read-only tool automatically approves them
+    too, so keep that setting off where a URL in the transcript matters, and rely on the
+    `autoApprove` list instead.
 
 ## Add-on tools
 

@@ -23,6 +23,18 @@ truth. This keeps the skill correct without edits as VAMS changes.
 **Assumptions:** `vamscli` is already installed and configured on the machine.
 This skill is standalone and is not part of the vamscli package.
 
+**When the VAMS MCP server is connected, use its tools instead of this skill.**
+If your session lists tools of the `vams` MCP server (for example `vams_status`,
+`search_assets`, `get_asset`), answer questions and do the work through those
+tools: they act as the same signed-in user, return bounded and structured
+results, and are what the operator approved for this session. Do not run
+`vamscli` in a shell, and do not read the VAMS source code, to do something an
+MCP tool does. Use `vamscli` (this skill) only for what the server does not
+expose, such as file uploads, sync, and user, role and constraint
+administration, and say that you are switching. If an MCP tool answers
+`NotAuthenticated`, ask the user to sign in (its `user_action` names the
+command the user runs); do not sign in yourself.
+
 ## Instructions
 
 ### Step 1: Verify the environment and authenticate (per session)

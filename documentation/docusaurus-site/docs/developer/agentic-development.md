@@ -47,20 +47,20 @@ The `.kiro/steering/` directory contains detailed development workflow guides. T
 
 ### CLAUDE.md Files
 
-| File                                         | Scope                       | Key Topics                                                                                                                               |
-| -------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLAUDE.md`                                  | Project-wide                | Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes                              |
-| `web/CLAUDE.md`                              | React frontend              | Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches                              |
-| `web/e2e/CLAUDE.md`                          | Playwright end-to-end tests | Tracked core specs versus untracked ad-hoc specs, environment-independent and non-mutating specs, shared harness, running the suite      |
-| `web/src/visualizerPlugin/CLAUDE.md`         | Viewer plugin system        | Plugin architecture, current viewers, adding a viewer plugin, plugin config fields, CSP and `unsafe-eval`, signed URLs in framed viewers |
-| `backend/CLAUDE.md`                          | Python Lambda backend       | Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing                               |
-| `backend/tests/CLAUDE.md`                    | Backend test suite          | pytest configuration, mock module hierarchy, per-handler `conftest.py` patterns, event-shape coverage, `xfail` and `temporary` markers   |
-| `backendPipelines/CLAUDE.md`                 | Processing pipelines        | Execution types, S3 output paths, `assetId` threading, vamsSchema registration, sub-process and log registration, new-pipeline checklist |
-| `infra/CLAUDE.md`                            | AWS CDK infrastructure      | Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support                                          |
-| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | Pipeline nested stacks      | Pipeline nested stack pattern, Lambda package layout, VPC builder wiring, sub-process and log registration wiring, S3 output paths       |
-| `tools/VamsCLI/CLAUDE.md`                    | Python CLI tool             | Click framework, profile management, command groups, constants pattern, JSON output mode                                                 |
-| `tools/VamsMCP/CLAUDE.md`                    | MCP server                  | Tool definitions and gating tiers, pagination and response shapes, stdout discipline, CLI reuse rules                                    |
-| `documentation/CLAUDE.md`                    | Documentation site          | Docusaurus conventions, writing style, sidebar configuration, cross-reference sources                                                    |
+| File                                         | Scope                       | Key Topics                                                                                                                                                                    |
+| -------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE.md`                                  | Project-wide                | Architecture overview, cross-component patterns, critical rules, gold standard references, deployment modes                                                                   |
+| `web/CLAUDE.md`                              | React frontend              | Cloudscape components, HashRouter, Synonyms system, service-layer pattern, viewer plugins, feature switches                                                                   |
+| `web/e2e/CLAUDE.md`                          | Playwright end-to-end tests | Tracked core specs versus untracked ad-hoc specs, environment-independent and non-mutating specs, shared harness, running the suite                                           |
+| `web/src/visualizerPlugin/CLAUDE.md`         | Viewer plugin system        | Plugin architecture, current viewers, adding a viewer plugin, plugin config fields, CSP and `unsafe-eval`, signed URLs in framed viewers                                      |
+| `backend/CLAUDE.md`                          | Python Lambda backend       | Pydantic v1 models, Casbin authorization, DynamoDB patterns, Lambda handler structure, logging and testing                                                                    |
+| `backend/tests/CLAUDE.md`                    | Backend test suite          | pytest configuration, mock module hierarchy, per-handler `conftest.py` patterns, event-shape coverage, `xfail` and `temporary` markers                                        |
+| `backendPipelines/CLAUDE.md`                 | Processing pipelines        | Execution types, S3 output paths, `assetId` threading, vamsSchema registration, sub-process and log registration, new-pipeline checklist                                      |
+| `infra/CLAUDE.md`                            | AWS CDK infrastructure      | Nested stacks, Lambda builders, security helpers, configuration system, multi-partition support                                                                               |
+| `infra/lib/nestedStacks/pipelines/CLAUDE.md` | Pipeline nested stacks      | Pipeline nested stack pattern, Lambda package layout, VPC builder wiring, sub-process and log registration wiring, S3 output paths                                            |
+| `tools/VamsCLI/CLAUDE.md`                    | Python CLI tool             | Click framework, profile management, command groups, constants pattern, JSON output mode                                                                                      |
+| `tools/VamsMCP/CLAUDE.md`                    | MCP server                  | Tool definitions and gating tiers, agent-facing descriptions and their budget, annotations, typed results, pagination and response shapes, stdout discipline, CLI reuse rules |
+| `documentation/CLAUDE.md`                    | Documentation site          | Docusaurus conventions, writing style, sidebar configuration, cross-reference sources                                                                                         |
 
 ### Workflow Documents
 
@@ -208,6 +208,18 @@ Four tool behaviours are worth knowing before an agent is allowed to call them, 
 The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task. The listing checks each `{param}` path segment as the placeholder `vams:any`, so when the user's `api` constraints name a concrete value in a parameter position, a route can be left out although it is allowed on those concrete paths, or listed although it is refused there (see [List allowed API routes](../api/auth.md#list-allowed-api-routes)).
 
 See `tools/VamsMCP/README.md` for installation, host registration, and the full tool list.
+
+#### Making the Server's Tools the Agent's First Choice
+
+When the VAMS MCP server is connected, agents should use its tools, and `vamscli` covers only what the server does not expose (file uploads, sync, and user, role and constraint administration). The server is built so that this is the easy path:
+
+-   **Usage instructions.** On connection the server sends the client a short guide (the MCP `instructions` field): how VAMS identifies assets and files, where to start (`search_assets` or `list_databases`, then `get_asset`, `list_asset_files` and `generate_download_url`), what a bounded result means, and that the agent uses these tools rather than a shell, the CLI or the source code, saying so when no tool covers a request.
+-   **Agent-facing descriptions.** Each tool's description starts with when to use it, then the parameters that matter, then what the result means for a conclusion, within a size budget.
+-   **Titles and annotations.** Every tool has a title and the MCP annotations of its tier: reads are `readOnlyHint`, destructive tools `destructiveHint`, and the tools that start or stop billed compute `openWorldHint`. The hints are advice to the client, not a control; the tiers and the user's permissions stay the controls. A client that approves every read-only tool automatically also approves the presigned-URL tools, so use the README's `autoApprove` list instead, which covers every read except those that return a credential, a presigned URL or other users' identifiers.
+-   **Typed results.** The most-used reads (databases, assets, files, versions, metadata, search, executions, download URLs) publish an `outputSchema` and return structured content, with the same JSON as before.
+-   **A start without a sign-in.** When the `vamscli` profile is not set up, nobody is signed in, or the sign-in expires, the server still starts and every tool returns a `NotAuthenticated` error that asks the agent to have the user sign in; the `user_action` field names the command the user runs. `vams_status` always answers with the profile, the API URL, the signed-in user, the deployment's feature switches, the enabled tool tiers and the server and CLI versions.
+
+`tools/VamsMCP/evals/agent-scenarios.md` holds a small scenario set (find an asset, read its metadata, get a download URL, find the last failed run, a signed-out session) with pass criteria: each task is done with MCP tools only, with no shell and no source reads. It runs against a test deployment in Kiro and Claude Code before a release that changes the tools, their descriptions or the instructions.
 
 ### VAMS Agent Skill
 
