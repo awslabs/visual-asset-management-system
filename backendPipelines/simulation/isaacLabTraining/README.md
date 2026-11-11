@@ -420,7 +420,7 @@ Note: ECR pull-through cache is **not supported** for NVIDIA NGC (nvcr.io).
 
 ### Training job times out
 
--   Default timeout is 6 hours
+-   A training run is limited to 8 hours, including the wait for a GPU instance and the image pull; an evaluation to 2 hours
 -   Consider using more GPUs or reducing `maxIterations`
 
 ---

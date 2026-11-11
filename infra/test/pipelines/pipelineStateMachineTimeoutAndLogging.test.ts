@@ -278,8 +278,10 @@ describe("Isaac Lab training state machine", () => {
         expect(jobDefinitions).toHaveLength(1);
         const attemptSeconds = jobDefinitions[0].Properties.Timeout.AttemptDurationSeconds;
 
-        // Strictly greater at every level: Batch attempt < task < execution. Reported as a list so a
-        // failure names the offending state rather than just two numbers.
+        // The execution envelopes everything below it: Batch attempt < execution and every state's
+        // timeout < execution. Reported as a list so a failure names the offending state rather than
+        // just two numbers. (The attempt may equal the task timeout; isaacLabTimeoutChain.test.ts
+        // pins that relation.)
         expect(executionSeconds).toBeGreaterThan(attemptSeconds);
         const notEnveloped = Object.entries(perState)
             .filter(([, seconds]) => seconds >= executionSeconds)
@@ -290,8 +292,9 @@ describe("Isaac Lab training state machine", () => {
     test("the task heartbeat tolerance stays below the parent pipeline's, in both bundles", () => {
         // Both clocks are starved by the same silence — nothing heartbeats while the Batch job waits
         // for GPU capacity or pulls its image. Whichever expires FIRST decides the outcome, and it has
-        // to be this one: only the internal task's Catch terminates the Batch job and reports a
-        // diagnosable failure. If the parent won the race the job would keep running and billing.
+        // to be this one: the internal task's Catch reports a diagnosable failure. If the parent won
+        // the race, its error handler would still terminate the registered Batch job, but the run
+        // would be recorded with the parent's generic heartbeat timeout instead.
         const { properties } = getStateMachine(template);
         const asl = parseAsl(properties);
         const heartbeats = Object.values(asl.States ?? {})
