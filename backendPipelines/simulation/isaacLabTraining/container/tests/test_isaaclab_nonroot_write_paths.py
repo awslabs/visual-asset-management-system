@@ -6,8 +6,8 @@
 The image runs as uid 10000 (issue #327) and ``__main__.py`` starts Isaac Lab's ``train.py`` and
 ``play.py`` from ``/workspace/isaaclab``, which the base image (``nvcr.io/nvidia/isaac-lab:2.3.0``)
 copies root-owned ``0755`` with no ``logs`` or ``outputs`` folder in it (Isaac Lab's ``.dockerignore``
-excludes both). The scripts write relative to that working directory, so every training run failed
-in Hydra's setup with ``PermissionError: [Errno 13] Permission denied: 'outputs'``.
+excludes both). Isaac Lab writes relative to that working directory, so each write below raises
+``PermissionError: [Errno 13]`` unless the image gives the runtime user somewhere to write it.
 
 What Isaac Lab v2.3.0 writes, and where:
 
@@ -17,38 +17,61 @@ What Isaac Lab v2.3.0 writes, and where:
   ``@hydra_task_config``.
 - ``train.py``'s run folder, ``os.path.abspath(os.path.join("logs", <library>, <experiment>))`` plus
   a timestamp, in all three libraries: checkpoints, TensorBoard events, ``params/*.yaml``, git diffs.
+- Files a task writes straight into the working directory while its environment is built. The
+  AutoMate tasks (``Isaac-AutoMate-Assembly-Direct-v0``, ``-Disassembly-Direct-v0``) download their
+  grasp, distance and trajectory JSON and their plug and socket meshes with
+  ``retrieve_file_path(<Nucleus URL>, download_dir="./")`` and open them by basename
+  (``direct/automate/assembly_env.py``, ``disassembly_env.py``, ``industreal_algo_utils.py``); a
+  custom environment that writes a relative path does the same.
 - ``play.py``'s run folder, derived from ``--checkpoint``: the checkpoint's folder for rsl_rl, the
   folder above it for rl_games and skrl. The video goes to ``<run folder>/videos/play`` (gymnasium
   1.2.0's ``RecordVideo`` creates it with ``os.makedirs``), and rsl_rl exports ``policy.pt`` and
   ``policy.onnx`` to ``<checkpoint folder>/exported``.
 
 No container build runs here (the image is over 15 GB), so the ownership half is a static parse of
-the Dockerfile, the approach ``infra/test/pipelines/fargateBatchContainerUser.test.ts`` takes for
-``USER``. The paths themselves are not restated: the working directory is read from the
-``subprocess.run`` call the pipeline makes, and the checkpoint path from the download it performs.
+the Dockerfile (the ``image`` fixture in ``conftest.py``), the approach
+``infra/test/pipelines/fargateBatchContainerUser.test.ts`` takes for ``USER``. The paths themselves
+are not restated: the working directory is read from the ``subprocess.run`` call the pipeline makes,
+and the checkpoint path from the download it performs. The write layout above is Isaac Lab's, so
+``TestModelledIsaacLabVersion`` pins it to the base image version it was read from.
 """
 
 import glob as real_glob
 import importlib.util
 import os
 import re
-import shlex
 from types import SimpleNamespace
 
 import pytest
 
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DOCKERFILE = os.path.join(_CONTAINER_DIR, "Dockerfile")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_CONTAINER_DIR))))
 _OUTPUT_PREFIX = "s3://run-bucket/pipelines/isaacLab/JOB/output/3f2c9a10/files/"
 
-# The base image keeps Ubuntu's /tmp at mode 1777 (sticky, world-writable): the Isaac Lab 2.3.0 base
-# only re-owns it (`chown -R isaac-sim /tmp`), so any user can create a folder there.
-_WORLD_WRITABLE = ("/tmp",)
+# The Isaac Lab release whose train.py, play.py, Hydra configuration and AutoMate tasks the write
+# paths in this module were read from, and that the Dockerfile builds on.
+_MODELLED_ISAAC_LAB_VERSION = "2.3.0"
+
+# Files that build the image without passing a build argument to it.
+_IMAGE_BUILD_SOURCES = (
+    os.path.join(_CONTAINER_DIR, "buildspec.yml"),
+    os.path.join(_REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "simulation",
+                 "isaacLabTraining", "constructs", "isaacLabCodeBuild-construct.ts"),
+    os.path.join(_REPO_ROOT, "infra", "lib", "nestedStacks", "pipelines", "simulation",
+                 "isaacLabTraining", "constructs", "isaacLabTraining-construct.ts"),
+)
 
 # Folders Isaac Lab creates relative to the working directory of train.py and play.py.
 _CWD_RELATIVE_WRITE_ROOTS = ("outputs", "logs")
 
+# Files the AutoMate tasks download into the working directory while the environment is built.
+_CWD_FILE_WRITES = ("plug_grasps.json", "disassembly_dist.json", "disassemble_traj.json",
+                    "plug.obj", "socket.obj")
+
 _LIBRARIES = ("rsl_rl", "rl_games", "skrl")
+
+# Folders the image ships for any user to write in (the ``image`` fixture models the rest).
+_SHIPPED_WRITABLE_FOLDERS = ("/tmp",)
 
 
 @pytest.fixture(scope="module")
@@ -64,87 +87,6 @@ def main_module():
 def _under(path, root):
     path, root = os.path.normpath(path), os.path.normpath(root)
     return path == root or path.startswith(root.rstrip("/") + "/")
-
-
-def _instructions(text):
-    """``(KEYWORD, argument)`` per Dockerfile instruction, continuation lines joined."""
-    instructions, pending = [], ""
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("#") or (not line and not pending):
-            continue
-        if line.endswith("\\"):
-            pending += line[:-1] + " "
-            continue
-        pending += line
-        keyword, _, argument = pending.partition(" ")
-        instructions.append((keyword.upper(), argument.strip()))
-        pending = ""
-    return instructions
-
-
-def _commands(run_argument):
-    """The simple commands of a shell-form RUN, split on ``&&``, ``||`` and ``;``."""
-    for part in re.split(r"&&|\|\||;", run_argument):
-        try:
-            words = shlex.split(part)
-        except ValueError:
-            continue
-        if words:
-            yield words
-
-
-class _Image:
-    """What the Dockerfile hands the runtime user before its ``USER`` line."""
-
-    def __init__(self, path):
-        with open(path, encoding="utf-8") as f:
-            instructions = _instructions(f.read())
-        user_lines = [i for i, (keyword, _) in enumerate(instructions) if keyword == "USER"]
-        assert user_lines, f"{path} declares no USER"
-        self.runtime_user = instructions[user_lines[-1]][1]
-        uid = self.runtime_user.split(":")[0]
-        runs = [argument for keyword, argument in instructions[:user_lines[-1]] if keyword == "RUN"]
-        commands = [words for argument in runs for words in _commands(argument)]
-
-        self.names = {uid}
-        for words in commands:
-            if words[0] == "useradd" and "-u" in words and words[words.index("-u") + 1] == uid:
-                self.names.add(words[-1])
-
-        self.created = []  # folders the build makes
-        self.owned = []  # (folder, recursive) the build gives the runtime user
-        for words in commands:
-            arguments = [w for w in words[1:] if not w.startswith("-")]
-            if words[0] == "mkdir":
-                self.created.extend(os.path.normpath(p) for p in arguments)
-            elif words[0] == "chown" and arguments:
-                owner, targets = arguments[0].split(":")[0], arguments[1:]
-                if owner in self.names:
-                    recursive = "-R" in words[1:] or "--recursive" in words[1:]
-                    self.owned.extend((os.path.normpath(t), recursive) for t in targets)
-
-    def writable(self, path):
-        """Whether the runtime user can create and write ``path`` when the container runs.
-
-        True under a world-writable folder; at a folder the user owns; below a folder owned
-        recursively, or below one the build created empty for the user; or directly inside a folder
-        the user owns, which lets it create the entry.
-        """
-        path = os.path.normpath(path)
-        if any(_under(path, root) for root in _WORLD_WRITABLE):
-            return True
-        for folder, recursive in self.owned:
-            if path == folder or os.path.dirname(path) == folder:
-                return True
-            if _under(path, folder) and (recursive or folder in self.created):
-                return True
-        return False
-
-
-@pytest.fixture(scope="module")
-def image():
-    return _Image(_DOCKERFILE)
 
 
 def _config(main_module, mode, library="rsl_rl", record_video=False):
@@ -184,30 +126,48 @@ def _isaac_lab_cwd(main_module, mode, monkeypatch):
 
 
 class _NoDiskOs:
-    """The module's ``os`` with ``makedirs`` recorded instead of performed."""
+    """The module's ``os`` with ``makedirs`` recorded in ``events`` instead of performed."""
 
-    def __init__(self):
-        self.made = []
+    def __init__(self, events):
+        self.events = events
 
     def makedirs(self, path, *args, **kwargs):
-        self.made.append(path)
+        self.events.append(("makedirs", os.path.normpath(path)))
 
     def __getattr__(self, name):
         return getattr(os, name)
 
 
-def _downloaded_policy_path(main_module, monkeypatch):
-    """Where the pipeline puts the evaluation policy it passes to play.py as ``--checkpoint``."""
-    destinations = []
+def _download_policy_events(main_module, monkeypatch):
+    """The policy path ``download_policy`` returns, and its folder and download calls in order."""
+    events = []
 
     class _Client:
         def download_file(self, bucket, key, local_path):
-            destinations.append(local_path)
+            events.append(("download", os.path.normpath(local_path)))
 
-    monkeypatch.setattr(main_module, "os", _NoDiskOs())
+    monkeypatch.setattr(main_module, "os", _NoDiskOs(events))
     s3 = SimpleNamespace(client_for_bucket=lambda bucket: _Client())
     returned = main_module.download_policy(s3, _config(main_module, "evaluate"))
-    assert destinations == [returned]
+    return returned, events
+
+
+def _assert_policy_folder_exists_before_download(returned, events):
+    """The policy's folder is one the image ships (``/tmp``), or ``download_policy`` creates it first."""
+    folder = os.path.dirname(os.path.normpath(returned))
+    download = ("download", os.path.normpath(returned))
+    assert download in events, f"the policy was not downloaded to {returned}: {events}"
+    if folder in _SHIPPED_WRITABLE_FOLDERS:
+        return
+    made = ("makedirs", folder)
+    assert made in events and events.index(made) < events.index(download), (
+        f"download_policy downloads to {returned} without creating {folder} first: {events}")
+
+
+def _downloaded_policy_path(main_module, monkeypatch):
+    """Where the pipeline puts the evaluation policy it passes to play.py as ``--checkpoint``."""
+    returned, events = _download_policy_events(main_module, monkeypatch)
+    _assert_policy_folder_exists_before_download(returned, events)
     return returned
 
 
@@ -273,6 +233,40 @@ class TestIsaacLabWorkingDirectory:
             f"{mode} runs Isaac Lab with cwd={cwd}, but the image does not give "
             f"{image.runtime_user} these folders it writes there: {unwritable}")
 
+    @pytest.mark.parametrize("mode", ["train", "evaluate"])
+    def test_a_task_can_write_files_into_the_working_directory(self, main_module, image, mode,
+                                                               monkeypatch):
+        """The AutoMate tasks download their assets into ``./`` while the environment is built."""
+        cwd = _isaac_lab_cwd(main_module, mode, monkeypatch)
+        unwritable = [os.path.join(cwd, name) for name in _CWD_FILE_WRITES
+                      if not image.writable(os.path.join(cwd, name))]
+        assert not unwritable, (
+            f"{mode} runs Isaac Lab with cwd={cwd}, where {image.runtime_user} cannot create "
+            f"the files a task downloads there: {unwritable}")
+
+    def test_the_working_directory_keeps_isaac_lab_root_owned(self, main_module, image,
+                                                              monkeypatch):
+        """The user may add entries to the working directory, not replace Isaac Lab's own.
+
+        Group write lets the user create files there; the sticky bit stops it renaming or deleting
+        the root-owned ``isaaclab.sh``, ``scripts/`` and ``source/`` (the ``/tmp`` model). Owning the
+        folder, or a recursive change over it, would hand those sources to the user.
+        """
+        cwd = os.path.normpath(_isaac_lab_cwd(main_module, "train", monkeypatch))
+        assert image.group_writable(cwd), f"the runtime user's group cannot create files in {cwd}"
+        assert image.sticky(cwd), f"{cwd} is group-writable without the sticky bit"
+        assert not image.owns(cwd), f"{cwd} is owned by the runtime user"
+
+        def reaches_sources(target):
+            if _under(cwd, target):  # the working directory itself, or a folder above it
+                return True
+            if _under(target, cwd):  # inside it: only an entry the base image ships matters
+                return os.path.relpath(target, cwd).split(os.sep)[0] in image.base_entries[cwd]
+            return False
+
+        covered = [t for t in image.recursive_changes if reaches_sources(t)]
+        assert not covered, f"a recursive chown/chgrp/chmod reaches Isaac Lab's sources: {covered}"
+
     def test_the_log_upload_root_is_where_train_py_writes(self, main_module, monkeypatch):
         """Checkpoints, metrics and diffs are uploaded from the folder train.py logs to."""
         cwd = _isaac_lab_cwd(main_module, "train", monkeypatch)
@@ -281,6 +275,11 @@ class TestIsaacLabWorkingDirectory:
 
 @pytest.mark.unit
 class TestEvaluationWritePaths:
+    def test_the_policy_folder_is_created_before_the_download(self, main_module, monkeypatch):
+        """A policy folder the image does not ship is created before the file is written to it."""
+        returned, events = _download_policy_events(main_module, monkeypatch)
+        _assert_policy_folder_exists_before_download(returned, events)
+
     @pytest.mark.parametrize("library", _LIBRARIES)
     def test_play_writes_where_the_runtime_user_can(self, main_module, image, library,
                                                     monkeypatch):
@@ -309,12 +308,40 @@ class TestEvaluationWritePaths:
 
 
 @pytest.mark.unit
+class TestModelledIsaacLabVersion:
+    """The write paths above are Isaac Lab's; a different base image needs them read again."""
+
+    def test_the_image_builds_on_the_modelled_isaac_lab_release(self, image):
+        assert image.args.get("ISAAC_LAB_VERSION") == _MODELLED_ISAAC_LAB_VERSION, (
+            f"The Dockerfile builds on Isaac Lab {image.args.get('ISAAC_LAB_VERSION')}, but this "
+            f"module models the write paths of Isaac Lab {_MODELLED_ISAAC_LAB_VERSION}. Re-read that "
+            "release's scripts/reinforcement_learning/*/train.py and play.py, its Hydra output "
+            "configuration, the files its tasks write to the working directory (direct/automate), "
+            "and the entries its image copies into /workspace/isaaclab, update this module, then "
+            "_MODELLED_ISAAC_LAB_VERSION.")
+
+    def test_the_base_image_follows_that_version(self, image):
+        assert image.args.get("BASE_IMAGE") == "nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}"
+
+    @pytest.mark.parametrize("path", _IMAGE_BUILD_SOURCES, ids=os.path.basename)
+    def test_no_build_overrides_the_base_image(self, path):
+        assert os.path.isfile(path), f"{path} is missing; the check would pass vacuously"
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        assert "ACCEPT_EULA" in text, f"{os.path.basename(path)} no longer builds the image"
+        assert not re.search(r"\b(ISAAC_LAB_VERSION|BASE_IMAGE)\b", text), (
+            f"{os.path.basename(path)} passes the base image or its version as a build argument, "
+            "so the Dockerfile default this module is pinned to is not what gets built")
+
+
+@pytest.mark.unit
 class TestControls:
     """The checks above are not vacuous: the parser and the virtual glob behave as assumed."""
 
     def test_the_parser_reads_the_runtime_user_and_its_folders(self, image):
         assert image.runtime_user == "10000:10000"
         assert "vams" in image.names
+        assert "vams" in image.groups
         # Custom environment installs: pip writes into Isaac Sim's Python, which the user owns.
         assert image.writable("/isaac-sim/kit/python/lib/python3.11/site-packages/pkg")
         assert image.writable("/home/vams/.cache/ov")
@@ -322,6 +349,18 @@ class TestControls:
     def test_the_parser_reports_root_owned_folders(self, image):
         assert not image.writable("/videos/play")
         assert not image.writable("/workspace/isaaclab/source/isaaclab")
+        # Entries the base image ships in the working directory stay root-owned.
+        assert not image.writable("/workspace/isaaclab/isaaclab.sh")
+        assert not image.writable("/workspace/isaaclab/scripts")
+        assert not image.writable("/workspace/isaaclab/scripts/reinforcement_learning/train.py")
+
+    def test_the_mode_parser_matches_chmod(self, chmod_mode):
+        assert chmod_mode(0o755, "1775") == 0o1775
+        assert chmod_mode(0o755, "g+w") == 0o775
+        assert chmod_mode(0o755, "g+w,+t") == 0o1775
+        assert chmod_mode(0o755, "o+t") == 0o1755
+        assert chmod_mode(0o1775, "-t") == 0o775
+        assert chmod_mode(0o640, "a+rX") == 0o755
 
     def test_the_virtual_glob_matches_like_glob(self, tmp_path):
         files = [tmp_path / "logs" / "evaluation" / "videos" / "play" / "a.mp4",

@@ -35,8 +35,7 @@ LOCAL_LOG_PATH = "/workspace/isaaclab/logs"
 # and records the video under <run folder>/videos/play; rsl_rl also exports policy.pt and
 # policy.onnx to <checkpoint folder>/exported. Two levels below LOCAL_LOG_PATH, which the image
 # gives the non-root user, keeps all of those writes in a folder that user owns and under the
-# video upload's search root. A policy directly in /tmp made rl_games and skrl record to
-# /videos/play, which uid 10000 cannot create (issue #1312) and which no upload pattern searched.
+# video upload's search root, LOCAL_LOG_PATH/**/videos/** (issue #1312).
 EVALUATION_POLICY_PATH = f"{LOCAL_LOG_PATH}/evaluation/checkpoints/policy.pt"
 
 # Package formats pip can install from a downloaded archive
