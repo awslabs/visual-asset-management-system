@@ -296,6 +296,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Metadata schema help** — `vamscli metadata-schema create --help` names the `inline_controlled_list` value type that the API accepts. (issue #1143)
 -   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
 -   **SSM prefix comments and MCP tier table** — The data-migration tooling comments include the Region in the resource-name SSM parameter prefix, and the MCP tool tier table drops a stray "Adds" from each row. (issue #1149)
+-   **Workflow examples use real template IDs** — The CLI workflows reference and `vamscli workflow create --help` name the 3D Basic Conversion templates `convert-to-glb` and `convert-to-obj`. (issue #1334)
 -   **Deterministic exclusion test** — The backend test that compares an asset execution listing with and without `excludeStatus` pins the listing start date, so it no longer fails intermittently on the time-derived `filterStartDate` echo. (issue #1227)
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
