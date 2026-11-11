@@ -54,6 +54,21 @@ ENV HOME=/home/vams \
 RUN mkdir -p /home/vams/.cache /home/vams/.nvidia-omniverse /home/vams/.local/share && \
     chown -R vams:vams /home/vams
 
+# Isaac Lab's train.py and play.py write relative to their working directory, /workspace/isaaclab
+# (__main__.py runs them there, as the base image's WORKDIR does), which the base image copies
+# root-owned 0755 (issue #1312). Hydra creates its run folder outputs/<date>/<time> (with .hydra/
+# and the job log) for every run; train.py writes its run under logs/<library>/<experiment>/<time>
+# (checkpoints, TensorBoard events, params, git diffs), which __main__.py uploads from as
+# LOCAL_LOG_PATH and where it puts the evaluation policy; and a task can write files straight into
+# the directory while its environment is built (the AutoMate tasks download their asset JSON and
+# meshes to ./). logs and outputs belong to the user. The directory itself is group vams and
+# sticky (1775, the /tmp model): the user can create entries in it but cannot rename or delete the
+# root-owned isaaclab.sh, scripts/ and source/.
+RUN mkdir -p /workspace/isaaclab/logs /workspace/isaaclab/outputs && \
+    chown -R vams:vams /workspace/isaaclab/logs /workspace/isaaclab/outputs && \
+    chgrp vams /workspace/isaaclab && \
+    chmod 1775 /workspace/isaaclab
+
 # Set entrypoint
 
 # Run as non-root user. The EFS checkpoint storage is mounted via an EFS access point and owned
