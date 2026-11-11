@@ -215,9 +215,13 @@ export default function ViewAsset() {
     useEffect(() => {
         if (versionsRevision === 0 || !databaseId || !assetId) return;
         let cancelled = false;
+        const assetKey = `${databaseId}/${assetId}`;
         fetchAssetWithStatus({ databaseId, assetId, showArchived: true })
             .then(([, item]) => {
-                if (!cancelled && item && typeof item === "object") setAsset(item);
+                // Drop an answer for an asset the user has already left: versionsAssetKey names
+                // the asset now shown (the versions effect below updates it on navigation).
+                if (cancelled || versionsAssetKey.current !== assetKey) return;
+                if (item && typeof item === "object") setAsset(item);
             })
             .catch((error) => console.log("Failed to reload asset:", error));
         return () => {

@@ -11,8 +11,8 @@
  */
 
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import * as APIService from "../../services/APIService";
 import * as AssetVersionService from "../../services/AssetVersionService";
 import ViewAsset from "./ViewAsset";
@@ -138,5 +138,44 @@ describe("asset page after a change on the Versions tab", () => {
         });
 
         expect(screen.getByTestId("pane")).toHaveTextContent("current v1");
+    });
+
+    it("drops a reload answer for an asset the user already left", async () => {
+        function GoToSecondAsset() {
+            const navigate = useNavigate();
+            return (
+                <button type="button" onClick={() => navigate("/databases/db1/assets/a2")}>
+                    second asset
+                </button>
+            );
+        }
+        render(
+            <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
+                <GoToSecondAsset />
+                <Routes>
+                    <Route path="/databases/:databaseId/assets/:assetId" element={<ViewAsset />} />
+                </Routes>
+            </MemoryRouter>
+        );
+        await waitFor(() =>
+            expect(screen.getByTestId("pane")).toHaveTextContent("current v1; versions 1")
+        );
+
+        let answerReload: (value: unknown) => void = () => undefined;
+        mockFetchAsset.mockReturnValueOnce(new Promise((resolve) => (answerReload = resolve)));
+        act(() => mockVersionsChanged?.());
+
+        mockFetchAsset.mockResolvedValue([true, { ...asset("7"), assetId: "a2" }]);
+        mockFetchVersions.mockResolvedValue(versionList("7"));
+        fireEvent.click(screen.getByText("second asset"));
+        await waitFor(() =>
+            expect(screen.getByTestId("pane")).toHaveTextContent("current v7; versions 7")
+        );
+
+        await act(async () => {
+            answerReload([true, asset("2")]);
+        });
+
+        expect(screen.getByTestId("pane")).toHaveTextContent("current v7; versions 7");
     });
 });
