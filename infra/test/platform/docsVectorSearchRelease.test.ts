@@ -1645,44 +1645,111 @@ describe("changelog, revision history, and notices", () => {
 });
 
 describe("diagram and screenshot embeds", () => {
-    // The owner-drawn diagrams and owner-captured screenshots are not in the tree; each planned embed is held by
-    // one `TODO(owner)` placeholder comment so the page never references a missing /img/ file (which fails the build).
-    const placeholders: Array<[string, string]> = [
-        ["pipelines/system-genai-metadata.md", "pipeline_usecase_systemGenAiMetadata.png"],
-        ["concepts/vector-search.md", "vectorSearch_queryFlow.png"],
-        ["architecture/details.md", "dataQueues_MainFlow.png"],
-        ["user-guide/search-and-discovery.md", "asset_search_table_2026MMDD_v2.7.png"],
-        ["user-guide/search-and-discovery.md", "file_search_table_2026MMDD_v2.7.png"],
-        ["user-guide/search-and-discovery.md", "search_nlp_mode_2026MMDD_v2.7.png"],
-        ["user-guide/web-interface.md", "pipelines_page_system_badge_2026MMDD_v2.7.png"],
+    // Every diagram and screenshot planned for vector search is embedded on its page from static/img, and
+    // no `TODO(owner)` placeholder for one is left in the docs.
+    const screenshots: Array<[string, string]> = [
+        ["user-guide/search-and-discovery.md", "asset_search_table_20261110_v2.7.png"],
+        ["user-guide/search-and-discovery.md", "file_search_table_20261110_v2.7.png"],
+        ["user-guide/search-and-discovery.md", "search_nlp_mode_20261110_v2.7.png"],
+        ["user-guide/search-and-discovery.md", "asset_search_mapView__dark_20261110_v2.7.png"],
+        ["user-guide/web-interface.md", "asset_search_table_20261110_v2.7.png"],
+        ["user-guide/web-interface.md", "pipelines_page_system_badge_20261110_v2.7.png"],
     ];
+    // [page, diagram key, the section heading the diagram sits directly under or inside]
+    const diagrams: Array<[string, string, string]> = [
+        [
+            "pipelines/system-genai-metadata.md",
+            "pipeline_usecase_systemGenAiMetadata",
+            "## How it works",
+        ],
+        ["concepts/vector-search.md", "vectorSearch_queryFlow", "## Searching"],
+        ["architecture/details.md", "dataQueues_MainFlow", "## Data Indexing Flow"],
+    ];
+    const embeds = (text: string, file: string): boolean =>
+        new RegExp(`!\\[[^\\]]+\\]\\(/img/${file.replace(/\./g, "\\.")}\\)`).test(text);
 
-    test("every planned diagram or screenshot is either embedded from static/img or held by a TODO(owner) placeholder", () => {
-        for (const [page, file] of placeholders) {
-            const text = readDoc(page);
-            const embedded = new RegExp(
-                `!\\[[^\\]]*\\]\\(/img/${file.replace(/\./g, "\\.")}\\)`
-            ).test(text);
-            const held = new RegExp(
-                `<!-- TODO\\(owner\\): (?:diagram|screenshot): ${file.replace(/\./g, "\\.")}`
-            ).test(text);
-            expect({ page, file, embeddedOrHeld: embedded || held }).toEqual({
+    test("every planned screenshot is embedded from static/img with alt text", () => {
+        for (const [page, file] of screenshots) {
+            expect({ page, file, embedded: embeds(readDoc(page), file) }).toEqual({
                 page,
                 file,
-                embeddedOrHeld: true,
+                embedded: true,
             });
-            if (embedded) expect(fs.existsSync(path.join(SITE, "static", "img", file))).toBe(true);
+            expect(fs.existsSync(path.join(SITE, "static", "img", file))).toBe(true);
         }
     });
 
-    test("the data-queue diagram the architecture page embeds exists in both repository copies", () => {
-        // The two copies are not byte-identical today (different export runs), so only presence is pinned here.
-        expect(fs.existsSync(path.join(SITE, "static", "img", "dataQueues_MainFlow.png"))).toBe(
-            true
+    test("every planned diagram is embedded in the section it illustrates, ahead of its subsections", () => {
+        for (const [page, key, heading] of diagrams) {
+            const text = readDoc(page);
+            const start = text.indexOf(`\n${heading}\n`);
+            expect({ page, heading, found: start >= 0 }).toEqual({ page, heading, found: true });
+            const rest = text.slice(start + heading.length + 2);
+            const nextHeading = rest.search(/\n#{2,3} /);
+            const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest;
+            expect({ page, key, inSection: embeds(section, `${key}.png`) }).toEqual({
+                page,
+                key,
+                inSection: true,
+            });
+            const mermaid = section.indexOf("```mermaid");
+            if (mermaid >= 0) expect(section.indexOf(`/img/${key}.png`)).toBeLessThan(mermaid);
+        }
+    });
+
+    test("each diagram has an uncompressed draw.io source and one PNG in all three copies", () => {
+        for (const [, key] of diagrams) {
+            const source = readRepo(`documentation/diagrams/source/drawio/${key}.drawio`);
+            expect(source).toContain("<mxGraphModel");
+            const copies = [
+                path.join(REPO, "documentation", "diagrams", `${key}.png`),
+                path.join(SITE, "static", "img", `${key}.png`),
+                path.join(DOCS, "assets", "images", "diagrams", `${key}.png`),
+            ].map((p) => fs.readFileSync(p));
+            expect(copies[1].equals(copies[0])).toBe(true);
+            expect(copies[2].equals(copies[0])).toBe(true);
+        }
+    });
+
+    test("no TODO(owner) placeholder is left in the docs", () => {
+        const left = walkDocs().filter((page) => readDoc(page).includes("TODO(owner)"));
+        expect(left).toEqual([]);
+    });
+});
+
+describe("partition defaults and the OpenSearch step as the pages state them", () => {
+    test("the guardrail row names each template's create.enabled default", () => {
+        const created = (template: string): boolean =>
+            JSON.parse(readRepo(`infra/config/${template}`)).app.pipelines.useSystemGenAiMetadata
+                .bedrockGuardrail.create.enabled;
+        expect(created("config.template.commercial.json")).toBe(true);
+        expect(created("config.template.govcloud.json")).toBe(true);
+        expect(created("config.template.eusovereign.json")).toBe(false);
+        const row = readDoc("pipelines/system-genai-metadata.md")
+            .split("\n")
+            .find((line) => line.startsWith("| `bedrockGuardrail`"));
+        expect(row).toContain(
+            "default `true` in the commercial and AWS GovCloud (US) templates; `false` in the AWS European Sovereign Cloud template"
         );
-        expect(
-            fs.existsSync(path.join(REPO, "documentation", "diagrams", "dataQueues_MainFlow.png"))
-        ).toBe(true);
+        expect(readDoc("architecture/security.md")).toContain(
+            "The commercial and AWS GovCloud (US) templates ship with `create.enabled` `true`."
+        );
+    });
+
+    test("the pages describe the OpenSearch step's batches of the service's window", () => {
+        const window = readRepo(
+            "backend/backend/handlers/osVectorSearch/vectorSearchService.py"
+        ).match(/^OPENSEARCH_ENRICH_WINDOW = (\d+)$/m);
+        expect(window?.[1]).toBe("100");
+        expect(readDoc("concepts/vector-search.md")).toContain(
+            "document ids to the OpenSearch file index 100 at a time, one query per batch"
+        );
+        expect(readDoc("developer/opensearch.md")).toContain(
+            "document ids to the OpenSearch file index 100 per query"
+        );
+        for (const page of ["concepts/vector-search.md", "developer/opensearch.md"]) {
+            expect(readDoc(page)).not.toContain("one OpenSearch query");
+        }
     });
 });
 

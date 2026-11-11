@@ -2,9 +2,7 @@
 
 The **Assets and Files** page is where you locate assets and files across every database you can access. A switch in the page title row chooses between two views: an **Asset list** that is always available, and a **Search** view — available when your deployment has Amazon OpenSearch Service, natural-language search, or both — that offers keyword search with full-text queries, metadata filtering, and geospatial map visualization, and natural-language search that ranks files by what they show or contain.
 
-![Asset search page showing table view with filters and search bar](/img/asset_search_table_20260323_v2.5.png)
-
-<!-- TODO(owner): screenshot: asset_search_table_2026MMDD_v2.7.png — the Assets and Files page with the Search / Asset list view switch in the title row and the query band with its Keyword / Natural language switch (replaces the v2.5 capture above) -->
+![Assets and Files page in the Search view: the Search and Asset list switch in the title row, the Keyword and Natural language switch above the search box, and the asset results for gearbox in the table](/img/asset_search_table_20261110_v2.7.png)
 
 ## Search views
 
@@ -57,15 +55,13 @@ The text query is combined with all other active filters using **AND** logic —
 
 Results include a relevance score. With **Show result explanation** turned on (in **Display & Preferences**), choose the information icon next to any result to see which fields matched and why the result was returned. **Show result explanation** and the **Keyword Search Scope** toggle (**Include metadata field data in keyword search**, in **Advanced Filters**) shape keyword search only, so the sidebar offers them in keyword mode and not in natural-language mode.
 
-![File search page showing file results in table view](/img/file_search_table_20260323_v2.5.png)
-
-<!-- TODO(owner): screenshot: file_search_table_2026MMDD_v2.7.png — the Search view in Files mode with keyword results (replaces the v2.5 capture above) -->
+![Search view in Files mode with the keyword results for gearbox: file path, asset, database, type, size and last modified columns](/img/file_search_table_20261110_v2.7.png)
 
 ## Natural language search
 
 Choose **Natural language** to describe what you are looking for instead of naming it — "a rusted pump housing", "drone footage of a bridge deck", "a floor plan with two stairwells". VAMS embeds your description with an Amazon Bedrock model and ranks files by the similarity of the text embedded for each file: the metadata the pipeline generated from renders, keyframes, and extracted text, the metadata already recorded on the file, its asset, and its database, the file's attributes, and the extracted text itself. Natural-language mode searches **files**; in Assets mode the results are grouped by asset and each asset is ranked by its best-matching file.
 
-<!-- TODO(owner): screenshot: search_nlp_mode_2026MMDD_v2.7.png — the Search view in Natural language mode with the mode line under the query box, the reduced filter sidebar, the Search inside files checkbox, and the Relevance column -->
+![Search view in Natural language mode with files for a narrated video showing how to assemble a gearbox: the mode line under the search box, the Search inside files checkbox in the sidebar, and the Relevance column](/img/search_nlp_mode_20261110_v2.7.png)
 
 -   Only the latest live version of each file is searched, and archived files are excluded unless **Include archived** is on.
 -   The **Relevance** column shows the similarity as a percentage; the modality popover beside it lists which parts of the embedded text contributed to the match: `asset-metadata`, `file-identity`, `genai-metadata`, `file-attributes`, `existing-file-metadata`, `existing-asset-metadata`, `existing-database-metadata`, `existing-file-attributes`, and `file-text`. A video analyzed in time windows or a document embedded in content chunks is listed once however many of them match; the popover then also names the best-matching window or chunk and how many matched. A match on a time window also lists `segment-frames`; a match on a content chunk lists `asset-metadata`, `file-identity`, `genai-metadata`, and `file-text`.
@@ -186,7 +182,7 @@ In natural-language mode the map shows the same page of the natural-language ans
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
-![Map view showing assets plotted on a geographic map](/img/asset_search_mapView__dark_20260323_v2.5.png)
+![Map view with three asset results plotted as markers on a map of Washington State, under the line 3 of 3 results with location data](/img/asset_search_mapView__dark_20261110_v2.7.png)
 
 ### Geospatial filter
 

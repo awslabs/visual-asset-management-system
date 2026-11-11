@@ -54,7 +54,7 @@ The **Assets and Files** page is the primary interface for discovering and brows
 
 The breadcrumb above the title ends with the page itself: on the all-databases page (`#/assets/`) it is the page title alone, and on a database's page it reads **Databases > Assets for {databaseId}**.
 
-![Asset search page in table view showing column headers and filter bar](/img/asset_search_table_20260323_v2.5.png)
+![Assets and Files page in the Search view: the Search and Asset list switch in the title row, the Keyword and Natural language switch above the search box, and the asset results for gearbox in the table](/img/asset_search_table_20261110_v2.7.png)
 
 ### View Modes
 
@@ -172,7 +172,7 @@ The **Pipelines** page lists all registered processing pipelines. Pipelines defi
 
 Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled**, **Archived**, or **System** where any applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database. A **System** pipeline is owned by the deployment: its entry opens read-only, only its `enabled` switch can be changed, its templates can have their configuration body and tag schema edited but cannot be added or deleted, and the Edit and Archive actions are hidden.
 
-<!-- TODO(owner): screenshot: pipelines_page_system_badge_2026MMDD_v2.7.png — the Pipelines page with a SYSTEM - GenAI entry carrying the System badge -->
+![Pipelines page grouped by category, with the two SYSTEM - GenAI pipelines carrying the System badge](/img/pipelines_page_system_badge_20261110_v2.7.png)
 
 Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 

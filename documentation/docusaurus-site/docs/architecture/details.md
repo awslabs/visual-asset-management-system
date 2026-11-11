@@ -62,9 +62,7 @@ Before calling Tier 2 enforcement, handlers must annotate the data object with i
 
 ## Data Indexing Flow
 
-![Data Queue Architecture](/img/dataQueues_MainFlow.png)
-
-<!-- TODO(owner): diagram: dataQueues_MainFlow.png — revise the data-queue diagram in place to add the VectorEmbeddingReadyRule → Vector Indexer SQS → Vector Indexer → Vector Embeddings Table branch (both PNG copies) -->
+![Data queue architecture, including the vector indexing branch](/img/dataQueues_MainFlow.png)
 
 VAMS maintains search indexes in Amazon OpenSearch that mirror data from Amazon DynamoDB, and — when vector search is enabled — a DynamoDB vector index of per-file-version embeddings. Both are fed through Amazon DynamoDB Streams, Amazon SNS, Amazon SQS, and the VAMS orchestration bus on Amazon EventBridge, which decouple producers from consumers.
 
