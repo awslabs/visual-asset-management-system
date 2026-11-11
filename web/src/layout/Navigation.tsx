@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
 import { SideNavigation, SideNavigationProps, Spinner } from "@cloudscape-design/components";
 import Button from "@cloudscape-design/components/button";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
+import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { allowedEntriesFor, webRouteChecksFor } from "./navigationRegistry";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
@@ -49,6 +50,11 @@ export function Navigation({
     onFollowHandler?: any;
     user: any;
 }) {
+    // Read live: the secure config that carries featuresEnabled lands after a first login, so an
+    // entry restricted to a feature switch appears when it does rather than on the next reload.
+    const featuresKey = JSON.stringify(useFeaturesEnabled());
+    const enabledFeatures: string[] = useMemo(() => JSON.parse(featuresKey), [featuresKey]);
+
     // The `web` paths the API allowed, or null until the check has succeeded. The entries are
     // filtered at render time, so a link gated on the API allowed-routes listing
     // (`requiresApiRoute`) appears once the auth flow has cached that listing.
@@ -57,28 +63,41 @@ export function Navigation({
     const [loadFailed, setLoadFailed] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
 
+    // Re-checked whenever the feature switches change (one arriving after mount adds links that were
+    // never checked) or on Retry. A check that resolves after a newer one started is discarded.
     useEffect(() => {
+        let stale = false;
         // The profile entries are checked in the same batched call, so the empty state can tell
         // "nothing at all" from "your pages are in the profile menu".
-        const allRoutes = webRouteChecksFor("side", "profile");
+        const allRoutes = webRouteChecksFor(["side", "profile"], enabledFeatures);
 
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
+                    if (stale) return;
                     setAllowedPaths(allowed.map((r) => r.route__path));
+                    // A re-check after a failed one (a feature switch arriving) clears the failure.
+                    setLoadFailed(false);
                     setLoading(false);
                 })
                 .catch((error) => {
+                    if (stale) return;
                     console.error(error);
                     setLoadFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, [loadAttempt]);
+        return () => {
+            stale = true;
+        };
+    }, [enabledFeatures, loadAttempt]);
 
-    const navigationItems = allowedPaths ? allowedEntriesFor("side", allowedPaths) : [];
+    const navigationItems = allowedPaths
+        ? allowedEntriesFor("side", allowedPaths, enabledFeatures)
+        : [];
     const hasProfilePages =
-        allowedPaths !== null && allowedEntriesFor("profile", allowedPaths).length > 0;
+        allowedPaths !== null &&
+        allowedEntriesFor("profile", allowedPaths, enabledFeatures).length > 0;
 
     const retryLoad = () => {
         setLoadFailed(false);

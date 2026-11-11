@@ -2,6 +2,8 @@
 
 This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent, and its viewer plugin sections are also the Kiro counterpart for `web/src/visualizerPlugin/CLAUDE.md`. When front-end standards change, update both this file and the matching `CLAUDE.md`.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ---
 
 ## 1. Architecture Overview
@@ -109,7 +111,7 @@ web/
       SignInHeader.tsx
       SignInFooter.tsx
 
-    services/               # API and data services
+    services/               # API and data services (may import apiClient — Rule 3 lists the other directories that may)
       APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # Includes updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
@@ -121,7 +123,8 @@ web/
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
-    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
       customNavigation.ts   #   customNavSections, appended by layout/navigationRegistry.ts
@@ -132,6 +135,7 @@ web/
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
@@ -299,8 +303,9 @@ The existing app uses AWS Cloudscape Design System. The orchestration module (`s
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
+-   **An add-on module's glob widens that global sheet on every deployment.** The utilities a Tailwind add-on module under `src/addons/<addon>/**` uses are emitted into the same stylesheet whether or not the add-on is enabled (the EDH module adds about 25), so the naming rule above covers them too.
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
 
@@ -339,7 +344,7 @@ const response = await apiClient.get(`database/${databaseId}/assets`);
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -349,9 +354,10 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `MetadataSchemaService.ts` — schema management
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -650,6 +656,7 @@ This codebase uses NO global state library. State is managed through:
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
 5. **URL params** via React Router v7 `useParams()`
+6. **TanStack Query** for server state in the Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory
 
 ### 6.2 Context Pattern
 
@@ -682,10 +689,11 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### 6.3 Existing Contexts
 
-| Context              | File                            | Purpose                          |
-| -------------------- | ------------------------------- | -------------------------------- |
-| `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
-| `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
+| Context                | File                              | Purpose                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AssetContext`         | `context/AssetContext.ts`         | Asset list state                                                                                                                                                                                                                                                                                                                                             |
+| `AssetDetailContext`   | `context/AssetDetailContext.ts`   | Single asset detail with reducer                                                                                                                                                                                                                                                                                                                             |
+| `RuntimeConfigContext` | `context/RuntimeConfigContext.ts` | The live runtime config, provided by `FedAuth/Auth.tsx` around the logged-in app; `useFeaturesEnabled()` re-evaluates when the secure config lands, so a feature-gated surface (a feature-restricted navigation entry, an add-on page) appears on a first login without a reload. Outside the provider both hooks fall back to `appCache.getItem("config")`. |
 
 The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
@@ -826,11 +834,11 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, placed after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, placed after the core "Admin - ..." sections), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do (see 7.6): without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), with the fork's entries after every core and add-on entry, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### 7.6 Navigation Placement
 
-Every page link is declared in one registry, `src/layout/navigationRegistry.ts`: the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` and feature switches are read at runtime), then `addonNavSections`, then `customNavSections` (`allNavEntries()`). A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. `entriesFor(placement)` returns one placement in registry order and strips the registry-only fields before Cloudscape sees them.
+Every page link is declared in one registry, `src/layout/navigationRegistry.ts`, which `allNavEntries()` composes from the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` is read at runtime), the two add-on lists and `customNavSections`. A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). The side navigation runs core main menu, `addonNavMainSections`, divider, core admin sections, `addonNavAdminSections`, then the fork's entries; the profile menu runs the core profile entries, then the add-on entries of both lists, then the fork's. A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. Any entry may carry `featuresEnabledRestriction: string[]`, the deployment's feature switches (`useFeaturesEnabled()`) that must all be on: an entry whose switches are off is dropped and its route is not checked, and both placements check again when the switches arrive after mount (only the latest check's answer is used). `entriesFor(placement, enabledFeatures)` returns one placement in registry order and strips the registry-only fields (`placement`, `requiresApiRoute`, `featuresEnabledRestriction`) before Cloudscape sees them.
 
 Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. When the side navigation is empty but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check. A route's `active` href is static, so a page serving several views may override the highlighted side link with `useActiveNavHref(href)` (`layout/activeNavHref.tsx`; `null` keeps the route's value, `""` highlights nothing, cleared on unmount); `ApiKeys.tsx` passes the Admin - Auth href only when its resolved mode is admin.
 
@@ -847,6 +855,8 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
 -   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
+-   **extensionMatching.ts** (`src/visualizerPlugin/core/extensionMatching.ts`) -- the one filename rule (`filenameExtension`, `extensionToken`), the `NO_EXTENSION` token `(none)`, `describeExtensionToken` and `supportsAllExtensions` (see 8.4.1)
+-   **textContent.ts** (`src/visualizerPlugin/core/textContent.ts`) -- `classifyTextSample` and `loadTextFile`, the bounded loader both text viewers use (see 8.4.1)
 -   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer adopts it in its own change; Cesium and Potree name stream failures through `describeStreamFailure`.
 
 ### 8.2 Current Viewers (plugins)
@@ -863,9 +873,10 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `columnar-viewer`                  | Columnar Data Viewer              | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (`(none)`)                                  | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer                  | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (same list as `text-viewer`)                       | enabled (compare-only: 2 files, cross-asset)        |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz, .splat, .sog                                                                                                                 | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .ksplat, .lcc, .ply, .sog, .splat, .spz                                                                                                  | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
 | `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
@@ -876,9 +887,9 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.6 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor. The install removes the editor's WebMCP tool registration (`registerWebMCP` in upstream `src/main.ts`, v3.7.0+) before building and fails if the built bundle still references `modelContext`: the framed editor is same-origin with VAMS, so its tools must not be offered to a browser agent.
 
-> Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.5). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
+> Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.6). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -962,25 +973,50 @@ export const VIEWER_COMPONENTS = {
 
 ### 8.4 Plugin Config Fields
 
-| Field                        | Type              | Description                                          |
-| ---------------------------- | ----------------- | ---------------------------------------------------- |
-| `id`                         | string            | Unique plugin identifier                             |
-| `componentPath`              | string            | Path for manifest lookup                             |
-| `dependencyManager`          | string?           | Path to dependency loader module                     |
-| `dependencyManagerClass`     | string?           | Class name in dependency module                      |
-| `dependencyManagerMethod`    | string?           | Load method name                                     |
-| `dependencyCleanupMethod`    | string?           | Cleanup method name                                  |
-| `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
-| `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
-| `canFullscreen`              | boolean           | Supports fullscreen mode                             |
-| `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
-| `category`                   | string            | Viewer category (3d, media, document, data, preview) |
-| `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
-| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
-| `enabled`                    | boolean           | Whether the plugin is active                         |
-| `customParameters`           | object?           | Viewer-specific configuration                        |
-| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                        |
+| Field                        | Type              | Description                                                                   |
+| ---------------------------- | ----------------- | ----------------------------------------------------------------------------- |
+| `id`                         | string            | Unique plugin identifier                                                      |
+| `componentPath`              | string            | Path for manifest lookup                                                      |
+| `dependencyManager`          | string?           | Path to dependency loader module                                              |
+| `dependencyManagerClass`     | string?           | Class name in dependency module                                               |
+| `dependencyManagerMethod`    | string?           | Load method name                                                              |
+| `dependencyCleanupMethod`    | string?           | Cleanup method name                                                           |
+| `supportedExtensions`        | string[]          | Lowercase `.ext` values, `*` (any file) or `(none)` (files with no extension) |
+| `supportsMultiFile`          | boolean           | Can handle multiple files at once                                             |
+| `canFullscreen`              | boolean           | Supports fullscreen mode                                                      |
+| `priority`                   | number            | Lower = listed first when multiple viewers match                              |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use                                     |
+| `category`                   | string            | Viewer category (3d, media, document, data, preview)                          |
+| `featuresEnabledRestriction` | string[]?         | Required feature flags                                                        |
+| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                                              |
+| `enabled`                    | boolean           | Whether the plugin is active                                                  |
+| `customParameters`           | object?           | Viewer-specific configuration                                                 |
+| `compareMode`                | object?           | Compare-mode opt-in (see 8.5)                                                 |
+
+### 8.4.1 Files Without an Extension and the Binary Guard
+
+A viewer opts into files with no extension (README, LICENSE, Makefile, `.gitignore`) by listing the
+reserved token `(none)` (`NO_EXTENSION`, `core/extensionMatching.ts`) in `supportedExtensions`; only
+`text-viewer` and `text-diff-viewer` list it (pinned by `config/viewerConfig.test.ts` and
+`core/viewerSelection.test.ts`). One filename rule, `filenameExtension` (last path segment, split like
+Python's `os.path.splitext`): `.gitignore`, `.bashrc` and `file.` have no extension, `.eslintrc.json`
+has `.json`, `.env.example` has `.example`. `extensionToken` lowercases it, gives `(none)` when there is
+none and undefined for a folder key. The token rides the usual every-file-must-match rule, so `LICENSE`
+with `LICENSE.txt` is admitted by the differ and `README` with `model.glb` by nothing; `*` matches it.
+Entry points gate by NAME (`isViewableFilename`, `isFilenameComparableAsVersions`,
+`areFilenamesViewableTogether`, `areFilesComparableTogether`, `availableModesForFiles`; search rows by
+`str_key` through `isViewableSearchRow`, never `str_fileext`); `extensionOfFilename` is display-only.
+User text names the token with `describeExtensionToken` ("no extension").
+
+Both text viewers load through `loadTextFile` (`core/textContent.ts`): `Range: bytes=0-8191`, classify
+the first 8 KiB with `classifyTextSample`, stop when it is not text (a binary file is never downloaded
+whole or highlighted), one more full GET for a larger text file, a 200 read as a stream and cancelled on
+binary, S3's 416 on an empty object read as empty text, a network `TypeError` retried once without
+`Range`. UTF-16 with a BOM is decoded; UTF-32 and BOM-less UTF-16 are an unsupported encoding; any
+other NUL byte, or too many control bytes (10 %, or 2 % when not valid UTF-8), is binary. Notices:
+`text-viewer-binary-notice` / `text-viewer-encoding-notice`, and per side in the differ
+`text-diff-side-binary` / `text-diff-side-encoding` while the other side renders. Full account:
+`web/src/visualizerPlugin/CLAUDE.md`, "Files Without an Extension and the Binary Guard".
 
 ### 8.5 Compare Mode (cross-asset / multi-version)
 
@@ -1028,7 +1064,7 @@ Selected Files" icon (`FileDetailsPanel.tsx`), and the version-compare actions i
 `viewerConfig.json` by `viewerSelection.test.ts`). A surface offers **Visualize** only when
 `hasVisualizeViewer` / `areFilenamesViewableTogether` says a non-compare viewer admits the selection,
 and **Compare** only when `hasCompareViewer` / `areFilesComparableTogether` says a compare viewer admits
-its file count, shape and types (`isExtensionComparableAsVersions(ext)` for a per-row version Compare).
+its file count, shape and types (`isFilenameComparableAsVersions(name)` for a per-row version Compare).
 `FileViewerModal` consults `availableModesForFiles(files)`: both modes → toggle (top-right); one →
 that mode, no toggle; none → "No viewer for this selection". `ViewerSelector` additionally filters
 compare-only viewers out of the Visualize dropdown (`listableViewers`) regardless of the list it is
@@ -1038,7 +1074,7 @@ predicates behind `useViewerRegistryReady()`.
 **Single-file compare.** A LONE file is judged for compare as two versions of itself:
 `availableViewerModes` (pure, `viewerSelection.ts`) maps a one-file selection onto
 `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`), the same question
-`isExtensionComparableAsVersions` asks, so a single `.txt` admits BOTH modes while a single `.png`/`.glb`
+`isFilenameComparableAsVersions` asks, so a single `.txt` (or `README`) admits BOTH modes while a single `.png`/`.glb`
 stays Visualize-only — admission, never an extension list. The host seeds the pair with
 `seedCompareFromSingleFile(file)` (`compareShape.ts`): `[the viewed entry (its pinned `versionId`, or
 latest), the same file at latest]`; when the viewed side is latest both start at latest and the differ
@@ -1056,72 +1092,7 @@ at its root) or its lines render centered and stop wrapping. The differ also pas
 `pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
 labels down and clipped them inside the fixed-height title block.
 
-### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
-
-A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
-expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
-are not treated as containing credentials and stay in the web app access-logs bucket until its
-lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
-is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
-When `app.useWaf` is on, the query string and the `Referer` headers also reach the `aws-waf-logs-vams-*`
-log group of the web ACL in front of the site (`wafv2-basic-construct.ts`; in `us-east-1` for the
-CloudFront ACL), which keeps events for one year and redacts only the `authorization` header. The
-operator-facing account of both channels and their controls is in `troubleshooting/known-limitations.md`
-("SuperSplat Editor File URLs in Web Logs").
-
-`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
-`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
-viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
-server or its logs.
-
-For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
-into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
-string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
-and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
-inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
-inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
-is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
-on the next version bump while injected elements do not.
-
-The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
-ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
-changes the document URL, and the browser builds the `Referer` of every later request the page makes
-from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
-(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
-the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
-and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
-and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
-carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
-the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
-response header's for the requests the document makes after the element is parsed, which is why it goes
-at the top, and it is the only control that covers both distributions, because the ALB cannot add a
-`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
-is not a substitute: it governs only the request that loads the framed page, not the requests that page
-makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
-the fragment.
-
-`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
-builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
-query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
-(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
-bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
-CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
-has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
-app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
-signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
-`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
-(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
-was given: the robotics overlay names the player by file name (the app bar and document title showed the
-URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
-upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
-URL.
-
-Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
-value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
-same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
-breaks and S3 returns 400.
-
-### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+### 8.6 A Framed Viewer Must Not Receive a Signed URL in the Query String
 
 A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
 expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
@@ -1230,12 +1201,26 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the
+flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config
+carries no `featuresEnabled` until the secure config lands after the first login, and only the context
+re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry
+`featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses:
+`layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route
+check when the switches arrive, and strips the field before the items reach `SideNavigation`. An
+add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in
+`infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in
+`custom/customFeatures.ts`.
+
 Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
 -   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+-   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on's own steering
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)

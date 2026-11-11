@@ -510,7 +510,8 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. It excludes `addon/*` for the same reason: the
+    add-on stacks upload their own trees there. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
@@ -1276,8 +1277,21 @@ drifts from the thumbnail Dockerfile.
 built images, so CI does not run them; they are run by hand when a converter or its base image changes.
 `ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
 them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
-row per file (exit codes, LAS format, point count, colour and intensity ranges, octree points); run it on
-the old and new PDAL image and diff the two (#1203).
+row per file (exit codes, input and output LAS format, point count, colour and intensity ranges, the
+route PotreeConverter's input took, octree points, attributes and RGB range); run it on the old and new
+PDAL image and diff the two (#1203). Its LAS/LAZ routing mirrors constructPipeline's header rule (point
+formats 0-7 direct, 8-10 through PDAL, #1215; an Extra Bytes descriptor with an unterminated name or
+description through PDAL, #783), reading each header with the pipeline's own `lasHeader.py`;
+`LAS_ROUTING=extension` reproduces the routing before both.
+
+**Route on what the file is, not what it is named.** The Potree preview's `openPipeline` reads a LAS/LAZ
+input's point data record format from a ranged GET of its header
+(`preview/pcPotreeViewer/lambda/lasHeader.py`) and `constructPipeline` sends a format the pinned
+PotreeConverter cannot read through the PDAL stage. For a format it reads, a second ranged GET walks the
+VLR block (to the point data offset, capped at 64 KiB) and an Extra Bytes descriptor whose 32-byte name
+or description has no NUL, which PotreeConverter reads past (#783), is routed the same way. The read is
+advisory: any failure leaves the field out and keeps the extension route, so an unreadable header or VLR
+block never fails a launch and an execution started before the field behaves as before.
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls

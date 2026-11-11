@@ -18,9 +18,13 @@ matches: a wrong operator, a misspelt value, or a constraint whose methods exclu
 
 ``ADDON_ROUTE_GRANTS`` records, per add-on route, the methods each template allows. A route added to
 ``ADDON_ROUTES`` without an entry fails ``test_every_registered_addon_route_has_a_template_decision``,
-which is where the templates that should reach it are decided.
+which is where the templates that should reach it are decided. An add-on whose tests live under
+``tests/handlers/addon/<add-on>/`` keeps the entries for its routes there, as ``ROUTE_GRANTS`` in
+``addonRouteGrants.py``; every such file is merged with the entries below, and a route two sources
+decide is refused.
 """
 
+import importlib.util
 import json
 import pathlib
 import re
@@ -34,6 +38,10 @@ from backend.backend.handlers.auth import authConstraintsTemplateService as svc 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 TEMPLATES_DIR = REPO_ROOT / "documentation" / "permissionsTemplates"
+# tests/handlers/addon: each add-on's test directory may carry its route decisions in ROUTE_GRANTS_FILE.
+ADDON_TESTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "addon"
+ROUTE_GRANTS_FILE = "addonRouteGrants.py"
+INLINE_SOURCE = "test_permission_templates_addon_routes.py"
 
 ROLE_NAME = "template-role"
 USER_ID = "template-user"
@@ -44,7 +52,7 @@ WRITE_METHODS = ("POST", "PUT", "DELETE")
 # The methods each template allows on each add-on route; a template absent from a route's entry
 # allows none. database-tag-admin reaches only the tag pages and deny-tagged-assets is an asset-deny
 # overlay with no api constraint, so neither grants an add-on route.
-ADDON_ROUTE_GRANTS = {
+INLINE_ROUTE_GRANTS = {
     API_ADDON_PHYSNA_VIEWER: {
         "database-admin.json": ("GET",),
         "database-user.json": ("GET",),
@@ -52,6 +60,44 @@ ADDON_ROUTE_GRANTS = {
         "global-readonly.json": ("GET",),
     },
 }
+
+
+class DuplicateRouteGrant(ValueError):
+    """A route that two route-grant sources decide."""
+
+
+def merge_route_grants(sources):
+    """One route -> template decision map from ``(source name, ROUTE_GRANTS)`` pairs. A route two
+    sources decide is refused, naming both, so no source can override another's decision."""
+    merged, owners = {}, {}
+    for source, grants in sources:
+        for route, decision in grants.items():
+            if route in owners:
+                raise DuplicateRouteGrant(f"{route.path} is decided by both {owners[route]} and {source}")
+            owners[route] = source
+            merged[route] = decision
+    return merged
+
+
+def _route_grant_files():
+    return sorted(ADDON_TESTS_DIR.glob(f"*/{ROUTE_GRANTS_FILE}"))
+
+
+def _route_grant_source(path):
+    return path.relative_to(ADDON_TESTS_DIR).as_posix()
+
+
+def _load_route_grants(path):
+    """``ROUTE_GRANTS`` of one add-on's route-grant file, loaded by path under a private module name."""
+    spec = importlib.util.spec_from_file_location(f"_addon_route_grants_{path.parent.name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ROUTE_GRANTS
+
+
+ADDON_ROUTE_GRANTS = merge_route_grants(
+    [(INLINE_SOURCE, INLINE_ROUTE_GRANTS)]
+    + [(_route_grant_source(path), _load_route_grants(path)) for path in _route_grant_files()])
 
 
 def _template_names():
@@ -176,6 +222,36 @@ class TestTemplatesGrantTheAddonRoutes:
         assert enforcer.enforce(request, "GET") is True
         opened = [method for method in WRITE_METHODS if enforcer.enforce(request, method)]
         assert not opened, f"{template_name} allows {opened} on {API_ADDON_PHYSNA_VIEWER.path}"
+
+
+@pytest.mark.unit
+class TestRouteGrantSources:
+    """The add-on route-grant files are found, merged whole, and cannot decide a route twice."""
+
+    @pytest.mark.parametrize("path", _route_grant_files(), ids=_route_grant_source)
+    def test_every_route_grant_file_is_merged_whole(self, path):
+        grants = _load_route_grants(path)
+        assert grants, f"{_route_grant_source(path)} decides no route"
+        assert {route: ADDON_ROUTE_GRANTS.get(route) for route in grants} == grants
+
+    def test_the_inline_entries_are_merged(self):
+        assert {route: ADDON_ROUTE_GRANTS.get(route) for route in INLINE_ROUTE_GRANTS} == INLINE_ROUTE_GRANTS
+
+    def test_every_decided_route_is_a_registered_addon_route(self):
+        stale = sorted(route.path for route in set(ADDON_ROUTE_GRANTS) - set(ADDON_ROUTES))
+        assert not stale, f"route decisions for routes ADDON_ROUTES does not register: {stale}"
+
+    def test_a_route_two_sources_decide_is_refused(self):
+        with pytest.raises(DuplicateRouteGrant, match=r"/addon/physna/viewer is decided by both one\.py and two\.py"):
+            merge_route_grants([("one.py", {API_ADDON_PHYSNA_VIEWER: {}}),
+                                ("two.py", {API_ADDON_PHYSNA_VIEWER: {"database-admin.json": ("GET",)}})])
+
+    def test_routes_that_one_source_each_decides_are_merged(self):
+        # Control for the refusal above.
+        other = API_ADDON_PHYSNA_VIEWER._replace(path="/addon/probe/route")
+        merged = merge_route_grants([("one.py", {API_ADDON_PHYSNA_VIEWER: {}}),
+                                     ("two.py", {other: {"database-admin.json": ("GET",)}})])
+        assert merged == {API_ADDON_PHYSNA_VIEWER: {}, other: {"database-admin.json": ("GET",)}}
 
 
 @pytest.mark.unit

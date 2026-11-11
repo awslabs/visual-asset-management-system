@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ButtonDropdownProps } from "@cloudscape-design/components/button-dropdown";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
+import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { allowedEntriesFor, NavEntry, webRouteChecksFor } from "./navigationRegistry";
 
 /** The menu item id of Sign out, which App.tsx handles in the menu's onItemClick. */
@@ -40,17 +41,21 @@ export function toMenuItems(entries: NavEntry[]): ButtonDropdownProps.ItemOrGrou
  * closed: page links appear only once the check has succeeded, and Sign out always works. The top bar
  * lives outside the HashRouter and has no Retry control, so a failed check is retried on the next
  * `hashchange`; every `hashchange` also re-renders, so a link gated on the API allowed-routes
- * listing (`requiresApiRoute`) appears once that listing is cached.
+ * listing (`requiresApiRoute`) appears once that listing is cached. The check runs again when the
+ * deployment's feature switches change, so an entry restricted to a switch
+ * (`featuresEnabledRestriction`) appears once the secure config carrying it lands.
  */
 export function useProfileMenuItems(): ButtonDropdownProps.ItemOrGroup[] {
     const [state, setState] = useState<CheckState>("loading");
     const [allowedPaths, setAllowedPaths] = useState<string[]>([]);
     const [attempt, setAttempt] = useState(0);
     const [, setHashTick] = useState(0);
+    const featuresKey = JSON.stringify(useFeaturesEnabled());
+    const enabledFeatures: string[] = useMemo(() => JSON.parse(featuresKey), [featuresKey]);
 
     useEffect(() => {
         let cancelled = false;
-        checkWebRoutesAllowed(webRouteChecksFor("profile"))
+        checkWebRoutesAllowed(webRouteChecksFor(["profile"], enabledFeatures))
             .then((allowed) => {
                 if (cancelled) return;
                 setAllowedPaths(allowed.map((route) => route.route__path));
@@ -64,7 +69,7 @@ export function useProfileMenuItems(): ButtonDropdownProps.ItemOrGroup[] {
         return () => {
             cancelled = true;
         };
-    }, [attempt]);
+    }, [attempt, enabledFeatures]);
 
     useEffect(() => {
         const onHashChange = () => {
@@ -80,6 +85,8 @@ export function useProfileMenuItems(): ButtonDropdownProps.ItemOrGroup[] {
     }, [state]);
 
     const pageItems =
-        state === "allowed" ? toMenuItems(allowedEntriesFor("profile", allowedPaths)) : [];
+        state === "allowed"
+            ? toMenuItems(allowedEntriesFor("profile", allowedPaths, enabledFeatures))
+            : [];
     return [...pageItems, { id: SIGN_OUT_ITEM_ID, text: "Sign out" }];
 }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { expect, Locator, Page } from "@playwright/test";
+import { expect, Locator, Page, test } from "@playwright/test";
 
 /**
  * Reusable Playwright harness for the VAMS orchestration UI.
@@ -57,6 +57,36 @@ export async function gotoOrchestration(
     });
     // The list issues its first request after mount; settle before asserting on content.
     await page.waitForLoadState("networkidle").catch(() => undefined);
+}
+
+/**
+ * The deployment's feature list, read from the app's own cached config (localStorage
+ * `vams_cache_config`) — what the running application itself reads. Not `/api/secure-config` through
+ * `page.request`: that carries no bearer token, answers 401, and every feature then reads as disabled.
+ * The entry is written after the app boots, later than `page.goto` resolving, so it is polled to a
+ * short deadline; an empty list after the deadline is returned as such.
+ */
+export async function cachedFeaturesEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const config = parsed?.value ?? parsed ?? {};
+                return (config.featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
 }
 
 /**
@@ -117,14 +147,17 @@ export function collectPageErrors(page: Page): string[] {
 
 /**
  * Assert a table either has rows or shows its empty state — never that specific data exists. Use
- * this to prove a page renders in ANY environment.
+ * this to prove a page renders in ANY environment. `emptyState` is the page's own empty-state copy
+ * when it does not read "No … found".
  */
-export async function expectTableRendered(page: Page): Promise<number> {
+export async function expectTableRendered(
+    page: Page,
+    emptyState: RegExp = /no .*found/i
+): Promise<number> {
     const rows = tableRows(page);
     await expect
         .poll(
-            async () =>
-                (await rows.count()) > 0 || (await page.getByText(/no .*found/i).count()) > 0,
+            async () => (await rows.count()) > 0 || (await page.getByText(emptyState).count()) > 0,
             {
                 timeout: 60_000,
             }
@@ -312,6 +345,11 @@ export async function openFileManager(
  * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
  * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
  * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ *
+ * Clicking a folder's NAME only selects it (SELECT_ITEM); the tree expands a folder solely through
+ * its caret (`.tree-item-caret`, TOGGLE_EXPANDED). So after selecting a folder, expand it through the
+ * caret when its next segment is not yet visible. The visibility check comes first because a folder
+ * that is already expanded would collapse on a caret click.
  */
 export async function selectTreePath(
     page: Page,
@@ -319,12 +357,13 @@ export async function selectTreePath(
     options: { modifiers?: Array<"Control" | "Shift"> } = {}
 ): Promise<void> {
     const segments = filename.split("/").filter(Boolean);
-    for (const segment of segments) {
+    for (let index = 0; index < segments.length; index++) {
+        const segment = segments[index];
         const node = treeNode(page, segment);
         await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
             timeout: 60_000,
         });
-        const isLeaf = segment === segments[segments.length - 1];
+        const isLeaf = index === segments.length - 1;
         if (isLeaf && options.modifiers?.length) {
             await node.scrollIntoViewIfNeeded().catch(() => undefined);
             await node.click({ modifiers: options.modifiers, timeout: 8_000 });
@@ -332,6 +371,14 @@ export async function selectTreePath(
             await clickWhenActionable(node, `tree node "${segment}"`);
         }
         if (!isLeaf) {
+            const next = treeNode(page, segments[index + 1]);
+            // Let the selection settle; a folder may already be expanded (e.g. auto-expanded root).
+            await page.waitForTimeout(400);
+            if (!(await next.isVisible())) {
+                // `.tree-item-name` and `.tree-item-caret` are siblings in the row's `.tree-item-content`.
+                const caret = node.locator("xpath=..").locator(".tree-item-caret");
+                await clickWhenActionable(caret, `the expand caret of folder "${segment}"`);
+            }
             // Give the tree a moment to render the newly revealed children.
             await page.waitForTimeout(1200);
         }
@@ -382,6 +429,8 @@ export function compareSeed(): CompareSeed | null {
 export interface ViewerSamples {
     databaseId: string;
     assetId: string;
+    /** True when the seed ran with `--asset-version` (one snapshot, then a second README version). */
+    assetVersion?: boolean;
     samples: Record<
         string,
         {
@@ -1371,4 +1420,134 @@ export function profileMenuLink(page: Page, href: string): Locator {
  */
 export function sideNavigation(page: Page): Locator {
     return page.locator("nav").filter({ has: page.locator('a[href^="#/"]') });
+}
+
+// ---------------------------------------------------------------------------------------------
+// SuperSplat Editor (iframe-embedded, WebGPU-only): the splat count and a pixel diff against the
+// empty editor, because the editor's own grid and UI make an unloaded canvas look "rendered".
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The violations the SuperSplat Editor's page raises under the production CSP on the development
+ * baseline, none of which breaks the editor: the upstream inline service-worker block that must
+ * stay blocked (#665), the `<base href>` that `base-uri 'none'` refuses, and the embedded `pc-icon`
+ * data-URI font. Pass as a case's `cspAllowed`; any other violation fails.
+ */
+export const SUPERSPLAT_CSP_ALLOWED: RegExp[] = [
+    /^script-src(-elem)? blocked inline in .*\/viewers\/supersplat\//,
+    /^base-uri blocked .*\/viewers\/supersplat\/ in /,
+    /^font-src blocked data in .*\/viewers\/supersplat\//,
+];
+
+/**
+ * The browser's console copy of a CSP report. A case that lists its baseline violations exactly in
+ * `cspAllowed` checks each one there, so its console copy is not counted a second time.
+ */
+export const CSP_CONSOLE_REPORT = /violates the following Content Security Policy directive/i;
+
+/** Share of pixels that differ by more than 48 summed RGB levels between two same-size PNGs. */
+export async function changedPixelFraction(page: Page, a: Buffer, b: Buffer): Promise<number> {
+    return await page.evaluate(
+        async ([first, second]) => {
+            const decode = async (base64: string) => {
+                const binary = atob(base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+                const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
+                const context = surface.getContext("2d")!;
+                context.drawImage(bitmap, 0, 0);
+                return context.getImageData(0, 0, bitmap.width, bitmap.height);
+            };
+            const [x, y] = [await decode(first), await decode(second)];
+            if (x.width !== y.width || x.height !== y.height) return -1;
+            let changed = 0;
+            for (let p = 0; p < x.data.length; p += 4) {
+                const delta =
+                    Math.abs(x.data[p] - y.data[p]) +
+                    Math.abs(x.data[p + 1] - y.data[p + 1]) +
+                    Math.abs(x.data[p + 2] - y.data[p + 2]);
+                if (delta > 48) changed += 1;
+            }
+            return changed / (x.width * x.height);
+        },
+        [a.toString("base64"), b.toString("base64")] as const
+    );
+}
+
+/**
+ * Asserts the SuperSplat Editor in `iframe` drew the file: its status bar counts more than zero
+ * splats, and its canvas differs from the empty editor's (the same page with no `?load=`, at the
+ * iframe's size) on at least `minChangedFraction` of its pixels. The editor renders only through
+ * WebGPU: without an adapter (headless Chromium without `E2E_WEBGPU=1`) the case skips with the
+ * reason, unless `E2E_REQUIRE_WEBGPU=1` makes that a failure. Returns the splat count and changed
+ * fraction for the log.
+ */
+export async function expectSuperSplatRendered(
+    page: Page,
+    iframe: Locator,
+    what: string,
+    minChangedFraction = 0.01
+): Promise<{ splats: number; changedFraction: number }> {
+    await expect(iframe).toBeVisible({ timeout: 60_000 });
+    const frame = await (await iframe.elementHandle())?.contentFrame();
+    expect(frame, "the SuperSplat iframe has no document").toBeTruthy();
+    const hasAdapter = await frame!.evaluate(async () => {
+        const gpu = (navigator as any).gpu;
+        return !!gpu && !!(await gpu.requestAdapter().catch(() => null));
+    });
+    if (!hasAdapter) {
+        expect(
+            process.env.E2E_REQUIRE_WEBGPU,
+            "E2E_REQUIRE_WEBGPU=1 but no WebGPU adapter"
+        ).not.toBe("1");
+        test.skip(true, "this browser has no WebGPU adapter, which the SuperSplat Editor requires");
+    }
+
+    // The first status-bar value is "Splats" (upstream src/ui/status-bar.ts).
+    const splatCount = frame!.locator(".status-bar-stat-value").first();
+    let splats = 0;
+    await expect
+        .poll(
+            async () => {
+                splats = Number(((await splatCount.textContent()) ?? "").replace(/\D/g, "")) || 0;
+                return splats;
+            },
+            {
+                message: `the SuperSplat status bar never counted the splats of ${what}`,
+                timeout: 90_000,
+            }
+        )
+        .toBeGreaterThan(0);
+    await page.waitForTimeout(3_000); // let the camera settle on the loaded scene
+    const loaded = await frame!.locator("canvas").first().screenshot();
+
+    const box = await iframe.boundingBox();
+    const src = (await iframe.getAttribute("src")) ?? "";
+    const empty = await page.context().newPage();
+    let baseline: Buffer;
+    try {
+        await empty.setViewportSize({
+            width: Math.round(box!.width),
+            height: Math.round(box!.height),
+        });
+        await empty.goto(new URL(src, page.url()).pathname, { waitUntil: "domcontentloaded" });
+        await expect(empty.locator(".status-bar-stat-value").first()).toBeVisible({
+            timeout: 60_000,
+        });
+        await empty.waitForTimeout(3_000);
+        baseline = await empty.locator("canvas").first().screenshot();
+    } finally {
+        await empty.close();
+    }
+    const changedFraction = await changedPixelFraction(page, loaded, baseline!);
+    expect(
+        changedFraction,
+        `${what}: the editor and the empty editor differ in size`
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+        changedFraction,
+        `${what}: the SuperSplat canvas matches the empty editor`
+    ).toBeGreaterThanOrEqual(minChangedFraction);
+    return { splats, changedFraction };
 }

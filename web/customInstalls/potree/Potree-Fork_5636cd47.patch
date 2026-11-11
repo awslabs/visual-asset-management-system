@@ -1,19 +1,19 @@
-From bce198d2aad16d33cf63ac55117a797f659dbb58 Mon Sep 17 00:00:00 2001
+From 76d3e98f43ada56128704d7d6f9caa5ba9947252 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Thu, 21 Sep 2023 07:26:09 -0700
 Subject: [PATCH] Removed global CSS rules.
 
 ---
- src/Potree.js                          | 33 ++++++++++-----
+ src/Potree.js                          | 33 ++++++++------
  src/PotreeRenderer.js                  | 11 +++--
- src/modules/loader/2.0/OctreeLoader.js | 57 +++++++++++++++++++-------
- src/viewer/potree.css                  | 46 +++++++++++++--------
+ src/modules/loader/2.0/OctreeLoader.js | 59 +++++++++++++++++++-------
+ src/viewer/potree.css                  | 50 ++++++++++++++--------
  src/viewer/sidebar.html                | 17 ++++++--
  src/viewer/viewer.js                   | 18 ++++++--
- 6 files changed, 128 insertions(+), 54 deletions(-)
+ 6 files changed, 131 insertions(+), 57 deletions(-)
 
 diff --git a/src/Potree.js b/src/Potree.js
-index 92e6fb57..923af93f 100644
+index 4f915857..c7e5f03a 100644
 --- a/src/Potree.js
 +++ b/src/Potree.js
 @@ -1,3 +1,8 @@
@@ -55,7 +55,7 @@ index 92e6fb57..923af93f 100644
  
  		// load pointcloud
  		if (!path){
-@@ -162,12 +168,15 @@ export function loadPointCloud(path, name, callback){
+@@ -171,12 +177,15 @@ export function loadPointCloud(path, name, callback){
  				}
  			});
  		} else if (path.indexOf('metadata.json') > 0) {
@@ -75,7 +75,9 @@ index 92e6fb57..923af93f 100644
  					let pointcloud = new PointCloudOctree(geometry);
  
  					let aPosition = pointcloud.getAttribute("position");
-@@ -183,7 +192,7 @@ export function loadPointCloud(path, name, callback){
+@@ -190,9 +199,9 @@ export function loadPointCloud(path, name, callback){
+ 					// loaded(pointcloud);
+ 					resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
  				}
 -			});
 +			}, reject);
@@ -85,7 +87,7 @@ index 92e6fb57..923af93f 100644
  				if (!geometry) {
  					//callback({type: 'loading_failed'});
  					console.error(new Error(`failed to load point cloud from URL: ${path}`));
-@@ -218,7 +227,7 @@ export function loadPointCloud(path, name, callback){
+@@ -227,7 +236,7 @@ export function loadPointCloud(path, name, callback){
  		return promise;
  	}
  };
@@ -95,7 +97,7 @@ index 92e6fb57..923af93f 100644
  // add selectgroup
  (function($){
 diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
-index 79964f42..3823e64c 100644
+index 00d46da5..82db76d2 100644
 --- a/src/PotreeRenderer.js
 +++ b/src/PotreeRenderer.js
 @@ -1,3 +1,8 @@
@@ -121,7 +123,7 @@ index 79964f42..3823e64c 100644
  	}
  
 diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 0f025661..c42be196 100644
+index 0f025661..f77e51b2 100644
 --- a/src/modules/loader/2.0/OctreeLoader.js
 +++ b/src/modules/loader/2.0/OctreeLoader.js
 @@ -1,3 +1,8 @@
@@ -207,13 +209,14 @@ index 0f025661..c42be196 100644
 +			method: 'GET',
 +			headers: headers
 +		});
- 
--	static async load(url){
++
 +		if(!response || !response.ok){
 +			console.log(`Error: could not retrieve asset from ${url}`);
 +			return;
 +		}
  
+-	static async load(url){
+-
 -		let response = await fetch(url);
  		let metadata = await response.json();
  
@@ -226,7 +229,7 @@ index 0f025661..c42be196 100644
  		loader.attributes = attributes;
  		loader.scale = metadata.scale;
 diff --git a/src/viewer/potree.css b/src/viewer/potree.css
-index 8e5b5022..f3749466 100644
+index 8e5b5022..57b358a1 100644
 --- a/src/viewer/potree.css
 +++ b/src/viewer/potree.css
 @@ -187,10 +187,18 @@
@@ -239,7 +242,7 @@ index 8e5b5022..f3749466 100644
 -}
 +/*
 +	2023-09-21 Amazon modifications
-+	
++
 +	Removed global rule:
 +
 +	a:hover, a:visited, a:link, a:active{
@@ -256,14 +259,12 @@ index 8e5b5022..f3749466 100644
  	opacity:	0.5;
  }
  
-+/*  2023-09-21 Amazon modifications
- 
+-
 -canvas { 
 -	width: 100%; 
 -	height: 100% 
 -}
-+	Remove global rules:
- 
+-
 -body{ 
 -	margin: 	0; 
 -	padding: 	0;
@@ -272,27 +273,31 @@ index 8e5b5022..f3749466 100644
 -	height: 	100%;
 -	overflow:	hidden;
 -}
-+	canvas { 
-+		width: 100%; 
-+		height: 100% 
++/*  2023-09-21 Amazon modifications
++
++	Remove global rules:
++
++	canvas {
++		width: 100%;
++		height: 100%
 +	}
 +
-+	body{ 
-+		margin: 	0; 
++	body{
++		margin: 	0;
 +		padding: 	0;
 +		position:	absolute;
 +		width: 		100%;
 +		height: 	100%;
 +		overflow:	hidden;
 +	}
-+	
++
 +	End of Amazon modifications
 +*/
  
  .axis {
    font: 		10px sans-serif;
 diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
-index 15524270..e71ebc9c 100644
+index 15524270..265f074e 100644
 --- a/src/viewer/sidebar.html
 +++ b/src/viewer/sidebar.html
 @@ -1,6 +1,12 @@
@@ -340,7 +345,7 @@ index 15524270..e71ebc9c 100644
  	</div>
  
 diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
-index baf1fb1b..ad908b14 100644
+index baf1fb1b..883217be 100644
 --- a/src/viewer/viewer.js
 +++ b/src/viewer/viewer.js
 @@ -1,3 +1,8 @@
@@ -387,5 +392,5 @@ index baf1fb1b..ad908b14 100644
  			this.renderer.domElement.focus();
  		});
 -- 
-2.38.1.windows.1
+2.50.1
 

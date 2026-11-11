@@ -23,17 +23,38 @@ import {
 } from "./navigationRegistry";
 
 jest.mock("../addons/addonNavigation", () => ({
-    addonNavSections: [
+    addonNavMainSections: [
         {
             type: "section",
-            text: "Add-on side",
-            items: [{ type: "link", text: "Add-on side page", href: "#/addon-side/" }],
+            text: "Add-on main",
+            items: [{ type: "link", text: "Add-on main page", href: "#/addon-main/" }],
         },
         {
             type: "link",
             text: "Add-on profile page",
             href: "#/addon-profile/",
             placement: "profile",
+        },
+        {
+            type: "section",
+            text: "Add-on switched",
+            featuresEnabledRestriction: ["PROBE_SWITCH"],
+            items: [
+                { type: "link", text: "Add-on switched page", href: "#/addon-switched/" },
+                {
+                    type: "link",
+                    text: "Add-on two-switch page",
+                    href: "#/addon-switched/both/",
+                    featuresEnabledRestriction: ["PROBE_SWITCH", "PROBE_OTHER"],
+                },
+            ],
+        },
+    ],
+    addonNavAdminSections: [
+        {
+            type: "section",
+            text: "Add-on side",
+            items: [{ type: "link", text: "Add-on side page", href: "#/addon-side/" }],
         },
         {
             type: "expandable-link-group",
@@ -113,10 +134,24 @@ describe("placement", () => {
         expect(profile).toEqual(["Your pages", "Add-on profile page", "Custom profile"]);
     });
 
+    it("places the add-on main-menu sections after Orchestrate & Automate, ahead of the divider", () => {
+        const side = texts(entriesFor("side"));
+        expect(side.indexOf("Add-on main")).toBe(side.indexOf("Orchestrate & Automate") + 1);
+        expect(side.indexOf("divider")).toBe(side.indexOf("Add-on main") + 1);
+        expect(side.indexOf("Admin - Data")).toBeGreaterThan(side.indexOf("divider"));
+    });
+
+    it("places the add-on admin sections after the core admin sections, before the fork's", () => {
+        const side = texts(entriesFor("side"));
+        expect(side.indexOf("Add-on side")).toBe(side.indexOf("Admin - Auth") + 1);
+        expect(side.indexOf("Custom side")).toBe(side.indexOf("Add-on side") + 1);
+    });
+
     it("lists every entry once across the two placements", () => {
         const all = allNavEntries().length;
-        // Two profile entries in the add-on mock are unsupported and skipped.
-        expect(entriesFor("side").length + entriesFor("profile").length).toBe(all - 2);
+        // Two profile entries in the add-on mock are unsupported and skipped, and one side section
+        // is restricted to a feature switch that is off.
+        expect(entriesFor("side").length + entriesFor("profile").length).toBe(all - 3);
     });
 
     it("moves API Key Management out of the side navigation and drops the User section", () => {
@@ -229,11 +264,33 @@ describe("route checks", () => {
     });
 
     it("checks each web route once, whatever its API requirement", () => {
-        const checks = webRouteChecksFor("side", "profile").map((route) => route.route__path);
+        const checks = webRouteChecksFor(["side", "profile"]).map((route) => route.route__path);
         expect(checks.filter((path) => path === "/auth/api-keys")).toHaveLength(1);
         expect(checks).toEqual(
             expect.arrayContaining(["/addon-profile", "/custom/profile", "/custom/side"])
         );
         expect(checks.every((path) => !path.includes("?"))).toBe(true);
+    });
+});
+
+describe("featuresEnabledRestriction", () => {
+    it("drops an entry whose feature switch is off, and does not check its route", () => {
+        expect(texts(entriesFor("side"))).not.toContain("Add-on switched");
+        const checks = webRouteChecksFor(["side"]).map((route) => route.route__path);
+        expect(checks).not.toContain("/addon-switched");
+        expect(checks).toContain("/addon-main");
+    });
+
+    it("keeps an entry only while every switch it lists is on, and strips the field", () => {
+        const side = entriesFor("side", ["PROBE_SWITCH"]);
+        const switched = side.find((entry) => entry.text === "Add-on switched");
+        expect(hrefsIn([switched])).toEqual(["#/addon-switched/"]);
+        expect(JSON.stringify(side)).not.toContain("featuresEnabledRestriction");
+        expect(webRouteChecksFor(["side"], ["PROBE_SWITCH"]).map((r) => r.route__path)).toEqual(
+            expect.arrayContaining(["/addon-switched"])
+        );
+
+        const both = entriesFor("side", ["PROBE_SWITCH", "PROBE_OTHER"]);
+        expect(hrefsIn(both)).toContain("#/addon-switched/both/");
     });
 });
