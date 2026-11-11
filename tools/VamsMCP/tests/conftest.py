@@ -42,6 +42,53 @@ GATE_AND_TUNING_ENV_VARS = (
 for _name in GATE_AND_TUNING_ENV_VARS:
     os.environ.pop(_name, None)
 
+# The vamscli profile lives under $HOME (vamscli.constants.get_config_dir). Point HOME at an empty
+# directory BEFORE vams_mcp.server is first imported, so the suite never reads the developer's own
+# profile: CI runs with no profile, and a suite that passes only with a signed-in profile on the
+# host is not a guard (in-dev D4 of the pull request that added the degraded start). Every test then
+# starts from the same state, nobody signed in, and the `signed_in_by_default` fixture below supplies
+# a mocked client to every test that does not ask for the signed-out state.
+import tempfile  # noqa: E402
+
+ISOLATED_HOME = tempfile.mkdtemp(prefix="vams-mcp-tests-home-")
+os.environ["HOME"] = ISOLATED_HOME
+os.environ.pop("APPDATA", None)
+
+# Tests that exercise the signed-out server ask for one of these fixtures; every other test gets a
+# mocked client in place of the missing one.
+SIGNED_OUT_FIXTURES = {"signed_out", "no_client"}
+
+
+@pytest.fixture(autouse=True)
+def signed_in_by_default(request, monkeypatch):
+    """Install a mocked client when the server has none, unless the test targets the signed-out path.
+
+    With the isolated HOME the server starts degraded (`CLIENT is None`), and `@tool_result` then
+    answers NotAuthenticated before a tool body runs. Tests of a tool's behaviour mock
+    `server.CLIENT` themselves, or register an add-on module with their own mocked client, and expect
+    the body to run, so a stand-in client is set here. Tests of the degraded path request
+    `signed_out` (or `no_client`), which keeps `CLIENT` None.
+    """
+    if SIGNED_OUT_FIXTURES & set(request.fixturenames):
+        yield
+        return
+    from unittest.mock import MagicMock
+
+    from vams_mcp import server
+
+    if server.CLIENT is None:
+        monkeypatch.setattr(server, "CLIENT", MagicMock(name="conftest-default-client"))
+    yield
+
+
+@pytest.fixture
+def no_client(monkeypatch):
+    """The server as it starts with nobody signed in (the isolated HOME holds no profile)."""
+    from vams_mcp import server
+
+    monkeypatch.setattr(server, "CLIENT", None)
+    return server
+
 
 @pytest.fixture(autouse=True)
 def gate_env_stays_cleared():

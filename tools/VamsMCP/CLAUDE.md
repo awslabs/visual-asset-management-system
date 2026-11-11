@@ -565,6 +565,14 @@ pytest
 Tests mock `vams_mcp.server.CLIENT`, or pass a mocked client to an add-on module's
 `register`, so no live VAMS deployment is required.
 
+The suite is hermetic: `tests/conftest.py` points `HOME` at an empty directory before the server is
+imported, so the developer's own vamscli profile is never read and the server always starts signed
+out, as in CI. Its autouse `signed_in_by_default` fixture then puts a mocked `CLIENT` in place for
+every test; a test of the signed-out path requests `signed_out` or `no_client` instead.
+`test_the_suite_runs_without_the_hosts_vamscli_profile` fails if that isolation is removed. CI runs
+Python 3.12, which keeps docstring indentation that 3.13 strips; `tool_result` cleans each
+docstring, so descriptions and their budgets are the same on both.
+
 CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
 its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
 

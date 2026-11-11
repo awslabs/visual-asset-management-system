@@ -387,3 +387,37 @@ def test_the_auto_approve_sample_is_every_safe_core_read():
     assert len(sample) == len(set(sample)), "a tool is listed twice"
     assert set(sample) == reads - NOT_AUTO_APPROVED_READS
     assert NOT_AUTO_APPROVED_READS <= reads
+
+
+# --- The suite is hermetic (in-dev D4) --------------------------------------------------------------
+
+
+def test_the_suite_runs_without_the_hosts_vamscli_profile():
+    """conftest points HOME at an empty directory before the server is imported, so this suite gives
+    the same answer on a developer machine with a signed-in profile as in CI, which has none."""
+    from vamscli.constants import get_config_dir
+
+    from . import conftest
+
+    assert str(Path.home()) == conftest.ISOLATED_HOME
+    assert str(get_config_dir()).startswith(conftest.ISOLATED_HOME)
+    assert not get_config_dir().exists() or not any(get_config_dir().iterdir())
+    with pytest.raises(server.ConfigError):
+        server.VamsClient(Config())
+
+
+def test_a_test_that_does_not_ask_for_the_signed_out_state_gets_a_client():
+    assert server.CLIENT is not None
+
+
+def test_the_signed_out_fixture_keeps_the_server_signed_out(no_client):
+    assert no_client.CLIENT is None
+    assert no_client.get_asset("d", "a")["error_type"] == "NotAuthenticated"
+
+
+async def test_descriptions_carry_no_source_indentation(every_tool):
+    """Python 3.12 keeps a docstring's indentation and 3.13 strips it; `tool_result` cleans it, so the
+    description and its budget are the same on both."""
+    indented = [name for name, tool in every_tool.items()
+                if any(line.startswith("    ") for line in (tool.description or "").splitlines())]
+    assert indented == []

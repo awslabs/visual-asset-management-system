@@ -8,6 +8,7 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import inspect
 import json
 import logging
 import sys
@@ -194,6 +195,10 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
             _SIGN_IN_FAILURE = None
         return result
 
+    # The MCP description is the docstring. Python 3.13 strips a docstring's common indentation at
+    # compile time and 3.12 does not, so without this a 3.12 host publishes every description with
+    # its source indentation: characters every agent reads, and over the Rule 11 budget.
+    wrapper.__doc__ = inspect.cleandoc(fn.__doc__) if fn.__doc__ else fn.__doc__
     return wrapper
 
 
