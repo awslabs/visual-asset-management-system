@@ -70,7 +70,8 @@ const RAW: Record<TemplateName, unknown> = {
     eusovereign: eusovereignTemplate,
 };
 
-const ACCOUNT = "123456789012";
+/** The account every synthesized template is bound to; the region is each template's own. */
+export const ACCOUNT = "123456789012";
 
 export interface Resource {
     logicalId: string;
