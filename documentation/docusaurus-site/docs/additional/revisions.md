@@ -85,6 +85,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Three.js Viewer PLY point clouds and colours** — A PLY file with no faces draws as a point cloud instead of grey streaks, and a PLY's per-vertex colours are used for points and meshes; a PLY without colours stays grey. (issue #1257)
 -   **More than 10 deployments per Region** — The orchestration bus audit log group carries its own resource policy instead of adding an account-level Amazon CloudWatch Logs resource policy per deployment, which limited an account to 10 VAMS deployments per Region. The update removes the old policy. A provisioned Amazon OpenSearch Service domain still adds one account-level policy for its logs. (issue #1266)
 -   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)
+-   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 
 **Other changes:**
 
