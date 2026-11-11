@@ -67,6 +67,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Fixed the CAD/Mesh Metadata Extraction failure message naming the temporary download (`input.step`) instead of the input file; it now names the input's path within its asset, so an asset holding several files says which one failed. ([#1188](https://github.com/awslabs/visual-asset-management-system/issues/1188))
 -   **Web** Fixed the home-page carousel being marked up as a list while three of its children are its own controls, which axe-core reported as a serious `list` violation; the slide container is no longer a list. ([#1236](https://github.com/awslabs/visual-asset-management-system/issues/1236))
 -   **Web** Search page: the result count no longer reads "0 results" right after **Clear All Filters** (or before the first search answers); the title row shows no count until the reloaded list arrives. ([#1252](https://github.com/awslabs/visual-asset-management-system/issues/1252))
+-   **Backend** Fixed bucket sync permanently deleting asset files whose names end in `init`, such as `postinit` or `config.init`, with all their versions. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. ([#1223](https://github.com/awslabs/visual-asset-management-system/issues/1223))
 
 ### Chores
 
