@@ -54,6 +54,17 @@ ENV HOME=/home/vams \
 RUN mkdir -p /home/vams/.cache /home/vams/.nvidia-omniverse /home/vams/.local/share && \
     chown -R vams:vams /home/vams
 
+# Isaac Lab's train.py and play.py write relative to their working directory, /workspace/isaaclab
+# (__main__.py runs them there, as the base image's WORKDIR does): Hydra creates its run folder
+# outputs/<date>/<time> (with .hydra/ and the job log) for every run, and train.py writes its run
+# under logs/<library>/<experiment>/<time> (checkpoints, TensorBoard events, params, git diffs),
+# which __main__.py uploads from as LOCAL_LOG_PATH and where it puts the evaluation policy. The base
+# image copies /workspace/isaaclab root-owned 0755 with neither folder in it (Isaac Lab's
+# .dockerignore excludes both), so the non-root USER could not create them (issue #1312). Hand the
+# user exactly these two write roots; the Isaac Lab sources stay root-owned.
+RUN mkdir -p /workspace/isaaclab/logs /workspace/isaaclab/outputs && \
+    chown -R vams:vams /workspace/isaaclab/logs /workspace/isaaclab/outputs
+
 # Set entrypoint
 
 # Run as non-root user. The EFS checkpoint storage is mounted via an EFS access point and owned

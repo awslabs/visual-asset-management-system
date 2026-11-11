@@ -30,6 +30,15 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 EFS_CHECKPOINT_PATH = "/mnt/efs/checkpoints"
 LOCAL_LOG_PATH = "/workspace/isaaclab/logs"
 
+# Where the evaluation policy is downloaded. Isaac Lab's play.py derives its run folder from the
+# --checkpoint path (the checkpoint's folder for rsl_rl, the folder above it for rl_games and skrl)
+# and records the video under <run folder>/videos/play; rsl_rl also exports policy.pt and
+# policy.onnx to <checkpoint folder>/exported. Two levels below LOCAL_LOG_PATH, which the image
+# gives the non-root user, keeps all of those writes in a folder that user owns and under the
+# video upload's search root. A policy directly in /tmp made rl_games and skrl record to
+# /videos/play, which uid 10000 cannot create (issue #1312) and which no upload pattern searched.
+EVALUATION_POLICY_PATH = f"{LOCAL_LOG_PATH}/evaluation/checkpoints/policy.pt"
+
 # Package formats pip can install from a downloaded archive
 ENVIRONMENT_PACKAGE_SUFFIXES = (".tar.gz", ".tgz", ".zip", ".whl")
 
@@ -290,9 +299,10 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
     The policy S3 URI reaches here from the Lambda (openPipeline), which resolves it from a relative
     checkpointPath, an operator-supplied policyS3Uri, or by discovering the newest .pt in the asset.
     The Lambda constrains it to the executing asset's own bucket in every case, because the file is
-    deserialized by torch.load in this container.
+    deserialized by torch.load in this container. The file lands at EVALUATION_POLICY_PATH, whose
+    folders decide where play.py writes its video and exported policy.
     """
-    policy_path = "/tmp/policy.pt"
+    policy_path = EVALUATION_POLICY_PATH
 
     if not config.policy_s3_uri:
         raise ValueError(
@@ -307,6 +317,7 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
         raise ValueError(f"Policy must be an s3:// URI: {config.policy_s3_uri}")
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
+    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
     s3.client_for_bucket(bucket).download_file(bucket, key, policy_path)
     print(f"Policy downloaded to {policy_path}")
     return policy_path
@@ -533,12 +544,11 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
             except Exception as e:
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
-    # Upload videos - recorded on every run since --video is required for termination
+    # Upload videos - recorded on every run since --video is required for termination. play.py
+    # records under the policy's folders (EVALUATION_POLICY_PATH), which sit below LOCAL_LOG_PATH.
     if config.record_video:
         videos_output_path = f"{base_output_path}videos/"
         video_search_paths = [
-            "/tmp/videos/**/*.mp4",
-            "/tmp/videos/**/*.avi",
             f"{LOCAL_LOG_PATH}/**/videos/**/*.mp4",
             f"{LOCAL_LOG_PATH}/**/videos/**/*.avi",
         ]
