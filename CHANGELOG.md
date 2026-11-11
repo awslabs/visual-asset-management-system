@@ -60,6 +60,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Fixed the Three.js Viewer drawing every PLY file as a grey mesh: a PLY with no faces now draws as a point cloud, and a PLY's per-vertex colours are used for points and meshes. ([#1257](https://github.com/awslabs/visual-asset-management-system/issues/1257))
 -   **Infra** Fixed each deployment adding its own account-level Amazon CloudWatch Logs resource policy for the orchestration bus audit log group, which limited an account to 10 VAMS deployments per Region; the audit log group carries its own resource policy, and the update removes the old one. ([#1266](https://github.com/awslabs/visual-asset-management-system/issues/1266))
     -   Note: A deployment with a provisioned Amazon OpenSearch Service domain still adds one account-level policy for the domain's logs. ([#1266](https://github.com/awslabs/visual-asset-management-system/issues/1266))
+-   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 
 ### Chores
 
