@@ -243,6 +243,12 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
 -   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}` and `PcPotreeViewerPotree{hash}` (conditional on the matching pipeline flag); the RapidPipeline and ModelOps groups are named for their container
 
+The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
+
+```bash
+aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
+```
+
 ```bash
 # List VAMS-related log groups
 aws logs describe-log-groups \
