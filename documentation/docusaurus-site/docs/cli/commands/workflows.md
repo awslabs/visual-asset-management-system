@@ -105,7 +105,7 @@ passed through as given:
 ```bash
 vamscli workflow create -d my-db -n "Convert then label" --specified-pipelines '[
   {"pipelineDatabaseId":"global","pipelineId":"conversion-3d-basic",
-   "defaultTemplateId":"to-glb","jobName":"convert-to-glb"}
+   "defaultTemplateId":"convert-to-glb","jobName":"convert-to-glb"}
 ]'
 ```
 
