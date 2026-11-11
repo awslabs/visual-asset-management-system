@@ -796,7 +796,10 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     matched exactly). Signature, issuer, expiry and `token_use` checks never depend on the
     audience, and the user's roles still decide. A token that names no user (a Cognito access
     token without `username`, or an external token accepted only through an additional audience
-    whose identity is missing or equals its client id) is rejected. The accepted audience reaches the authorization
+    whose identity is missing or equals its client id, or that carries a machine-token marker:
+    `gty` = `client-credentials`, `idtyp` = `app`, `preferred_username` starting `service-account-`)
+    is rejected. Primary-audience tokens are not checked, and the markers do not cover every IdP,
+    so only user sign-in clients may be listed. The accepted audience reaches the authorization
     audit record as `tokenAudience`; it is not put in the authorizer context.
 -   **`claims_and_roles["authMethod"]`** is `"apiKey"` when the authorizer context carries
     `vams:authMethod = apiKey` and `"jwt"` otherwise (JWT callers and Lambda cross-calls alike).

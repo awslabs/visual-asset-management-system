@@ -306,3 +306,40 @@ class TestMachineToMachineTokensAreRejected:
         # The web app's own audience keeps the existing behaviour, whatever the client claims say.
         token = _external_token(sub="svc-client", client_id="svc-client")
         assert core.verify_external_jwt(token) is not None
+
+
+# App-only token markers of common IdPs, each on a token whose sub is NOT its client id, so only
+# the marker rule can reject it.
+_MACHINE_MARKERS = {
+    "auth0-client-credentials": {"gty": "client-credentials", "azp": "svc-client"},
+    "entra-app-only": {"idtyp": "app", "azp": "svc-client"},
+    "keycloak-service-account": {"preferred_username": "service-account-svc-client", "azp": "svc-client"},
+}
+# User tokens of the same providers: the marker claims are absent or carry their user values.
+_USER_SHAPES = {
+    "auth0-user": {"gty": "password", "azp": "mcp-client"},
+    "entra-user": {"idtyp": "user", "azp": "mcp-client"},
+    "keycloak-user": {"preferred_username": "alice", "azp": "mcp-client"},
+    "plain-user": {},
+}
+
+
+@pytest.mark.unit
+class TestMachineTokenMarkers:
+    @pytest.mark.parametrize("marker", list(_MACHINE_MARKERS), ids=list(_MACHINE_MARKERS))
+    def test_an_additional_audience_machine_token_is_rejected(self, external, marker):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        token = _external_token(aud=EXTERNAL_EXTRA, sub="11111111-aaaa", **_MACHINE_MARKERS[marker])
+        assert core.verify_external_jwt(token) is None
+
+    @pytest.mark.parametrize("shape", list(_USER_SHAPES), ids=list(_USER_SHAPES))
+    def test_an_additional_audience_user_token_is_accepted(self, external, shape):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        token = _external_token(aud=EXTERNAL_EXTRA, sub="11111111-aaaa", **_USER_SHAPES[shape])
+        assert core.verify_external_jwt(token) is not None
+
+    @pytest.mark.parametrize("marker", list(_MACHINE_MARKERS), ids=list(_MACHINE_MARKERS))
+    def test_a_primary_audience_token_with_a_marker_is_unchanged(self, external, marker):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        token = _external_token(sub="11111111-aaaa", **_MACHINE_MARKERS[marker])
+        assert core.verify_external_jwt(token) is not None

@@ -661,22 +661,46 @@ def _non_blank(value: Any) -> bool:
 # them was issued to the client itself (a client_credentials grant), not to a user.
 _CLIENT_IDENTIFIER_CLAIMS = ('client_id', 'azp', 'cid')
 
+# Claim values by which common IdPs mark a token issued to an application rather than a user:
+# Auth0 client credentials grant ('gty'), Microsoft Entra ID app-only token ('idtyp').
+_MACHINE_TOKEN_CLAIM_MARKERS = (
+    ('gty', 'client-credentials'),
+    ('idtyp', 'app'),
+)
+# Keycloak names a client's service account user 'service-account-<client id>'.
+_MACHINE_TOKEN_USERNAME_PREFIXES = (
+    ('preferred_username', 'service-account-'),
+)
+
+
+def _is_machine_token(claims: Dict[str, Any]) -> bool:
+    """Whether claims carry a known app-only (machine-to-machine) token marker."""
+    for claim, value in _MACHINE_TOKEN_CLAIM_MARKERS:
+        if claims.get(claim) == value:
+            return True
+    for claim, prefix in _MACHINE_TOKEN_USERNAME_PREFIXES:
+        claim_value = claims.get(claim)
+        if isinstance(claim_value, str) and claim_value.startswith(prefix):
+            return True
+    return False
+
 
 def _external_token_names_a_user(claims: Dict[str, Any]) -> bool:
     """Whether an external IdP token accepted through an additional audience identifies a user.
 
     A token whose 'aud' includes JWT_AUDIENCE is not checked here: that is the web app's own
     audience. A token accepted only through JWT_ADDITIONAL_AUDIENCES must carry the identity
-    claim the authorizer resolves the user from (cognito:username, then username, then sub), and
-    that identity must not be the token's own client identifier, which is the shape of a
-    machine-to-machine (client_credentials) token.
+    claim the authorizer resolves the user from (cognito:username, then username, then sub),
+    that identity must not be the token's own client identifier, and the token must carry no
+    known machine-token marker (_is_machine_token). The markers cover common IdPs only, so the
+    configuration still has to list audiences of user sign-in clients.
     """
     aud = claims.get('aud')
     audiences = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
     if JWT_AUDIENCE and JWT_AUDIENCE in audiences:
         return True
     identity = claims.get('cognito:username') or claims.get('username') or claims.get('sub')
-    if not _non_blank(identity):
+    if not _non_blank(identity) or _is_machine_token(claims):
         return False
     client_ids = {claims.get(c) for c in _CLIENT_IDENTIFIER_CLAIMS if _non_blank(claims.get(c))}
     return identity not in client_ids
