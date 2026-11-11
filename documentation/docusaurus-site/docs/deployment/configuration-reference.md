@@ -1261,7 +1261,7 @@ Any field left empty keeps the corresponding CDK default. ARNs may use the `${AW
 If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `npx cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
 :::
 
-A scoped CloudFormation execution role needs `lambda:PutFunctionRecursionConfig` and `lambda:GetFunctionRecursionConfig` in the commercial partition and the AWS European Sovereign Cloud, where VAMS sets the recursive loop setting of the created-events bucket-sync Lambda to `Allow`.
+A scoped CloudFormation execution role needs `lambda:PutFunctionRecursionConfig` and `lambda:GetFunctionRecursionConfig` in the commercial partition and the AWS European Sovereign Cloud, where VAMS sets the recursive loop setting of the created-events bucket-sync Lambda to `Allow`. Without them, the update that first sets it fails at that function, and its rollback fails there too and leaves the core stack in `UPDATE_ROLLBACK_FAILED`; [Updating the solution](update-the-solution.md#v267-and-later-replay-the-bucket-sync-dead-letter-queue) describes the recovery.
 
 ### VAMS stack role customization (`vamsStacks`)
 
