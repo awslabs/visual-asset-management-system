@@ -379,6 +379,12 @@ export function buildApiGatewayAuthorizerRestFunction(
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
         environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP", false).Endpoint}`;
+        // Extra app clients whose tokens the API accepts (#1328). Set only when listed, so a
+        // deployment without the option synthesizes the same function as before.
+        const additionalClientIds = config.app.authProvider.useCognito.additionalTokenAudiences;
+        if (additionalClientIds && additionalClientIds.length > 0) {
+            environment.ADDITIONAL_APP_CLIENT_IDS = JSON.stringify(additionalClientIds);
+        }
     }
 
     // MFA-preference check reachability (partition/VPC-aware; the authorizer resolves the
@@ -391,6 +397,12 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
         environment.JWT_AUDIENCE =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+        // Extra audiences the API accepts from the external IdP (#1328). Set only when listed.
+        const additionalAudiences =
+            config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences;
+        if (additionalAudiences && additionalAudiences.length > 0) {
+            environment.JWT_ADDITIONAL_AUDIENCES = JSON.stringify(additionalAudiences);
+        }
     }
 
     // API Key authentication table names resolved via SSM (no env vars needed)

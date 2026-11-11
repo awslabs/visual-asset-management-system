@@ -384,6 +384,17 @@ const EXECUTION_LOG_READ_PREFIX_PATTERN =
 // CloudWatch Logs caps a log-group name at 512 characters.
 const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 
+/**
+ * Most additional token audiences one provider may list (#1328). The list is meant for a handful
+ * of named clients (a remote MCP server, an integration), and every entry widens the set of tokens
+ * the API accepts, so it is bounded.
+ */
+export const MAX_ADDITIONAL_TOKEN_AUDIENCES = 10;
+/** Longest additional token audience accepted (an external IdP audience may be a URI). */
+export const ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH = 512;
+/** An Amazon Cognito app client id: 1-128 characters of [\w+] (the CreateUserPoolClient ClientId pattern). */
+export const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
+
 // An IAM managed policy ARN, with the partition captured: an account id (customer managed) or `aws`
 // (AWS managed), an optional path, and the policy name.
 export const IAM_MANAGED_POLICY_ARN_PATTERN =
@@ -1707,6 +1718,16 @@ export function getConfig(app: cdk.App): Config {
     // Initialize IdP display name for external OAuth (backward compatibility)
     if (config.app.authProvider.useExternalOAuthIdp.idpDisplayName == undefined) {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
+    }
+
+    // Additional token audiences (#1328). Absent means none: the API accepts tokens issued to the
+    // web app client (Cognito) or to lambdaAuthorizorJWTAudience (external IdP) only, as before the
+    // option existed.
+    if (config.app.authProvider.useCognito.additionalTokenAudiences == undefined) {
+        config.app.authProvider.useCognito.additionalTokenAudiences = [];
+    }
+    if (config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences = [];
     }
 
     if (config.app.api == undefined) {
@@ -3371,6 +3392,39 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
 
+    //Additional token audiences (#1328) belong to the provider they are listed under. A list under a
+    //disabled provider is ignored (normalized to empty, so nothing reaches the authorizer), matching
+    //how useSaml / useOidc are treated when Cognito is off.
+    if (
+        !config.app.authProvider.useCognito.enabled &&
+        config.app.authProvider.useCognito.additionalTokenAudiences.length > 0
+    ) {
+        console.warn(
+            "Configuration Warning: app.authProvider.useCognito.additionalTokenAudiences is ignored because useCognito.enabled is false."
+        );
+        config.app.authProvider.useCognito.additionalTokenAudiences = [];
+    }
+    if (
+        !config.app.authProvider.useExternalOAuthIdp.enabled &&
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences.length > 0
+    ) {
+        console.warn(
+            "Configuration Warning: app.authProvider.useExternalOAuthIdp.additionalTokenAudiences is ignored because useExternalOAuthIdp.enabled is false."
+        );
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences = [];
+    }
+    validateAdditionalTokenAudiences(
+        config.app.authProvider.useCognito.additionalTokenAudiences,
+        "app.authProvider.useCognito.additionalTokenAudiences",
+        "cognito"
+    );
+    validateAdditionalTokenAudiences(
+        config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences,
+        "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        "external",
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience
+    );
+
     if (
         config.app.authProvider.useCognito.enabled &&
         config.app.authProvider.useCognito.useUserPasswordAuthFlow
@@ -4267,6 +4321,68 @@ export function validateExternalPipelineBridges(
 }
 
 /**
+ * Validates app.authProvider.<provider>.additionalTokenAudiences (#1328): an array of at most
+ * MAX_ADDITIONAL_TOKEN_AUDIENCES distinct, exact audience values. Each entry is compared by exact
+ * string equality in the authorizer, so a wildcard, a blank entry, or surrounding whitespace (which
+ * would never match) is rejected. A Cognito entry must be an app client id; an external entry must
+ * not repeat lambdaAuthorizorJWTAudience, which is always accepted. Throws a Configuration Error on
+ * any violation. Exported for unit testing.
+ */
+export function validateAdditionalTokenAudiences(
+    audiences: unknown,
+    label: string,
+    provider: "cognito" | "external",
+    primaryAudience?: string | null
+): void {
+    if (!Array.isArray(audiences)) {
+        throw new Error(
+            `Configuration Error: ${label} must be an array of audience values (leave it empty or out for none).`
+        );
+    }
+    if (audiences.length > MAX_ADDITIONAL_TOKEN_AUDIENCES) {
+        throw new Error(
+            `Configuration Error: ${label} lists ${audiences.length} audiences; at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} are accepted.`
+        );
+    }
+    const seen = new Set<string>();
+    audiences.forEach((audience: unknown, index: number) => {
+        const entry = `${label}[${index}]`;
+        if (typeof audience !== "string" || audience.trim() === "") {
+            throw new Error(`Configuration Error: ${entry} must be a non-empty string.`);
+        }
+        if (audience !== audience.trim()) {
+            throw new Error(
+                `Configuration Error: ${entry} has leading or trailing whitespace; audiences are matched exactly.`
+            );
+        }
+        if (audience.includes("*")) {
+            throw new Error(
+                `Configuration Error: ${entry} must be an exact audience value; wildcards are not accepted.`
+            );
+        }
+        if (audience.length > ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH) {
+            throw new Error(
+                `Configuration Error: ${entry} exceeds ${ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH} characters.`
+            );
+        }
+        if (provider === "cognito" && !COGNITO_APP_CLIENT_ID_PATTERN.test(audience)) {
+            throw new Error(
+                `Configuration Error: ${entry} must be an Amazon Cognito app client id (letters, digits, '_' and '+', up to 128 characters) of an app client in the VAMS user pool.`
+            );
+        }
+        if (provider === "external" && primaryAudience && audience === primaryAudience) {
+            throw new Error(
+                `Configuration Error: ${entry} repeats lambdaAuthorizorJWTAudience, which is always accepted; remove it from the list.`
+            );
+        }
+        if (seen.has(audience)) {
+            throw new Error(`Configuration Error: ${entry} is listed more than once.`);
+        }
+        seen.add(audience);
+    });
+}
+
+/**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
  * patterns under `/aws/`, each used verbatim as an IAM resource name on the executionService
  * log-read grant. Throws a Configuration Error on any violation. Exported for unit testing.
@@ -4966,6 +5082,10 @@ export interface ConfigPublic {
                 // When true, the user pool declares the `custom:groups` attribute that user pools created
                 // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
                 retainLegacyGroupsAttribute: boolean;
+                // Extra app client ids of the VAMS user pool whose ID and access tokens the API accepts,
+                // alongside the web app client (#1328), e.g. a client registered for a remote MCP server.
+                // Empty (the default) accepts the web app client only.
+                additionalTokenAudiences?: string[];
             };
             useExternalOAuthIdp: {
                 enabled: boolean;
@@ -4980,6 +5100,9 @@ export interface ConfigPublic {
                 idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;
+                // Extra `aud` values the API accepts from the external IdP, alongside
+                // lambdaAuthorizorJWTAudience (#1328). Empty (the default) accepts that audience only.
+                additionalTokenAudiences?: string[];
             };
         };
         webUi: {
