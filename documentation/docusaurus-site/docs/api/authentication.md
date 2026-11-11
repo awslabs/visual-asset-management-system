@@ -44,6 +44,10 @@ VAMS supports three approaches to external identity providers:
 Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
 :::
 
+:::info[Tokens issued to other clients]
+By default the authorizer accepts only tokens issued to the VAMS web application: a Cognito ID token whose `aud`, or access token whose `client_id`, is the web app client, or an external IdP token whose `aud` is `lambdaAuthorizorJWTAudience`. A deployment can accept tokens issued to further clients, such as a remotely hosted MCP server, by listing their app client ids (Cognito) or audiences (external IdP) in `additionalTokenAudiences`. Signature, issuer, expiry and token-use checks are unchanged, and the user's roles decide each request as usual. See [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences).
+:::
+
 ### API Key
 
 VAMS supports API key authentication for programmatic access. API keys are sent directly in the `Authorization` header:
