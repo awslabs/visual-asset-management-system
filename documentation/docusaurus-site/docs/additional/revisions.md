@@ -143,6 +143,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Documentation** — Clarify that pipeline `executingRequestContext` carries the same value as `executingUserName` for compatibility and is omitted from AWS Deadline Cloud job parameters because `VamsExecutingUserName` already carries that value. (issue #936)
 -   **Metadata schema creation** — Missing nested fields in a file-attribute schema return HTTP 400 instead of 500, and the CLI example uses the accepted field keys. (issue #818)
 -   **GPU pipeline Batch containers run as non-root** — The Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, and Isaac Lab training containers now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
+    -   **Isaac Lab write paths** — Training and evaluation write their Hydra run folders, training logs, evaluation videos and exported policies to folders the non-root user owns, and a task can create files in its working directory, as the AutoMate assembly tasks do. (issue #1312)
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat. (issue #330)
 -   **`/generate-permissions` agent skill** — The deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and the operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
 -   **Assertion-shape guard passes on development** — The assetLinks batch_get helper test asserts the recorded `sleep` call count before asserting over its contents, so a zero-sleep test double fails instead of passing vacuously. (issue #414)
@@ -305,6 +306,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Route listings follow the enabled add-ons** — The API route listing and the allowed-route check leave out the routes of an add-on the deployment has not enabled, such as the Physna viewer route without Physna Sync, so the constraint editor no longer offers them and no denial is recorded for them. (issue #1243)
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
+-   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
 
 **Other changes:**
 
