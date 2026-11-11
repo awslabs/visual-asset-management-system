@@ -530,30 +530,59 @@ import manifestHelper
 
 def lambda_handler(event, context):
     data = json.loads(event["body"]) if isinstance(event.get("body"), str) else event["body"]
-    resolved = manifestHelper.resolve_pipeline_inputs(data, manifestHelper.s3_client_for_region())
+    s3_client = manifestHelper.s3_client_for_region()
+    resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
     manifestHelper.enforce_single_input_file(resolved)
+    # The rule's inputParameters, rendered into the template's configBody
+    configuration = manifestHelper.fetch_input_configuration(
+        s3_client, resolved["inputConfigurationS3Location"])
 
-    measurements = measure_mesh(resolved)  # your code: {"triangle_count": 184220, "open_edge_count": 0}
+    # Your code: read the input file at resolved["inputVersionId"] and measure it
+    measurements = measure_mesh(resolved, units=configuration.get("units", "mm"))
 
     compliance_output.write_compliance_output(
         s3_client=manifestHelper.s3_client_for_region(resolved["outputBucketRegion"]),
-        measurements=measurements,
+        measurements=measurements,  # {"triangle_count": 184220, "open_edge_count": 0}
         results_s3_path=resolved["outputS3AssetResultsPath"],
     )
     return {"statusCode": 200, "body": "Success"}
 ```
 
-A pipeline in another language writes the same JSON document itself. A pipeline that hands its work to a container forwards `outputS3AssetResultsPath` together with the other output paths. Keep the file under about 380 KB: a larger file is cut short in the execution's record and is not read, so each check on it fails because its measurement is missing.
+A pipeline in another language writes the same JSON document itself. A pipeline that hands its work to a container forwards `outputS3AssetResultsPath` together with the other output paths. Keep the file under about 380 KB. A larger file is cut short in the execution's record and is treated as if the pipeline wrote none: only `execution_success` and `processing_duration_seconds` are available, and a check on any other field fails because the field is missing.
 
 Decide how the pipeline reports a measurement it could not take. Writing `"status": "error"` with the reasons in `errors` fails the rule with `Pipeline reported an error`, and the reasons are kept in the execution's results. Raising an exception, or writing `execution.status.json` with `"status": "FAILED"` (see [Writing outputs](../pipelines/custom-pipelines.md#writing-outputs)), fails the run, and the rule's result shows the reason the execution recorded to readers allowed to read that execution. Either way the rule fails and its enforcement applies.
 
+:::note[A function you deploy outside VAMS]
+The pipelines VAMS builds get their invoke rights and permissions from the VAMS CDK. A function you deploy yourself needs both:
+
+-   **Its name.** The VAMS workflow role invokes only functions in the deployment's account and Region whose name contains the deployment's top-level `name` value (default `vams`), or that match `vams-*`. See [Pipeline execution types](../pipelines/custom-pipelines.md#pipeline-execution-types).
+-   **Its role.** `s3:GetObject` on the bucket the body names as `workflowExecutionS3InputOutputBucket`, for the manifest and the rendered configuration; `s3:GetObject` and `s3:GetObjectVersion` on the input files' bucket, to read each file at its recorded version; `s3:PutObject` under the run's output locations, the `pipelines/` area of the deployment's default asset bucket; and `kms:Decrypt` and `kms:GenerateDataKey` on the deployment's key when its buckets use a customer managed key. Grant these actions on these buckets only.
+
+:::
+
 ### Step 3: Register the pipeline and its workflow
 
-1. Register the pipeline through the **Pipelines** page, `vamscli pipeline create` or a `vamsSchema` bundle, with an `inputFileArity` and `inputFileFilters` that match the files it measures. If the rule passes `inputParameters`, give the pipeline a template whose `tagSchema` declares each parameter and whose `configBody` places it as a `{{tag}}` placeholder; the pipeline reads the rendered configuration from `inputConfigurationS3Location` (see [Configuration templates and per-run options](../pipelines/custom-pipelines.md#configuration-templates-and-per-run-options)).
-2. Create a workflow that runs the pipeline. A pipeline that only measures fits a results-only workflow (`outputTarget` with `"locationType": "none"`), which writes nothing into the asset. A pipeline that does write files or metadata into the asset starts no new evaluation by doing so, and in `matching` mode a file a workflow wrote is never selected as a rule's input.
-3. Run the workflow once by hand on a sample asset, with **Execute workflow** on the asset's **Executions** tab or with `vamscli workflow execute`, and read the execution's results (`vamscli execution details results <executionId>`). They show `compliance-output.json` with the measurements, before any rule depends on them.
+1. Register the pipeline through the **Pipelines** page, `vamscli pipeline create` or a `vamsSchema` bundle, with an `inputFileArity` and `inputFileFilters` that match the files it measures. Name your function in `lambda.resourceId`; without it, VAMS creates a sample function instead. If the rule passes `inputParameters`, give the pipeline a template whose `tagSchema` declares each parameter and whose `configBody` places it as a `{{tag}}` placeholder; the pipeline reads the rendered configuration from `inputConfigurationS3Location`, as the example above does (see [Configuration templates and per-run options](../pipelines/custom-pipelines.md#configuration-templates-and-per-run-options)).
+2. Create a workflow that runs the pipeline. A pipeline that only measures fits a results-only workflow, set by `outputTarget` `{"locationType": "none"}` in the workflow's `systemConfig`, which writes nothing into the asset. A pipeline that does write files or metadata into the asset starts no new evaluation by doing so, and in `matching` mode a file a workflow wrote is never selected as a rule's input.
+3. Run the workflow once by hand on a sample asset and read the execution's results with `vamscli execution details results <executionId>`. They show `compliance-output.json` with the measurements, before any rule depends on them. In the web interface, choose **Execute workflow** on the asset's **Executions** tab; the asset is filled in, and you choose the file before **Launch** is available.
 
-In a workflow with several pipelines, `pipelineRef.pipelineId` names the step whose `compliance-output.json` the checks read. When that step wrote none, the file of the workflow's last step is used, then that of any other step.
+With the CLI, the three steps for the example pipeline are:
+
+```bash
+vamscli pipeline create -d GLOBAL -p mesh-inspector -n "Mesh inspector" \
+    --execution-config '{"executionType": "Lambda", "waitForCallback": "Disabled", "lambda": {"resourceId": "vams-mesh-inspector"}}' \
+    --system-config '{"inputFileArity": "one", "inputFileFilters": {"allow": ["*.glb"], "exclude": []}}'
+vamscli pipeline template create -d GLOBAL -p mesh-inspector -t mesh-inspector-default -n "Mesh inspector" \
+    --config-body '{"units": "{{units}}"}' \
+    --tag-schema '[{"tagKey": "units", "type": "enum", "enumValues": ["mm", "m"], "default": "mm"}]' --default
+vamscli workflow create -d GLOBAL -w mesh-quality-check -n "Mesh quality check" \
+    --pipeline GLOBAL:mesh-inspector:mesh-inspector-default \
+    --system-config '{"outputTarget": {"locationType": "none"}}'
+vamscli workflow execute --workflow-database-id GLOBAL -w mesh-quality-check \
+    --input-file <databaseId>:<assetId>:/model.glb
+```
+
+All the steps of a workflow share one results location. When more than one step writes `compliance-output.json`, each write replaces the one before, and the checks read the last one written, whichever step `pipelineRef.pipelineId` names. In a workflow that backs a pipeline rule, let one step write the file. `pipelineRef.pipelineId` decides which step receives the rule's template and `inputParameters`.
 
 ### Step 4: Write the rule
 
@@ -600,7 +629,7 @@ The fields are described in [Pipeline rules](../concepts/compliance.md#pipeline-
 
 1. [Register the schema](#registering-a-schema) and bind it to a test database, or set it as the [override of one asset](#overriding-the-schema-of-one-asset).
 2. Choose **Evaluate Now** on an asset, or run `vamscli compliance evaluate -d <databaseId> -a <assetId>`. The asset reads `pending_evaluation`, and the run appears among the workflow's executions.
-3. When the run ends, the asset's **Compliance** tab shows the verdict, and its evaluation history lists each failed check with its message, for example `triangle_budget: 612000.0 not in [1000.0, 500000.0]`. A failed run shows **Pipeline failure:** with the reason it recorded. `vamscli compliance evaluations -d <databaseId> -a <assetId> --json-output` returns each rule's `measured` and `expected` values.
+3. When the run ends, the asset's **Compliance** tab shows the verdict, and its evaluation history lists each failed check with its message, for example `triangle_budget: 612000.0 not in [1000.0, 500000.0]`. A failed run shows **Pipeline failure:** with the reason it recorded. `vamscli compliance evaluations -d <databaseId> -a <assetId> --json-output` returns each evaluation's `ruleResults`, a JSON-encoded list in which each pipeline rule carries its `measured` and `expected` values (see [List the evaluations of an asset](../api/compliance.md#list-the-evaluations-of-an-asset)).
 
 ---
 

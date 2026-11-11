@@ -231,11 +231,15 @@ def read_compliance_output(execution_id: str, pipeline_id: str) -> Optional[Dict
     execution's recorded output-result rows; None when no pipeline wrote one.
 
     The result rows are keyed by pipelineExecutionId, so the execution's PipelineExecutions rows
-    (PipelineExecByWorkflowExecGSI) are read first — the rule's pipeline preferred, then the
-    end-state pipeline, then any other — and each pipeline execution's result rows are read to
-    exhaustion. The result rows are read consistently: the end-state lambda writes them moments
-    before it publishes the completion event this callback consumes, and an eventually-consistent
-    read that lags that write would report the pipeline as having written no output.
+    (PipelineExecByWorkflowExecGSI) are read first, ranked the rule's pipeline, then the end-state
+    pipeline, then any other, and each pipeline execution's result rows are read to exhaustion.
+    Every step of a workflow writes to the one results prefix of the execution, and the end-state
+    lambda records each file under it once, under the end-state pipeline execution: so the document
+    found is the last `compliance-output.json` any step wrote, whichever step the rule names (the
+    contract the compliance docs state). The ranking only orders the lookup. The result rows are read
+    consistently: the end-state lambda writes them moments before it publishes the completion event
+    this callback consumes, and an eventually-consistent read that lags that write would report the
+    pipeline as having written no output.
     """
     pipeline_rows = query_all_items(
         pipeline_executions_table,
