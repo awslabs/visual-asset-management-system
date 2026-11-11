@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
+import React, { useId } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Z } from "./zLayers";
 import { DisabledReasonTooltip } from "./DisabledReason";
@@ -19,6 +19,11 @@ export interface ContextMenuItem {
     disabledReason?: string;
     hidden?: boolean;
     danger?: boolean;
+    /**
+     * Secondary text under the label, exposed as the item's accessible description: why the item is
+     * disabled, or what it needs. The label alone stays the item's name.
+     */
+    hint?: string;
 }
 
 interface ContextMenuProps {
@@ -32,6 +37,7 @@ interface ContextMenuProps {
  */
 const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
     const visibleItems = items.filter((item) => !item.hidden);
+    const hintIdBase = useId();
 
     return (
         <DropdownMenu.Root>
@@ -56,6 +62,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                         // marked aria-disabled instead, and selecting it does nothing and keeps the
                         // menu open.
                         const reason = item.disabled ? item.disabledReason : undefined;
+                        const hintId = item.hint ? `${hintIdBase}-hint-${idx}` : undefined;
                         return (
                             <DisabledReasonTooltip key={idx} reason={reason}>
                                 <DropdownMenu.Item
@@ -68,6 +75,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                                     aria-disabled={item.disabled || undefined}
                                     data-disabled={item.disabled ? "" : undefined}
                                     aria-description={reason}
+                                    aria-label={item.hint ? item.label : undefined}
+                                    aria-describedby={hintId}
                                     className={`px-3 py-2 text-sm rounded cursor-pointer outline-none ${
                                         item.disabled
                                             ? "text-text-disabled cursor-not-allowed"
@@ -80,6 +89,18 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                                     }`}
                                 >
                                     {item.label}
+                                    {item.hint && (
+                                        <span
+                                            id={hintId}
+                                            className={`block text-xs font-normal ${
+                                                item.disabled
+                                                    ? "text-text-disabled"
+                                                    : "text-text-secondary"
+                                            }`}
+                                        >
+                                            {item.hint}
+                                        </span>
+                                    )}
                                 </DropdownMenu.Item>
                             </DisabledReasonTooltip>
                         );

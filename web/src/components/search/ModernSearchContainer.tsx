@@ -107,7 +107,7 @@ const ModernSearchContainer: React.FC<
         }
     }, [initialQuery]);
 
-    // Eagerly initialize the visualizer plugin registry so isViewableExtension()
+    // Eagerly initialize the visualizer plugin registry so isViewableSearchRow()
     // works on the file-search list before any viewer modal mounts. Without this,
     // the registry stays uninitialized on the search page and every row is treated
     // as non-viewable, so the multi-select viewer counter never increments.
@@ -875,7 +875,9 @@ const ModernSearchContainer: React.FC<
                 onSearch={handleSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                resultCount={totalResults}
+                // No result yet (first load, or just after Clear All Filters): show no count rather
+                // than "0 results" until the search answers.
+                resultCount={searchState.result ? totalResults : undefined}
                 resultCountIsLowerBound={isTotalLowerBound(searchState.result)}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={

@@ -5,6 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { PlayCanvasGaussianSplatDependencyManager } from "./dependencies";
 import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -194,6 +195,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
     } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
+    const [downloadError, setDownloadError] = useState<string | null>(null);
 
     // Viewer instance refs (populated as the PlayCanvas application and
     // splat entity become available). These power the floating control
@@ -523,6 +525,9 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                     }
                 } else {
                     console.error("PlayCanvas Gaussian Splat Viewer: Failed to download asset");
+                    setDownloadError(
+                        downloadFailureMessage(response, "Failed to download the splat file.")
+                    );
                     setIsLoading(false); // Hide loading on error
                 }
             } catch (error) {
@@ -618,6 +623,29 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
         >
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
+
+            {/* Download the API refused or that failed */}
+            {downloadError && (
+                <div
+                    role="alert"
+                    style={{
+                        color: "#d13212",
+                        fontSize: "1.2em",
+                        lineHeight: "1.5",
+                        width: "100%",
+                        position: "absolute",
+                        top: "50%",
+                        left: "50%",
+                        transform: "translate(-50%, -50%)",
+                        textAlign: "center",
+                        padding: "20px",
+                        boxSizing: "border-box",
+                        zIndex: VIEWER_LAYER.cover,
+                    }}
+                >
+                    {downloadError}
+                </div>
+            )}
 
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (
