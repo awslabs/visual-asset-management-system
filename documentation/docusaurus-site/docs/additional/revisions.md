@@ -296,6 +296,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Input-file filters and container selections** — The pipeline and workflow pages state that extension patterns do not apply to a whole-asset or folder selection, which `assetScope` decides instead. (issue #1148)
 -   **SSM prefix comments and MCP tier table** — The data-migration tooling comments include the Region in the resource-name SSM parameter prefix, and the MCP tool tier table drops a stray "Adds" from each row. (issue #1149)
 -   **Deterministic exclusion test** — The backend test that compares an asset execution listing with and without `excludeStatus` pins the listing start date, so it no longer fails intermittently on the time-derived `filterStartDate` echo. (issue #1227)
+-   **Load-independent regex timing test** — The backend test that bounds the cost of the most expensive accepted constraint regex measures CPU time instead of wall-clock time, so it no longer fails intermittently on a busy machine. (issue #1322)
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 -   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
