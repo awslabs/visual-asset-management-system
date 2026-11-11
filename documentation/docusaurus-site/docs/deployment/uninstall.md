@@ -139,6 +139,8 @@ If the stack destroy fails, check for the following common causes:
 | Resource in use by another stack   | Identify and remove the dependent stack first.                                                   |
 | Nested stack deletion failed       | Delete the failed nested stack manually in CloudFormation, then retry the parent stack deletion. |
 
+If the deletion fails on the VPC's subnets, check for orphaned Lambda network interfaces first, as described in [Orphaned Lambda network interfaces](../troubleshooting/common-issues.md#orphaned-lambda-network-interfaces).
+
 If the stack is stuck in `DELETE_FAILED` state, you can force-delete it with specific resources excluded:
 
 ```bash

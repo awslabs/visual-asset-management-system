@@ -55,7 +55,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
     cd infra && npx cdk deploy --all --require-approval never
     ```
 
-    If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
+    If a Lambda ENI lingers after the deploy, check whether it is orphaned: see [Orphaned Lambda network interfaces](#orphaned-lambda-network-interfaces). Delete only the ENIs that pass the checks there before continuing.
 
 3. Re-enable the features you need in `infra/config/config.json`, including any new subnet or availability-zone configuration (for example, set `openSearch.useProvisioned.availabilityZoneCount` to `2` for a two-AZ Region such as `eusc-de-east-1`).
 4. Deploy again so the VPC is provisioned with the new subnet layout:
@@ -73,6 +73,45 @@ Disabling Amazon OpenSearch Service and re-enabling it does not lose asset data.
 :::tip
 To minimize the chance of these failures, keep the availability zone count and subnet types stable across deployments. VAMS provisions a fixed AZ count per subnet type so that toggling individual pipelines does not add or remove subnets. The largest source of subnet churn is changing `openSearch.useProvisioned.availabilityZoneCount` or switching `useAlb.usePublicSubnet`, both of which change the subnet set.
 :::
+
+### Orphaned Lambda network interfaces
+
+Before the fix for [#1347](https://github.com/awslabs/visual-asset-management-system/issues/1347), an update that took Lambda functions out of the VPC removed the network interface permissions from their execution roles in the same update. That happens when `app.useGlobalVpc.useForAllLambdas` is turned off, when `app.useGlobalVpc.enabled` is turned off, and when an update that turned `useForAllLambdas` on rolls back. Lambda deletes a function's network interfaces after the function leaves the VPC, using the function's role. Without the permissions that call fails, Lambda does not retry it, and the interfaces stay in the VPC. The current release keeps the permissions while the VPC is enabled. Interfaces orphaned earlier stay until you delete them.
+
+**Symptoms:**
+
+-   The update stays in `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS`, and old Lambda security groups fail to delete with "has a dependent object".
+-   Stack deletion fails on the VPC's subnets.
+-   AWS CloudTrail shows `ec2:DeleteNetworkInterface` calls made with a function's execution role failing with `Client.UnauthorizedOperation`.
+
+**Resolution:** run these steps as an administrator in the deployment's account and Region. Delete an interface only when every check in step 2 passes.
+
+1. List the candidates in the VAMS VPC:
+
+    ```bash
+    aws ec2 describe-network-interfaces \
+        --filters Name=vpc-id,Values=<VAMS_VPC_ID> Name=interface-type,Values=lambda Name=status,Values=available \
+        --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,SubnetId,Groups[0].GroupId]' --output text
+    ```
+
+2. For each interface, check that:
+    - its status is `available` and it has no attachment. An `in-use` interface belongs to a function that still runs in the VPC.
+    - its description is `AWS Lambda VPC ENI-<function name>-…`, and the function belongs to this VAMS deployment.
+    - the function is no longer in the VPC, or no longer exists: `aws lambda get-function-configuration --function-name <FUNCTION_NAME> --query VpcConfig.SubnetIds` returns an empty list or `ResourceNotFoundException`. Lambda manages the interfaces of a function that is still in the VPC; leave those alone.
+3. Delete each interface that passed:
+
+    ```bash
+    aws ec2 delete-network-interface --network-interface-id <ENI_ID>
+    ```
+
+4. If the stack is still in `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS`, AWS CloudFormation deletes the old security groups on its next retry. If the update has already finished, the groups are left in the VPC, tagged with the `aws:cloudformation:stack-name` of the core stack or one of its nested stacks. Delete a group once no interface uses it:
+
+    ```bash
+    aws ec2 describe-network-interfaces --filters Name=group-id,Values=<SECURITY_GROUP_ID> --query 'NetworkInterfaces[].NetworkInterfaceId'
+    aws ec2 delete-security-group --group-id <SECURITY_GROUP_ID>
+    ```
+
+5. If an uninstall failed on the subnets, delete the stack again.
 
 ### Docker Buildx Container Image Errors
 

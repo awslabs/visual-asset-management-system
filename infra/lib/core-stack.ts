@@ -31,6 +31,7 @@ import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-neste
 import { CustomBuilderNestedStack } from "./nestedStacks/custom/customBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
+import { LambdaVpcEniPermissionsAspect } from "./aspects/lambda-vpc-eni-permissions.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
 import { Aspects } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -96,6 +97,15 @@ export class CoreVAMSStack extends cdk.Stack {
 
         // Apply the aspect to set log retention for all Log Groups in this stack
         Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
+
+        // While there is a VPC, every Lambda role keeps the network interface permissions, so an update
+        // that takes a function out of the VPC does not orphan its network interfaces (#1347). Runs before
+        // CDK Nag so the checks see the result.
+        if (props.config.app.useGlobalVpc.enabled) {
+            Aspects.of(this).add(new LambdaVpcEniPermissionsAspect(), {
+                priority: cdk.AspectPriority.MUTATING,
+            });
+        }
 
         //Setup GovCloud Feature Enabled
         if (props.config.app.govCloud.enabled) {

@@ -309,6 +309,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
 -   **Isaac Lab training time limit** — AWS Batch no longer stops an Isaac Lab training job after 6 hours of running; the job limit matches the workflow's 8 hours. (issue #1324)
 -   **Isaac Lab pipeline page** — The page states that its timeouts include the wait for a GPU instance, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
+-   **Lambda network interfaces after leaving the VPC** — An update that takes Lambda functions out of the VPC no longer leaves their network interfaces behind, which had kept the old security groups from being deleted and made a later uninstall fail on the VPC subnets. While the VPC is enabled, every Lambda execution role keeps the network interface permissions, and function code outside the VPC is denied their use. A deployment that already made such an update deletes its orphaned interfaces by hand, as the troubleshooting guide describes. (issue #1347)
 
 **Other changes:**
 
