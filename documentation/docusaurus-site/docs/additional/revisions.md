@@ -305,6 +305,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Route listings follow the enabled add-ons** — The API route listing and the allowed-route check leave out the routes of an add-on the deployment has not enabled, such as the Physna viewer route without Physna Sync, so the constraint editor no longer offers them and no denial is recorded for them. (issue #1243)
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
+-   **Metadata table value column** — The File Attributes and File Metadata tables in the file details panel keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. (issue #1307)
 
 **Other changes:**
 
