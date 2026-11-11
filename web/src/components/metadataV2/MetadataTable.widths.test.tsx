@@ -15,8 +15,9 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import MetadataTable from "./MetadataTable";
+import DateInput from "./valueTypes/DateInput";
 import { MetadataRowState } from "./types/metadata.types";
 
 jest.mock("./MetadataRow", () => ({
@@ -47,6 +48,24 @@ const px = (value: string) => {
     expect(value).toMatch(/^\d+px$/);
     return parseInt(value, 10);
 };
+
+describe("date value inside the scrolling table", () => {
+    // The table's wrapper scrolls, so a dropdown positioned inside it is limited to the table's own
+    // height. The calendar is rendered against the viewport instead, as the Selects in the rows are.
+    it("renders its calendar in a portal outside the table wrapper", () => {
+        const { container } = render(
+            <div data-testid="scroller" style={{ overflowX: "auto" }}>
+                <DateInput value="" onChange={noop} ariaLabel="Release date" />
+            </div>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Choose date for Release date" }));
+
+        const calendar = screen.getByRole("dialog");
+        expect(screen.getByTestId("scroller")).not.toContainElement(calendar);
+        expect(container).not.toContainElement(calendar);
+    });
+});
 
 describe("MetadataTable column widths", () => {
     it("keeps room for the value column and scrolls sideways when the container is narrower", () => {
