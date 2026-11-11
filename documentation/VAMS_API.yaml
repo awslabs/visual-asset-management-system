@@ -18840,10 +18840,10 @@ components:
                             type: integer
                         candidatesEvaluated:
                             type: integer
-                            description: "Distinct vector items of the hits the caller may open, after the merge and before the collapse."
+                            description: "Distinct vector items of the files the caller may open, after the merge and before the collapse; counted before the OpenSearch-only constraints are applied."
                         itemsCollapsed:
                             type: integer
-                            description: "Items of the hits the caller may open that folded into another hit of the same file."
+                            description: "Items of the files the caller may open that folded into another hit of the same file; counted before the OpenSearch-only constraints are applied."
                         classIntent:
                             type: array
                             items:
