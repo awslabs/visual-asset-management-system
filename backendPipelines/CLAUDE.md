@@ -28,7 +28,7 @@ Each pipeline step reads several S3 paths from its manifest (`manifestHelper.res
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
-**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
+**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (`outputS3AssetResultsPath`). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. It is the canonical copy and is vendored like `manifestHelper.py`: a pipeline copies it into its own `lambda/` or `container/` directory and imports `compliance_output`, because the Lambda code asset and the container build context hold only that directory. Every copy stays byte-identical to the canonical one, and `backendPipelines/tests/test_compliance_output_helper.py` checks that, plus the file name and the `complianceOutput: true` flag the backend's `evaluationEngine` matches on. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows. A written file replaces the derived `execution_success` / `processing_duration_seconds` measurements rather than adding to them. The walkthrough for authors is the user guide's "Building a pipeline for compliance checks" (`documentation/docusaurus-site/docs/user-guide/compliance.md`).
 
 **Rules for output path usage:**
 
@@ -1298,7 +1298,9 @@ holding:
 
 -   the pinned-revision checks over each `Dockerfile` (a `--build-arg …_COMMIT=main` still builds green)
 -   the `manifestHelper.py` byte-identity check across every vendored copy
-    (`backendPipelines/tests/test_manifest_helper_byte_identity.py`)
+    (`backendPipelines/tests/test_manifest_helper_byte_identity.py`), and the same check for
+    `compliance_output.py` with its backend file-name and flag checks
+    (`backendPipelines/tests/test_compliance_output_helper.py`)
 -   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
     (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
     handler can always be edited back to an f-string event log or a drifting logger copy

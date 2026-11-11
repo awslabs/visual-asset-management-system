@@ -11,16 +11,26 @@ PipelineExecutionOutputResults row with its content, and the compliance workflow
 the document from that row — so the pipeline never needs the evaluation id, the asset, or any
 compliance table.
 
-Usage in a pipeline Lambda or container, with the workflow manifest fetched through
-``manifestHelper.fetch_manifest``::
+This file is the canonical copy, and a pipeline vendors it the way it vendors ``manifestHelper.py``:
+copy it into the pipeline's own ``lambda/`` or ``container/`` directory and import it from there.
+A pipeline's Lambda code asset and container build context hold only that directory, so this copy
+is not importable from a deployed pipeline. Every copy stays byte-identical to this one
+(``backendPipelines/tests/test_compliance_output_helper.py``). The module needs only the standard
+library and the S3 client the caller passes in.
 
-    from common.compliance_output import write_compliance_output
+Usage in a pipeline Lambda or container, with the inputs resolved by
+``manifestHelper.resolve_pipeline_inputs`` and the client for the output bucket's Region::
 
-    write_compliance_output(
-        s3_client=s3_client,
-        manifest=manifest,
+    import compliance_output
+    import manifestHelper
+
+    compliance_output.write_compliance_output(
+        s3_client=manifestHelper.s3_client_for_region(resolved["outputBucketRegion"]),
         measurements={"residual_error_mm": 0.42, "scale_deviation_ppm": 0.8},
+        results_s3_path=resolved["outputS3AssetResultsPath"],
     )
+
+``manifest=`` (the parsed workflow manifest) can be passed instead of ``results_s3_path``.
 
 Document schema::
 

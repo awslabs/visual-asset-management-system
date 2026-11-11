@@ -503,7 +503,7 @@ The compliance engine holds this mapping behind one constant, `TOOLING_FAILURES_
 
 #### Pipeline output contract
 
-A pipeline that backs a compliance rule reports its measurements by writing one file, `compliance-output.json`, under the execution's standard results output prefix — the `outputs.results` location of the workflow manifest, alongside the `files`, `previews` and `metadata` prefixes. The workflow end-state records every file under that prefix as an output result of the execution, and the compliance callback reads the document from there. The pipeline needs no evaluation identifier, asset reference or compliance table access; a pipeline written in Python uses the `write_compliance_output` helper in `backendPipelines/common/compliance_output.py`.
+A pipeline that backs a compliance rule reports its measurements by writing one file, `compliance-output.json`, under the execution's standard results output prefix — the `outputs.results` location of the workflow manifest, alongside the `files`, `previews` and `metadata` prefixes. The workflow end-state records every file under that prefix as an output result of the execution, and the compliance callback reads the document from there. The pipeline needs no evaluation identifier, asset reference or compliance table access. A pipeline written in Python uses the `write_compliance_output` helper of `backendPipelines/common/compliance_output.py`, copied into the pipeline's own `lambda/` or `container/` directory beside its vendored `manifestHelper.py`, since a deployed pipeline contains only its own directory. [Building a pipeline for compliance checks](../user-guide/compliance.md#building-a-pipeline-for-compliance-checks) walks through a pipeline and its rule from start to finish.
 
 ```json
 {
@@ -526,7 +526,7 @@ A pipeline that backs a compliance rule reports its measurements by writing one 
 | `errors`           | array   | Error messages when `status` is `error`                                |
 | `pipelineMetadata` | object  | Optional free-form information about the run                           |
 
-`compliance-output.json` is optional. A workflow that writes none can still back a pipeline rule: two measurements are derived for every execution, and when the file is absent they are the only measurements the rule's checks can read — a check on any other `outputField` fails because the field is missing.
+`compliance-output.json` is optional. A workflow that writes none can still back a pipeline rule: two measurements are derived from the execution itself, and when the file is absent they are the only measurements the rule's checks can read — a check on any other `outputField` fails because the field is missing. When the file is present, only its `measurements` are read and the derived values are not added, so a pipeline whose rule also checks a time budget reports its own duration.
 
 | Measurement                   | Value                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------ |

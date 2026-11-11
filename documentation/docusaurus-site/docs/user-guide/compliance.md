@@ -13,7 +13,7 @@ Compliance turns those standards into rules that VAMS applies continuously. You 
 | Capability                                      | What it gives you                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Standards written once, as reusable rules**   | A compliance schema is a named, versioned set of rules. Six rule types cover an asset's metadata (required fields and types on the asset, its files or its links), its relationships (required links, such as a parent assembly), its file structure (required or forbidden paths and file counts), version coverage (every current file is recorded in an asset version), its attributes (naming conventions, descriptions, required tags) and pipeline checks. Each rule has an enforcement level: `quarantine`, `warn` or `inform`. A schema is shared with every database (`GLOBAL`) or kept to one database, can extend another schema, and is built in the **Visual Builder** or written as JSON. A default schema and four ready-made templates help you start. See [Managing schemas](#managing-schemas). |
-| **Automated checks through your own pipelines** | A pipeline rule runs a VAMS workflow, such as the built-in 3D conversion, on the asset's files and compares the measurements the run reports with tolerances you set: the conversion succeeds, finishes within a time limit, or keeps a value in range. Any pipeline registered in VAMS can serve as a check. See [Pipeline rules](../concepts/compliance.md#pipeline-rules).                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Automated checks through your own pipelines** | A pipeline rule runs a VAMS workflow, such as the built-in 3D conversion, on the asset's files and compares the measurements the run reports with tolerances you set: the conversion succeeds, finishes within a time limit, or keeps a value in range. Any pipeline registered in VAMS can serve as a check. See [Pipeline rules](../concepts/compliance.md#pipeline-rules), and [Building a pipeline for compliance checks](#building-a-pipeline-for-compliance-checks) for a pipeline that reports measurements of its own.                                                                                                                                                                                                                                                                                    |
 | **Continuous, automatic evaluation**            | Binding a schema to a database covers every asset in it, at any database size; the change is applied in the background, with its progress on the database's compliance page. After that, an asset is evaluated whenever it is created or its files, metadata or links change. You can also evaluate one asset (**Evaluate Now**), a whole database (**Evaluate All Assets**) or every asset under a schema (**Sweep**). See [Binding schemas to databases](#binding-schemas-to-databases) and [Evaluating assets](#evaluating-assets).                                                                                                                                                                                                                                                                            |
 | **A clear status for every asset**              | Each governed asset is `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation` or `unknown`. The status shows as a badge on the asset, on its **Compliance** tab with the failing rules and the full evaluation history, and on each database's compliance overview with counts per state and a compliance rate. See [Viewing compliance status](#viewing-compliance-status).                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Quarantine that holds back failing content**  | An asset that fails a `quarantine`-level rule is quarantined and listed on the **Quarantine** page, and its subscribers are notified when it enters quarantine. A deployment can also refuse downloads, previews, streaming and exports with file links for quarantined assets. A quarantine is not lifted by a binding change or by a re-evaluation still in progress; only a passing verdict or a reviewer ends it. See [Quarantine](#quarantine).                                                                                                                                                                                                                                                                                                                                                              |
@@ -457,8 +457,150 @@ Any workflow can back a pipeline rule without changes to its pipelines. When the
 ```
 
 :::tip[Domain-specific measurements]
-For measurements of your own — geometric accuracy, noise levels, coverage ratios — the pipeline writes a `compliance-output.json` file under its results output prefix. The file format and the `write_compliance_output` helper are described in [Compliance (Concepts) — Pipeline output contract](../concepts/compliance.md#pipeline-output-contract).
+For measurements of your own — geometric accuracy, noise levels, coverage ratios — the pipeline writes a `compliance-output.json` file under its results output prefix. [Building a pipeline for compliance checks](#building-a-pipeline-for-compliance-checks) walks through it; the file format is in [Compliance (Concepts) — Pipeline output contract](../concepts/compliance.md#pipeline-output-contract).
 :::
+
+---
+
+## Building a pipeline for compliance checks
+
+A pipeline rule splits the work in two. The pipeline measures the asset and reports numbers, such as a residual error in millimetres or a triangle count. The rule's checks compare each number with a tolerance, and the rule's enforcement level decides what a failure does. The pipeline makes no pass or fail decision of its own, needs no compliance permissions, and knows nothing about the schema or the evaluation that started it, so one pipeline can serve a strict schema and a lenient one.
+
+### How a pipeline check runs
+
+```mermaid
+sequenceDiagram
+    participant E as Evaluation
+    participant W as Workflow execution
+    participant P as Your pipeline
+    participant C as Compliance callback
+    E->>W: Launch the rule's workflow on the selected files
+    Note over E: The asset reads pending_evaluation
+    W->>P: Run with the manifest and the rule's inputParameters
+    P->>P: Measure the input files
+    P->>W: Write compliance-output.json to the results location
+    W->>C: Run completed (its results recorded on the execution)
+    C->>C: Read compliance-output.json and run the checks
+    C->>E: Record the rule result and decide the verdict
+```
+
+1. When an evaluation reaches a pipeline rule, it launches the rule's workflow on the asset files the rule selects (`inputFiles`) and passes the rule's `inputParameters` as template tag values. The run is an ordinary workflow execution, started by the system user and listed with the workflow's other executions. The asset reads `pending_evaluation` until the run ends.
+2. The pipeline reads its inputs from the workflow manifest, measures them, and writes one file, `compliance-output.json`, to the run's results location (`outputS3AssetResultsPath`).
+3. When the run ends, the workflow records each file in the results location on the execution and announces the completion. The compliance callback receives the announcement, reads `compliance-output.json` from the execution's results, and runs each of the rule's checks against the `measurements` in it.
+4. The rule passes when every check passes. The verdict comes from all the schema's rules together, and the asset's compliance state follows from it.
+
+### What decides the rule's result
+
+| What the run did                                                                                   | The rule's result                                                                                                                                                  |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Succeeded and wrote `compliance-output.json` with `"status": "success"`                            | Each check compares the measurement its `outputField` names with its tolerance. A missing measurement, or one that is not a number, fails its check                |
+| Succeeded and wrote `compliance-output.json` with `"status": "error"`                              | Every check fails with `Pipeline reported an error`                                                                                                                |
+| Succeeded and wrote no `compliance-output.json`                                                    | The checks read the two derived measurements, `execution_success` and `processing_duration_seconds`. A check on any other field fails because the field is missing |
+| Failed, was aborted or timed out, or wrote `execution.status.json` with `"status": "FAILED"`       | Every check fails with `Pipeline execution <status>`, and the result carries the failure reason the execution recorded                                             |
+| Never started: the selected files do not fit the workflow, or the workflow is disabled or archived | An `error` result. This is a [tooling failure](../concepts/compliance.md#tooling-failures): it applies no enforcement, and the verdict comes from the other rules  |
+
+A failed check applies the rule's enforcement: `quarantine` quarantines the asset, `warn` marks it non-compliant, and `inform` only records the failure. When the pipeline writes `compliance-output.json`, only the measurements in it count, and `processing_duration_seconds` is not added. A rule that should also hold the pipeline to a time budget needs the pipeline to report its own duration.
+
+### Step 1: Decide what to measure
+
+Choose the values a reviewer would otherwise check by hand, and give each one a name such as `residual_error_mm`, `triangle_count` or `coverage_percent`. Each name is the `outputField` of a check and must match it exactly, including case; a unit in the name keeps the rule readable. Every value is a number: report a yes-or-no result as `1` or `0` and check it with `gte 1`. Leave the limits to the rule rather than building them into the pipeline.
+
+### Step 2: Write the measurements to the results location
+
+Build the pipeline as described in [Building custom pipelines](../pipelines/custom-pipelines.md), with any execution type. The pipeline reads its input files from the workflow manifest at the version the manifest records, measures them, and writes this document to `compliance-output.json` under `outputS3AssetResultsPath`:
+
+```json
+{
+    "complianceOutput": true,
+    "status": "success",
+    "measurements": { "triangle_count": 184220, "open_edge_count": 0 },
+    "errors": [],
+    "pipelineMetadata": { "tool": "mesh-inspector" }
+}
+```
+
+A Python pipeline uses the helper `backendPipelines/common/compliance_output.py`. Copy it into the pipeline's own `lambda/` or `container/` directory, beside its vendored `manifestHelper.py`: a deployed pipeline contains only its own directory, so it cannot import the file from `backendPipelines/common/`. The helper needs only the Python standard library and the Amazon S3 client you pass to it. A synchronous AWS Lambda pipeline that measures one file looks like this:
+
+```python
+import json
+
+import compliance_output
+import manifestHelper
+
+
+def lambda_handler(event, context):
+    data = json.loads(event["body"]) if isinstance(event.get("body"), str) else event["body"]
+    resolved = manifestHelper.resolve_pipeline_inputs(data, manifestHelper.s3_client_for_region())
+    manifestHelper.enforce_single_input_file(resolved)
+
+    measurements = measure_mesh(resolved)  # your code: {"triangle_count": 184220, "open_edge_count": 0}
+
+    compliance_output.write_compliance_output(
+        s3_client=manifestHelper.s3_client_for_region(resolved["outputBucketRegion"]),
+        measurements=measurements,
+        results_s3_path=resolved["outputS3AssetResultsPath"],
+    )
+    return {"statusCode": 200, "body": "Success"}
+```
+
+A pipeline in another language writes the same JSON document itself. A pipeline that hands its work to a container forwards `outputS3AssetResultsPath` together with the other output paths. Keep the file under about 380 KB: a larger file is cut short in the execution's record and is not read, so each check on it fails because its measurement is missing.
+
+Decide how the pipeline reports a measurement it could not take. Writing `"status": "error"` with the reasons in `errors` fails the rule with `Pipeline reported an error`, and the reasons are kept in the execution's results. Raising an exception, or writing `execution.status.json` with `"status": "FAILED"` (see [Writing outputs](../pipelines/custom-pipelines.md#writing-outputs)), fails the run, and the rule's result shows the reason the execution recorded to readers allowed to read that execution. Either way the rule fails and its enforcement applies.
+
+### Step 3: Register the pipeline and its workflow
+
+1. Register the pipeline through the **Pipelines** page, `vamscli pipeline create` or a `vamsSchema` bundle, with an `inputFileArity` and `inputFileFilters` that match the files it measures. If the rule passes `inputParameters`, give the pipeline a template whose `tagSchema` declares each parameter and whose `configBody` places it as a `{{tag}}` placeholder; the pipeline reads the rendered configuration from `inputConfigurationS3Location` (see [Configuration templates and per-run options](../pipelines/custom-pipelines.md#configuration-templates-and-per-run-options)).
+2. Create a workflow that runs the pipeline. A pipeline that only measures fits a results-only workflow (`outputTarget` with `"locationType": "none"`), which writes nothing into the asset. A pipeline that does write files or metadata into the asset starts no new evaluation by doing so, and in `matching` mode a file a workflow wrote is never selected as a rule's input.
+3. Run the workflow once by hand on a sample asset, with **Execute workflow** on the asset's **Executions** tab or with `vamscli workflow execute`, and read the execution's results (`vamscli execution details results <executionId>`). They show `compliance-output.json` with the measurements, before any rule depends on them.
+
+In a workflow with several pipelines, `pipelineRef.pipelineId` names the step whose `compliance-output.json` the checks read. When that step wrote none, the file of the workflow's last step is used, then that of any other step.
+
+### Step 4: Write the rule
+
+Name the workflow and the pipeline in `pipelineRef`, select the files in `inputFiles`, and add one check per measurement. This rule quarantines a GLB model that has open edges or a triangle count outside the budget:
+
+```json
+{
+    "schemaFormat": "vams-rules-v1",
+    "rules": {
+        "mesh-quality": {
+            "ruleType": "pipeline",
+            "enforcement": "quarantine",
+            "pipelineRef": {
+                "databaseId": "GLOBAL",
+                "workflowId": "mesh-quality-check",
+                "pipelineDatabaseId": "GLOBAL",
+                "pipelineId": "mesh-inspector",
+                "templateId": "mesh-inspector-default"
+            },
+            "inputFiles": { "mode": "matching", "filter": ["*.glb"] },
+            "inputParameters": { "units": "mm" },
+            "checks": [
+                {
+                    "name": "watertight",
+                    "description": "The mesh has no open edges",
+                    "outputField": "open_edge_count",
+                    "tolerance": { "operator": "eq", "value": 0 }
+                },
+                {
+                    "name": "triangle_budget",
+                    "description": "Between 1,000 and 500,000 triangles",
+                    "outputField": "triangle_count",
+                    "tolerance": { "operator": "between", "min": 1000, "max": 500000 }
+                }
+            ]
+        }
+    }
+}
+```
+
+The fields are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules), the file selection in [Input files](../concepts/compliance.md#input-files), and the operators (`lte`, `gte`, `eq`, `between`) in [Tolerance operators](../concepts/compliance.md#tolerance-operators). A workflow that restricts its own concurrency can make a rule wait for a run already going on the asset; see [Rules that wait for a running execution](../concepts/compliance.md#rules-that-wait-for-a-running-execution).
+
+### Step 5: Test the rule
+
+1. [Register the schema](#registering-a-schema) and bind it to a test database, or set it as the [override of one asset](#overriding-the-schema-of-one-asset).
+2. Choose **Evaluate Now** on an asset, or run `vamscli compliance evaluate -d <databaseId> -a <assetId>`. The asset reads `pending_evaluation`, and the run appears among the workflow's executions.
+3. When the run ends, the asset's **Compliance** tab shows the verdict, and its evaluation history lists each failed check with its message, for example `triangle_budget: 612000.0 not in [1000.0, 500000.0]`. A failed run shows **Pipeline failure:** with the reason it recorded. `vamscli compliance evaluations -d <databaseId> -a <assetId> --json-output` returns each rule's `measured` and `expected` values.
 
 ---
 
