@@ -307,6 +307,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 -   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
+-   **Isaac Lab pipeline page** — The page states the 6-hour AWS Batch limit on a training job's running time, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
 -   **Locked Database filter label** — On a database's search page the locked Database filter names the database it is locked to, instead of reading "All databases". (issue #1253)
 
 **Other changes:**
