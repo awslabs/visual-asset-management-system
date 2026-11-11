@@ -4,10 +4,12 @@
 """
 Compute resources of the running task and the render budgets derived from them.
 
-The budgets come from what the container can actually use -- the cgroup memory limit and the CPU
-quota -- never from a tier name, so a job runs within its task's limits whichever job definition or
-override started it. ``VAMS_COMPUTE_TIER`` (set by the state machine when it picks a tier) is only
-logged.
+The budgets come from what the container can actually use -- the memory limit and the CPU quota --
+never from a tier name, so a job runs within its task's limits whichever job definition or override
+started it. The memory limit is the smallest of the cgroup limit, the task memory the state machine
+passes in ``VAMS_TASK_MEMORY_MIB`` and physical memory: on AWS Fargate the container's cgroup carries
+no limit and physical memory is the micro-VM's, larger than the task. ``VAMS_COMPUTE_TIER`` (set by the
+state machine when it picks a tier) is only logged.
 
 Defaults were measured on the CPU rasteriser (llvmpipe) at 800x600, 36 frames, limited to 4 vCPU and
 16 GiB: 5 million points render in about 100 s and 20 million triangles in about 100 s with
@@ -18,7 +20,7 @@ import math
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from .utils.logging import get_logger
 
@@ -30,6 +32,8 @@ COMPUTE_TIER_ENV = "VAMS_COMPUTE_TIER"
 # The values the state machine sets in COMPUTE_TIER_ENV.
 STANDARD_TIER = "standard"
 LARGE_TIER = "large"
+# The memory, in MiB, of the task the state machine submitted (the tier's memory override).
+TASK_MEMORY_ENV = "VAMS_TASK_MEMORY_MIB"
 
 # Per-vCPU render budgets (measured, see the module docstring) and the ceilings above which more
 # geometry adds nothing visible to an 800x600 thumbnail.
@@ -49,6 +53,19 @@ GEOMETRY_MEMORY_FRACTION = 0.35
 BYTES_PER_POINT = 120
 BYTES_PER_TRIANGLE = 200
 BYTES_PER_SPLAT = 200
+
+# A mesh drawn with per-face colours renders from a copy that gives each triangle its own three corners
+# (``renderer.cell_colours_on_corners``), which VTK then uploads as three vertices per triangle. Measured
+# on the production base image with a 36-frame 800x600 orbit, on tasks from 1 vCPU / 2 GiB to 4 vCPU /
+# 16 GiB at 1.2 to 20 million triangles, its render peaks at about 0.75 GiB plus 350 to 475 bytes per
+# triangle (about 130 bytes without the copy), the most on 2 vCPU, so BYTES_PER_TRIANGLE does not cover
+# it. Such a mesh is held to the triangles that keep this peak, at the most measured cost, within 60% of
+# the memory limit: at most the triangle budget, and never fewer than the floor, which only applies on a
+# task under about 1.3 GiB.
+CELL_COLOUR_MEMORY_FRACTION = 0.6
+CELL_COLOUR_FIXED_BYTES = 768 * 1024 ** 2
+BYTES_PER_CELL_COLOUR_TRIANGLE = 475
+MIN_CELL_COLOUR_TRIANGLES = 100_000
 
 # Used when no limit can be read (outside a container).
 FALLBACK_MEMORY_BYTES = 16 * 1024 ** 3
@@ -86,14 +103,8 @@ def _read(path: str) -> Optional[str]:
         return None
 
 
-def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT) -> int:
-    """The container's memory limit: cgroup v2 ``memory.max``, else v1 ``memory.limit_in_bytes``,
-    else physical memory. An unlimited cgroup reads as physical memory."""
-    physical = None
-    try:
-        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (ValueError, OSError, AttributeError):
-        pass
+def _cgroup_memory_limit(cgroup_root: str) -> Optional[int]:
+    """cgroup v2 ``memory.max``, else v1 ``memory.limit_in_bytes``; None when neither sets a limit."""
     for path in (os.path.join(cgroup_root, "memory.max"),
                  os.path.join(cgroup_root, "memory", "memory.limit_in_bytes")):
         value = _read(path)
@@ -106,8 +117,39 @@ def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT) -> int:
         # cgroup v1 reports "unlimited" as a value near 2**63.
         if limit <= 0 or limit >= 2 ** 60:
             continue
-        return min(limit, physical) if physical else limit
-    return int(physical) if physical else FALLBACK_MEMORY_BYTES
+        return limit
+    return None
+
+
+def task_memory_bytes(environ: Optional[Mapping[str, str]] = None) -> Optional[int]:
+    """The task memory the state machine passes in ``VAMS_TASK_MEMORY_MIB``; None when it is unset or
+    not a positive whole number of MiB."""
+    value = ((os.environ if environ is None else environ).get(TASK_MEMORY_ENV) or "").strip()
+    if not value:
+        return None
+    if not value.isdecimal() or int(value) <= 0:
+        logger.warning(f"Ignoring {TASK_MEMORY_ENV}={value!r}: not a positive whole number of MiB")
+        return None
+    return int(value) * 1024 ** 2
+
+
+def memory_limit_bytes(cgroup_root: str = CGROUP_ROOT,
+                       environ: Optional[Mapping[str, str]] = None) -> int:
+    """The container's memory limit: the smallest of the cgroup limit, the task memory the state
+    machine passes (``task_memory_bytes``) and physical memory, each when it can be read.
+
+    Each one is a bound the process cannot pass, so the smallest is the limit. A cgroup limit is what
+    the kernel enforces in a container that has one. On AWS Fargate the container's cgroup has no limit
+    and physical memory is the micro-VM's, which is larger than the task (31 GiB read on a 16 GiB
+    task), so there the passed task memory is the only right figure."""
+    physical = None
+    try:
+        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        pass
+    bounds = [_cgroup_memory_limit(cgroup_root), task_memory_bytes(environ), physical]
+    bounds = [bound for bound in bounds if bound]
+    return int(min(bounds)) if bounds else FALLBACK_MEMORY_BYTES
 
 
 def cpu_count(cgroup_root: str = CGROUP_ROOT) -> int:
@@ -144,6 +186,15 @@ def _budget(per_vcpu, cpus, bytes_each, memory_bytes, floor, ceiling):
     by_cpu = per_vcpu * cpus
     by_memory = int(memory_bytes * GEOMETRY_MEMORY_FRACTION / bytes_each)
     return int(max(floor, min(ceiling, by_cpu, by_memory)))
+
+
+def cell_colour_triangle_limit(memory_bytes: int) -> int:
+    """The most triangles a mesh drawn with per-face colours may hold in a task with ``memory_bytes`` of
+    memory, from the corner copy's measured cost (see CELL_COLOUR_MEMORY_FRACTION). The caller also
+    holds it to the triangle budget."""
+    by_memory = ((memory_bytes * CELL_COLOUR_MEMORY_FRACTION - CELL_COLOUR_FIXED_BYTES)
+                 / BYTES_PER_CELL_COLOUR_TRIANGLE)
+    return int(max(MIN_CELL_COLOUR_TRIANGLES, by_memory))
 
 
 def compute_budgets(memory_bytes: Optional[int] = None, cpus: Optional[int] = None) -> Budgets:

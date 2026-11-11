@@ -905,6 +905,105 @@ def build_workflow_execution_record(
     return record
 
 
+# A fileUpload trigger launch refused by the workflow's concurrency restriction is recorded as ONE
+# SKIPPED execution per blocking run and lock key, however many launches that run refuses: the record
+# counts them (skippedLaunchCount) and lists the files they named, up to MAX_SKIP_RECORD_INPUT_ROWS input
+# rows. SKIPPED is terminal from the moment it is written: the record has no state machine, no pipeline
+# rows and no locks, so no abort, reconcile, log capture or terminal writer ever acts on it.
+EXECUTION_STATUS_SKIPPED = "SKIPPED"
+MAX_SKIP_RECORD_INPUT_ROWS = 100
+# How many of the skipped files the details view's `skip` block names; the rest are read through the
+# details files route (collection=input), which pages the same input rows.
+MAX_SKIP_DETAIL_FILES = 20
+# Fixed namespace of the skip-record id (uuid5), so every writer derives the same id for one blocking
+# run and lock key: concurrent skips and SQS redeliveries land on the same record.
+SKIP_RECORD_ID_NAMESPACE = uuid.UUID("6f1c0d52-8a7e-4b9a-9b51-3c0f6e7a9d24")
+# The main-row attributes only a skip record carries. A row without them is not a skip record, and
+# every read path treats their absence as "not skipped".
+SKIP_RECORD_ATTRIBUTES = ("skippedLaunchCount", "lastSkippedDate", "skipScope", "skipReason",
+                          "blockingExecutionId")
+
+
+def skip_record_execution_id(lock_key: str, holder_execution_id: str) -> str:
+    """The execution id of the skip record for one lock key and the run holding it (32 lowercase hex
+    characters, the same shape new_guid emits, so the GUID validator and every key builder accept it).
+    A uuid5 never equals a uuid4, so the id cannot collide with a real execution."""
+    return uuid.uuid5(SKIP_RECORD_ID_NAMESPACE, f"{lock_key}|{holder_execution_id}").hex
+
+
+def is_skip_record(main_item) -> bool:
+    """True for a main row written by the skip writer."""
+    return (main_item or {}).get("executionStatus", "") == EXECUTION_STATUS_SKIPPED
+
+
+def build_skip_record_update(execution_id, workflow_database_id, workflow_id, workflow_arn,
+                             skipped_at, skip_scope, skip_reason, blocking_execution_id,
+                             first_skipped_at=None):
+    """The UpdateItem arguments (minus the table) that create or extend a skip record's main row.
+
+    One atomic call: every attribute a launched run's main row carries is SET only if absent
+    (if_not_exists), so the first skip fixes the record's identity, start and stop date, while
+    lastSkippedDate is overwritten and skippedLaunchCount is ADDed to on every skip. The row is created
+    when missing, so two concurrent writers on one id both land on one record with a count of two.
+    ReturnValues ALL_NEW hands back the row as it now stands (the first-skip date the input rows reuse,
+    and the count that decides whether this skip's files are still listed).
+
+    first_skipped_at is the start and stop date the record keeps (the date its configuration and input
+    rows were first written with, so all of the record's rows agree); skipped_at, the time of THIS
+    refusal, is lastSkippedDate. It defaults to skipped_at."""
+    first_skipped_at = first_skipped_at or skipped_at
+    base = build_workflow_execution_record(
+        execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
+        workflow_arn=workflow_arn or "", workflow_execution_arn="", execution_start_date=first_skipped_at,
+        execution_status=EXECUTION_STATUS_SKIPPED, triggered_by_user_id="SYSTEM_USER",
+        trigger_type="File-Upload", execution_log_group_arn="")
+    # Terminal from the first write: the stop date is the first skip, like the start date.
+    base["executionStopDate"] = first_skipped_at
+    base["skipScope"] = skip_scope or ""
+    base["skipReason"] = skip_reason or ""
+    base["blockingExecutionId"] = blocking_execution_id or ""
+    key_names = ("workflowExecutionId", "workflowDatabaseId:workflowId")
+    names, values, sets = {}, {}, []
+    for index, (attribute, value) in enumerate(
+            (a, v) for a, v in base.items() if a not in key_names):
+        names[f"#a{index}"] = attribute
+        values[f":a{index}"] = value
+        sets.append(f"#a{index} = if_not_exists(#a{index}, :a{index})")
+    names["#lastSkipped"] = "lastSkippedDate"
+    values[":lastSkipped"] = skipped_at
+    sets.append("#lastSkipped = :lastSkipped")
+    names["#count"] = "skippedLaunchCount"
+    values[":one"] = 1
+    return {
+        "Key": {name: base[name] for name in key_names},
+        "UpdateExpression": "SET " + ", ".join(sets) + " ADD #count :one",
+        "ExpressionAttributeNames": names,
+        "ExpressionAttributeValues": values,
+        "ReturnValues": "ALL_NEW",
+    }
+
+
+def skip_list_fields(main_item) -> dict:
+    """The optional list-item fields of a skip record: the count, the lock scope and the fixed reason.
+    Empty for any other row, so an execution recorded before skip records existed lists unchanged. The
+    blocking run's id is deliberately not listed (the details view gates it on its own read check)."""
+    if not is_skip_record(main_item):
+        return {}
+    return {
+        "skippedLaunchCount": stored_int(main_item.get("skippedLaunchCount")),
+        "skipScope": main_item.get("skipScope", "") or "",
+        "skipReason": main_item.get("skipReason", "") or "",
+    }
+
+
+def stored_int(value) -> int:
+    """A stored DynamoDB number (Decimal) as an int; 0 for anything absent or unreadable."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_pipeline_execution_record(
     pipeline_execution_id, workflow_execution_id, pipeline_database_id, pipeline_id,
     end_state_pipeline, s3_asset_bucket, s3_aux_bucket, output_prefixes,
@@ -1429,9 +1528,13 @@ def build_workflow_configuration_record(
     input_metadata_file_s3_key="",
     execution_start_date="",
     metadata_source_assets=None, metadata_source_databases=None,
-    output_types=None,
+    output_types=None, pipeline_execution_parameters=None,
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration').
+
+    pipeline_execution_parameters is set only on a SKIPPED record's row: the per-pipeline template
+    parameters the refused trigger launch named (the trigger's defaultTemplateIds), which a re-run
+    replays because the record has no pipeline rows to read them from. Absent on every other row.
 
     metadata_source_assets is the run's resolved [{databaseId, assetId}] metadata-source selection and
     input_metadata_database_id the source database the CALLER named — the selection a re-run replays.
@@ -1497,6 +1600,8 @@ def build_workflow_configuration_record(
         # attribute existed resolves to [] everywhere (no migration).
         "outputTypes": list(output_types or []),
     }
+    if pipeline_execution_parameters:
+        record["pipelineExecutionParameters"] = to_dynamodb_numerics(pipeline_execution_parameters)
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely
     # (DynamoDB indexes sparsely), so results-only executions never appear in an asset's history and

@@ -7,20 +7,38 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN conda create -n pdal -y
 
-# v2.7.0
+# v2.10.2 (tag 2.10.2, released 2026-06-12). 2.10.0 updated the vendored libE57Format from 2.0.1 to
+# 3.3.0; 2.0.1 rejects every CompressedVector index packet, which current E57 writers emit (#1203).
 # pragma: allowlist nextline secret
-ARG GITHUB_SHA="4f63a07556041a7a21ad02fd5d32844701732003" 
+ARG GITHUB_SHA="27008f6241be44585c866a29dfc13bb16d678dab"
+ARG PDAL_VERSION="2.10.2"
 ARG GITHUB_REPOSITORY="PDAL/PDAL"
 ARG GITHUB_SERVER_URL="https://github.com"
 
 SHELL ["conda", "run", "-n", "pdal", "/bin/bash", "-c"]
 
-# The conda-forge toolchain is pinned to the 1.x `compilers` generation (GCC 13/14) that PDAL 2.7.0
-# builds with. `compilers` 2.x moved to GCC 15 and dropped the activation scripts that exported
-# CC/CXX/AR, which breaks this build twice over: CMake finds no `ar` (CMAKE_AR-NOTFOUND at link) and
-# GCC 15's -Wtemplate-body rejects the vendored kazhdan Poisson sources.
+# The conda-forge toolchain is pinned to the 1.x `compilers` generation (GCC 13/14). `compilers` 2.x
+# moved to GCC 15 and dropped the activation scripts that exported CC/CXX/AR, so CMake finds no `ar`
+# (CMAKE_AR-NOTFOUND at link) and GCC 15's -Wtemplate-body rejects the vendored kazhdan Poisson sources.
+#
+# The build dependencies come from conda-forge's own PDAL ${PDAL_VERSION} packages. Since 2.8 conda-forge
+# splits PDAL into libpdal-core plus one package per plugin, and the `pdal` package is a metapackage that
+# pulls them all in as binaries, so `pdal=X --only-deps` would install a prebuilt PDAL under the one built
+# here. Naming the core and exactly the plugins enabled below with --only-deps installs their
+# dependencies (GDAL, PROJ, GeoTIFF, Xerces-C for E57, HDF5, TileDB, NITRO, libpq) at the versions that
+# PDAL release was built against, and none of the named packages themselves.
 RUN mamba install -c conda-forge git "compilers<2" conda-pack cmake make ninja boto3 sysroot_linux-64=2.17 && \
-    mamba install --yes -c conda-forge pdal=2.7.0 --only-deps
+    mamba install --yes -c conda-forge --only-deps \
+        "libpdal-core=${PDAL_VERSION}" \
+        "libpdal-e57=${PDAL_VERSION}" \
+        "libpdal-hdf=${PDAL_VERSION}" \
+        "libpdal-icebridge=${PDAL_VERSION}" \
+        "libpdal-nitf=${PDAL_VERSION}" \
+        "libpdal-pgpointcloud=${PDAL_VERSION}" \
+        "libpdal-tiledb=${PDAL_VERSION}" && \
+    if conda list -n pdal | grep -E '^(libpdal|pdal|python-pdal)(-[a-z0-9]+)? '; then \
+        echo "a prebuilt PDAL package was installed; the source build below would be shadowed" >&2; exit 1; \
+    fi
 
 RUN git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" pdal && \
     cd pdal ; \
@@ -51,7 +69,7 @@ RUN cd pdal/build  && \
 # Skipping ctest -V: tests are not built (-DWITH_TESTS=OFF) because the
 # tiledb-plugin gtest objects fail to link against newer gtest versions
 # (undefined references to testing::internal::MakeAndRegisterTestInfo etc.).
-# The published v2.7.0 tag is upstream; we don't need the test suite to ship
+# The published release tag is upstream; we don't need the test suite to ship
 # the runtime container.
 #RUN cd pdal/build  && \
 #    ctest -V

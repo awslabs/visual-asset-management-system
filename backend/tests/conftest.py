@@ -84,6 +84,10 @@ def mock_safe_logger(service=None, service_name=None):
 sys.modules['handlers'] = MagicMock()
 sys.modules['handlers.auth'] = MagicMock()
 sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test_token"]}
+# The authMethod values handlers compare a caller's claims with; tests/handlers/auth/
+# test_request_to_claims_authMethod.py pins the real module's values to these.
+sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
+sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
@@ -264,9 +268,10 @@ sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.ass
 sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
     _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path
-# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module and
-# the add-on route list it imports are loaded first, for the same reason.
-for _apir_dep in ('apiRouteTypes', 'addonApiRoutes'):
+# rather than a MagicMock (same approach as s3MetadataKeys above). The route type module, the add-on
+# feature switches (common/addonFeatures.py, which the add-on route list and apiRoutes import; it reads
+# its environment variable on each call) and the add-on route list are loaded first, for the same reason.
+for _apir_dep in ('apiRouteTypes', 'addonFeatures', 'addonApiRoutes'):
     _apir_dep_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_apir_dep}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_apir_dep}.py')
@@ -292,6 +297,18 @@ _addon_constants_spec = _s3mk_importlib_util.spec_from_file_location(
 _addon_constants_module = _s3mk_importlib_util.module_from_spec(_addon_constants_spec)
 _addon_constants_spec.loader.exec_module(_addon_constants_module)
 sys.modules['common.addonConstants'] = _addon_constants_module
+# The two log redactors (customLogging/logger.py, common/logRedaction.py) import their merged key
+# lists from common.constants at import. Under the MagicMock above that import reads a mock attribute,
+# which iterates as empty, so a test of the real redactor would redact nothing. Load constants.py
+# privately (it imports only the pure-data lane modules) and pin its merged log-key tuples on the mock.
+_log_keys_spec = _s3mk_importlib_util.spec_from_file_location(
+    '_real_common_constants_for_log_keys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'constants.py')
+)
+_log_keys_module = _s3mk_importlib_util.module_from_spec(_log_keys_spec)
+_log_keys_spec.loader.exec_module(_log_keys_module)
+sys.modules['common.constants'].LOG_SENSITIVE_KEYS = _log_keys_module.LOG_SENSITIVE_KEYS
+sys.modules['common.constants'].LOG_TEXT_SENSITIVE_KEYS = _log_keys_module.LOG_TEXT_SENSITIVE_KEYS
 # The execution/pipeline/workflow helpers live in the common.workflows subpackage.
 # `common` is a MagicMock, so register a REAL package object for `common.workflows`
 # (and bind it as an attribute on the mock `common`) before loading its submodules,
@@ -373,6 +390,17 @@ _rn_spec = _s3mk_importlib_util.spec_from_file_location(
 _rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
 _rn_spec.loader.exec_module(_rn_module)
 sys.modules['common.resourceNames'] = _rn_module
+
+# snsTopicNames is pure naming logic; register the real module so handlers that
+# import it at load time collect cleanly under the MagicMock `common` package.
+_sns_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.snsTopicNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'snsTopicNames.py')
+)
+_sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
+_sns_spec.loader.exec_module(_sns_module)
+sys.modules['common.snsTopicNames'] = _sns_module
+sys.modules['common'].snsTopicNames = _sns_module
 # downloadEligibility is the shared download-eligibility check set (downloadAsset imports it at module
 # level). It builds no client and reads no table at import -- every S3 client, getter and resolver is
 # passed in by the caller -- so load the REAL module by path. It must come after common.s3 above, which

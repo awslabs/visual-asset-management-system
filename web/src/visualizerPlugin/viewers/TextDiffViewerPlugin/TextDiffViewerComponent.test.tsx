@@ -108,9 +108,15 @@ const RIGHT = {
 const urlFor = (assetId: string, versionId?: string) =>
     `https://s3.example/${assetId}/config.json?v=${versionId ?? "latest"}`;
 
-const bodies: Record<string, string> = {};
+const bodies: Record<string, string | Uint8Array> = {};
 
-const renderDiff = (files = [LEFT, RIGHT]) =>
+/** The first bytes of a PNG: signature, IHDR length and type, with the NUL bytes binary data has. */
+const PNG_BYTES = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x06, 0x00, 0x00, 0x00,
+]);
+
+const renderDiff = (files: Array<Record<string, unknown>> = [LEFT, RIGHT]) =>
     render(
         <TextDiffViewerComponent
             assetId="asset-A"
@@ -142,11 +148,20 @@ beforeEach(() => {
             ],
         },
     ]);
-    global.fetch = jest.fn(async (url: string) => ({
-        ok: url in bodies,
-        status: url in bodies ? 200 : 404,
-        text: async () => bodies[url] ?? "",
-    })) as any;
+    // A Response-like object without a body stream: the loader reads it whole. Ranged requests are
+    // answered as if the server ignored Range (200), which the loader handles like a plain GET.
+    global.fetch = jest.fn(async (url: string) => {
+        const body = url in bodies ? bodies[url] : "";
+        const bytes: Uint8Array =
+            typeof body === "string" ? new TextEncoder().encode(body) : (body as Uint8Array);
+        return {
+            ok: url in bodies,
+            status: url in bodies ? 200 : 404,
+            headers: { get: () => null },
+            arrayBuffer: async () =>
+                bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+    }) as any;
 });
 
 describe("TextDiffViewerComponent", () => {
@@ -185,11 +200,57 @@ describe("TextDiffViewerComponent", () => {
         renderDiff();
 
         await waitFor(() => expect(screen.getByText("Not authorized")).toBeInTheDocument());
-        expect(screen.getByText("You are not authorized to view this file.")).toBeInTheDocument();
+        expect(
+            screen.getByText("You do not have permission to view or download this file.")
+        ).toBeInTheDocument();
         // Left side content is still on screen; the whole diff did not collapse into one error.
         expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
         expect(screen.queryByTestId("diff")).toBeNull();
         expect(screen.queryByText("Error loading diff")).toBeNull();
+    });
+
+    it("labels a side pinned to the current version as latest (#1202)", async () => {
+        // The File Manager hands a lone file over with the versionId it listed (the current one),
+        // so the seeded pair is [file @ current id, file unpinned]. Both sides are the latest version.
+        const current = { ...RIGHT, versionId: "v-latest" };
+        const unpinned = { ...RIGHT };
+        renderDiff([current, unpinned]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-latest (latest)"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-right")).toHaveTextContent(
+            "config.json (latest)"
+        );
+    });
+
+    it("[control] labels a side pinned to an older version without (latest)", async () => {
+        renderDiff([{ ...RIGHT, versionId: "v-old" }, { ...RIGHT }]);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-label-left")).toHaveTextContent(
+                "config.json @ v-old"
+            )
+        );
+        expect(screen.getByTestId("text-diff-side-label-left")).not.toHaveTextContent("latest");
+    });
+
+    it("tells a signed-out user to sign in again on 401, per side", async () => {
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B"
+                ? [false, "Unauthorized", 401]
+                : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Signed out")).toBeInTheDocument());
+        expect(
+            screen.getByText("Your session has expired. Sign in again to view this file.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Not authorized")).toBeNull();
     });
 
     it("labels an archived version (410) per side", async () => {
@@ -203,6 +264,152 @@ describe("TextDiffViewerComponent", () => {
 
         await waitFor(() => expect(screen.getByText("Version archived")).toBeInTheDocument());
         expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 2}');
+    });
+
+    it("shows a binary side's notice and still renders the readable side (#1198)", async () => {
+        bodies[urlFor("asset-B")] = PNG_BYTES;
+        const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
+
+        renderDiff();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-binary")).toBeInTheDocument()
+        );
+        expect(screen.getByText("Binary file")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "This file appears to contain binary data and cannot be compared as text."
+            )
+        ).toBeInTheDocument();
+        // The readable side is still on screen, and the binary bytes never reached a highlighter.
+        expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
+        expect(screen.queryByTestId("diff")).toBeNull();
+        // An expected state, not a failure: nothing logged to the console.
+        expect(errors).not.toHaveBeenCalled();
+        errors.mockRestore();
+    });
+
+    it("shows a binary side beside a denied side, each with its own state (#1198)", async () => {
+        bodies[urlFor("asset-A")] = PNG_BYTES;
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B" ? [false, "Forbidden", 403] : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Not authorized")).toBeInTheDocument());
+        expect(screen.getByTestId("text-diff-side-binary")).toBeInTheDocument();
+        expect(screen.getByTestId("text-diff-side-forbidden")).toBeInTheDocument();
+        expect(screen.queryByTestId("highlighted")).toBeNull();
+    });
+
+    it("shows a binary side beside a signed-out side, each with its own state (#1198, #1211)", async () => {
+        bodies[urlFor("asset-A")] = PNG_BYTES;
+        mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+            assetId === "asset-B"
+                ? [false, "Unauthorized", 401]
+                : [true, urlFor(assetId, versionId)]
+        );
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByText("Signed out")).toBeInTheDocument());
+        expect(screen.getByTestId("text-diff-side-binary")).toBeInTheDocument();
+        expect(screen.getByTestId("text-diff-side-unauthenticated")).toBeInTheDocument();
+        expect(screen.queryByText("Not authorized")).toBeNull();
+        expect(screen.queryByTestId("highlighted")).toBeNull();
+    });
+
+    it("decodes a UTF-16 side with a byte-order mark and diffs it as text (#1198)", async () => {
+        // '{"a": 2}' as UTF-16LE with a BOM.
+        const text = '{"a": 2}';
+        const utf16 = new Uint8Array(2 + text.length * 2);
+        utf16.set([0xff, 0xfe]);
+        for (let i = 0; i < text.length; i++) utf16[2 + i * 2] = text.charCodeAt(i);
+        bodies[urlFor("asset-B")] = utf16;
+
+        renderDiff();
+
+        await waitFor(() => expect(screen.getByTestId("diff")).toBeInTheDocument());
+        expect(screen.getByTestId("diff-right").textContent).toBe('{"a": 2}');
+    });
+
+    it("names an unsupported encoding on its side (UTF-16 without a BOM) (#1198)", async () => {
+        const text = '{"a": 2}';
+        const utf16 = new Uint8Array(text.length * 2);
+        for (let i = 0; i < text.length; i++) utf16[i * 2] = text.charCodeAt(i);
+        bodies[urlFor("asset-B")] = utf16;
+
+        renderDiff();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-encoding")).toBeInTheDocument()
+        );
+        expect(screen.getByText("Unsupported text encoding")).toBeInTheDocument();
+        expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
+    });
+
+    describe("the 'pick another version' hint starts on its own line (#1237)", () => {
+        const HINT = "Pick another version above to compare it instead.";
+        const utf16NoBom = () => {
+            const text = '{"a": 2}';
+            const bytes = new Uint8Array(text.length * 2);
+            for (let i = 0; i < text.length; i++) bytes[i * 2] = text.charCodeAt(i);
+            return bytes;
+        };
+
+        it.each([
+            [
+                "binary",
+                () => {
+                    bodies[urlFor("asset-B")] = PNG_BYTES;
+                },
+            ],
+            [
+                "encoding",
+                () => {
+                    bodies[urlFor("asset-B")] = utf16NoBom();
+                },
+            ],
+            [
+                "failed",
+                () => {
+                    mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+                        assetId === "asset-B"
+                            ? [false, "Server error", 500]
+                            : [true, urlFor(assetId, versionId)]
+                    );
+                },
+            ],
+        ])("renders the hint as a separate block after a %s notice", async (kind, arrange) => {
+            arrange();
+
+            renderDiff();
+
+            const pane = await screen.findByTestId(`text-diff-side-${kind}`);
+            const hint = await screen.findByTestId("text-diff-side-version-hint");
+            expect(pane).toContainElement(hint);
+            expect(hint).toHaveTextContent(HINT);
+            // A block element, not an inline <small>/<span> that runs on with the message text.
+            expect(hint.tagName).toBe("P");
+            expect(window.getComputedStyle(hint).display).toBe("block");
+            // The message is its own node beside the hint, never inside the same element.
+            expect(hint.parentElement?.textContent).not.toBe(hint.textContent);
+            expect(hint.textContent).toBe(HINT);
+        });
+
+        it("[control] shows no hint on a signed-out side (sign in again, not another version)", async () => {
+            mockDownloadAsset.mockImplementation(async ({ assetId, versionId }: any) =>
+                assetId === "asset-B"
+                    ? [false, "Unauthorized", 401]
+                    : [true, urlFor(assetId, versionId)]
+            );
+
+            renderDiff();
+
+            await screen.findByTestId("text-diff-side-unauthenticated");
+            expect(screen.queryByTestId("text-diff-side-version-hint")).toBeNull();
+        });
     });
 
     it("re-fetches only the side whose version was changed", async () => {

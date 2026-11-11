@@ -14,8 +14,10 @@ Key suffixes under ``addon/`` are recommended so a later core key does not colli
 here; an exact duplicate of a core or custom key fails at synth.
 """
 
-from common.resourceNames import ResourceParamKey  # noqa: F401
+from common.resourceNames import ResourceParamKey
 
 
 class AddonResourceKeys:
-    pass
+    # EDH Workstations: the workstation session records and the AMI recipe records
+    EDH_SESSION_STORAGE_TABLE = ResourceParamKey("addon/dynamoTables/edhSessionStorage", ("EDH_SESSION_STORAGE_TABLE_NAME",))
+    EDH_AMI_RECIPE_STORAGE_TABLE = ResourceParamKey("addon/dynamoTables/edhAmiRecipeStorage", ("EDH_AMI_RECIPE_STORAGE_TABLE_NAME",))
