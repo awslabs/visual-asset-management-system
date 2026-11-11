@@ -353,14 +353,14 @@ renders a field for each and substitutes the value into the configuration body a
 
 **Evaluation Mode Parameters:**
 
-| Parameter         | Template tag        | Type    | Default | Description                                                                            |
-| ----------------- | ------------------- | ------- | ------- | -------------------------------------------------------------------------------------- |
-| `checkpointPath`  | `CHECKPOINT_PATH`   | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/model_300.pt`)            |
-| `policyS3Uri`     | -                   | string  | -       | Full S3 URI to trained policy (`.pt` file); must name the executing asset's own bucket |
-| `numEnvs`         | `NUM_ENVS`          | integer | 100     | Number of parallel environments                                                        |
-| `numEpisodes`     | `NUM_EPISODES`      | integer | 50      | Number of episodes to evaluate                                                         |
-| `stepsPerEpisode` | `STEPS_PER_EPISODE` | integer | 1000    | Maximum simulation steps in one episode                                                |
-| `recordVideo`     | `RECORD_VIDEO`      | boolean | false   | Upload the evaluation video to the asset                                               |
+| Parameter         | Template tag        | Type    | Default | Description                                                                               |
+| ----------------- | ------------------- | ------- | ------- | ----------------------------------------------------------------------------------------- |
+| `checkpointPath`  | `CHECKPOINT_PATH`   | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/<executionId>/model_300.pt`) |
+| `policyS3Uri`     | -                   | string  | -       | Full S3 URI to trained policy (`.pt` file); must name the executing asset's own bucket    |
+| `numEnvs`         | `NUM_ENVS`          | integer | 100     | Number of parallel environments                                                           |
+| `numEpisodes`     | `NUM_EPISODES`      | integer | 50      | Number of episodes to evaluate                                                            |
+| `stepsPerEpisode` | `STEPS_PER_EPISODE` | integer | 1000    | Maximum simulation steps in one episode                                                   |
+| `recordVideo`     | `RECORD_VIDEO`      | boolean | false   | Upload the evaluation video to the asset                                                  |
 
 > **Note:** Specify either `checkpointPath` (recommended) or `policyS3Uri`. If neither is provided, the pipeline auto-discovers `.pt` files in the config directory.
 
@@ -373,25 +373,25 @@ renders a field for each and substitutes the value into the configuration body a
 
 ### Output Files
 
-After training completes, the following files are uploaded to the output S3 path, organized under the job UUID for easy identification:
+After training completes, the following files are added to the asset the run executed against. Both Isaac Lab workflows set `defaultOutputFileBaseExecutionPathExtension` to `/{{executionId}}/`, which inserts a folder named for the workflow execution immediately before each file name:
 
-| Path                            | Description                                    |
-| ------------------------------- | ---------------------------------------------- |
-| `{uuid}/checkpoints/model_*.pt` | Training checkpoints written by the RL library |
-| `{uuid}/metrics.csv`            | Training metrics exported from TensorBoard     |
-| `{uuid}/train-config.json`      | Copy of input configuration                    |
-| `{uuid}/*.txt`                  | Converted log files (e.g., git diff files)     |
+| Path                                   | Description                                    |
+| -------------------------------------- | ---------------------------------------------- |
+| `checkpoints/<executionId>/model_*.pt` | Training checkpoints written by the RL library |
+| `<executionId>/metrics.csv`            | Training metrics exported from TensorBoard     |
+| `<executionId>/train-config.json`      | Copy of input configuration                    |
+| `<executionId>/*.txt`                  | Converted log files (e.g., git diff files)     |
 
 For evaluation jobs:
 
-| Path                          | Description                                  |
-| ----------------------------- | -------------------------------------------- |
-| `{uuid}/metrics.csv`          | Evaluation metrics exported from TensorBoard |
-| `{uuid}/evaluate-config.json` | Copy of input configuration                  |
-| `{uuid}/videos/*.mp4`         | Recorded evaluation videos                   |
-| `{uuid}/*.txt`                | Converted log files                          |
+| Path                                 | Description                                  |
+| ------------------------------------ | -------------------------------------------- |
+| `<executionId>/metrics.csv`          | Evaluation metrics exported from TensorBoard |
+| `<executionId>/evaluate-config.json` | Copy of input configuration                  |
+| `videos/<executionId>/*.mp4`         | Recorded evaluation videos                   |
+| `<executionId>/*.txt`                | Converted log files                          |
 
-The `{uuid}` prefix matches the job execution UUID, making it easy to identify and organize outputs from multiple jobs within the same asset.
+`<executionId>` is the workflow execution id, so outputs from several runs on the same asset stay apart. To evaluate a checkpoint a training run wrote, set `checkpointPath` to its path, for example `checkpoints/<executionId>/model_300.pt`.
 
 ---
 
