@@ -22,7 +22,10 @@ from .....utils.exceptions import (
     AssetAlreadyExistsError,
     FileUploadError,
     InvalidFileError,
+    SearchDisabledError,
 )
+from .....utils.features import is_feature_enabled
+from .....constants import FEATURE_NOOPENSEARCH
 from typing import List, Set, Tuple
 from ....assets import create as assets_create
 from ....file import upload as file_upload
@@ -168,7 +171,7 @@ def json_mode_stdout_discarded(json_output: bool):
     command's JSON result. sys.stdout is process-wide, so the redirect wraps the whole pool on
     the calling thread instead of each worker call. When the pool ends with an exception (a
     nested command that exits, for example), the captured text goes to stderr so its reason is
-    not lost.
+    not lost; an interrupt replays nothing.
     """
     if not json_output:
         yield
@@ -177,6 +180,8 @@ def json_mode_stdout_discarded(json_output: bool):
     try:
         with contextlib.redirect_stdout(captured):
             yield
+    except KeyboardInterrupt:
+        raise
     except BaseException:
         click.echo(captured.getvalue(), err=True, nl=False)
         raise
@@ -317,7 +322,10 @@ def process_assets_parallel(
     
     progress_lock = Lock()
     
-    with json_mode_stdout_discarded(json_output), ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with (
+        json_mode_stdout_discarded(json_output),
+        ThreadPoolExecutor(max_workers=max_workers) as executor,
+    ):
         futures = {
             executor.submit(
                 create_single_asset,
@@ -620,7 +628,10 @@ def process_parallel_operations(
     alias_tracker = {}
     tracker_lock = Lock()
     
-    with json_mode_stdout_discarded(json_output), ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with (
+        json_mode_stdout_discarded(json_output),
+        ThreadPoolExecutor(max_workers=max_workers) as executor,
+    ):
         futures = []
         
         # Submit metadata creation tasks
@@ -926,6 +937,15 @@ def import_plmxml(
     if not xml_files:
         click.secho(f"✗ No XML files found in: {plmxml_dir}", fg="red", bold=True, err=True)
         raise click.ClickException(f"No XML files found in: {plmxml_dir}")
+    
+    # Existing assets are found through search, so the import cannot run with search turned off
+    if is_feature_enabled(FEATURE_NOOPENSEARCH, get_profile_manager_from_context(ctx)):
+        error = SearchDisabledError(
+            "Search functionality is disabled for this environment. "
+            "PLM XML import uses search to find existing assets."
+        )
+        output_error(error, json_output, error_type="Search Disabled")
+        raise click.ClickException(str(error))
     
     # Phase 0: Parse all XML files
     phase0_start = time.time()

@@ -178,16 +178,18 @@ class TestIndustryPLMImportJsonOutput:
             for module in self.INVOKED_MODULES:
                 stack.enter_context(patch(f'vamscli.commands.{module}.APIClient',
                                           return_value=mocks['api_client']))
-                stack.enter_context(patch(f'vamscli.commands.{module}.get_profile_manager_from_context',
-                                          return_value=mocks['profile_manager']))
+                stack.enter_context(patch(
+                    f'vamscli.commands.{module}.get_profile_manager_from_context',
+                    return_value=mocks['profile_manager']))
             # Search is on in the deployment (the NOOPENSEARCH switch is off).
-            stack.enter_context(patch('vamscli.commands.search.is_feature_enabled', return_value=False))
+            mocks['profile_manager'].has_feature_switch.return_value = False
             asset_ids = count(1)
             api = mocks['api_client']
             api.search_simple.return_value = {'hits': {'hits': [], 'total': {'value': 0}}}
             api.create_asset.side_effect = lambda data: {'assetId': f'asset-{next(asset_ids)}',
                                                          'message': 'Asset created'}
-            api.create_asset_link.return_value = {'assetLinkId': 'link-1', 'message': 'Link created'}
+            api.create_asset_link.return_value = {'assetLinkId': 'link-1',
+                                                  'message': 'Link created'}
             yield mocks
 
     @pytest.fixture
@@ -220,14 +222,42 @@ class TestIndustryPLMImportJsonOutput:
         assert 'Asset created successfully' in result.stdout
         assert 'Asset link created successfully' in result.stdout
 
-    def test_json_output_nested_exit_reason_goes_to_stderr(self, cli_runner, plm_mocks, plm_dir):
-        """A nested command that exits (search turned off) keeps stdout free of text and its reason visible."""
-        with patch('vamscli.commands.search.is_feature_enabled', return_value=True):
-            result = self._import(cli_runner, plm_dir, '--json-output')
+    def test_json_output_search_off_writes_one_json_error(self, cli_runner, plm_mocks, plm_dir):
+        """With search turned off the import stops before any API call, with one JSON error."""
+        from vamscli.constants import FEATURE_NOOPENSEARCH
+        plm_mocks['profile_manager'].has_feature_switch.side_effect = (
+            lambda name: name == FEATURE_NOOPENSEARCH)
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
 
         assert result.exit_code == 1
-        assert result.stdout == ''
-        assert 'Search functionality is disabled' in result.stderr
+        data = json.loads(result.stdout)
+        assert data['error_type'] == 'SearchDisabledError'
+        assert 'Search functionality is disabled' in data['error']
+        plm_mocks['api_client'].search_simple.assert_not_called()
+        plm_mocks['api_client'].create_asset.assert_not_called()
+
+    def test_json_output_nested_exit_reason_goes_to_stderr(self, cli_runner, plm_mocks, plm_dir):
+        """A nested exit inside a pool keeps its text off stdout and its reason on stderr."""
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        api = plm_mocks['api_client']
+        api.search_simple.side_effect = InvalidSearchParametersError('bad query')
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 1
+        assert 'Creating asset' not in result.stdout
+        assert 'InvalidSearchParametersError' in result.stderr
+
+    def test_json_output_interrupt_replays_nothing(self, cli_runner, plm_mocks, plm_dir):
+        """Ctrl+C during a pool does not dump the pool's captured output to stderr."""
+        plm_mocks['api_client'].create_asset.side_effect = KeyboardInterrupt
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 1
+        assert '"hits"' not in result.stderr
+        assert '"hits"' not in result.stdout
 
 
 class TestIndustryCommandHierarchy:
