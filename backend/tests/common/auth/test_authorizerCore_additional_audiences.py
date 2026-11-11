@@ -256,3 +256,53 @@ class TestAuthenticateRequestAudit:
                                            fronted="none")
         assert result["authorized"] is False
         assert result["failure"] == core.FAILURE_UNAUTHENTICATED
+
+
+def _m2m_access_token(client=MCP_CLIENT):
+    """A Cognito client_credentials access token: no username, sub is the app client id."""
+    now = int(time.time())
+    claims = {"sub": client, "client_id": client, "iss": COGNITO_ISSUER, "token_use": "access",
+              "scope": "vams/api", "iat": now, "exp": now + 600}
+    return joserfc_jwt.encode({"alg": "RS256", "kid": KID}, claims, _KEY)
+
+
+@pytest.mark.unit
+class TestMachineToMachineTokensAreRejected:
+    def test_a_listed_client_m2m_access_token_is_rejected(self, cognito):
+        cognito.setattr(core, "ADDITIONAL_APP_CLIENT_IDS", [MCP_CLIENT])
+        assert core.verify_cognito_jwt(_m2m_access_token()) is None
+
+    def test_an_m2m_access_token_is_unauthenticated_in_authenticate_request(self, cognito, monkeypatch):
+        cognito.setattr(core, "ADDITIONAL_APP_CLIENT_IDS", [MCP_CLIENT])
+        monkeypatch.setattr(core, "ALLOWED_IP_RANGES", [])
+        result = core.authenticate_request(_event(_m2m_access_token()), fronted="none")
+        assert result["authorized"] is False
+        assert result["failure"] == core.FAILURE_UNAUTHENTICATED
+
+    def test_a_blank_username_access_token_is_rejected(self, cognito):
+        cognito.setattr(core, "ADDITIONAL_APP_CLIENT_IDS", [MCP_CLIENT])
+        assert core.verify_cognito_jwt(_cognito_token("access", client=MCP_CLIENT, username="  ")) is None
+
+    @pytest.mark.parametrize("kind", ["id", "access"])
+    def test_web_client_user_tokens_are_unchanged(self, cognito, kind):
+        assert core.verify_cognito_jwt(_cognito_token(kind)) is not None
+
+    def test_an_external_additional_audience_token_without_a_user_is_rejected(self, external):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        assert core.verify_external_jwt(_external_token(aud=EXTERNAL_EXTRA, sub="")) is None
+
+    @pytest.mark.parametrize("claim", ["client_id", "azp", "cid"])
+    def test_an_external_additional_audience_m2m_token_is_rejected(self, external, claim):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        token = _external_token(aud=EXTERNAL_EXTRA, sub="svc-client", **{claim: "svc-client"})
+        assert core.verify_external_jwt(token) is None
+
+    def test_an_external_additional_audience_user_token_is_accepted(self, external):
+        external.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [EXTERNAL_EXTRA])
+        token = _external_token(aud=EXTERNAL_EXTRA, sub="user-1", azp="mcp-client")
+        assert core.verify_external_jwt(token) is not None
+
+    def test_the_primary_external_audience_is_not_subject_to_the_user_check(self, external):
+        # The web app's own audience keeps the existing behaviour, whatever the client claims say.
+        token = _external_token(sub="svc-client", client_id="svc-client")
+        assert core.verify_external_jwt(token) is not None

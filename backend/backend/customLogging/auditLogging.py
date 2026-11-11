@@ -829,7 +829,7 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
     - Source IP address
     - The accepted audience (Cognito app client id or external IdP audience) a verified
       token was issued to, so calls made through an additional client are distinguishable
-      (issue #1328). It is a public client identifier, never token content.
+      It is a public client identifier, never token content.
 
     NEVER logs:
     - Raw JWT tokens

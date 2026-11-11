@@ -385,7 +385,7 @@ const EXECUTION_LOG_READ_PREFIX_PATTERN =
 const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 
 /**
- * Most additional token audiences one provider may list (#1328). The list is meant for a handful
+ * Most additional token audiences one provider may list. The list is meant for a handful
  * of named clients (a remote MCP server, an integration), and every entry widens the set of tokens
  * the API accepts, so it is bounded.
  */
@@ -1720,9 +1720,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
     }
 
-    // Additional token audiences (#1328). Absent means none: the API accepts tokens issued to the
-    // web app client (Cognito) or to lambdaAuthorizorJWTAudience (external IdP) only, as before the
-    // option existed.
+    // Additional token audiences. Absent means none: the API accepts tokens issued to the web app
+    // client (Cognito) or to lambdaAuthorizorJWTAudience (external IdP) only.
     if (config.app.authProvider.useCognito.additionalTokenAudiences == undefined) {
         config.app.authProvider.useCognito.additionalTokenAudiences = [];
     }
@@ -3392,7 +3391,7 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
 
-    //Additional token audiences (#1328) belong to the provider they are listed under. A list under a
+    //Additional token audiences belong to the provider they are listed under. A list under a
     //disabled provider is ignored (normalized to empty, so nothing reaches the authorizer), matching
     //how useSaml / useOidc are treated when Cognito is off.
     if (
@@ -4321,7 +4320,7 @@ export function validateExternalPipelineBridges(
 }
 
 /**
- * Validates app.authProvider.<provider>.additionalTokenAudiences (#1328): an array of at most
+ * Validates app.authProvider.<provider>.additionalTokenAudiences: an array of at most
  * MAX_ADDITIONAL_TOKEN_AUDIENCES distinct, exact audience values. Each entry is compared by exact
  * string equality in the authorizer, so a wildcard, a blank entry, or surrounding whitespace (which
  * would never match) is rejected. A Cognito entry must be an app client id; an external entry must
@@ -5083,7 +5082,7 @@ export interface ConfigPublic {
                 // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
                 retainLegacyGroupsAttribute: boolean;
                 // Extra app client ids of the VAMS user pool whose ID and access tokens the API accepts,
-                // alongside the web app client (#1328), e.g. a client registered for a remote MCP server.
+                // alongside the web app client, e.g. a client registered for a remote MCP server.
                 // Empty (the default) accepts the web app client only.
                 additionalTokenAudiences?: string[];
             };
@@ -5101,7 +5100,7 @@ export interface ConfigPublic {
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;
                 // Extra `aud` values the API accepts from the external IdP, alongside
-                // lambdaAuthorizorJWTAudience (#1328). Empty (the default) accepts that audience only.
+                // lambdaAuthorizorJWTAudience. Empty (the default) accepts that audience only.
                 additionalTokenAudiences?: string[];
             };
         };

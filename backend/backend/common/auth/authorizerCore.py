@@ -93,9 +93,9 @@ COGNITO_BASE_URL = os.environ.get('COGNITO_BASE_URL')
 JWT_ISSUER_URL = os.environ.get('JWT_ISSUER_URL')
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE')
 
-# Additional token audiences (issue #1328). Each is a JSON array of strings, set by CDK only when
+# Additional token audiences. Each is a JSON array of strings, set by CDK only when
 # the operator lists extra audiences (app.authProvider.<provider>.additionalTokenAudiences), so an
-# unset variable means the primary audience above is the only one accepted, exactly as before.
+# unset variable means the primary audience above is the only one accepted.
 ADDITIONAL_APP_CLIENT_IDS_ENV = os.environ.get('ADDITIONAL_APP_CLIENT_IDS')
 JWT_ADDITIONAL_AUDIENCES_ENV = os.environ.get('JWT_ADDITIONAL_AUDIENCES')
 
@@ -653,9 +653,38 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
                 'failure': FAILURE_FORBIDDEN}
 
 
+def _non_blank(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() != ''
+
+
+# Claims an OAuth access token names its client with. A token whose user identity equals one of
+# them was issued to the client itself (a client_credentials grant), not to a user.
+_CLIENT_IDENTIFIER_CLAIMS = ('client_id', 'azp', 'cid')
+
+
+def _external_token_names_a_user(claims: Dict[str, Any]) -> bool:
+    """Whether an external IdP token accepted through an additional audience identifies a user.
+
+    A token whose 'aud' includes JWT_AUDIENCE is not checked here: that is the web app's own
+    audience. A token accepted only through JWT_ADDITIONAL_AUDIENCES must carry the identity
+    claim the authorizer resolves the user from (cognito:username, then username, then sub), and
+    that identity must not be the token's own client identifier, which is the shape of a
+    machine-to-machine (client_credentials) token.
+    """
+    aud = claims.get('aud')
+    audiences = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
+    if JWT_AUDIENCE and JWT_AUDIENCE in audiences:
+        return True
+    identity = claims.get('cognito:username') or claims.get('username') or claims.get('sub')
+    if not _non_blank(identity):
+        return False
+    client_ids = {claims.get(c) for c in _CLIENT_IDENTIFIER_CLAIMS if _non_blank(claims.get(c))}
+    return identity not in client_ids
+
+
 def accepted_cognito_client_ids() -> List[str]:
     """The Cognito app client ids whose tokens the API accepts: the web client first, then the
-    configured additional clients (issue #1328). Read at call time so it follows the module
+    configured additional clients. Read at call time so it follows the module
     configuration."""
     accepted = [APP_CLIENT_ID] if APP_CLIENT_ID else []
     for client_id in ADDITIONAL_APP_CLIENT_IDS:
@@ -666,7 +695,7 @@ def accepted_cognito_client_ids() -> List[str]:
 
 def accepted_external_audiences() -> List[str]:
     """The external IdP audiences the API accepts: the configured JWT_AUDIENCE first, then the
-    configured additional audiences (issue #1328)."""
+    configured additional audiences."""
     accepted = [JWT_AUDIENCE] if JWT_AUDIENCE else []
     for audience in JWT_ADDITIONAL_AUDIENCES:
         if audience not in accepted:
@@ -756,7 +785,7 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
 
         # Verify the Audience: an ID token names its app client in 'aud', an access token in
         # 'client_id'. The token must have been issued to the web app client or to one of the
-        # additional app clients the operator configured (issue #1328); the comparison is
+        # additional app clients the operator configured; the comparison is
         # exact. Issuer, signature, expiry and token_use checks are the same for every client.
         token_audience = claims.get('aud') or claims.get('client_id')
         accepted_client_ids = accepted_cognito_client_ids()
@@ -775,6 +804,13 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         token_use = claims.get('token_use')
         if token_use not in ['id', 'access']:
             logger.error(f'Invalid token_use: {token_use}')
+            return None
+
+        # An access token must name the user it was issued for. A Cognito client_credentials
+        # (machine-to-machine) access token carries no 'username' and its 'sub' is the app
+        # client id, so it identifies no VAMS user and is rejected like any other bad token.
+        if token_use == 'access' and not _non_blank(claims.get('username')):
+            logger.error('Access token carries no username claim; a machine-to-machine token is not accepted')
             return None
 
         logger.info(f'Cognito token successfully verified for user: {claims.get("sub", "unknown")}')
@@ -821,7 +857,7 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
 
         # Verify and decode the token. PyJWT accepts the token when any of its 'aud' values is
         # one of the listed audiences: the configured JWT_AUDIENCE plus the configured
-        # additional audiences (issue #1328). With none configured the list is the single
+        # additional audiences. With none configured the list is the single
         # JWT_AUDIENCE, which PyJWT treats exactly like the bare string.
         claims = pyjwt.decode(
             token,
@@ -836,6 +872,10 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
                 'verify_iss': True
             }
         )
+
+        if not _external_token_names_a_user(claims):
+            logger.error('Token accepted through an additional audience names no user; it is not accepted')
+            return None
 
         logger.info(f'External IDP token successfully verified for user: {claims.get("sub", "unknown")}')
         return claims
@@ -1250,7 +1290,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     # The app client / audience the token was issued to, for the authorization audit record, so
     # calls made through an additional client (for example a remote MCP server) are
-    # distinguishable from web app calls (issue #1328). Not added to the context: the token's own
+    # distinguishable from web app calls. Not added to the context: the token's own
     # aud / client_id claim is already there.
     return {"authorized": True, "context": context, "reason": None,
             "tokenAudience": token_audience_for_audit(claims)}

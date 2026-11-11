@@ -45,7 +45,7 @@ Choose Cognito federation (OIDC or SAML) when you need to support both corporate
 :::
 
 :::info[Tokens issued to other clients]
-By default the authorizer accepts only tokens issued to the VAMS web application: a Cognito ID token whose `aud`, or access token whose `client_id`, is the web app client, or an external IdP token whose `aud` is `lambdaAuthorizorJWTAudience`. A deployment can accept tokens issued to further clients, such as a remotely hosted MCP server, by listing their app client ids (Cognito) or audiences (external IdP) in `additionalTokenAudiences`. Signature, issuer, expiry and token-use checks are unchanged, and the user's roles decide each request as usual. See [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences).
+By default the authorizer accepts only tokens issued to the VAMS web application: a Cognito ID token whose `aud`, or access token whose `client_id`, is the web app client, or an external IdP token whose `aud` is `lambdaAuthorizorJWTAudience`. A deployment can accept tokens issued to further clients, such as a remotely hosted MCP server, by listing their app client ids (Cognito) or audiences (external IdP) in `additionalTokenAudiences`. Signature, issuer, expiry and token-use checks are unchanged, and the user's roles decide each request as usual. A listed client must be a user sign-in client (for example the authorization code grant). A machine-to-machine client (the client credentials grant) issues tokens that name no VAMS user, and the API rejects them with `401`. See [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences).
 :::
 
 ### API Key

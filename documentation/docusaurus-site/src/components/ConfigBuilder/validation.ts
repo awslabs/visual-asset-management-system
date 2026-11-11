@@ -219,7 +219,7 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
  * Rules for app.authProvider.<provider>.additionalTokenAudiences (config.ts:
  * validateAdditionalTokenAudiences, and the "additionalTokenAudiences is ignored because" warning
  * getConfig() gives when the provider is disabled). Each entry is matched exactly by the API
- * authorizer, so the shape rules reject what could never match or would widen it (#1328).
+ * authorizer, so the shape rules reject what could never match or would widen it.
  */
 const MAX_ADDITIONAL_TOKEN_AUDIENCES = 10;
 const ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH = 512;

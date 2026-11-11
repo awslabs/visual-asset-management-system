@@ -581,6 +581,8 @@ To accept such a client, list it under the provider in use:
 -   **Amazon Cognito**: create an app client in the VAMS user pool for the client (for example with the Amazon Cognito console or `aws cognito-idp create-user-pool-client`) and add its app client id to `app.authProvider.useCognito.additionalTokenAudiences`.
 -   **External OAuth IdP**: register the client with your IdP and add the `aud` value its tokens carry to `app.authProvider.useExternalOAuthIdp.additionalTokenAudiences`.
 
+A listed client must be a user sign-in client (for example the authorization code grant). A machine-to-machine client (the client credentials grant) issues tokens that name no VAMS user, and the API rejects them with `401`.
+
 Then redeploy. The setting changes only the authorizer's audience check. The token's signature, issuer, expiry and (for Amazon Cognito) `token_use` are checked exactly as for the web app, and the user's VAMS roles and constraints decide every request as usual: an accepted client grants no permission of its own. The authorization audit log records the accepted audience of each request (`tokenAudience`), so requests made through an additional client can be told apart from web app requests. With the lists empty, the deployed authorizer is the same as in earlier versions.
 
 Only tokens are accepted, never credentials: the API does not exchange or store tokens, and a client is responsible for obtaining its users' tokens through the provider's normal sign-in flow.
