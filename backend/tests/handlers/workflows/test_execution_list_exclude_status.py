@@ -23,6 +23,10 @@ from backend.backend.models import executions as em
 
 SKIPPED = "SKIPPED"
 
+# A fixed listing lower bound, older than every row these tests build, for the one test that
+# compares two whole response messages.
+PINNED_START_DATE = "2020-01-01T00:00:00Z"
+
 
 # --------------------------------------------------------------------------- #
 # Validation
@@ -218,11 +222,17 @@ class TestAssetListExclusion:
                    rows[3]["workflowExecutionId"]}
         statuses = {eid: SKIPPED for eid in (rows[0]["workflowExecutionId"],
                                              rows[2]["workflowExecutionId"])}
-        plain, plain_handed, _ = _run_asset([{"Items": rows}], statuses, {"pageSize": page_size},
-                                            refused=refused)
+        # Both listings pin filterStartDate, which the handler otherwise echoes back as "now minus
+        # DEFAULT_EXECUTION_LOOKBACK_DAYS" to whole seconds: two calls either side of a second
+        # boundary would differ in that field alone and fail the whole-message comparison below.
+        # The bound predates every row, so the walk is the same as with the default.
+        plain, plain_handed, _ = _run_asset(
+            [{"Items": rows}], statuses,
+            {"pageSize": page_size, "filterStartDate": PINNED_START_DATE}, refused=refused)
         excluded, excluded_handed, _ = _run_asset(
-            [{"Items": rows}], statuses, {"pageSize": page_size, "excludeStatus": "SKIPPED"},
-            refused=refused)
+            [{"Items": rows}], statuses,
+            {"pageSize": page_size, "excludeStatus": "SKIPPED",
+             "filterStartDate": PINNED_START_DATE}, refused=refused)
         assert excluded == plain
         assert excluded_handed == plain_handed
         assert not set(plain_handed) & refused

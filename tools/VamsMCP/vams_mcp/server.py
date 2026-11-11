@@ -40,6 +40,7 @@ from .client import (  # noqa: E402
     SearchDisabledError,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .addon_tools import register_addon_tools  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 # The CLI's own selection parsing, so a tool and `vamscli zip-download create` build the same body.
@@ -2751,6 +2752,13 @@ if CONFIG.enable_destructive:
         ZipDownloadStateError (cancel it first). Any download URL already issued stops working.
         """
         return CLIENT.api.delete_zip_download(database_id, asset_id, request_id)
+
+
+# =========================================================================
+# ADD-ON TOOLS (upstream add-on lane: vams_mcp/addon_tools/)
+# =========================================================================
+
+register_addon_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 # =========================================================================

@@ -103,6 +103,10 @@ aws bedrock-agentcore-control list-agent-runtimes \
     --output text > vams-cad-agent-runtimes.txt
 ```
 
+## Pre-uninstall: add-ons
+
+An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
@@ -255,7 +259,7 @@ done
 
 ## Step 4: Delete Amazon CloudWatch log groups
 
-VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine and container groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
 
 The key named log groups are:
 
@@ -271,13 +275,19 @@ The key named log groups are:
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
 
+The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
+
+```bash
+aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
+```
+
 ```bash
 # List VAMS-related log groups
 aws logs describe-log-groups \
     --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
     --query 'logGroups[].logGroupName' --output text
 
-# List all VAMS named log groups (audit, API access, workflow, orchestration,
+# List all VAMS named log groups (audit, workflow, orchestration,
 # VPC, CloudTrail, and per-pipeline state machine groups)
 aws logs describe-log-groups \
     --log-group-name-prefix "/aws/vendedlogs/VAMS" \
@@ -295,7 +305,7 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 
-# Delete all VAMS named vendedlogs groups (audit, API access, orchestration bus,
+# Delete all VAMS named vendedlogs groups (audit, orchestration bus,
 # VPC flow logs, per-pipeline state machine logs). Includes the conditional
 # CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
 for LG in $(aws logs describe-log-groups \
@@ -735,7 +745,7 @@ aws logs describe-log-groups \
     --query 'logGroups[].logGroupName'
 ```
 
-All of the above commands should return empty results when the uninstall is complete.
+All of the above commands should return empty results when the uninstall is complete. An add-on can leave resources of its own that these checks do not cover; the pages of each add-on the deployment enabled list the checks for them.
 
 ## Cost impact after uninstall
 

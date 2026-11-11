@@ -160,6 +160,8 @@ Once enabled, the extension opens a **VAMS Connector** window with:
     -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
 5.  **Workflows** -- Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its first pipeline accept, and a template choice for a pipeline that requires one
 
+When the extension's CLI profile is already signed in, as on a desktop whose session sign-in signed it in, the window takes that session over at startup, and **Refresh Databases** takes over a sign-in that completes after Isaac Sim started. Closing Isaac Sim leaves a session taken over this way signed in, and signs out one entered under **Authentication**. A request refused on a session taken over this way shows the CLI's error on the status line, followed by how to recover: on an EDH Workstations desktop whose sign-in ran (the desktop's own profile `edh-<instance-id>`, with the sign-in's log under `~/.vams/hosts/<instance-id>/`), `if this desktop was just started, its VAMS sign-in may not have completed; …`, which also names renewing the workstation's lease; anywhere else, `the session this extension took over was refused; sign in under Authentication`.
+
 A `.usd`, `.usda` or `.usdc` layer, a URDF file and a MJCF file name other files of the asset by relative path (sublayers, references, textures, meshes). Opening or importing one downloads the whole asset, laid out as it is in VAMS, into a new private temporary directory so those paths resolve; the status line reports how many of the asset's other files did not download, and a requested file that did not download with the reason the download gave, for example `Reference error: /robot.usd did not download: <error>`. A `.usdz` package carries its dependencies and is downloaded alone.
 
 **Export & Upload** writes the current stage, flattened into a single layer, to the root of the selected asset. A texture, reference or sublayer path to a file downloaded with that same asset is rewritten relative to the asset root, so the export resolves in VAMS and in a whole-asset download. A path to any other local file, including a file of another asset or one written into a download directory afterwards (such as importer output), is left as it is and resolves only on the machine that exported the stage; the status line reports how many such paths the export contains, and `export_and_upload_scene` returns the count as `unportablePaths`.
@@ -195,7 +197,8 @@ databases = connector.list_databases()
 assets = connector.list_assets(databases[0].database_id)
 files = connector.list_files(databases[0].database_id, assets[0].asset_id)
 
-# Download (a file that does not download raises VamsCliError naming the download's error)
+# Download (a file that does not download raises VamsCliError naming the download's error;
+# a credential VAMS refuses raises VamsAccessDeniedError, a VamsCliError)
 connector.download_file("my-db", "my-asset", "/model.usd", "/tmp/downloads")
 result = connector.download_asset("my-db", "my-asset", "/tmp/full_asset")
 

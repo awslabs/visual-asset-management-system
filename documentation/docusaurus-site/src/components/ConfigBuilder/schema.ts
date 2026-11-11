@@ -16,6 +16,7 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { ADDON_FIELDS } from "./addon";
 
 export const SECTIONS: Section[] = [
     {
@@ -34,7 +35,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, the container pipelines, and the add-ons that run in the VPC.",
         order: 3,
     },
     {
@@ -268,7 +269,7 @@ const imageTo3dAgentImageEditingField: FieldMeta = {
     help: "Lets the agent inpaint and restyle texture views with the Stability AI image models on Amazon Bedrock, through their us. inference profiles. Commercial partition, US Regions only; off elsewhere, where the agent textures from the photographs alone.",
 };
 
-export const FIELDS: FieldMeta[] = [
+const CORE_FIELDS: FieldMeta[] = [
     // ===== Deployment basics =====
     {
         path: "name",
@@ -2169,6 +2170,8 @@ export const FIELDS: FieldMeta[] = [
         help: "Builds the zipArchive container image with AWS CodeBuild during deployment instead of local Docker. Default false.",
     },
 ];
+
+export const FIELDS: FieldMeta[] = [...CORE_FIELDS, ...ADDON_FIELDS];
 
 /** Fields belonging to a section, in declaration order. */
 export function fieldsForSection(sectionId: string): FieldMeta[] {

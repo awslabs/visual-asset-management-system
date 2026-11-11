@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useId, useState } from "react";
 import {
     DEFAULT_AMBIENT_INTENSITY,
     DEFAULT_DIRECTIONAL_INTENSITY,
     DEFAULT_ENVIRONMENT_INTENSITY,
 } from "../utils/sceneLighting";
+import { supportsWireframe } from "../utils/selectionHighlight";
 
 interface ControlsProps {
     scene: any;
@@ -61,6 +62,7 @@ const Controls: React.FC<ControlsProps> = ({
         DEFAULT_ENVIRONMENT_INTENSITY
     );
     const [wireframe, setWireframe] = useState<boolean>(false);
+    const wireframeDescriptionId = useId();
 
     const THREE = (window as any).THREE;
 
@@ -276,13 +278,13 @@ const Controls: React.FC<ControlsProps> = ({
             fileGroups.forEach((group: any) => {
                 group.traverse((obj: any) => {
                     if (obj.material) {
-                        if (Array.isArray(obj.material)) {
-                            obj.material.forEach((mat: any) => {
-                                mat.wireframe = newState;
-                            });
-                        } else {
-                            obj.material.wireframe = newState;
-                        }
+                        // Points, lines and sprites have no faces to outline (#1275).
+                        const materials = Array.isArray(obj.material)
+                            ? obj.material
+                            : [obj.material];
+                        materials.forEach((mat: any) => {
+                            if (supportsWireframe(mat)) mat.wireframe = newState;
+                        });
                     }
                 });
             });
@@ -590,10 +592,17 @@ const Controls: React.FC<ControlsProps> = ({
                         type="checkbox"
                         checked={wireframe}
                         onChange={toggleWireframe}
+                        aria-describedby={wireframeDescriptionId}
                         style={{ marginRight: "8px" }}
                     />
                     Wireframe Mode
                 </label>
+                <div
+                    id={wireframeDescriptionId}
+                    style={{ fontSize: "0.7em", color: "#999", marginTop: "2px" }}
+                >
+                    Applies to meshes. Point clouds and lines are drawn as they are.
+                </div>
             </div>
 
             {/* Actions */}

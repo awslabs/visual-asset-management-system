@@ -222,6 +222,12 @@ Because an absent `allow` list means "everything", a filter is a way to _narrow_
 A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an `exclude` list is rejected when the pipeline, template, workflow, or trigger is saved. Since `exclude` is applied last, such a pattern would remove every file and leave the pipeline or workflow permanently unable to run. To exclude nothing, leave the list empty or omit it. The same patterns are valid in an `allow` list, where they simply mean "allow everything".
 :::
 
+:::warning[Extension patterns do not apply to whole-asset or folder selections]
+A whole-asset (`/`) or folder (`/folder/`) selection names a container rather than a file, so an extension pattern cannot describe it. The extension forms — `*.ext` and the `.ext` shorthand — are dropped from both lists for such a selection, while path and name globs (`*skip*`, `/models/*`) and exact keys still apply. An `allow` list made up only of extension patterns therefore admits a container selection, and the `assetScope` booleans `wholeAssetAllowed` and `folderAllowed` decide whether it is accepted.
+
+A pipeline that processes one file at a time sets both to `false` rather than relying on `inputFileFilters` to keep a container selection out. The built-in single-file pipelines declare `wholeAsset: false`.
+:::
+
 #### The resolution chain
 
 Filters are declared at up to three levels, and a selected file must satisfy all of them to reach a pipeline:

@@ -78,7 +78,7 @@ tests/mocks/
 
 When adding a new dependency that a handler imports at module load time, add a matching mock module here if the real one requires AWS or Casbin bootstrapping.
 
-The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes.
+The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`; `tests/conftest.py` also registers `common.addonFeatures`, which both route modules import. `common/addonFeatures.py` reads `ADDON_FEATURES_ENABLED` on every call, and with the variable unset, as in a test that does not set it, the route and object-type listings include every add-on entry; a test of a listing that leaves a disabled add-on out sets or deletes the variable with `monkeypatch` (`tests/handlers/auth/test_addon_listings_follow_deployment.py`). The `handlers.auth` mock carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, which `tests/handlers/auth/test_request_to_claims_authMethod.py` pins to the real module's values. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes. `customLogging/logger.py` and `common/logRedaction.py` import their merged key lists from `common.constants`, so `tests/conftest.py` also loads the real `constants.py` once by path and pins `LOG_SENSITIVE_KEYS` and `LOG_TEXT_SENSITIVE_KEYS` on the mock `common.constants`; a redactor imported under the mock then redacts the real keys.
 
 `common.downloadEligibility` is registered the same way in `tests/conftest.py`, after `common.s3`, which it imports. It builds no client, so the real module loads. Its callers inject every S3 client, getter and resolver. A handler test therefore patches names on the handler module (`downloadAsset.s3`, `downloadAsset.check_s3_object_exists`, …), and the handler's wrappers pass those names to the shared checks at call time. `tests/common/test_downloadEligibility.py` tests the module directly.
 
@@ -257,6 +257,15 @@ call from a read-only path, a validator regex that hardcodes a partition. Nor a 
 The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** —
 a forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full
 criterion: root `CLAUDE.md` Rule 13.
+
+### Add-on tests live with the add-on
+
+An add-on's tests sit under `tests/handlers/addon/<add-on>/`, and its own test-suite rules (harness
+modules, captured fixtures) live in that add-on's `CLAUDE.md`. An add-on that ships routes records, per
+shipped permission template, the methods each template allows on them as `ROUTE_GRANTS` in
+`tests/handlers/addon/<add-on>/addonRouteGrants.py`: `tests/handlers/auth/test_permission_templates_addon_routes.py`
+merges every such file, refuses a route two sources decide, and evaluates each decision through the real
+policy generation and Casbin evaluation.
 
 ---
 

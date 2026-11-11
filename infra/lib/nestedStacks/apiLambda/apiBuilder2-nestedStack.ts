@@ -99,6 +99,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // The Lambdas here that list permission object types and validate constraints and permission
+    // templates; the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -240,6 +243,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
+        this.addonFeatureListingFunctions.push(
+            authConstraintsService,
+            authConstraintsTemplateService
+        );
 
         //Asset History Resources
         const assetHistoryFunction = buildAssetHistoryFunction(

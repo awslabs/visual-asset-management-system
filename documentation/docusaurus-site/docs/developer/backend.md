@@ -239,7 +239,7 @@ if not casbin_enforcer.enforce(item, "GET"):
 Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
-You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow` and `metadataSchema`, plus any type a deployment registers as an extension object type (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
+You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow` and `metadataSchema`, plus any type a deployment registers as an extension object type in `common/addonConstants.py` or `custom/customConstants.py` (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
 :::
 
 ### Key Authorization Concepts
@@ -247,7 +247,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
 -   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
--   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
+-   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, MFA status, and how the caller authenticated: `authMethod` (`AUTH_METHOD_API_KEY`, `"apiKey"`, for an API key, otherwise `AUTH_METHOD_JWT`, `"jwt"`) and `apiKeyId` (the key's ID for an API-key caller, otherwise `None`). A handler that issues a credential compares `authMethod` with `AUTH_METHOD_API_KEY` from `handlers.auth`, never a bare string, to refuse a caller that authenticated with an API key
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
 
 ## Pydantic v1 Model Patterns
@@ -732,7 +732,7 @@ def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
 
 ## Notification Subscriptions
 
-`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic (`AssetTopic{databaseId}-{assetId}`). Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
 
 How a subscriber value becomes an email address:
 

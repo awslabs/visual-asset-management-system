@@ -5,6 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../../../services/APIService";
+import { downloadFailureMessage } from "../../../../core/streamFailure";
 import { Online3DViewerProps } from "../../types/viewer.types";
 import { ViewerProvider, useViewerContext } from "../../context/ViewerContext";
 import { ViewerCanvas } from "./ViewerCanvas";
@@ -49,6 +50,8 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
             try {
                 updateState({ error: null, isLoading: true });
                 const urls: string[] = [];
+                // Why the first refused file of a multi-file selection was refused, for the error state.
+                let firstRefusal: string | null = null;
                 let fileName = "";
 
                 if (multiFileKeys && multiFileKeys.length > 0) {
@@ -83,6 +86,12 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                                     // stored or returned from it.
                                     // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                     console.error(`Failed to load file: ${key}`, response[1]);
+                                    if (!firstRefusal) {
+                                        firstRefusal = downloadFailureMessage(
+                                            response,
+                                            "No files could be loaded successfully"
+                                        );
+                                    }
                                 }
                             }
                         } catch (fileError) {
@@ -112,7 +121,9 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                             fileName = assetKey;
                         } else {
                             console.error("Error loading single asset:", response[1]);
-                            throw new Error("Failed to download 3D model file");
+                            throw new Error(
+                                downloadFailureMessage(response, "Failed to download 3D model file")
+                            );
                         }
                     } else {
                         throw new Error("Invalid response format");
@@ -128,7 +139,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                     // Don't set model as loaded here - let the viewer's onModelLoaded callback handle it
                     // Just store the URLs for loading
                 } else {
-                    throw new Error("No files could be loaded successfully");
+                    throw new Error(firstRefusal || "No files could be loaded successfully");
                 }
             } catch (error) {
                 console.error("Error loading assets:", error);

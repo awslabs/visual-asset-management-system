@@ -1,0 +1,44 @@
+{
+  "name": "virtual_desktops_create_windows",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/dcv/virtual_desktops/create",
+    "absolutePath": "/api/dcv/virtual_desktops/create",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_name": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6",
+      "instance_type": "m5.2xlarge",
+      "software_stack_id": "2",
+      "disk_size": "100",
+      "project": "default",
+      "subnet_id": "auto",
+      "session_type": "console",
+      "hibernate": "false"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Session b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6 started successfully."
+    }
+  },
+  "expect": {
+    "sessionName": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/create_virtual_desktop.py"
+    ]
+  }
+}
