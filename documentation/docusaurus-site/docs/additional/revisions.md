@@ -87,6 +87,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
+-   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
 
 **Other changes:**
 
