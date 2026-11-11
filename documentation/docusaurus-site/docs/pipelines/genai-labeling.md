@@ -100,7 +100,7 @@ The template allows per-run edits, so a run can supply a replacement configurati
 The Blender container imports the 3D model and renders multiple camera views as PNG images using the Cycles rendering engine. The `renderScene.py` script handles camera placement, lighting setup, and multi-angle capture. Rendered images are uploaded to the auxiliary Amazon S3 bucket.
 
 :::tip[Supported 3D formats]
-The Blender renderer imports OBJ, GLB, FBX, ABC, PLY, and STL models. The pipeline does not accept USD (`.usd`) or COLLADA (`.dae`) files, because the Blender build in its container image has no importer for either. FBX files that contain lights fail to import with the Blender version in the image (5.1); export the FBX without lights. Complex models with external texture references benefit from setting `includeAllAssetFileHierarchyFiles` to `"True"`.
+The Blender renderer imports OBJ, GLB, FBX, ABC, PLY, and STL models. The pipeline does not accept USD (`.usd`) or COLLADA (`.dae`) files, because the Blender build in its container image has no importer for either. Complex models with external texture references benefit from setting `includeAllAssetFileHierarchyFiles` to `"True"`.
 :::
 
 ### Metadata generation stage
