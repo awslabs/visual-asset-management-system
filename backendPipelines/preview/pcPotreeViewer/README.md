@@ -19,8 +19,8 @@ See the [Point Cloud Potree Viewer pipeline](https://awslabs.github.io/visual-as
 
 ### Overview
 
-0. Open Pipeline Lambda function is called from a SNS event on adding an object to the VAMS Assets S3 bucket. Open Pipeline starts the Pipeline State Machine and passes through S3 bucket and object information.
-1. Construct Pipeline Lambda function constructs the multi-stage JSON input definitions for the jobs based on the filetypes uploaded to the S3 bucket (e57/ply = PDAL + PotreeConveter, laz/laz = PotreeConverter)
+0. Open Pipeline Lambda function is called from a SNS event on adding an object to the VAMS Assets S3 bucket. Open Pipeline starts the Pipeline State Machine and passes through S3 bucket and object information. For a LAS/LAZ input it also reads the point data record format from the first 105 bytes of the LAS header (`lambda/lasHeader.py`, a ranged GET of the run's input version) and passes it as `inputLasPointFormat`; an unreadable header leaves the field out. For a format 0-7 file that declares VLRs it reads the VLR block with a second ranged GET (up to the point data offset, at most 64 KiB) and passes `inputLasUnterminatedExtraBytes: true` when an Extra Bytes descriptor's name or description has no NUL (#783); a malformed or unreadable block leaves it out.
+1. Construct Pipeline Lambda function constructs the multi-stage JSON input definitions for the jobs based on the filetypes uploaded to the S3 bucket (e57/ply = PDAL + PotreeConveter, las/laz = PotreeConverter, las/laz in point format 8-10 = PDAL + PotreeConverter, because the pinned PotreeConverter reads point formats 0-7 only; las/laz with an Extra Bytes descriptor whose 32-byte name or description has no NUL = PDAL + PotreeConverter, because PotreeConverter reads past such a field, #783)
 2. AWS Batch Job executes for batch processing point cloud data
 3. AWS Fargate Task provisions Docker container compute resources and runs the specific PCP app container
 4. If the first stage/type is PDAL, the PDAL PCP container runs to translate the file to a LAZ format. The e57/ply file is retrieved form origniating S3 bucket. The LAZ output is a temporary pipeline file in the VAMS AssetsAuxiliary S3 bucket, in a working folder of this run's own (`<file>/preview/PotreeViewerRuns/<jobName>/`), so two runs on one file never share it. The PDAL stage removes nothing.
@@ -50,7 +50,7 @@ PCP follows the multi-stage build strategy. First, the `build` image downloads, 
 
 Building the container image can range from a few minutes to 15 minutes depending on the machine you are building on. The PDAL container image is based on "condaforge/miniforge3" as the base docker image and POTREE is built on "python:3.11-alpine" as the base. This is based on the requirements and dependencies that each application needs.
 
-The PDAL container size is 2.22GB while the Potree Container size is 228MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
+The PDAL container (PDAL 2.10.2) size is about 2.5GB while the Potree Container size is about 600MB. Note: Further future enhancements could be made to bring these sizes down by choosing different base docker images and/or more splitting out with multi-stage docker container processing.
 
 To build the container follow the below commands.
 
@@ -110,7 +110,7 @@ The PDAL library is used in this application to streamline transforming the poin
 
 ### Base Pipeline
 
-Ingests and unzips the non-LAZ/LAS files (i.e. E57, PLY) and outputs a LAZ file.
+Ingests and unzips the non-LAZ/LAS files (i.e. E57, PLY), and LAS/LAZ files in point format 8-10 or with an unterminated Extra Bytes name or description, and outputs a LAZ file (LAS 1.2, point format 3). For a LAS/LAZ input this drops NIR, waveform data, Extra Bytes dimensions, the overlap flag and the scanner channel, and maps a classification above 31 to 1.
 
 ## Potree Converter Pipeline
 

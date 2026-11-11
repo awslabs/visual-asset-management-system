@@ -93,6 +93,10 @@ def _install_real_authz_dependencies():
         sys.modules["handlers"] = handlers_pkg
     auth_mod = types.ModuleType("handlers.auth")
     auth_mod.request_to_claims = lambda event: {"tokens": ["test-user"], "roles": [], "mfaEnabled": False}
+    # The authentication-method values handlers.auth exports beside request_to_claims; apiKeyService
+    # imports them, so a run that collects the auth tests with these ones needs them on the stub too.
+    auth_mod.AUTH_METHOD_JWT = "jwt"
+    auth_mod.AUTH_METHOD_API_KEY = "apiKey"
     sys.modules["handlers.auth"] = auth_mod
 
 

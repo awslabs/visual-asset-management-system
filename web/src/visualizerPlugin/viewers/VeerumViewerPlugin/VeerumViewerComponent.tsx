@@ -8,6 +8,8 @@ import { appCache } from "../../../services/appCache";
 import { VeerumDependencyManager } from "./dependencies";
 import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 
 // Lazy load unified panel to avoid circular dependency issues
@@ -34,6 +36,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [loadedModels, setLoadedModels] = useState<any[]>([]);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         // Check if we have any files to load
@@ -414,7 +417,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.9em",
                     }}
                 >
@@ -463,7 +466,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "12px 16px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         maxHeight: "150px",
                         overflowY: "auto",
@@ -530,7 +533,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         padding: "8px 12px",
                         margin: "8px",
-                        zIndex: 1001,
+                        zIndex: VIEWER_LAYER.notice,
                         fontSize: "0.85em",
                         color: "#0972d3",
                         display: "flex",
@@ -580,7 +583,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "8px",
                         textAlign: "center",
                         maxWidth: "80%",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.cover,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "10px" }}>
@@ -597,6 +600,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {viewerControllerRef.current && loadedModels.length > 0 && showPanel && (
                 <Suspense fallback={<div />}>
                     <VeerumPanel
+                        panelRef={panelRef}
                         viewerController={viewerControllerRef.current}
                         loadedModels={loadedModels}
                         initError={initError}
@@ -620,7 +624,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -631,6 +635,7 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
             {/* Info Panel */}
             {!isLoading && !error && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: initError || fileErrors.length > 0 ? "auto" : "10px",
@@ -641,7 +646,8 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>VEERUM 3D Viewer</div>

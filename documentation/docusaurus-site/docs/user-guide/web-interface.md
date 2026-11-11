@@ -6,7 +6,7 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access. Add-ons a deployment enables can add navigation sections and pages of their own; see [Add-ons Overview](../developer/addons-overview.md).
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
@@ -189,6 +189,8 @@ Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** 
 ### Executions Page
 
 The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
+
+A **Skipped** row records file-upload trigger launches that the workflow's concurrency restriction refused while another execution held the asset, file or file version. One row counts every launch that execution refused, shows how many under the badge and gives the reason on hover. Its detail view lists the files and, when you may read it, links the execution that blocked them. Skipped rows have no Abort action. Choose **All except skipped** in the status filter to hide them.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 

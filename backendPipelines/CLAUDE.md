@@ -158,11 +158,12 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 
 ## Sizing a Container's Work to Its Task
 
-A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+A Batch/Fargate container sizes its work to the limits of the task it runs in rather than to a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
 
--   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Memory is the smallest of three bounds, each read when it can be: the cgroup limit (`/sys/fs/cgroup/memory.max`, v1 `memory/memory.limit_in_bytes`; "max" or a near-2^63 value means unlimited), the task memory the orchestration passes, and physical memory. The cgroup alone is not enough: on AWS Fargate the container's cgroup sets no limit and physical memory is the micro-VM's, larger than the task (31 GiB read on a 16 GiB task), so every memory-derived budget comes out too large. The thumbnail state machine therefore passes each tier's memory override as `VAMS_TASK_MEMORY_MIB` beside `VAMS_COMPUTE_TIER` (`resources.task_memory_bytes`). CPUs come from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
 -   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
 -   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Charge a path's own copies to that path. The renderer draws a mesh coloured per face from a copy with three corners per triangle, which measured up to 475 bytes per triangle at render against the 200 `BYTES_PER_TRIANGLE` charges. Measure such a cost on every task shape the configuration allows, not only the default: it was highest on 2 vCPU. `geometry_budget.apply_budgets` therefore holds such a mesh to `resources.cell_colour_triangle_limit` (the triangles that keep the measured peak within 60% of memory). Raising the shared constant instead would cut the budget of every mesh.
 -   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
 -   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
 -   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
@@ -465,6 +466,15 @@ manifest inputFiles[].versionId
     a prefix (GR00T), and a multi-file pipeline whose `constructPipeline` puts each entry's own `versionId`
     on its definition (Video SOP/BOM, the reference implementation). A multi-file pipeline keys its local
     paths by index, since one launch may select the same file at two versions.
+-   **Several inputs travel as one list of objects**, each `{bucket, key, versionId}` built from one
+    manifest entry, never as a path list beside a parallel version list: two lists fall out of step without
+    an error, and a short version list reads the remaining inputs at the current object. Image to 3D sends
+    `inputViews` (`genAi/imageTo3d/lambda/inputViews.py`), reads it as the only list when present, and fails
+    the run on an entry without a bucket, a key or a `versionId` string. It still sends
+    `inputS3AssetFilePaths`, derived from the views, for a development build before `inputViews`. While the
+    three functions run different builds (a stack update or a rollback), views are read at the current
+    object, and a file selected at two versions is read once; where the `constructPipeline` that runs reads
+    `inputViews`, the primary input keeps its version.
 
 `backendPipelines/tests/test_pipeline_input_versions.py` checks every `vamsExecute*.py`,
 `openPipeline.py` and `constructPipeline.py` in the tree (and the RapidPipeline EKS
@@ -500,7 +510,8 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
-    registration resources still expect to read them. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
+    registration resources still expect to read them. It excludes `addon/*` for the same reason: the
+    add-on stacks upload their own trees there. Test: `infra/test/storage/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
@@ -897,6 +908,18 @@ to 3D at once.
     smooth normals; a mesh that still carries an atlas keeps its uv seams split, since welding them would
     leave the uv array addressing positions that no longer exist.
 
+6.  **Carry a per-face colour by its cell's index, not through VTK's own cell data.** `vtkPolyData` orders
+    its cells, and their cell data, vertices, lines, polygons, then strips. `vtkTriangleFilter` gives each
+    cell's triangles one after another in that order, but on a mesh whose polygons are all triangles and
+    that also holds lines, vertices or strips it returns more cell-data rows than cells (1,601 rows for 801
+    cells in VTK 9.6, some of them garbage), and it makes fewer than n - 2 triangles of a polygon with a
+    repeated corner. pyvista's `is_all_triangles` ignores strips, so code that skips the filter on it drops
+    the strips and every colour after them moves by a cell. The 3D Thumbnail decimation
+    (`geometry_budget._triangles_with_face_colours`) reads the polygons' and the strips' colours at their
+    own offsets, keeps polygons that are all triangles as they are, and triangulates the other polygons and
+    the strips on their own with each cell's index as cell data, using it only when there is one index per
+    triangle.
+
 **Get ground truth by switching the transformation off.** None of the above was separable from "the model's
 texture is bad" until a run with `MESH_CLEANUP=false` shipped each model's atlas untouched. That reference
 settled it in one round: two models' own textures were clean likenesses, so everything wrong in a cleaned
@@ -1249,6 +1272,26 @@ or a `suite-settings.json` entry names no test directory or gives no reason, a C
 in a pipeline folder, the workflow's group matrix and `GROUP_COUNT` differ, a suite
 whose pipeline code opens a render window does not declare a headless display, or `HEADLESS_DISPLAY_ENV`
 drifts from the thumbnail Dockerfile.
+
+**Container-level smoke scripts live in `ci/smoke/`, not in the pipeline folder.** They need Docker and
+built images, so CI does not run them; they are run by hand when a converter or its base image changes.
+`ci/smoke/pcPotreeViewer-formats.sh` fetches public E57/LAS/LAZ/PLY samples at pinned commits and runs
+them through the Potree preview's PDAL and PotreeConverter images with the stages' own commands, one TSV
+row per file (exit codes, input and output LAS format, point count, colour and intensity ranges, the
+route PotreeConverter's input took, octree points, attributes and RGB range); run it on the old and new
+PDAL image and diff the two (#1203). Its LAS/LAZ routing mirrors constructPipeline's header rule (point
+formats 0-7 direct, 8-10 through PDAL, #1215; an Extra Bytes descriptor with an unterminated name or
+description through PDAL, #783), reading each header with the pipeline's own `lasHeader.py`;
+`LAS_ROUTING=extension` reproduces the routing before both.
+
+**Route on what the file is, not what it is named.** The Potree preview's `openPipeline` reads a LAS/LAZ
+input's point data record format from a ranged GET of its header
+(`preview/pcPotreeViewer/lambda/lasHeader.py`) and `constructPipeline` sends a format the pinned
+PotreeConverter cannot read through the PDAL stage. For a format it reads, a second ranged GET walks the
+VLR block (to the point data offset, capped at 64 KiB) and an Extra Bytes descriptor whose 32-byte name
+or description has no NUL, which PotreeConverter reads past (#783), is routed the same way. The read is
+advisory: any failure leaves the field out and keeps the extension route, so an unreadable header or VLR
+block never fails a launch and an execution started before the field behaves as before.
 
 **A suite that reads configuration from the process environment must restore it.**
 `splatToolbox/lambda/tests/test_extension_gate.py` does `os.environ.setdefault` at import and then calls

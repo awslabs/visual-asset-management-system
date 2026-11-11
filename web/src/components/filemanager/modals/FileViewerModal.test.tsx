@@ -17,13 +17,9 @@ import { act, render, screen } from "@testing-library/react";
 import FileViewerModal from "./FileViewerModal";
 
 const mockAvailableModes = jest.fn();
+// The type names in the no-viewer message come from the real filename rule (extensionMatching).
 jest.mock("../../../visualizerPlugin/core/viewableExtensions", () => ({
     availableModesForFiles: (files: any[]) => mockAvailableModes(files),
-    extensionOfFilename: (name?: string) => {
-        if (!name) return undefined;
-        const dot = name.lastIndexOf(".");
-        return dot <= 0 ? undefined : name.slice(dot);
-    },
 }));
 jest.mock("../../../visualizerPlugin/core/useViewerRegistryReady", () => ({
     useViewerRegistryReady: () => true,
@@ -104,6 +100,13 @@ describe("FileViewerModal mode availability", () => {
         expect(screen.getByTestId("file-viewer-no-viewer")).toBeInTheDocument();
         expect(screen.getByText("No viewer for this selection")).toBeInTheDocument();
         expect(screen.getByText(/2 files of type \.png, \.bin/)).toBeInTheDocument();
+    });
+
+    it("names a file without an extension in words, never by its matching token (#1198)", () => {
+        mockAvailableModes.mockReturnValue({ visualize: false, compare: false });
+        renderModal([file("README"), file("model.glb")]);
+        expect(screen.getByText(/2 files of type no extension, \.glb/)).toBeInTheDocument();
+        expect(screen.queryByText(/\(none\)/)).toBeNull();
     });
 
     it("asks about the selection once with the files it was given", () => {
