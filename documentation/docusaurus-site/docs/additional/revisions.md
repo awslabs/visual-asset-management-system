@@ -136,10 +136,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   `zod` 3.25.76 in `web/` has a security advisory (GHSA-mrhx-c7xc-m3w5, memory exhaustion when validating oversized constrained collections) with no patched 3.x release; 2.7.0 resolves it with the upgrade to `zod` 4. (issue #976)
 
-<!-- TODO(D7): keep the next line only if #1181 gets no workaround in 2.6.7, matching CHANGELOG.md. Remove this comment before the push. -->
-
--   GenAI 3D Metadata Labeling fails on an FBX file that contains a light, because the Blender version in its image no longer reads the light property the importer uses; see [GenAI 3D Metadata Labeling](../pipelines/genai-labeling.md). (issue #1181)
-
 ### 2.6.6
 
 **Release date:** 2026-10-30

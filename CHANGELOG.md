@@ -120,10 +120,6 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Security** `zod` 3.25.76 in `web/` has a security advisory (GHSA-mrhx-c7xc-m3w5, memory exhaustion when validating oversized constrained collections) with no patched 3.x release; 2.7.0 resolves it with the upgrade to `zod` 4. ([#976](https://github.com/awslabs/visual-asset-management-system/issues/976))
 
-<!-- TODO(D7): keep the next bullet only if #1181 gets no workaround in 2.6.7 (the image is already pinned to Blender 5.1, so a pin is not an option); mirror the decision in revisions.md "Known issues". Remove this comment before the push. -->
-
--   **Pipelines** GenAI 3D Metadata Labeling fails on an FBX file that contains a light, because the Blender version in its image no longer reads the light property the importer uses. ([#1181](https://github.com/awslabs/visual-asset-management-system/issues/1181))
-
 ## [2.6.6] (2026-10-30)
 
 ### Major Change Summary:
