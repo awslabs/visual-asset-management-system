@@ -68,7 +68,7 @@ When the add-on is enabled, validation in `infra/config/config.ts` enforces that
 
 The Physna sync and viewer Lambda functions read the credentials from one Secrets Manager secret, with read access scoped to that secret's ARN rather than `*`. Each function caches the credentials in memory for up to an hour, and reads the secret again sooner when Physna answers `401`, so a credential rotated in Secrets Manager is picked up without a redeploy. Where the secret comes from depends on the configuration:
 
--   **`credentialsSecretArn` (recommended).** Create the secret before you deploy, with a JSON value of `{"clientId": "...", "clientSecret": "..."}`, and set `credentialsSecretArn` to the complete ARN that Secrets Manager returns, including its six-character suffix. VAMS imports the secret by ARN, so no credential passes through CDK synthesis. Encrypt the secret with the default `aws/secretsmanager` key, or with the VAMS KMS key when the deployment uses one; VAMS grants the functions no `kms:Decrypt` on another customer managed key for this secret.
+-   **`credentialsSecretArn` (recommended).** Create the secret before you deploy, in the account and Region you deploy VAMS to, with a JSON value of `{"clientId": "...", "clientSecret": "..."}`, and set `credentialsSecretArn` to the complete ARN that Secrets Manager returns, including its six-character suffix. VAMS imports the secret by ARN, so no credential passes through CDK synthesis. Encrypt the secret with the default `aws/secretsmanager` key, or with the VAMS KMS key when the deployment uses one; VAMS grants the functions no `kms:Decrypt` on another customer managed key for this secret.
 
     ```bash
     aws secretsmanager create-secret \
