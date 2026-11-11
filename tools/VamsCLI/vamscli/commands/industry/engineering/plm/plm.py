@@ -159,6 +159,29 @@ def suppress_output(func):
     return wrapper
 
 
+@contextlib.contextmanager
+def json_mode_stdout_discarded(json_output: bool):
+    """Discard stdout around a worker pool when --json-output is set.
+
+    The pool workers run `assets create`, `asset-links create` and `search simple` through
+    ctx.invoke, and those write their own text and search results to stdout, ahead of the
+    command's JSON result. sys.stdout is process-wide, so the redirect wraps the whole pool on
+    the calling thread instead of each worker call. When the pool ends with an exception (a
+    nested command that exits, for example), the captured text goes to stderr so its reason is
+    not lost.
+    """
+    if not json_output:
+        yield
+        return
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            yield
+    except BaseException:
+        click.echo(captured.getvalue(), err=True, nl=False)
+        raise
+
+
 # ============================================================================
 # PHASE 0: XML PARSING
 # ============================================================================
@@ -294,7 +317,7 @@ def process_assets_parallel(
     
     progress_lock = Lock()
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with json_mode_stdout_discarded(json_output), ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 create_single_asset,
@@ -597,7 +620,7 @@ def process_parallel_operations(
     alias_tracker = {}
     tracker_lock = Lock()
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with json_mode_stdout_discarded(json_output), ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         
         # Submit metadata creation tasks
