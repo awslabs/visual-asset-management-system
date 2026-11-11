@@ -406,7 +406,7 @@ After creating all files, verify:
 -   [ ] Step Functions state machine references correct Lambda ARNs
 -   [ ] Container Dockerfile builds successfully
 -   [ ] Container Dockerfile drops to a non-root `USER`, and every `COPY` of source that user reads is followed on the next line by `RUN chmod -R a+rX <path>` (`COPY --chown` alone is not sufficient)
--   [ ] Before `USER`, the Dockerfile creates and `chown`s to that user every folder the container writes at run time, including the working directory of each subprocess it starts (upstream tools write relative to it; see `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes")
+-   [ ] Before `USER`, the Dockerfile gives that user every folder the container writes at run time, including the working directory of each subprocess it starts (upstream tools write relative to it). A working directory that holds root-owned upstream sources gets the user's group and mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`) rather than a `chown`; see `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes"
 -   [ ] Config flag name matches between config.json, config templates, config.ts interface, and the pipelineBuilder check
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts

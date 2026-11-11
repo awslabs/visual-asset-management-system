@@ -255,6 +255,8 @@ The pipeline supports custom Isaac Lab environments packaged as Python packages.
 
 The container downloads the package at runtime and installs it with `pip install --no-build-isolation <archive>` before starting training or evaluation. `pip install -e` is not used: the editable flag accepts only a local project directory or a version-control URL, never an archive.
 
+Training and evaluation run with Isaac Lab's directory, `/workspace/isaaclab`, as the working directory. An environment can create files there, as the built-in AutoMate assembly tasks do when they download their assets, but cannot change or remove the files Isaac Lab ships in it.
+
 ## Heartbeat mechanism
 
 Long-running training jobs send periodic heartbeats (every 5 minutes) to both the internal and external AWS Step Functions state machines to prevent timeout. The heartbeat thread runs in the background during the entire training or evaluation process. The internal state machine has a 30-minute heartbeat timeout, so any interruption lasting longer than 30 minutes will cause the job to be marked as failed.

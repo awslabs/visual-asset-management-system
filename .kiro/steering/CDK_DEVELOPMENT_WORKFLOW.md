@@ -1745,15 +1745,20 @@ and `backendPipelines/conversion/coordinateTransform/container/Dockerfile`.
 
 #### **Write Ownership in a Non-Root Container**
 
-Before `USER`, the Dockerfile creates and `chown`s to that user every folder the container writes at
-run time: the entrypoint's output folders and the working directory of every subprocess it starts,
-because upstream tools write relative to it. `/tmp` (Ubuntu's `1777`) and the user's `$HOME` are
-fine; a folder the base image copied root-owned is not. The Isaac Lab image ran `train.py` and
-`play.py` in the root-owned `/workspace/isaaclab`, so Hydra's `outputs/<date>/<time>` failed with
-`PermissionError: [Errno 13]` on every run (#1312); it now owns `/workspace/isaaclab/logs` and
-`/workspace/isaaclab/outputs` only, and downloads the evaluation policy below `logs` because
-`play.py` writes its video beside the `--checkpoint`. The guard is
-`backendPipelines/simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py`.
+Before `USER`, the Dockerfile gives that user every folder the container writes at run time: the
+entrypoint's output folders and the working directory of every subprocess it starts, because
+upstream tools write relative to it, both into folders they create there and as plain files. `/tmp`
+(Ubuntu's `1777`) and the user's `$HOME` are fine; a folder the base image copied root-owned is not.
+A working directory that also holds upstream sources is not `chown`ed: it gets the user's group and
+mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`, the `/tmp` model), so the user can create
+entries while the sticky bit stops it renaming or deleting the root-owned ones. The Isaac Lab image
+runs `train.py` and `play.py` in `/workspace/isaaclab` (#1312), where Hydra writes
+`outputs/<date>/<time>`, `train.py` writes `logs/<library>/...` and the AutoMate tasks download
+their asset files into `./`: the image creates `logs` and `outputs` for the user, makes
+`/workspace/isaaclab` group `vams` with mode `1775`, and downloads the evaluation policy below
+`logs` because `play.py` writes its video beside the `--checkpoint`. The guard is
+`backendPipelines/simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py`,
+which also pins the Isaac Lab release its write paths were read from.
 See `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes".
 
 #### **Container Lambda Handler Pattern**
@@ -1916,7 +1921,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
 14. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
-15. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above. Before `USER` it also creates and `chown`s to that user every folder it writes at run time, including the working directory of each subprocess it starts (see "Write Ownership in a Non-Root Container", #1312).
+15. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above. Before `USER` it also gives that user every folder it writes at run time, including the working directory of each subprocess it starts; a working directory holding root-owned upstream sources gets the user's group and mode `1775` instead of a `chown` (see "Write Ownership in a Non-Root Container", #1312).
 
 16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
