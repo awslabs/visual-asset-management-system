@@ -370,6 +370,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend/Auth** Fixed the API route listing (`GET /auth/routes/api`) and the allowed-route check (`GET /auth/routes/api/allowed`) covering the routes of add-ons a deployment has not enabled, such as the Physna viewer route without Physna Sync: they leave such routes out, so the constraint editor no longer offers them and no denial is recorded for them. ([#1243](https://github.com/awslabs/visual-asset-management-system/issues/1243))
 -   **CLI** VamsCLI checks the path of each request before sending it and refuses one with an empty, `.` or `..` segment (`InvalidRequestPathError`). ([#536](https://github.com/awslabs/visual-asset-management-system/issues/536))
 -   **Web** Search page: the result count no longer reads "0 results" right after **Clear All Filters** (or before the first search answers); the title row shows no count until the reloaded list arrives. ([#1252](https://github.com/awslabs/visual-asset-management-system/issues/1252))
+-   **Infra** `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, instead of exiting `0` with "Reindexing completed successfully", and exits `2` when a synchronous invocation times out and the outcome is unverified. ([#1296](https://github.com/awslabs/visual-asset-management-system/issues/1296))
 
 ### Chores
 

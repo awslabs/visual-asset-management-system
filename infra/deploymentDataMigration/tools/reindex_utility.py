@@ -57,12 +57,18 @@ import logging
 import os
 import sys
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError, ReadTimeoutError
 
 logger = logging.getLogger(__name__)
+
+# Process exit codes. A timed-out invocation is neither: the Lambda function keeps running and its
+# outcome is unknown to this script.
+EXIT_SUCCESS = 0
+EXIT_FAILED = 1
+EXIT_UNVERIFIED = 2
 
 # Default location of the VAMS backend source (the 'backend/backend' directory containing the
 # 'handlers' and 'common' packages), computed relative to this script so it works regardless of the
@@ -458,6 +464,56 @@ def run_reindexer_direct(
         return {'statusCode': status_code, 'error': 'Reindexer run failed'}
 
 
+def reindex_failures(result: Dict) -> List[str]:
+    """
+    Return the reasons the reindexer gave for a run that did not fully complete.
+
+    On a direct invocation the reindexer answers with status 200 and lists failed assets or files,
+    errors and an index clear that did not finish in the body's 'failures' array.
+    """
+    body = result.get('body')
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return []
+    if not isinstance(body, dict):
+        return []
+    failures = body.get('failures')
+    if not isinstance(failures, list):
+        return []
+    return [str(failure) for failure in failures]
+
+
+def exit_code_for_result(result: Dict) -> int:
+    """
+    Log the outcome of a run and return the process exit code for it.
+
+    Returns:
+        EXIT_SUCCESS when the run completed (or an asynchronous invocation was submitted),
+        EXIT_FAILED when the run failed or the reindexer reported failures,
+        EXIT_UNVERIFIED when the invocation timed out and the outcome is unknown.
+    """
+    if result.get('timeout'):
+        logger.warning("Reindexing invocation timed out - Lambda function continues processing in background")
+        logger.warning("The outcome is unverified. Check CloudWatch Logs to verify completion")
+        return EXIT_UNVERIFIED
+
+    if 'error' in result:
+        logger.error("Reindexing failed")
+        return EXIT_FAILED
+
+    failures = reindex_failures(result)
+    if failures:
+        logger.error("Reindexing did not complete:")
+        for failure in failures:
+            logger.error(f"  {failure}")
+        return EXIT_FAILED
+
+    logger.info("Reindexing completed successfully")
+    return EXIT_SUCCESS
+
+
 def main():
     """
     Main function for standalone execution.
@@ -642,11 +698,7 @@ Notes:
             region=args.region,
         )
 
-        if 'error' in result:
-            logger.error("Reindexing failed")
-            return 1
-        logger.info("Reindexing completed successfully")
-        return 0
+        return exit_code_for_result(result)
 
     # Lambda mode (default)
     if not args.function_name:
@@ -667,18 +719,7 @@ Notes:
         invocation_type=invocation_type
     )
 
-    # Return appropriate exit code
-    # Treat timeout as a warning, not a failure (Lambda continues processing in background)
-    if 'timeout' in result and result.get('timeout'):
-        logger.warning("Reindexing invocation timed out - Lambda function continues processing in background")
-        logger.warning("Check CloudWatch Logs to verify completion")
-        return 0  # Exit successfully since the Lambda is still processing
-    elif 'error' in result:
-        logger.error("Reindexing failed")
-        return 1
-    else:
-        logger.info("Reindexing completed successfully")
-        return 0
+    return exit_code_for_result(result)
 
 
 if __name__ == "__main__":
