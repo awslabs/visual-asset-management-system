@@ -77,6 +77,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The Isaac Lab pipeline page states that its timeouts include the wait for a GPU instance, gives a CodeBuild status command that finds the project on the Isaac Lab nested stack, shows where checkpoints and videos land (`checkpoints/<executionId>/`, `videos/<executionId>/`), and notes that AutoMate assembly with rl_games needs a multiple of 128 environments. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
 -   **CDK** Fixed every API route answering `500` (`AuthorizerConfigurationException`) after an update that renames the IAM roles, such as setting or changing `environments.aws.IamRoleNamePrefix`: the REST API stage now moves to a new deployment that names the renamed authorizer role. ([#1210](https://github.com/awslabs/visual-asset-management-system/issues/1210))
     -   Note: the first update to this version creates one new API deployment and moves the stage to it; the API stays available.
+-   **Web** File details panel: the **File Attributes** and **File Metadata** tables keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. ([#1307](https://github.com/awslabs/visual-asset-management-system/issues/1307))
 
 ### Chores
 

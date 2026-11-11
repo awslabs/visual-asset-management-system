@@ -1,0 +1,82 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * The width the metadata table keeps for its value column.
+ *
+ * The table uses a fixed layout: the key, type and actions columns declare their widths and the value
+ * column takes what is left. In a container narrower than those three, such as the file details panel,
+ * nothing is left, so the table declares a minimum width and its wrapper scrolls sideways. jsdom
+ * computes no layout, so this checks the declarations the browser lays the table out from.
+ *
+ * The row is stubbed so this file never loads `MapMetadataPicker` (react-map-gl is ESM-only under Jest).
+ */
+
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import MetadataTable from "./MetadataTable";
+import { MetadataRowState } from "./types/metadata.types";
+
+jest.mock("./MetadataRow", () => ({
+    __esModule: true,
+    default: () => (
+        <tr>
+            <td>row</td>
+        </tr>
+    ),
+}));
+
+const row = {
+    metadataKey: "material",
+    metadataValue: "steel",
+    metadataValueType: "string",
+    isEditing: false,
+    hasChanges: false,
+    isNew: false,
+    isDeleted: false,
+    editKey: "material",
+    editValue: "steel",
+    editType: "string",
+} as MetadataRowState;
+
+const noop = () => undefined;
+
+const px = (value: string) => {
+    expect(value).toMatch(/^\d+px$/);
+    return parseInt(value, 10);
+};
+
+describe("MetadataTable column widths", () => {
+    it("keeps room for the value column and scrolls sideways when the container is narrower", () => {
+        render(
+            <MetadataTable
+                rows={[row]}
+                loading={false}
+                editMode="normal"
+                onCancelEdit={noop}
+                onDeleteRow={noop}
+                onAddNew={noop}
+                onKeyChange={noop}
+                onTypeChange={noop}
+                onValueChange={noop}
+                onToggleEditMode={noop}
+                onCommitChanges={noop}
+                onCancelAllChanges={noop}
+                onRefresh={noop}
+                hasChanges={false}
+                canCommit={false}
+                isFileAttribute
+            />
+        );
+
+        const table = screen.getByRole("table");
+        expect(table.parentElement).toHaveStyle({ overflowX: "auto" });
+
+        const [key, type, value, actions] = Array.from(table.querySelectorAll("col"));
+        expect(value.style.width).toBe("");
+        const declared = px(key.style.minWidth) + px(type.style.width) + px(actions.style.width);
+        expect(px(table.style.minWidth) - declared).toBeGreaterThanOrEqual(180);
+    });
+});
