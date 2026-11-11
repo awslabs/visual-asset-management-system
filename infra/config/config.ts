@@ -237,6 +237,24 @@ export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
 export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
 export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
 
+const MIB = 1024 * 1024;
+
+/**
+ * Defaults of app.zipDownloads (Download as Zip). The backend reads the limits from the zip download
+ * service's environment and falls back to the same values.
+ */
+export const ZIP_DOWNLOADS_DEFAULTS = {
+    enabled: false,
+    maxFilesPerRequest: 100000,
+    // 5 TiB, the largest single Amazon S3 object.
+    maxTotalBytesPerRequest: 5 * 1024 * 1024 * MIB,
+    maxActiveRequestsPerUser: 5,
+    computeVcpu: 16,
+    computeMemoryGiB: 32,
+    // Build the zipArchive container image with AWS CodeBuild instead of local Docker.
+    useCodeBuild: false,
+};
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -388,6 +406,23 @@ const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 // (AWS managed), an optional path, and the policy name.
 export const IAM_MANAGED_POLICY_ARN_PATTERN =
     /^arn:(aws[a-z-]*):iam::(?:\d{12}|aws):policy\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
+
+/** Bounds of each numeric app.zipDownloads key (inclusive integers). */
+export const ZIP_DOWNLOADS_BOUNDS: Record<
+    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
+    { min: number; max: number; unit: string }
+> = {
+    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
+    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
+    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
+    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
+    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
+};
+
+/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
+ * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
+ * 8 GiB steps. */
+export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
 
 /**
  * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
@@ -800,41 +835,6 @@ export function validatePermissionBoundaryArn(value: unknown, partition: string)
         );
     }
 }
-
-const MIB = 1024 * 1024;
-
-/**
- * Defaults of app.zipDownloads (Download as Zip). The backend reads the limits from the zip download
- * service's environment and falls back to the same values.
- */
-export const ZIP_DOWNLOADS_DEFAULTS = {
-    enabled: false,
-    maxFilesPerRequest: 100000,
-    // 5 TiB, the largest single Amazon S3 object.
-    maxTotalBytesPerRequest: 5 * 1024 * 1024 * MIB,
-    maxActiveRequestsPerUser: 5,
-    computeVcpu: 16,
-    computeMemoryGiB: 32,
-    // Build the zipArchive container image with AWS CodeBuild instead of local Docker.
-    useCodeBuild: false,
-};
-
-/** Bounds of each numeric app.zipDownloads key (inclusive integers). */
-export const ZIP_DOWNLOADS_BOUNDS: Record<
-    Exclude<keyof typeof ZIP_DOWNLOADS_DEFAULTS, "enabled" | "useCodeBuild">,
-    { min: number; max: number; unit: string }
-> = {
-    maxFilesPerRequest: { min: 1, max: 1000000, unit: "files" },
-    maxTotalBytesPerRequest: { min: 1, max: 5 * 1024 * 1024 * MIB, unit: "bytes" },
-    maxActiveRequestsPerUser: { min: 1, max: 100, unit: "jobs" },
-    computeVcpu: { min: 4, max: 16, unit: "vCPU" },
-    computeMemoryGiB: { min: 8, max: 120, unit: "GiB" },
-};
-
-/** The zipArchive job's AWS Fargate vCPU sizes. Memory must be one Fargate accepts for the size
- * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
- * 8 GiB steps. */
-export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
 
 /** Fill each unset app.zipDownloads key with its default (an absent block is all defaults). */
 export function applyZipDownloadsDefaults(config: ConfigPublic): void {

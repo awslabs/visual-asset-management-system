@@ -1153,6 +1153,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`           | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
 | `FEATURE_PHYSNA_ADDON` (`addon_constants.py`)     | `"PHYSNA_ADDON"`                  | Physna add-on features   |
 | `FEATURE_DEADLINECLOUD_PIPELINES`                 | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_ZIPDOWNLOADS`                            | `"ZIPDOWNLOADS"`                  | Download as Zip          |
 | `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
 | `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
 | `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |
