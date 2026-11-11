@@ -103,6 +103,10 @@ aws bedrock-agentcore-control list-agent-runtimes \
     --output text > vams-cad-agent-runtimes.txt
 ```
 
+## Pre-uninstall: add-ons
+
+An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
@@ -269,6 +273,12 @@ The key named log groups are:
 -   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
+
+The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
+
+```bash
+aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
+```
 
 ```bash
 # List VAMS-related log groups
@@ -731,7 +741,7 @@ aws logs describe-log-groups \
     --query 'logGroups[].logGroupName'
 ```
 
-All of the above commands should return empty results when the uninstall is complete.
+All of the above commands should return empty results when the uninstall is complete. An add-on can leave resources of its own that these checks do not cover; the pages of each add-on the deployment enabled list the checks for them.
 
 ## Cost impact after uninstall
 

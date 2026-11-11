@@ -139,7 +139,9 @@ def test_request_to_claims_with_vams_claims(mock_custom_override, event_with_vam
         "tokens": ["test-user-id"],
         "roles": ["admin", "user"],
         "externalAttributes": ["attr1", "attr2"],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_vams_claims)
 
 
@@ -168,7 +170,9 @@ def test_request_to_claims_with_cognito_username(mock_custom_override, event_wit
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_cognito_username)
 
 
@@ -197,7 +201,9 @@ def test_request_to_claims_with_username(mock_custom_override, event_with_userna
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_username)
 
 
@@ -226,7 +232,9 @@ def test_request_to_claims_with_sub(mock_custom_override, event_with_sub):
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_sub)
 
 
@@ -255,7 +263,9 @@ def test_request_to_claims_with_upn(mock_custom_override, event_with_upn):
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_upn)
 
 
@@ -284,7 +294,9 @@ def test_request_to_claims_with_email(mock_custom_override, event_with_email):
         "tokens": ["test@example.com"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_email)
 
 

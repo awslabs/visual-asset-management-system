@@ -299,6 +299,8 @@ These non-pipeline endpoints are created based on the deployment configuration:
 | Amazon Bedrock AgentCore                        | `useGenAiCadStepAgent` with `runtime: "agentcore"` + `useGlobalVpc.useForAllLambdas`  | `bedrock-agentcore` — the GenAI CAD STEP agent's invoke Lambda calls `InvokeAgentRuntime` from the isolated subnets. The `agentcore` runtime is commercial-only, so this endpoint is too.           |
 | Amazon S3 (cross-Region, one per bucket Region) | `useGlobalVpc.addCrossRegionS3Endpoints` + an external asset bucket in another Region | `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set — reaches an asset bucket in another Region from the isolated subnets. Commercial partition only.                                        |
 
+An enabled add-on can add interface endpoints, and security groups for its own functions, to the VPC; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)).
+
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 
 :::info[ALB Amazon S3 interface endpoint]
