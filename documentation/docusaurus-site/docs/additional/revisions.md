@@ -370,6 +370,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Combined search facet counts** — A search across both assets and files reports database and tag facet counts and `aggregationTotal` for assets and files together, not assets only. (issue #1027)
 -   **IAM permissions boundary applied** — `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` now sets the boundary on every IAM role VAMS creates; synthesis rejects a malformed or other-partition ARN. (issue #431)
 -   **Bucket sync keeps files whose names end in `init`** — Bucket sync no longer permanently deletes asset files such as `postinit` or `config.init`. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. (issue #1223)
+-   **API keeps working after an IAM role rename** — After an update that renames the IAM roles, such as setting or changing `IamRoleNamePrefix`, the REST API stage moves to a new deployment that names the renamed authorizer role, instead of answering every route with `500`. The first update to this version creates one new API deployment. (issue #1210)
 
 **Other changes:**
 

@@ -74,9 +74,9 @@ export interface RestApiGatewayConstructProps {
  * Builds a single `SpecRestApi` from the cross-stack {@link RouteRegistry}: renders one
  * inline OpenAPI document (with the custom REQUEST Lambda authorizer, CORS, the gateway
  * responses, and the anonymous amplify-config/version routes), creates an explicit Deployment + Stage whose
- * logical id is hashed against the whole spec and the gateway responses (so any cross-stack
- * route change auto-redeploys), grants API Gateway invoke on every registered Lambda, and
- * optionally associates a regional WAF web ACL.
+ * logical id is hashed against the whole spec, the gateway responses and the name of the authorizer
+ * invoke role (so any cross-stack route change or role rename auto-redeploys), grants API Gateway invoke
+ * on every registered Lambda, and optionally associates a regional WAF web ACL.
  *
  * The API is fully self-contained: it is publicly addressable on its own and does not
  * require CloudFront or an ALB in front of it. A front maps the web URL's `/api/*` paths onto
@@ -353,6 +353,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         const deployment = new apigw.Deployment(this, "Deployment", { api: this.restApi });
         deployment.addToLogicalId(spec); // any spec change -> new deployment -> auto redeploy
         addGatewayResponses(this, this.restApi, deployment, gatewayResponses);
+        addAuthorizerInvokeRoleToDeployment(deployment, authInvokeRole);
 
         const stage = new apigw.Stage(this, "Stage", {
             deployment,
@@ -618,4 +619,53 @@ export function addGatewayResponses(
         gatewayResponses: definitions.map((d) => ({ ...d, type: d.type.responseType })),
     });
     return responses;
+}
+
+/**
+ * Ties the deployment to the role API Gateway assumes to invoke the authorizer.
+ *
+ * The stage serves a deployment, which is a snapshot of the API definition, so the stage keeps the
+ * authorizer credentials of the deployment it points at. The definition names the role as
+ * `Fn::GetAtt <logical id>.Arn`, which reads the same before and after a rename. A new `RoleName`
+ * (setting or changing `environments.aws.IamRoleNamePrefix`) replaces the role and updates the
+ * definition, but leaves the deployment, and with it the stage, naming the deleted role. The role's
+ * logical id, `RoleName` and `Path` decide its ARN, so they go into the deployment's logical id. They
+ * are read from the role as rendered, after the IamRoleTransform aspect has set its name, and are
+ * plain strings: an unchanged configuration keeps its deployment. A permissions boundary or policy
+ * change updates the role in place, keeps its ARN and leaves the deployment as it is.
+ *
+ * The deployment also depends on the role and its policy, so the stage moves to a new deployment only
+ * after the new role may invoke the authorizer.
+ */
+export function addAuthorizerInvokeRoleToDeployment(
+    deployment: apigw.Deployment,
+    role: iam.Role
+): void {
+    const cfnRole = role.node.defaultChild;
+    // A pre-created role (app.iamRoleConfig.useCustomVamsStackRoles) has no resource in the template:
+    // its ARN is a literal in the definition, which the deployment's logical id already covers.
+    if (!cdk.CfnResource.isCfnResource(cfnRole)) return;
+    deployment.node.addDependency(role);
+    deployment.addToLogicalId({
+        authorizerInvokeRole: cdk.Lazy.any({
+            produce: () => {
+                // `_toCloudFormation()` is the resource as rendered, with the property overrides the
+                // aspect sets; the Deployment construct reads the RestApi resource the same way for
+                // its own logical id.
+                const renderable = cfnRole as unknown as { _toCloudFormation(): unknown };
+                const rendered: {
+                    Resources: Record<
+                        string,
+                        { Properties?: { RoleName?: unknown; Path?: unknown } }
+                    >;
+                } = cdk.Stack.of(cfnRole).resolve(renderable._toCloudFormation());
+                const [logicalId, resource] = Object.entries(rendered.Resources)[0];
+                return {
+                    logicalId,
+                    roleName: resource.Properties?.RoleName ?? null,
+                    path: resource.Properties?.Path ?? null,
+                };
+            },
+        }),
+    });
 }
