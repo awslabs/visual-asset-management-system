@@ -89,6 +89,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 -   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
+-   **Isaac Lab pipeline page** — The page states the 6-hour AWS Batch limit on a training job's running time, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
 
 **Other changes:**
 
