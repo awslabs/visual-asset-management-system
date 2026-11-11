@@ -162,7 +162,9 @@ function isErrorAlert(alert: { getElement(): Element }) {
 
 const NOTHING_STORED_BODY = {
     existing: "No files were added to asset asset-1. See the error details below.",
-    new: "Asset asset-new was created, but none of its files were stored. See the error details below.",
+    // NEW_ASSET carries assetName "model", and the alerts name the asset rather than the
+    // generated id (issue #1189).
+    new: "Asset model was created, but none of its files were stored. See the error details below.",
 };
 
 describe("Upload outcome wording", () => {

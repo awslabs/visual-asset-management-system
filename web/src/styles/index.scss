@@ -292,7 +292,7 @@ code {
     width: 100%;
 }
 
-.carousel ul.slides {
+.carousel .slides {
     display: block;
     position: relative;
     margin: 0;
@@ -310,7 +310,7 @@ code {
     -webkit-touch-callout: none;
 }
 
-.carousel ul.slides input {
+.carousel .slides input {
     display: none;
 }
 
