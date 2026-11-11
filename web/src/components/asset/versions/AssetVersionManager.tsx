@@ -87,6 +87,8 @@ interface AssetVersionContextType {
     setPageSize: (size: number) => void;
     setSelectedVersion: (version: AssetVersion | null) => void;
     refreshVersions: () => void;
+    /** Tells the page that a version changed, after a change made from the list itself. */
+    onVersionsChanged?: () => void;
     compareMode: boolean;
     setCompareMode: (mode: boolean) => void;
     versionToCompare: AssetVersion | null;
@@ -141,7 +143,7 @@ interface AssetVersionContextType {
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
 
 interface AssetVersionManagerProps {
-    /** Called after a version is created, reverted to, edited or archived. */
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
     onVersionsChanged?: () => void;
 }
 
@@ -531,6 +533,7 @@ export const AssetVersionManager: React.FC<AssetVersionManagerProps> = ({ onVers
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         setCompareMode,
         versionToCompare,

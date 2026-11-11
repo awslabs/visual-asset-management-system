@@ -372,7 +372,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** VamsCLI checks the path of each request before sending it and refuses one with an empty, `.` or `..` segment (`InvalidRequestPathError`). ([#536](https://github.com/awslabs/visual-asset-management-system/issues/536))
 -   **Web** Search page: the result count no longer reads "0 results" right after **Clear All Filters** (or before the first search answers); the title row shows no count until the reloaded list arrives. ([#1252](https://github.com/awslabs/visual-asset-management-system/issues/1252))
 -   **Pipelines** Fixed Isaac Lab evaluation with the rl_games or skrl library not uploading its recorded video when `recordVideo` is on. ([#1313](https://github.com/awslabs/visual-asset-management-system/issues/1313))
--   **Web** Asset page: **Current Last Version** in the header and the header's version selector follow a change made on the **Versions** tab (a version created, reverted to, edited or archived) at once, instead of keeping the previous version until the page reloads. ([#1311](https://github.com/awslabs/visual-asset-management-system/issues/1311))
+-   **Web** Asset page: **Current Last Version** in the header and the header's version selector follow a change made on the **Versions** tab (a version created, reverted to, edited, archived or unarchived) at once, instead of keeping the previous version until the page reloads. ([#1311](https://github.com/awslabs/visual-asset-management-system/issues/1311))
 
 ### Chores
 

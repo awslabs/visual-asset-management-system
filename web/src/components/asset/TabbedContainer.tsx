@@ -24,7 +24,7 @@ interface TabbedContainerProps {
     assetVersionId?: string; // Optional version ID to filter files and metadata
     /** Bubbled-up notification when the user changes the file/folder selection. */
     onSelectedPathChange?: (path: string | null) => void;
-    /** Called after a version is created, reverted to, edited or archived. */
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
     onVersionsChanged?: () => void;
 }
 

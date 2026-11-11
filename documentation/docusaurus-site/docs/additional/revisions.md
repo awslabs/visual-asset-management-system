@@ -307,7 +307,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 -   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
--   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited or archived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
+-   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
 
 **Other changes:**
 

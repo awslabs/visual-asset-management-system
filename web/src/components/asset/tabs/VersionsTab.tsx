@@ -12,7 +12,7 @@ interface VersionsTabProps {
     databaseId: string;
     assetId: string;
     isActive: boolean;
-    /** Called after a version is created, reverted to, edited or archived. */
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
     onVersionsChanged?: () => void;
 }
 

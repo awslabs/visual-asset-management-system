@@ -80,6 +80,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         versionToCompare,
         // New properties for enhanced functionality
@@ -285,6 +286,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 
             if (success) {
                 refreshVersions();
+                onVersionsChanged?.();
             } else {
                 console.log("Failed to unarchive version:", response);
             }
