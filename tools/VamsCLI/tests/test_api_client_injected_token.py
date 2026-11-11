@@ -142,7 +142,7 @@ class TestNothingIsPersisted:
         client = APIClient(BASE, profile_manager=profile_manager, bearer_token=TOKEN_A)
         _Wire(monkeypatch, client, _response({"message": "Unauthorized"}, status=401))
 
-        with pytest.raises(Exception):
+        with pytest.raises(AuthenticationError):
             client.call_login_profile("user-a")
 
         profile_manager.delete_auth_profile.assert_not_called()
