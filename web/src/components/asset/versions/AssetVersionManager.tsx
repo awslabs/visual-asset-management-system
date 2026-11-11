@@ -140,7 +140,12 @@ interface AssetVersionContextType {
 
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
 
-export const AssetVersionManager: React.FC = () => {
+interface AssetVersionManagerProps {
+    /** Called after a version is created, reverted to, edited or archived. */
+    onVersionsChanged?: () => void;
+}
+
+export const AssetVersionManager: React.FC<AssetVersionManagerProps> = ({ onVersionsChanged }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const assetArchived = useAssetArchived();
 
@@ -927,6 +932,7 @@ export const AssetVersionManager: React.FC = () => {
                     onSuccess={() => {
                         setShowCreateModal(false);
                         refreshVersions();
+                        onVersionsChanged?.();
                     }}
                 />
 
@@ -938,6 +944,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowRevertModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}
@@ -952,6 +959,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowEditModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}
@@ -966,6 +974,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowArchiveModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}
