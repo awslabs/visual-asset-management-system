@@ -401,12 +401,12 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 
 | Code                           | Meaning                                                                                                                                                                                                                                             |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `truncated:window`             | A whole-file result window filled, so more files may match. `nlp.truncated` is `true`.                                                                                                                                                              |
+| `truncated:window`             | A whole-file result window filled, or a searched database is one the caller may open only in part (see [Vector search](../concepts/vector-search.md#searching)), so more files may match. `nlp.truncated` is `true`.                                |
 | `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `nlp.truncated` is `true`.                                                                                                                                        |
 | `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty, its total is `0` (`eq`), and the query was not embedded.                                                                                                                   |
 | `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                                                                                                                                                |
 | `opensearch:enrichment_failed` | File details from the OpenSearch file index, or asset locations from the asset index, could not be loaded; the hits are returned without them. Sent only for a request with no OpenSearch-only constraint (one with a constraint fails with `503`). |
-| `segments:window_full`         | A segment result window filled while the whole-file windows did not, so more segments may match. `nlp.truncated` stays `false`.                                                                                                                     |
+| `segments:window_full`         | A segment result window filled while the whole-file windows did not, in databases the caller may open in full, so more segments may match. `nlp.truncated` stays `false`.                                                                           |
 
 **Error Responses:**
 

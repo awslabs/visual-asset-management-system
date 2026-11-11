@@ -1115,13 +1115,22 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
     `query_string` text. The general keyword query uses `FieldClassifier.any_word_anywhere_query`
     (any word, anywhere inside a value); a field filter with wildcards on an analyzed text field
     `every_word_in_field_query`; a wildcard pattern on a keyword-typed field `whole_value_pattern`;
-    a contains search of metadata values `every_word_anywhere_in_values_query`.
+    a contains search of metadata values `every_word_anywhere_in_values_query`. A value the caller
+    wrapped in one pair of double quotes is that exact value: `FieldClassifier.quoted_exact_value`,
+    `exact_phrase` and `split_metadata_query`; never escape the caller's quotes into the searched value.
 -   **Flat-object value fields depend on the query, not the engine.** For an exact or prefix term
     name only the root (`MD_`, `AB_`) or a key (`MD_.<key>`). Neither engine rewrites any other
     wildcard pattern, so it names `<root>._value` (a value) or `<root>._valueAndPath` (one key's
     value): use `FieldClassifier.flat_object_value_fields` and `flat_object_key_pattern_query`,
     and do not branch on `OPENSEARCH_TYPE` (confirmed on OpenSearch Serverless and provisioned
     OpenSearch 3.5). Never hardcode `MD_._value`.
+-   **Natural-language window signals never depend on records the caller cannot open**
+    (`handlers/osVectorSearch/vectorSearchService.py`). `_databases_read_in_full` decides which
+    searched databases the caller may open in full (every asset GET policy line constrains
+    `databaseId` alone and the user's enforcer allows an asset object of the database, asked
+    directly so no denial audit entry is written). Every other target is searched with `MAX_TOP_K`
+    whatever `size` and always reported as possibly incomplete (`nlp.truncated`, `gte`,
+    `truncated:window`); only targets open in full are checked for a filled window.
 
 #### **System User (`SYSTEM_USER`)**
 
