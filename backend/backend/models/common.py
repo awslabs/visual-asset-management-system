@@ -125,7 +125,10 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
 def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
     # An error body is the returned message rather than a payload, so it stays in the log - passed as
     # structured data, not interpolated, so safeLogger's key-driven redaction still walks it.
-    logger.error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
+    # A rejected request is a client outcome, so a 4xx logs at WARNING and ERROR stays reserved for
+    # 5xx, as in general_error().
+    log_validation_error = logger.error if status_code >= 500 else logger.warning
+    log_validation_error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log validation error if event provided
     if event:
