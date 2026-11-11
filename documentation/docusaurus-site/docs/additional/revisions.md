@@ -94,6 +94,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Bucket sync keeps files whose names end in `init`** — Bucket sync no longer permanently deletes asset files such as `postinit` or `config.init`. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. (issue #1223)
 -   **Isaac Lab training time limit** — AWS Batch no longer stops an Isaac Lab training job after 6 hours of running; the job limit matches the workflow's 8 hours. (issue #1324)
 -   **Isaac Lab pipeline page** — The page states that its timeouts include the wait for a GPU instance, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
+-   **API keeps working after an IAM role rename** — After an update that renames the IAM roles, such as setting or changing `IamRoleNamePrefix`, the REST API stage moves to a new deployment that names the renamed authorizer role, instead of answering every route with `500`. The first update to this version creates one new API deployment. (issue #1210)
 
 **Other changes:**
 

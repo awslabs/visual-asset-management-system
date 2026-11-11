@@ -1183,6 +1183,8 @@ The boundary ARN must be an IAM managed policy ARN in the partition you deploy t
 
 Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
+Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update.
+
 :::warning[Role name length limit]
 The total IAM role name character count limit is 64 characters. Long prefixes may affect role name uniqueness and cause deployment failures. Prefixes of 8 characters or fewer are recommended.
 :::
