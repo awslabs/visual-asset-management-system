@@ -33,7 +33,17 @@ def _as_bool(value: str | None) -> bool:
 
 
 class ConfigError(RuntimeError):
-    """Raised when configuration is missing or invalid."""
+    """Raised when configuration is missing or invalid.
+
+    ``str()`` is the full message for a person, setup command included. A tool result must not tell
+    the agent to run a CLI (Mandatory Rule 12), so the server reports ``reason`` (the fact, with no
+    command) to the agent and puts ``user_step`` (the command the USER runs) in ``user_action``.
+    """
+
+    def __init__(self, message: str, reason: Optional[str] = None, user_step: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.reason = reason or message
+        self.user_step = user_step
 
 
 # Ceiling for VAMS_PAGE_SIZE. The metadata GETs refuse a pageSize above 1000 with a 400 rather than

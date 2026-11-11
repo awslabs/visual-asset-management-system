@@ -20,6 +20,8 @@ import types
 from pathlib import Path
 
 import pytest
+
+from vams_mcp.annotations import TIER_ANNOTATIONS
 from vamscli.utils.api_client import APIClient
 
 import vams_mcp.addon_tools as addon_tools
@@ -48,7 +50,7 @@ RAW_VERBS = ("post", "put", "patch", "delete")
 
 GOOD_MODULE = '''
 def register(mcp, client, config, tool_result):
-    @mcp.tool()
+    @mcp.tool(title="Probe read", annotations=READ)
     @tool_result
     def probe_read():
         """Read."""
@@ -57,7 +59,7 @@ def register(mcp, client, config, tool_result):
 
     if config.enable_writes:
 
-        @mcp.tool()
+        @mcp.tool(title="Probe write", annotations=WRITE)
         @tool_result
         def probe_write():
             """Write."""
@@ -66,7 +68,7 @@ def register(mcp, client, config, tool_result):
 
     if config.enable_destructive:
 
-        @mcp.tool()
+        @mcp.tool(title="Probe delete", annotations=DESTRUCTIVE)
         @tool_result
         def probe_delete():
             """Delete."""
@@ -77,7 +79,33 @@ def register(mcp, client, config, tool_result):
 
 def _is_tool(node):
     return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-        ast.unparse(d) in ("tool_result", "mcp.tool()") for d in node.decorator_list)
+        ast.unparse(d) == "tool_result" or _is_mcp_tool_decorator(d) for d in node.decorator_list)
+
+
+def _is_mcp_tool_decorator(decorator):
+    """`@mcp.tool()` or `@mcp.tool(...)`: the call that registers a tool."""
+    return isinstance(decorator, ast.Call) and ast.unparse(decorator.func) == "mcp.tool"
+
+
+def _decorator_violations(tool, tier, node):
+    """The decorators are `@mcp.tool(title="...", annotations=<CONST>)` then `@tool_result`, and the
+    annotation constant is one of those its gate tier allows (vams_mcp/annotations.py, Rule 11)."""
+    decorators = node.decorator_list
+    if len(decorators) != 2 or not _is_mcp_tool_decorator(decorators[0]) \
+            or ast.unparse(decorators[1]) != "tool_result":
+        shown = [ast.unparse(d) for d in decorators]
+        return [f"{tool}: decorated {shown}, not @mcp.tool(title=..., annotations=...) then @tool_result"]
+    keywords = {kw.arg: kw.value for kw in decorators[0].keywords}
+    found = []
+    title = keywords.get("title")
+    if not (isinstance(title, ast.Constant) and isinstance(title.value, str) and title.value.strip()):
+        found.append(f"{tool}: @mcp.tool() carries no title")
+    annotation = keywords.get("annotations")
+    allowed = TIER_ANNOTATIONS[tier]
+    if not (isinstance(annotation, ast.Name) and annotation.id in allowed):
+        shown = ast.unparse(annotation) if annotation is not None else None
+        found.append(f"{tool}: annotations={shown}, not one of {list(allowed)} for the {tier} tier")
+    return found
 
 
 def _register_def(tree):
@@ -139,9 +167,7 @@ def layout_violations(tree, name="module"):
     ]
     for tier, node in placed:
         tool = f"{name}.{node.name}"
-        decorators = [ast.unparse(d) for d in node.decorator_list]
-        if decorators != ["mcp.tool()", "tool_result"]:
-            found.append(f"{tool}: decorated {decorators}, not @mcp.tool() then @tool_result")
+        found += _decorator_violations(tool, tier, node)
         if not _opens_with_pre_flight(node):
             found.append(f"{tool}: first statement is not client.require_feature(<switch>, <message>)")
         for called in _api_calls(node):
@@ -320,8 +346,16 @@ def test_the_synthetic_module_passes_every_check():
          "POSTs raw through client.post_json"),
         ('return client.api.create_database("db", "d", "b")', 'return client.api.delete_database("db")',
          "calls client.api.delete_database outside the destructive gate"),
-        ('    @mcp.tool()\n    @tool_result\n    def probe_read',
-         '    @tool_result\n    @mcp.tool()\n    def probe_read', "not @mcp.tool() then @tool_result"),
+        ('    @mcp.tool(title="Probe read", annotations=READ)\n    @tool_result\n    def probe_read',
+         '    @tool_result\n    @mcp.tool(title="Probe read", annotations=READ)\n    def probe_read',
+         "then @tool_result"),
+        ('@mcp.tool(title="Probe read", annotations=READ)', '@mcp.tool(title="Probe read", annotations=WRITE)',
+         "probe_read: annotations=WRITE, not one of ['READ'] for the read tier"),
+        ('@mcp.tool(title="Probe delete", annotations=DESTRUCTIVE)',
+         '@mcp.tool(title="Probe delete", annotations=WRITE)',
+         "probe_delete: annotations=WRITE, not one of ['DESTRUCTIVE', 'DESTRUCTIVE_COMPUTE']"),
+        ('@mcp.tool(title="Probe write", annotations=WRITE)', '@mcp.tool(annotations=WRITE)',
+         "probe_write: @mcp.tool() carries no title"),
         ('        """Read."""\n        client.require_feature(FEATURE_PROBE, PROBE_DISABLED_MESSAGE)\n',
          '        """Read."""\n', "probe_read: first statement is not client.require_feature"),
         ("    if config.enable_writes:\n", "    if config.enable_writes or True:\n",
@@ -338,6 +372,7 @@ def test_the_synthetic_module_passes_every_check():
          "is not register(mcp, client, config, tool_result)"),
     ],
     ids=["read-mutates", "read-raw-verb", "read-post-json", "delete-under-writes", "decorator-order",
+         "read-annotated-write", "destructive-annotated-write", "no-title",
          "no-pre-flight", "other-gate", "else-branch", "server-global", "register-signature"],
 )
 def test_the_layout_check_fires_on_each_departure(old, new, expected):
