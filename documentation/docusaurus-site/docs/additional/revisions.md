@@ -118,6 +118,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Default file metadata schema file** — `infra/config/metadataSchema/defaultFileMetadataSchema.json` defines a deployment-time GLOBAL default schema for file metadata. It ships with no fields and seeds nothing; add fields before deploying to seed `default-file-metadata-schema`. An invalid file fails the synthesis. (issue #1068)
 -   **SuperSplat Editor opens `.ksplat` and `.spz`** — The SuperSplat Editor opens `.ksplat` and `.spz` Gaussian splat files. With `app.webUi.allowUnsafeEvalFeatures` enabled, an `.spz` file offers it beside the BabylonJS Gaussian Splat Viewer, so the viewer is chosen instead of opening automatically. (issue #1174)
 -   **More splat formats in the BabylonJS viewer** — The BabylonJS Gaussian Splat viewer opens `.splat` and bundled `.sog` files as well as `.ply` and `.spz`. (issue #1174)
+-   **Per-call CLI token** — The VAMS CLI's `APIClient` accepts an in-memory per-call `bearer_token` for processes that serve several users, such as a remotely hosted MCP server; it is never saved or refreshed, and profile-based sign-in is unchanged. (issue #1338)
 
 **Key fixes:**
 

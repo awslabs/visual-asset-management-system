@@ -1,4 +1,4 @@
-"""APIClient with an injected, per-instance bearer token (issue #1328).
+"""APIClient with an injected, per-instance bearer token (issue #1338).
 
 A process that serves several users, such as a remote MCP server, builds one APIClient per request
 from the caller's own token: ``APIClient(base_url, bearer_token=token)``. These tests hold that:

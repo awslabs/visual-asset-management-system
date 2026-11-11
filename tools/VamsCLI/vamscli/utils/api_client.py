@@ -65,7 +65,7 @@ _AUTHORIZER_DENIED_MESSAGE = (
     "deployment may restrict API access by source IP address, or this credential is not accepted. "
     "Contact your administrator."
 )
-# A per-call token handed to APIClient(bearer_token=...) (issue #1328) is never refreshed, so its
+# A per-call token handed to APIClient(bearer_token=...) (issue #1338) is never refreshed, so its
 # rejection is reported at once, and in words that do not tell the caller to run a CLI login.
 _INJECTED_TOKEN_REJECTED_MESSAGE = (
     "Authentication failed: the VAMS API did not accept the supplied token (HTTP 401). It may be "
@@ -365,7 +365,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                  bearer_token: Optional[str] = None):
         """Create a client for one VAMS API.
 
-        ``bearer_token`` (issue #1328) is for a process that serves several users, such as a remote
+        ``bearer_token`` (issue #1338) is for a process that serves several users, such as a remote
         MCP server: it builds one client per request from the caller's own token. The token lives
         on this instance only. It is sent as ``Authorization: Bearer <token>`` on every
         authenticated request, never written to a profile file, never refreshed (the client holds
