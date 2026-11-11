@@ -29,15 +29,16 @@ jest.mock("../core/PluginRegistry", () => {
     };
     return {
         PluginRegistry: { getInstance: () => instance },
+        // The real rule lives in the pure extensionMatching module (the registry itself needs Vite).
         getFileExtensions: (files: any[]) =>
             Array.from(
                 new Set(
                     files
                         .filter((file: any) => !file.isDirectory)
                         .map((file: any) =>
-                            String(file.filename)
-                                .slice(String(file.filename).lastIndexOf("."))
-                                .toLowerCase()
+                            jest
+                                .requireActual("../core/extensionMatching")
+                                .extensionToken(String(file.filename))
                         )
                 )
             ),
@@ -177,6 +178,19 @@ describe("DynamicViewer", () => {
         rerender(view([file("model.glb")]));
 
         await waitFor(() => expect(screen.queryByText(/No compatible viewers found/)).toBeNull());
+    });
+
+    it("names a file without an extension in words, never by its matching token (#1198)", async () => {
+        registry().getCompatibleViewers.mockReturnValue([]);
+        render(view([file("Makefile")]));
+        await waitFor(() =>
+            expect(
+                screen.getByText(/No compatible viewers found for file types: no extension/)
+            ).toBeInTheDocument()
+        );
+        expect(screen.queryByText(/\(none\)/)).toBeNull();
+        // The registry was asked with the token itself.
+        expect(registry().getCompatibleViewers).toHaveBeenCalledWith(["(none)"], false, false);
     });
 });
 

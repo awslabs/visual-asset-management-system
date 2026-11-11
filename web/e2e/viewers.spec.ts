@@ -3,8 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Page, Request, Response } from "@playwright/test";
-import { type AssetFileRef, chooseViewer, findAssetFiles } from "./support/fixtures";
+import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
+import {
+    apiContext,
+    type AssetFileRef,
+    canvasStats,
+    type CanvasStats,
+    captureCanvas,
+    chooseViewer,
+    CONSOLE_ERROR_IGNORE,
+    CSP_CONSOLE_REPORT,
+    dataGrid,
+    expectCanvasRendered,
+    expectSuperSplatRendered,
+    expectNoNewCspViolations,
+    featuresEnabled,
+    findAssetFiles,
+    largestCanvas,
+    missingFeatures,
+    openViewerFile,
+    pickViewerIfAsked,
+    type RenderThresholds,
+    viewerSamples,
+    watchConsoleErrors,
+    watchCspViolations,
+    watchRequestHosts,
+    SUPERSPLAT_CSP_ALLOWED,
+} from "./support/fixtures";
 
 /**
  * React-18 viewer-plugin load smoke test. The 3D/media viewers are dynamically imported
@@ -25,52 +50,6 @@ import { type AssetFileRef, chooseViewer, findAssetFiles } from "./support/fixtu
  * and a .usd layer, benchmelb.spz and Ifc4_CubeAdvancedBrep.ifc uploaded together to one
  * distributable asset.
  */
-
-// Benign noise to ignore (network aborts on teardown, third-party analytics, favicon).
-const IGNORE = [
-    /favicon/i,
-    /Failed to load resource.*404/i,
-    /net::ERR_ABORTED/i,
-    /ResizeObserver loop/i,
-    /Download the React DevTools/i,
-    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
-    // on every page load and logs these three when the request fails at the network layer, keeping the
-    // cached config so the page still renders — which is why the heading and the viewer surface both
-    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
-    // run the edge rejects one, and the case that catches it is whichever happens to be running:
-    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
-    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
-    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
-    // above rather than reaching this list.
-    /getAmplifyConfig: Fetch error/i,
-    /Failed to refresh amplify-config/i,
-    /Error getting secure-config/i,
-];
-
-function watchErrors(page: Page): string[] {
-    const errors: string[] = [];
-    page.on("console", (msg) => {
-        if (msg.type() === "error") {
-            const t = msg.text();
-            if (!IGNORE.some((re) => re.test(t))) errors.push(`console: ${t}`);
-        }
-    });
-    page.on("pageerror", (err) => {
-        const t = err.message || String(err);
-        if (!IGNORE.some((re) => re.test(t))) errors.push(`pageerror: ${t}`);
-    });
-    return errors;
-}
-
-async function openFile(page: Page, subject: AssetFileRef) {
-    // Stored file keys are asset-relative with a leading slash (e.g. /BoomBox.glb); ViewFile
-    // parses the segment after /file/ as the key, so it must carry that leading slash.
-    await page.goto(
-        `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
-            `/file/${encodeURIComponent(subject.key)}`,
-        { waitUntil: "domcontentloaded" }
-    );
-}
 
 const cases = [
     // `select` = the viewer name to choose when the extension maps to more than one viewer
@@ -103,8 +82,10 @@ const cases = [
         wasm: true,
         requiresFeature: "ALLOWUNSAFEEVAL",
     },
-    { ext: ".spz", viewer: "Gaussian splat" },
+    // With ALLOWUNSAFEEVAL the SuperSplat Editor also opens .spz, so the picker appears there.
+    { ext: ".spz", viewer: "Gaussian splat", select: /Gaussian Splat Viewer \(BabylonJS\)/i },
     { ext: ".ifc", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
+    { ext: ".ifczip", viewer: "IFC BIM", requiresFeature: "ALLOWUNSAFEEVAL" },
     // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
     // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
     // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
@@ -121,28 +102,6 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
 
 // One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
-
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
 
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
@@ -283,10 +242,10 @@ for (const c of cases) {
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
-        const errors = watchErrors(page);
+        const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
         const references = c.referenceChecks ? await trackReferenceRequests(page) : null;
-        await openFile(page, subject!);
+        await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
         // constructed RegExp: a file name carries regex metacharacters (`.` at minimum).
@@ -367,3 +326,823 @@ for (const c of cases) {
         }
     });
 }
+
+/**
+ * Render proof per sample (#1174). The cases above prove a viewer MOUNTS; these prove it DRAWS the
+ * file: canvas viewers by the pixels of their scene (an empty viewer shows only its clear colour),
+ * DOM viewers by the content they render. Every case also fails on any new Content Security Policy
+ * violation and on any request to a host outside the deployment (a viewer pulling code from a public
+ * CDN at run time), which air-gapped and GovCloud deployments cannot serve.
+ *
+ * SEEDED: the subjects are the public samples listed in `e2e/fixtures/viewer-samples.json`, uploaded
+ * by `tools/VamsCLI/examples/seed_viewer_samples.py` to one distributable asset. The cases skip with a
+ * reason unless `E2E_VIEWER_SAMPLES` names the fixture that script writes:
+ *
+ *   python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>
+ *   export E2E_VIEWER_SAMPLES=/abs/path/web/e2e/fixtures/viewer-samples-seed.json
+ *   cd web && npx playwright test e2e/viewers.spec.ts
+ *
+ * Run the same spec on the development build first: a case that passes there and fails on a change
+ * is a regression. `cspAllowed` lists the baseline violations a case already shows there, exactly.
+ */
+
+/**
+ * `potree`: the Potree viewer streams the octree the Point Cloud Potree Viewer pipeline
+ * (`app.pipelines.usePreviewPcPotreeViewer`) wrote for the file, so the case skips, naming the
+ * pipeline, when the file has no preview yet. It proves the cloud was drawn by Potree's own count
+ * of points resident on the GPU and by point pixels on its canvas (see `potreePointShare`).
+ */
+type RenderKind =
+    | "canvas"
+    | "pdf"
+    | "grid"
+    | "text"
+    /** The Text Viewer refuses the file as binary: its notice, no highlighter (#1198). */
+    | "text-binary"
+    /** The Text Viewer names an encoding it cannot show (UTF-16 without a BOM, UTF-32) (#1198). */
+    | "text-encoding"
+    | "not-offered"
+    | "refused"
+    | "supersplat"
+    | "potree";
+
+interface RenderCase {
+    /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
+    sample: string;
+    /**
+     * The viewer's `name` in the viewer config. The case asserts this viewer is the one selected
+     * (`pickViewerIfAsked`), so it must match the config exactly; for `not-offered` it is a label.
+     */
+    viewer: string;
+    kind: RenderKind;
+    /** Picker option to choose when several viewers are offered (default: `viewer` literally). */
+    select?: RegExp;
+    requiresFeature?: string | string[];
+    /** Run only when the deployment does NOT enable this feature (the gated path). */
+    withoutFeature?: string;
+    /** A request whose URL contains this must succeed (a tileset's tile, say). */
+    fetches?: string;
+    thresholds?: RenderThresholds;
+    cspAllowed?: RegExp[];
+    /** Console lines this case alone may log, on top of `CONSOLE_ERROR_IGNORE`. Never global. */
+    consoleAllowed?: RegExp[];
+    /**
+     * The HTTP statuses, in order, of every presigned GET of the sample's own file: how the bounded
+     * text loader read it (#1198). `[206]` = the first 8 KiB held the whole verdict (a small text
+     * file, or a binary refused on its first bytes); `[206, 200]` = a text file larger than the
+     * sample, read whole after the check; `[416]` = an empty file.
+     */
+    reads?: number[];
+    /**
+     * A web path the deployment serves only when the viewer is enabled (a licensed add-on's
+     * bundle). The case skips, with the reason, when the path is not served as JavaScript.
+     */
+    servedBundle?: string;
+    /**
+     * Select the loaded object by its row in the Three.js panel's scene graph (the row carrying the
+     * file name, the object's own row being the last), check the canvas turns visibly highlight
+     * green, then deselect it and check the green goes again (#1275).
+     */
+    selectInPanel?: boolean;
+}
+
+/** Whether the deployment serves `path` as JavaScript (the SPA answers a missing file with HTML). */
+async function servesScript(page: Page, path: string): Promise<boolean> {
+    const origin = new URL(page.url()).origin;
+    const res = await page.request.get(`${origin}${path}`);
+    return res.ok() && /javascript/i.test(res.headers()["content-type"] ?? "");
+}
+
+/** The VNTANA bundle, built only when `vntana-viewer` is enabled in addonViewerConfig.json. */
+const VNTANA_BUNDLE = "/viewers/vntana/vntana-viewer.bundle.js";
+
+/**
+ * The case's thresholds over the sample's: a manifest entry may set `expect.minForegroundFraction` /
+ * `expect.minDistinctColours` for a model that fills little of the canvas, and every other sample
+ * keeps the defaults of `expectCanvasRendered`.
+ */
+function caseThresholds(c: RenderCase, sample: { expect?: Record<string, any> }): RenderThresholds {
+    const fromSample: RenderThresholds = {};
+    if (typeof sample.expect?.minForegroundFraction === "number") {
+        fromSample.minForegroundFraction = sample.expect.minForegroundFraction;
+    }
+    if (typeof sample.expect?.minDistinctColours === "number") {
+        fromSample.minDistinctColours = sample.expect.minDistinctColours;
+    }
+    return { ...fromSample, ...c.thresholds };
+}
+
+const renderCases: RenderCase[] = [
+    {
+        sample: "cesium-tileset",
+        viewer: "Cesium 3D Tileset Viewer",
+        kind: "canvas",
+        select: /Cesium/i,
+        fetches: "dragon_low.b3dm",
+    },
+    {
+        sample: "splat-ply",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
+        kind: "canvas",
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "Gaussian Splat Viewer (PlayCanvas)",
+        kind: "canvas",
+        // The picker label is "Gaussian Splat Viewer (PlayCanvas)"; a looser pattern such as
+        // /PlayCanvas\)/ also matches "SuperSplat Editor (PlayCanvas)".
+        select: /Gaussian Splat Viewer \(PlayCanvas\)/i,
+    },
+    // BabylonJS 9 with no CDN fetch (#1174): every listed format draws; SPZ version 4 is refused
+    // with a message (Babylon reads it only through @adobe/spz, which the CSP blocks).
+    {
+        sample: "splat-ply",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-spz-v3",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-spz-v4",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "refused",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-splat",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    {
+        sample: "splat-sog",
+        viewer: "Gaussian Splat Viewer (BabylonJS)",
+        kind: "canvas",
+        select: /Gaussian Splat Viewer \(BabylonJS\)/i,
+    },
+    { sample: "online3d-amf", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-bim", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-off", viewer: "Online 3D Viewer", kind: "canvas" },
+    { sample: "online3d-wrl", viewer: "Online 3D Viewer", kind: "canvas" },
+    {
+        sample: "online3d-3dm",
+        viewer: "Online 3D Viewer (Rhinoceros 3D)",
+        kind: "canvas",
+        requiresFeature: "ALLOWUNSAFEEVAL",
+    },
+    // #921: under the default CSP, rhino3dm cannot run, so no viewer may be offered for .3dm.
+    {
+        sample: "online3d-3dm",
+        viewer: "no viewer (.3dm without ALLOWUNSAFEEVAL)",
+        kind: "not-offered",
+        withoutFeature: "ALLOWUNSAFEEVAL",
+    },
+    {
+        sample: "pdf",
+        viewer: "PDF Viewer",
+        kind: "pdf",
+        // One line of black text on a white page: a small share of pixels, two or three colours.
+        thresholds: { minForegroundFraction: 0.001, minDistinctColours: 2 },
+    },
+    { sample: "csv", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-bom", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "csv-ragged", viewer: "Columnar Data Viewer", kind: "grid", select: /Columnar/i },
+    { sample: "fcs", viewer: "Columnar Data Viewer", kind: "grid" },
+    { sample: "text", viewer: "Text Viewer", kind: "text" },
+    // #1198: files with no extension, dotfiles, binary content and UTF-16 in the Text Viewer.
+    // Text Viewer is the only viewer listing "(none)", so these open without a picker.
+    { sample: "noext-license", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "noext-readme", viewer: "Text Viewer", kind: "text", reads: [206] },
+    { sample: "noext-changes", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "dotfile-gitignore", viewer: "Text Viewer", kind: "text", reads: [206] },
+    { sample: "binary-noext", viewer: "Text Viewer", kind: "text-binary", reads: [206] },
+    { sample: "binary-as-txt", viewer: "Text Viewer", kind: "text-binary", reads: [206] },
+    { sample: "license-utf16le-bom", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "license-utf16be-bom", viewer: "Text Viewer", kind: "text", reads: [206, 200] },
+    { sample: "license-utf16le", viewer: "Text Viewer", kind: "text-encoding", reads: [206] },
+    {
+        sample: "noext-empty",
+        viewer: "Text Viewer",
+        kind: "text",
+        reads: [416],
+        // S3 answers a range on a 0-byte object with 416, which the loader reads as empty text;
+        // Chromium still logs its own network line for it (in-dev D1 on PR #1200).
+        consoleAllowed: [/Failed to load resource.*416/i],
+    },
+    {
+        // A dotfile WITH an extension matches by it: .json lists Text and Cesium, so a pick.
+        sample: "prettierrc-json",
+        viewer: "Text Viewer",
+        kind: "text",
+        select: /^Text Viewer/i,
+        reads: [206],
+    },
+    { sample: "env-example", viewer: "no viewer (.env.example)", kind: "not-offered" },
+    { sample: "potree-las", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-laz", viewer: "Potree Viewer", kind: "potree" },
+    { sample: "potree-e57", viewer: "Potree Viewer", kind: "potree" },
+    // .ply also matches the Gaussian splat and Three.js viewers.
+    { sample: "potree-ply", viewer: "Potree Viewer", kind: "potree", select: /Potree/i },
+    // #1257: a coloured PLY with no faces draws as coloured points; the info box reports the
+    // sample's `expect.vertexCount` points.
+    {
+        sample: "threejs-ply-points",
+        viewer: "Three.js Viewer",
+        kind: "canvas",
+        select: /Three\.js/i,
+        selectInPanel: true,
+    },
+    // Licensed add-on, disabled by default: these cases run only on a build that enables it.
+    {
+        sample: "vntana-glb-box",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    {
+        sample: "vntana-glb-avocado",
+        viewer: "VNTANA 3D Viewer",
+        kind: "canvas",
+        select: /VNTANA/i,
+        servedBundle: VNTANA_BUNDLE,
+    },
+    // The IFC viewer draws a grid under the model, so these cases only prove the canvas is not
+    // blank; "IFC BIM viewer panel actions" below compares the model against the bare grid.
+    { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-haus-zip", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    { sample: "ifc-school-structural", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    // SuperSplat Editor (iframe, WebGPU): splat count > 0 and a canvas that differs from the empty
+    // editor's, inside the frame (expectSuperSplatRendered). One case per single-file format it is
+    // offered for, SPZ v3 and v4 separately: PR-3 sends users with SPZ v4 here on ALLOWUNSAFEEVAL
+    // deployments. No permissively licensed .lcc sample exists, so .lcc has no case.
+    ...[
+        "splat-ply",
+        "splat-splat",
+        "splat-sog",
+        "splat-spz-v3",
+        "splat-spz-v4",
+        "splat-ksplat",
+    ].map(
+        (sample): RenderCase => ({
+            sample,
+            viewer: "SuperSplat Editor (PlayCanvas)",
+            kind: "supersplat",
+            requiresFeature: "ALLOWUNSAFEEVAL",
+            cspAllowed: SUPERSPLAT_CSP_ALLOWED,
+        })
+    ),
+];
+
+/** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
+const PRESIGNED = /X-Amz-(?:Signature|Credential)=/i;
+
+/**
+ * Records every presigned GET of one asset file (its key's tail, e.g. `/noext/LICENSE`) with its
+ * status and `Range` header, from the raw responses (a `fetch(redirect: "manual")` hides both).
+ */
+function trackFileReads(page: Page, key: string) {
+    const reads: { status: number; range: string }[] = [];
+    const onResponse = (response: Response) => {
+        const url = response.url();
+        if (!PRESIGNED.test(url)) return;
+        let path: string;
+        try {
+            path = decodeURIComponent(new URL(url).pathname);
+        } catch {
+            return;
+        }
+        if (!path.endsWith(key)) return;
+        reads.push({
+            status: response.status(),
+            range: response.request().headers()["range"] ?? "",
+        });
+    };
+    page.context().on("response", onResponse);
+    return {
+        reads,
+        stop: () => page.context().off("response", onResponse),
+    };
+}
+
+const seeded = viewerSamples();
+
+test.describe("viewer render proof (seeded samples)", () => {
+    for (const c of renderCases) {
+        const label = c.withoutFeature ? `${c.sample} without ${c.withoutFeature}` : c.sample;
+        test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
+            page,
+        }) => {
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[c.sample];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${c.sample} sample; re-run the seed script`
+            );
+
+            // Watchers go in before the first navigation so they see the app's first document.
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page, [
+                ...CONSOLE_ERROR_IGNORE,
+                ...(c.cspAllowed ? [CSP_CONSOLE_REPORT] : []),
+                ...(c.consoleAllowed ?? []),
+            ]);
+            const fileReads = c.reads ? trackFileReads(page, sample.key) : null;
+            const fetched = c.fetches
+                ? page.waitForResponse(
+                      (response) => response.url().includes(c.fetches!) && response.status() < 400,
+                      { timeout: 90_000 }
+                  )
+                : null;
+
+            const features = await featuresEnabled(page);
+            // A case that checks the gated path names the feature it must run WITHOUT; any other
+            // case needs the features its own entry names or, failing that, the sample's.
+            if (!c.withoutFeature) {
+                const missing = missingFeatures(
+                    features,
+                    c.requiresFeature ?? sample.requiresFeature ?? []
+                );
+                test.skip(
+                    missing.length > 0,
+                    `${c.viewer} needs ${missing.join(", ")}, which this deployment does not enable`
+                );
+            }
+            if (c.withoutFeature) {
+                test.skip(
+                    features.includes(c.withoutFeature),
+                    `this case checks a deployment without ${c.withoutFeature}`
+                );
+            }
+
+            if (c.servedBundle) {
+                test.skip(
+                    !(await servesScript(page, c.servedBundle)),
+                    `this deployment does not serve ${c.servedBundle}: ${c.viewer} is not enabled`
+                );
+            }
+
+            const subject = {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            };
+            const fileName = sample.key.split("/").pop()!;
+            // Register the "loaded" wait BEFORE opening the file (the log line comes from the page
+            // the file opens), and do not await it until after: awaiting it here can never finish.
+            let potreeLoaded: Promise<unknown> | null = null;
+            if (c.kind === "potree") {
+                await potreePreviewOrSkip(page, subject);
+                potreeLoaded = potreeLoadedEvent(page);
+            }
+            await openViewerFile(page, subject);
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+
+            if (c.kind === "not-offered") {
+                await expect(
+                    page.getByText(/No compatible viewers found for file types/i)
+                ).toBeVisible({
+                    timeout: 60_000,
+                });
+                await expect(page.getByText(/Failed to load rhino3dm/i)).toHaveCount(0);
+            } else {
+                await pickViewerIfAsked(page, c.viewer, c.select);
+            }
+
+            if (c.servedBundle) {
+                // The VNTANA component shows its info panel after the element's `load` event and an
+                // error box after its `error` event (3.x reports what failed in `detail.type`).
+                // Scoped to the viewer's root: the viewer picker above it shows the same name, so a
+                // page-wide match would pass before the model loaded.
+                const root = page.locator(".vntana-viewer-root");
+                await expect(root.getByText(/Mouse: Rotate/)).toBeVisible({ timeout: 90_000 });
+                await expect(root.getByText(/Error Loading Model/i)).toHaveCount(0);
+                await expect(root.locator("vntana-zoom-in-button")).toHaveCount(1);
+                await expect(root.locator("vntana-scene-graph-button")).toHaveCount(1);
+            }
+
+            if (c.kind === "canvas") {
+                await expect(page.locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    await largestCanvas(page),
+                    `${c.viewer} (${fileName})`,
+                    caseThresholds(c, sample)
+                );
+                console.log(`[viewers] ${c.sample} canvas ${JSON.stringify(stats)}`);
+                // A sample may name how many vertices (for a point cloud, points) the viewer's
+                // info box must report, as the Three.js viewer's "▲ N vertices" line does.
+                if (typeof sample.expect?.vertexCount === "number") {
+                    await expect(
+                        page.getByText(
+                            `${sample.expect.vertexCount.toLocaleString("en-US")} vertices`
+                        )
+                    ).toBeVisible({ timeout: 30_000 });
+                }
+                if (c.selectInPanel) await expectPanelSelectionHighlight(page, fileName);
+            } else if (c.kind === "pdf") {
+                const pageCanvas = page.locator(".react-pdf__Page canvas").first();
+                await expect(pageCanvas).toBeVisible({ timeout: 60_000 });
+                const stats = await expectCanvasRendered(
+                    page,
+                    pageCanvas,
+                    `${c.viewer} (${fileName})`,
+                    c.thresholds
+                );
+                console.log(`[viewers] ${c.sample} page ${JSON.stringify(stats)}`);
+            } else if (c.kind === "grid") {
+                // Scope to the viewer's own grid: the file page also renders the asset-versions
+                // table, whose header cells a page-wide query reads before the viewer mounts.
+                const grid = dataGrid(page);
+                const headers = grid.getByRole("columnheader");
+                await expect(headers.first()).toBeVisible({ timeout: 60_000 });
+                // react-data-grid renders the header row plus a window of data rows.
+                await expect
+                    .poll(async () => await grid.getByRole("row").count())
+                    .toBeGreaterThan(1);
+                const names = await headers.allTextContents();
+                expect(names.length).toBeGreaterThan(0);
+                expect(
+                    names.filter((name) => name.includes("\uFEFF")),
+                    "a column name carries the UTF-8 byte order mark"
+                ).toEqual([]);
+                if (sample.expect?.columns) expect(names).toHaveLength(sample.expect.columns);
+                if (sample.expect?.firstHeader) expect(names[0]).toBe(sample.expect.firstHeader);
+            } else if (c.kind === "potree") {
+                await potreeLoaded;
+                await expect
+                    .poll(() => page.evaluate(() => (window as any).Potree?.lru?.numPoints ?? 0), {
+                        timeout: 60_000,
+                        message: "Potree reported no points resident on the GPU",
+                    })
+                    .toBeGreaterThan(0);
+                const canvas = page.locator("#potree_render_area > canvas").first();
+                await expect(canvas).toBeVisible();
+                let share = 0;
+                await expect(async () => {
+                    share = await potreePointShare(canvas);
+                    expect(
+                        share,
+                        `${fileName}: no point pixels on the Potree canvas`
+                    ).toBeGreaterThan(POTREE_MIN_POINT_SHARE);
+                }).toPass({ timeout: 30_000 });
+                console.log(`[viewers] ${c.sample} potree point share ${share.toFixed(4)}`);
+            } else if (c.kind === "supersplat") {
+                // The editor mounts as one iframe on the self-hosted build, handed this file.
+                const editor = page.locator('iframe[title="SuperSplat Editor"]');
+                await expect(editor).toHaveCount(1, { timeout: 60_000 });
+                await expect(editor).toHaveAttribute(
+                    "src",
+                    /^\/viewers\/supersplat\/index\.html\?load=[^&]+&filename=/
+                );
+                // The value is double-encoded (SuperSplatViewerComponent.tsx); searchParams undoes one.
+                const handedName = new URL(
+                    (await editor.getAttribute("src"))!,
+                    page.url()
+                ).searchParams.get("filename");
+                expect(
+                    decodeURIComponent(handedName ?? ""),
+                    "the SuperSplat iframe was handed another file"
+                ).toBe(fileName);
+                const result = await expectSuperSplatRendered(
+                    page,
+                    editor,
+                    `${c.viewer} (${fileName})`
+                );
+                console.log(`[viewers] ${c.sample} supersplat ${JSON.stringify(result)}`);
+            } else if (c.kind === "refused") {
+                // The SuperSplat Editor reads SPZ version 4 and is offered only with
+                // ALLOWUNSAFEEVAL, so the message names it there and nowhere else.
+                const alert = page.getByRole("alert");
+                await expect(alert).toContainText(
+                    `${fileName} uses SPZ format version ${sample.expect?.spzVersion ?? 4}`,
+                    { timeout: 60_000 }
+                );
+                if (features.includes("ALLOWUNSAFEEVAL")) {
+                    await expect(alert).toContainText("Open it in the SuperSplat Editor instead");
+                } else {
+                    await expect(alert).toContainText("does not support");
+                    await expect(alert).not.toContainText("SuperSplat");
+                }
+            } else if (c.kind === "text") {
+                // The highlighter's own controls prove the text rendered, even for an empty file.
+                await expect(page.getByText("Line numbers", { exact: true })).toBeVisible({
+                    timeout: 60_000,
+                });
+                if (sample.expect?.line) {
+                    // `.first()`: a line can recur further down (LICENSE names "Apache License"
+                    // again in its appendix).
+                    await expect(
+                        page.getByText(sample.expect.line, { exact: false }).first()
+                    ).toBeVisible({ timeout: 60_000 });
+                }
+                await expect(page.getByText("Error loading file")).toHaveCount(0);
+                await expect(
+                    page.locator('[data-testid^="text-viewer-"][data-testid$="-notice"]')
+                ).toHaveCount(0);
+            } else if (c.kind === "text-binary" || c.kind === "text-encoding") {
+                const notice = c.kind === "text-binary" ? "binary" : "encoding";
+                await expect(page.getByTestId(`text-viewer-${notice}-notice`)).toBeVisible({
+                    timeout: 60_000,
+                });
+                // A refused file never reaches the highlighter.
+                await expect(page.getByText("Line numbers", { exact: true })).toHaveCount(0);
+            }
+
+            if (fetched) await fetched;
+            // Let late loads (textures, workers, tiles) finish before the error and policy checks.
+            await page.waitForTimeout(3000);
+
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            if (fileReads) {
+                fileReads.stop();
+                console.log(`[viewers] ${c.sample} reads ${JSON.stringify(fileReads.reads)}`);
+                expect(
+                    fileReads.reads.map((read) => read.status),
+                    `how ${fileName} was read (presigned GETs, in order)`
+                ).toEqual(c.reads);
+                // The first read is always the bounded sample.
+                expect(fileReads.reads[0]?.range).toBe("bytes=0-8191");
+            }
+            await expectNoNewCspViolations(csp, c.cspAllowed, fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});
+
+/**
+ * Share of the canvas's pixels drawn in the selection highlight's green family (0x4caf50: green well
+ * above red and blue), from a screenshot of the canvas alone (`captureCanvas`).
+ */
+async function highlightGreenShare(page: Page, canvas: Locator): Promise<number> {
+    const png = await captureCanvas(page, canvas);
+    return await page.evaluate(async (base64: string) => {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = surface.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+        let green = 0;
+        for (let p = 0; p < data.length; p += 4) {
+            const [r, g, b] = [data[p], data[p + 1], data[p + 2]];
+            if (g > 120 && g > r + 50 && g > b + 50) green += 1;
+        }
+        return green / (data.length / 4);
+    }, png.toString("base64"));
+}
+
+/** Least share of highlight-green pixels a selected point cloud adds to the canvas. */
+const HIGHLIGHT_MIN_GREEN_GAIN = 0.002;
+
+/**
+ * Selects the loaded object through its row in the Three.js panel's scene graph and checks the
+ * canvas shows the selection highlight, then deselects it and checks the highlight is gone (#1275).
+ * A point cloud's material has no emissive colour, so before the fix a selection drew nothing.
+ */
+async function expectPanelSelectionHighlight(page: Page, fileName: string): Promise<void> {
+    const canvas = await largestCanvas(page);
+    const before = await highlightGreenShare(page, canvas);
+    const row = page.locator("[data-node-id]").filter({ hasText: fileName }).last();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    await row.click();
+    let selected = before;
+    await expect(async () => {
+        selected = await highlightGreenShare(page, canvas);
+        expect(
+            selected,
+            `${fileName}: the selected object is not drawn highlighted`
+        ).toBeGreaterThan(before + HIGHLIGHT_MIN_GREEN_GAIN);
+    }).toPass({ timeout: 30_000 });
+
+    await row.click();
+    let after = selected;
+    await expect(async () => {
+        after = await highlightGreenShare(page, canvas);
+        expect(
+            after,
+            `${fileName}: the highlight stayed after the object was deselected`
+        ).toBeLessThan(before + HIGHLIGHT_MIN_GREEN_GAIN / 2);
+    }).toPass({ timeout: 30_000 });
+    console.log(
+        `[viewers] ${fileName} highlight green share ${JSON.stringify({ before, selected, after })}`
+    );
+}
+
+/** Share of the Potree canvas that must hold point pixels after fitToScreen. */
+const POTREE_MIN_POINT_SHARE = 0.005;
+
+/**
+ * Share of the Potree canvas's pixels whose red channel is above Potree's background. The default
+ * background is a dark blue gradient whose red channel stays below ~35
+ * (Utils.createBackgroundTexture: at most 255 * (1/15 + 0.05 + 0.012)); its blue spread defeats the
+ * generic most-common-colour measure in `canvasStats`, which counts the gradient itself as content.
+ * Potree renders with `preserveDrawingBuffer`, so the canvas is read back in the page.
+ */
+async function potreePointShare(canvas: Locator): Promise<number> {
+    return await canvas.evaluate((el) => {
+        const source = el as HTMLCanvasElement;
+        const copy = document.createElement("canvas");
+        copy.width = source.width;
+        copy.height = source.height;
+        const context = copy.getContext("2d")!;
+        context.drawImage(source, 0, 0);
+        const { data } = context.getImageData(0, 0, copy.width, copy.height);
+        let points = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] > 48) points += 1;
+        return points / (copy.width * copy.height);
+    });
+}
+
+/** Skips the case unless the file's Potree preview exists (the path PotreeViewerComponent streams). */
+async function potreePreviewOrSkip(page: Page, subject: AssetFileRef): Promise<void> {
+    const ctx = await apiContext(page);
+    expect(ctx, "no API context; the saved session may have expired").not.toBeNull();
+    const relative = subject.key.replace(/^\/+/, "");
+    const metadata = await page.request.get(
+        `${ctx!.base}/database/${subject.databaseId}/assets/${subject.assetId}` +
+            `/auxiliaryPreviewAssets/stream/${relative}/preview/PotreeViewer/metadata.json`,
+        { headers: { Authorization: `Bearer ${ctx!.token}` } }
+    );
+    test.skip(
+        metadata.status() === 404,
+        `${subject.key} has no Potree preview; run the Point Cloud Potree Viewer pipeline on it`
+    );
+    expect(metadata.ok(), `the Potree preview answered ${metadata.status()}`).toBe(true);
+}
+
+/**
+ * A promise for the Potree viewer's "loaded" log line. Returned un-awaited: the caller starts it
+ * before opening the file and awaits it once the viewer is open. The no-op catch keeps a case that
+ * fails earlier from also reporting an unhandled rejection; awaiting the promise still rejects.
+ */
+function potreeLoadedEvent(page: Page): Promise<unknown> {
+    const loaded = page.waitForEvent("console", {
+        predicate: (msg) => /Point cloud loaded successfully/.test(msg.text()),
+        timeout: 120_000,
+    });
+    loaded.catch(() => undefined);
+    return loaded;
+}
+/**
+ * IFC BIM viewer panel actions (#1174), on the seeded IFC samples. The viewer draws a grid under the
+ * model, so "the canvas is not blank" cannot tell a model from an empty scene. Hide All is that empty
+ * scene: each case measures it and requires the model, Show All, Isolate and every camera move to draw
+ * more than it. Every action is local to the browser (visibility, camera, section planes,
+ * measurements), so the environment is not changed (e2e/CLAUDE.md Rule 2).
+ */
+test.describe("IFC BIM viewer panel actions (seeded samples)", () => {
+    for (const sampleId of ["ifc-haus", "ifc-haus-zip"]) {
+        test(`IFC BIM viewer runs each panel action on ${sampleId}`, async ({ page }) => {
+            test.setTimeout(240_000);
+            test.skip(
+                !seeded,
+                "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
+                    "tools/VamsCLI/examples/seed_viewer_samples.py and export the path it prints"
+            );
+            const sample = seeded!.samples[sampleId];
+            test.skip(
+                !sample,
+                `the seed fixture has no ${sampleId} sample; re-run the seed script`
+            );
+
+            const csp = await watchCspViolations(page);
+            const hosts = watchRequestHosts(page);
+            const errors = watchConsoleErrors(page);
+            const missing = missingFeatures(await featuresEnabled(page), "ALLOWUNSAFEEVAL");
+            test.skip(
+                missing.length > 0,
+                "The IFC BIM viewer needs ALLOWUNSAFEEVAL, which this deployment does not enable"
+            );
+
+            const fileName = sample.key.split("/").pop()!;
+            await openViewerFile(page, {
+                databaseId: seeded!.databaseId,
+                assetId: seeded!.assetId,
+                key: sample.key,
+            });
+            await expect(page.getByRole("heading", { name: fileName, exact: false })).toBeVisible({
+                timeout: 60_000,
+            });
+            // Only one viewer handles .ifc/.ifczip; fail if any other viewer opened the file.
+            await pickViewerIfAsked(page, "ThatOpen IFC BIM Viewer");
+
+            // The panel mounts only once the model is parsed and the scene is ready.
+            const tablist = page.getByRole("tablist", { name: "IFC viewer panels" });
+            await expect(tablist).toBeVisible({ timeout: 120_000 });
+            const canvas = page.locator("#thatopenwebifc-viewer-container canvas").first();
+
+            /** Polls the canvas until `ok` holds (the renderer draws on its own frame loop). */
+            const expectCanvas = async (
+                what: string,
+                ok: (s: CanvasStats) => boolean
+            ): Promise<CanvasStats> => {
+                let last: CanvasStats | null = null;
+                await expect(async () => {
+                    last = await canvasStats(page, canvas);
+                    expect(ok(last), `${what}: canvas ${JSON.stringify(last)}`).toBe(true);
+                }).toPass({ timeout: 20_000 });
+                return last!;
+            };
+            const model = await canvasStats(page, canvas);
+
+            // Model tree: Hide All gives the empty scene (grid only); Show All brings the model back.
+            await tablist.getByRole("tab", { name: /Model/ }).click();
+            const tree = page.getByRole("tree", { name: "Model tree" });
+            await expect(tree).toBeVisible();
+            const isolate = page.getByRole("button", { name: /^Isolate .* \(show only this\)$/ });
+            await expect(isolate.first()).toBeVisible();
+            await page.getByRole("button", { name: /Hide All/ }).click();
+            const empty = await expectCanvas(
+                "Hide All",
+                (s) => s.distinctColours < model.distinctColours
+            );
+            const drawsModel = (s: CanvasStats) =>
+                s.distinctColours > empty.distinctColours &&
+                Math.abs(s.foregroundFraction - empty.foregroundFraction) > 0.005;
+            await page.getByRole("button", { name: /Show All/ }).click();
+            await expectCanvas("Show All", drawsModel);
+
+            // Isolate the first category: some of the model, never more colours than all of it.
+            await isolate.first().click();
+            await expectCanvas(
+                "Isolate",
+                (s) =>
+                    s.distinctColours > empty.distinctColours &&
+                    s.distinctColours <= model.distinctColours + 8
+            );
+            await page.getByRole("button", { name: /Show All/ }).click();
+
+            // Select a category from the tree; Properties then shows the element.
+            await tree.locator("[data-node-key]").first().locator("span[title]").first().click();
+            await tablist.getByRole("tab", { name: /Properties/ }).click();
+            await expect(page.getByRole("tabpanel", { name: /Properties/ })).not.toBeEmpty();
+
+            // Tools: camera presets, zoom and fit keep the model on screen.
+            await tablist.getByRole("tab", { name: /Tools/ }).click();
+            for (const view of ["Top", "Front", "Left", "Iso"]) {
+                await page.getByRole("button", { name: view, exact: true }).click();
+                await expectCanvas(`${view} view`, drawsModel);
+            }
+            await page.getByRole("button", { name: /Zoom In/ }).click();
+            await page.getByRole("button", { name: /Zoom Out/ }).click();
+            await page.getByRole("button", { name: /Fit to View/ }).click();
+            await expectCanvas("Fit to View", drawsModel);
+
+            // Section plane: enable, double-click the model, delete every plane, switch off.
+            const box = (await canvas.boundingBox())!;
+            const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.getByRole("button", { name: "Enable Section Plane" }).click();
+            await expect(page.getByRole("button", { name: "Section: ON" })).toBeVisible();
+            await page.mouse.move(centre.x, centre.y);
+            await page.mouse.dblclick(centre.x, centre.y);
+            await page.getByRole("button", { name: "Delete All Planes" }).click();
+            await page.getByRole("button", { name: "Section: ON" }).click();
+
+            // Length: two points on the model; Area: three points, then Finish; then clear both.
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            for (const dx of [-60, 60]) {
+                await page.mouse.move(centre.x + dx, centre.y);
+                await page.mouse.dblclick(centre.x + dx, centre.y);
+            }
+            await page.getByRole("button", { name: "Length", exact: true }).click();
+            await page.getByRole("button", { name: "Area", exact: true }).click();
+            for (const [dx, dy] of [
+                [-50, -30],
+                [50, -30],
+                [50, 40],
+            ]) {
+                await page.mouse.move(centre.x + dx, centre.y + dy);
+                await page.mouse.dblclick(centre.x + dx, centre.y + dy);
+            }
+            await page.getByRole("button", { name: /Finish Area/ }).click();
+            await page.getByRole("button", { name: "Clear Measurements" }).click();
+            await expectCanvas("after the tools", drawsModel);
+
+            await page.waitForTimeout(2000);
+            expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+            await expectNoNewCspViolations(csp, [], fileName);
+            const outside = await hosts.thirdParty();
+            expect(outside, `${fileName} reached hosts outside the deployment`).toEqual([]);
+        });
+    }
+});
