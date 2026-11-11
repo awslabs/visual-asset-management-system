@@ -816,7 +816,8 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
         logger.exception(f"Failed to log errors audit event: {e}")
 
 
-def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None) -> None:
+def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None,
+                              token_audience: Optional[str] = None) -> None:
     """
     Log authorization events from API Gateway authorizer with silent failure.
 
@@ -826,6 +827,9 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
+    - The accepted audience (Cognito app client id or external IdP audience) a verified
+      token was issued to, so calls made through an additional client are distinguishable
+      (issue #1328). It is a public client identifier, never token content.
 
     NEVER logs:
     - Raw JWT tokens
@@ -837,6 +841,7 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         event: The API Gateway authorizer event
         authorized: Whether authorization was successful
         failure_reason: Generic failure reason (optional, for failures only)
+        token_audience: Accepted audience of the verified token (optional, successes only)
     """
     try:
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
@@ -869,7 +874,8 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
             "sourceIp": source_ip,
             "failureReason": failure_reason if not authorized else None
         }
-        
+        if authorized and token_audience:
+            custom_data["tokenAudience"] = str(token_audience)
         message = _format_log_message(event_type, user_context, custom_data)
         _write_to_cloudwatch(log_group_name, message, event)
         

@@ -93,6 +93,12 @@ COGNITO_BASE_URL = os.environ.get('COGNITO_BASE_URL')
 JWT_ISSUER_URL = os.environ.get('JWT_ISSUER_URL')
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE')
 
+# Additional token audiences (issue #1328). Each is a JSON array of strings, set by CDK only when
+# the operator lists extra audiences (app.authProvider.<provider>.additionalTokenAudiences), so an
+# unset variable means the primary audience above is the only one accepted, exactly as before.
+ADDITIONAL_APP_CLIENT_IDS_ENV = os.environ.get('ADDITIONAL_APP_CLIENT_IDS')
+JWT_ADDITIONAL_AUDIENCES_ENV = os.environ.get('JWT_ADDITIONAL_AUDIENCES')
+
 # Authorizer Configuration
 ALLOWED_IP_RANGES_ENV = os.environ.get('ALLOWED_IP_RANGES')
 IGNORED_PATHS_ENV = os.environ.get('IGNORED_PATHS')
@@ -109,6 +115,39 @@ try:
 except json.JSONDecodeError:
     logger.error("Failed to parse IGNORED_PATHS environment variable")
     IGNORED_PATHS = []
+
+
+def parse_additional_audiences(raw: Optional[str], env_name: str) -> List[str]:
+    """Parse an additional-audience environment variable into a list of exact audience values.
+
+    Fails closed: a value that is not a JSON array yields an empty list (only the primary
+    audience is then accepted), and an entry that is not a non-empty string, or is a wildcard,
+    is dropped. config.ts rejects all of these at synth time, so they reach here only through a
+    hand-edited function environment. Matching is exact string equality; no pattern is ever
+    interpreted.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.error(f"Failed to parse {env_name} environment variable; no additional audiences accepted")
+        return []
+    if not isinstance(value, list):
+        logger.error(f"{env_name} is not a JSON array; no additional audiences accepted")
+        return []
+    audiences = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip() or '*' in entry:
+            logger.error(f"{env_name} carries an entry that is not an exact audience value; it is ignored")
+            continue
+        if entry not in audiences:
+            audiences.append(entry)
+    return audiences
+
+
+ADDITIONAL_APP_CLIENT_IDS = parse_additional_audiences(ADDITIONAL_APP_CLIENT_IDS_ENV, 'ADDITIONAL_APP_CLIENT_IDS')
+JWT_ADDITIONAL_AUDIENCES = parse_additional_audiences(JWT_ADDITIONAL_AUDIENCES_ENV, 'JWT_ADDITIONAL_AUDIENCES')
 
 # API Key Configuration
 API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
@@ -614,6 +653,49 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
                 'failure': FAILURE_FORBIDDEN}
 
 
+def accepted_cognito_client_ids() -> List[str]:
+    """The Cognito app client ids whose tokens the API accepts: the web client first, then the
+    configured additional clients (issue #1328). Read at call time so it follows the module
+    configuration."""
+    accepted = [APP_CLIENT_ID] if APP_CLIENT_ID else []
+    for client_id in ADDITIONAL_APP_CLIENT_IDS:
+        if client_id not in accepted:
+            accepted.append(client_id)
+    return accepted
+
+
+def accepted_external_audiences() -> List[str]:
+    """The external IdP audiences the API accepts: the configured JWT_AUDIENCE first, then the
+    configured additional audiences (issue #1328)."""
+    accepted = [JWT_AUDIENCE] if JWT_AUDIENCE else []
+    for audience in JWT_ADDITIONAL_AUDIENCES:
+        if audience not in accepted:
+            accepted.append(audience)
+    return accepted
+
+
+def token_audience_for_audit(claims: Dict[str, Any]) -> Optional[str]:
+    """The accepted audience a verified token was issued to, for the authorization audit record.
+
+    Cognito: the app client id ('aud' of an ID token, 'client_id' of an access token). External
+    IdP: the token's 'aud' value that matched an accepted audience (a token may carry several).
+    Never any other token content. None when the claims carry no accepted audience (API keys).
+    """
+    if not claims:
+        return None
+    if AUTH_MODE == 'cognito':
+        value = claims.get('aud') or claims.get('client_id')
+        return value if isinstance(value, str) and value in accepted_cognito_client_ids() else None
+    if AUTH_MODE == 'external':
+        value = claims.get('aud')
+        candidates = [value] if isinstance(value, str) else (value if isinstance(value, list) else [])
+        accepted = accepted_external_audiences()
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate in accepted:
+                return candidate
+    return None
+
+
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify Cognito JWT token using joserfc library
@@ -672,11 +754,14 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error('Token is expired')
             return None
 
-        # Verify the Audience (use claims['client_id'] if verifying an access token)
-        # For ID tokens, use 'aud' claim
+        # Verify the Audience: an ID token names its app client in 'aud', an access token in
+        # 'client_id'. The token must have been issued to the web app client or to one of the
+        # additional app clients the operator configured (issue #1328); the comparison is
+        # exact. Issuer, signature, expiry and token_use checks are the same for every client.
         token_audience = claims.get('aud') or claims.get('client_id')
-        if token_audience != APP_CLIENT_ID:
-            logger.error(f'Token was not issued for this audience. Expected: {APP_CLIENT_ID}, Got: {token_audience}')
+        accepted_client_ids = accepted_cognito_client_ids()
+        if not isinstance(token_audience, str) or token_audience not in accepted_client_ids:
+            logger.error(f'Token was not issued for an accepted app client. Got: {token_audience}')
             return None
 
         # Additional validations
@@ -734,12 +819,15 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
         if not signing_key:
             return None
 
-        # Verify and decode the token
+        # Verify and decode the token. PyJWT accepts the token when any of its 'aud' values is
+        # one of the listed audiences: the configured JWT_AUDIENCE plus the configured
+        # additional audiences (issue #1328). With none configured the list is the single
+        # JWT_AUDIENCE, which PyJWT treats exactly like the bare string.
         claims = pyjwt.decode(
             token,
             signing_key,
             algorithms=['RS256'],
-            audience=JWT_AUDIENCE,
+            audience=accepted_external_audiences(),
             issuer=JWT_ISSUER_URL,
             options={
                 'verify_signature': True,
@@ -1160,4 +1248,9 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     mfa_enabled = resolve_mfa_enabled(username, claims, event)
     context['vams:mfaEnabled'] = 'true' if mfa_enabled else 'false'
 
-    return {"authorized": True, "context": context, "reason": None}
+    # The app client / audience the token was issued to, for the authorization audit record, so
+    # calls made through an additional client (for example a remote MCP server) are
+    # distinguishable from web app calls (issue #1328). Not added to the context: the token's own
+    # aud / client_id claim is already there.
+    return {"authorized": True, "context": context, "reason": None,
+            "tokenAudience": token_audience_for_audit(claims)}
