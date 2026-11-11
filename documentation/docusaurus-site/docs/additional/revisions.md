@@ -111,7 +111,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Credential headers redacted in audit records** — The `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` header values are redacted from the request echo of audit records and from structured logs, like `Authorization`, whatever their letter case. (issue #1417)
 -   **Audit records with unencodable values kept** — An audit record whose request holds a value JSON cannot encode, such as a decimal number or a set, is written with the value as text instead of being dropped. (issue #1421)
 -   **What audit records contain** — The audit logging and security pages describe the request echo an audit record carries (the headers that are not redacted, the verified token claims and the submitted request body after redaction), so personal data a user enters can appear, instead of stating that no personal data beyond user IDs is logged. (issue #1418)
--   **Validation errors logged at WARNING** — A request refused with a 4xx validation error is logged at WARNING instead of ERROR, so log queries, metric filters and alarms that count ERROR lines track failures of the service only; the audit entry and the response are unchanged. (issue #1304)
+-   **Validation errors logged at WARNING** — The shared validation-error response logs a request refused with a 4xx at WARNING instead of ERROR, so it no longer adds an ERROR line for a request the caller got wrong; a 5xx stays at ERROR, and the audit entry and the response are unchanged. (issue #1304)
 
 **Other changes:**
 
