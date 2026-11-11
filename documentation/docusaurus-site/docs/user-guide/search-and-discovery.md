@@ -182,7 +182,7 @@ In natural-language mode the map shows the same page of the natural-language ans
 
 GeoJSON polygons and multi-polygons are rendered as filled shapes with outline borders. Points are rendered as map markers.
 
-![Map view with three asset results plotted as markers on a map of Washington State, under the line 3 of 3 results with location data](/img/asset_search_mapView__dark_20261110_v2.7.png)
+![Map view with three asset results plotted as markers on Seattle, Spokane and Portland, under the line 3 of 3 results with location data](/img/asset_search_mapView__dark_20261110_v2.7.png)
 
 ### Geospatial filter
 
