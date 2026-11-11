@@ -8,7 +8,10 @@ non-archived items of every database the caller may read: one unpartitioned call
 every live database and named none, otherwise one call per target (at most MAX_TARGETS, on
 SEARCH_WORKERS threads). Each target gets a *breadth* call over whole-file items and, with
 ``includeSegments``, a *depth* call over every item; only a full breadth window marks the answer
-truncated because breadth windows hold one item per file. The vector index answers ``SearchVectors``
+truncated because breadth windows hold one item per file. A target holding records the caller may not
+open (``_databases_read_in_full``) is searched with the largest window whatever ``size``, and its window
+is always reported as possibly incomplete instead of being checked for filling, so the answer's signals
+do not depend on those records. The vector index answers ``SearchVectors``
 with approximate nearest-neighbour (ANN) search, so every total that is not zero is reported as a
 minimum (``gte``), truncated or not (see _total_relation). Candidates are merged by distance, collapsed
 to one hit per (database, asset, path, version) with the file's matching segments counted and the best
@@ -25,7 +28,8 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import field as dataclass_field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
@@ -98,6 +102,13 @@ ASSET_LOCATION_KEY = "assetLocation"
 # Keys of a hit the handler uses internally; never sent to the caller
 _INTERNAL_HIT_KEYS = ("asset", ASSET_LOCATION_KEY)
 DELETED_PARTITION_SUFFIX = "#deleted"
+# The one asset field a policy line may constrain for the caller's access to cover a whole database: a
+# decision made on the database id alone is the same for every asset of that database.
+_DATABASE_ID_FIELD = "databaseId"
+# The truncated:window message for an answer over a database the caller's access covers only in part
+PARTIAL_ACCESS_WINDOW_MESSAGE = (
+    "Only the files you may open among the closest matches are listed; more files may match"
+)
 INDEX_BUILDING_MESSAGE = "Vector index is being built"
 ROUTE_NOT_SERVED_MESSAGE = "Route is not served by this function"
 INVALID_BODY_MESSAGE = "Request body is not valid JSON"
@@ -160,11 +171,55 @@ class SearchPlan:
     targets_cut: bool
     databases_searched: int
     top_k: int
+    # Targets holding records the caller may not open: their window is MAX_TOP_K whatever ``size``, and
+    # whether it filled is not reported (see handle_nlp_search)
+    partial_access: List[Optional[str]] = dataclass_field(default_factory=list)
+
+    def window(self, target: Optional[str]) -> int:
+        return MAX_TOP_K if target in self.partial_access else self.top_k
 
 
-def _plan(request: NlpSearchRequestModel, accessible: List[str], live_count: int) -> SearchPlan:
+def _databases_read_in_full(claims_and_roles, databases: List[str], include_archived: bool) -> Set[str]:
+    """The databases of ``databases`` in which the caller may open every asset the search can reach: the
+    live ones, and with ``include_archived`` the archived ones too.
+
+    This holds only when every asset GET policy line of the caller (``effective_object_policies``)
+    constrains the database id alone, so one decision covers every asset of a database; that decision
+    is Casbin's own, on an asset object of the database with no name, type or tags, in the live form and
+    with ``include_archived`` also the archived ``<databaseId>#deleted`` form. It is a question about
+    the policy, not about a record, so it is asked of the user's enforcer directly and writes no denial
+    audit entry. Any line on another field, policy lines that cannot be given, or a failure leaves every
+    database out: the caller is then treated as reading part of each."""
+    if not databases or len(claims_and_roles.get("tokens", [])) == 0:
+        return set()
+    try:
+        enforcer = CasbinEnforcer(claims_and_roles)
+        lines = enforcer.effective_object_policies("asset", "GET")
+        if not isinstance(lines, list):
+            return set()
+        for line in lines:
+            for criterion in list(line.get("criteriaAnd") or []) + list(line.get("criteriaOr") or []):
+                if criterion.get("field") != _DATABASE_ID_FIELD:
+                    return set()
+        covered = set()
+        for database_id in databases:
+            forms = [database_id] + ([f"{database_id}{DELETED_PARTITION_SUFFIX}"] if include_archived else [])
+            if all(enforcer.service_object.enforce(
+                    {"databaseId": form, "assetName": "", "tags": [], "assetType": "", "object__type": "asset"},
+                    "GET") is True for form in forms):
+                covered.add(database_id)
+        return covered
+    except Exception:
+        logger.exception("Could not decide which databases the caller reads in full; treating access as partial")
+        return set()
+
+
+def _plan(request: NlpSearchRequestModel, accessible: List[str], live_count: int,
+          read_in_full: Optional[Set[str]] = None) -> SearchPlan:
     """One unpartitioned call when the caller sees every live database and named none; else one call per
-    accessible target, the named ones first when the request names databases."""
+    accessible target, the named ones first when the request names databases. A target is of partial
+    access unless the caller reads it in full (``read_in_full``); the unpartitioned call is of partial
+    access unless the caller reads every accessible database in full."""
     accessible_set = set(accessible)
     if request.databaseIds:
         targets: List[Optional[str]] = list(dict.fromkeys(d for d in request.databaseIds if d in accessible_set))
@@ -175,7 +230,10 @@ def _plan(request: NlpSearchRequestModel, accessible: List[str], live_count: int
     cut = len(targets) > MAX_TARGETS
     targets = targets[:MAX_TARGETS]
     searched = live_count if targets == [None] else len(targets)
-    return SearchPlan(targets, cut, searched, min(MAX_TOP_K, request.size * 2))
+    full = read_in_full if read_in_full is not None else set()
+    partial = [t for t in targets
+               if (not accessible_set <= full if t is None else t not in full)]
+    return SearchPlan(targets, cut, searched, min(MAX_TOP_K, request.size * 2), partial)
 
 
 def _filters_for(request: NlpSearchRequestModel, database_id: Optional[str], segment_kind: Optional[str]) -> Dict[str, str]:
@@ -197,17 +255,20 @@ def _filters_for(request: NlpSearchRequestModel, database_id: Optional[str], seg
 
 
 def _run_searches(store, vector: List[float], request: NlpSearchRequestModel, plan: SearchPlan) -> Tuple[List[VectorHit], bool, bool]:
-    """Every planned call; returns the hits and whether any breadth / any depth window came back full."""
-    jobs: List[Tuple[str, Dict[str, str]]] = []
+    """Every planned call; returns the hits and whether any breadth / any depth window of a target the
+    caller reads in full came back full. A target of partial access is searched with its own window
+    (SearchPlan.window) and never counted as full: its window holds records the caller may not open."""
+    jobs: List[Tuple[str, Optional[str], Dict[str, str]]] = []
     for target in plan.targets:
-        jobs.append(("breadth", _filters_for(request, target, _WHOLE_FILE_SEGMENT_KIND)))
+        jobs.append(("breadth", target, _filters_for(request, target, _WHOLE_FILE_SEGMENT_KIND)))
         if request.includeSegments:
-            jobs.append(("depth", _filters_for(request, target, None)))
+            jobs.append(("depth", target, _filters_for(request, target, None)))
 
     def run(job):
-        kind, filters = job
-        hits = store.search(vector, top_k=plan.top_k, filters=filters)
-        return kind, hits, len(hits) >= plan.top_k
+        kind, target, filters = job
+        top_k = plan.window(target)
+        hits = store.search(vector, top_k=top_k, filters=filters)
+        return kind, hits, target not in plan.partial_access and len(hits) >= top_k
 
     with ThreadPoolExecutor(max_workers=min(SEARCH_WORKERS, len(jobs))) as pool:
         results = list(pool.map(run, jobs))
@@ -448,15 +509,16 @@ def _aggregations(hits: List[Dict[str, Any]], fields: Tuple[str, ...]) -> Dict[s
 def _total_relation(total: int, truncated: bool) -> str:
     """``hits.total.relation`` of an answer that searched: ``gte`` (a minimum) or ``eq`` (exact).
 
-    A truncated answer is a minimum: a breadth window filled, or not every database was searched. Every
+    A truncated answer is a minimum: a breadth window filled, not every database was searched, or a
+    searched database holds records the caller may not open. Every
     other answer that found a readable hit is a minimum too, because the vector index answers
     ``SearchVectors`` with approximate nearest-neighbour (ANN) search
     (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html): a weak match
     can be left out of an answer whose windows did not fill, so identical searches can differ in their
     weakest matches. A total of zero from an answer that is not truncated stays exact: ANN returns the
     nearest items whenever any item passes the filters, so an empty answer means nothing matched.
-    ``nlp.truncated`` keeps its own meaning (a window filled or a database was not searched); this
-    relation does not feed it."""
+    ``nlp.truncated`` keeps its own meaning (a window filled, a database was not searched, or a searched
+    database holds records the caller may not open); this relation does not feed it."""
     return "gte" if truncated or total > 0 else "eq"
 
 
@@ -658,7 +720,8 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         accessible, live_count = DatabaseAccessManager().get_accessible_databases_with_count(
             claims_and_roles, show_deleted=False
         )
-        plan = _plan(request, accessible, live_count)
+        plan = _plan(request, accessible, live_count,
+                     _databases_read_in_full(claims_and_roles, accessible, request.includeArchived))
         class_intent = fileClassIntent.detect(request.query) if not request.fileClasses else []
         if not plan.targets:
             # Nothing was searched, so there is nothing approximate to count: the empty answer is exact.
@@ -675,13 +738,19 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         # per-target calls (which filter on them) and keyword search answer.
         accessible_set = set(accessible)
         collapsed = [hit for hit in collapsed if hit["item"]["databaseId"] in accessible_set]
-        # The window signals only say that more may match; they name no count of anything.
-        truncated = breadth_full or plan.targets_cut
-        if breadth_full:
+        # The window signals only say that more may match; they name no count of anything. They never
+        # depend on records the caller may not open: a target of partial access always reports its window
+        # as possibly incomplete, which is true there (access is checked after the closest matches are
+        # chosen), and only the windows of targets the caller reads in full are checked for filling.
+        partial = bool(plan.partial_access)
+        truncated = breadth_full or plan.targets_cut or partial
+        if partial:
+            warnings.append(_warning("truncated:window", PARTIAL_ACCESS_WINDOW_MESSAGE))
+        elif breadth_full:
             warnings.append(_warning("truncated:window", f"A result window of {plan.top_k} filled; more files may match"))
         if plan.targets_cut:
             warnings.append(_warning("truncated:targets", f"Only the first {MAX_TARGETS} accessible databases were searched"))
-        if depth_full and not breadth_full:
+        if depth_full and not breadth_full and not partial:
             warnings.append(_warning("segments:window_full", f"A segment window of {plan.top_k} filled; more segments may match"))
         authorized = _authorize(collapsed, _load_asset_rows(collapsed, request.includeArchived), claims_and_roles)
         # The diagnostics count the vector items of the files the caller may open, never one of a file

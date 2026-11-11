@@ -23,6 +23,12 @@ from tests.handlers.osVectorSearch import vectorsearch_support as support
 MODEL = os.environ["EMBEDDING_MODEL_ID"]
 DIMENSIONS = int(os.environ["EMBEDDING_DIMENSIONS"])
 _DATABASE_ACCESS = os.path.join(support._BACKEND, "common", "databaseAccess.py")
+# An asset GET policy line allowing every asset of every database (effective_object_policies form)
+READ_EVERY_ASSET_LINE = {
+    "effect": "allow",
+    "criteriaAnd": [{"field": "databaseId", "operator": "contains", "value": ".*"}],
+    "criteriaOr": [],
+}
 
 
 def _bind_database_access():
@@ -67,6 +73,10 @@ def svc(monkeypatch):
     enforcer = MagicMock()
     enforcer.enforceAPI.return_value = True
     enforcer.enforce.return_value = True
+    # The caller's asset GET policy: every asset of every database, so every target is read in full and
+    # the window signals are computed (tests of a narrower role set their own lines)
+    enforcer.effective_object_policies.return_value = [READ_EVERY_ASSET_LINE]
+    enforcer.service_object.enforce.return_value = True
     module.CasbinEnforcer = MagicMock(return_value=enforcer)
     module.embed_text = MagicMock(return_value=[0.0] * DIMENSIONS)
     access = MagicMock()
