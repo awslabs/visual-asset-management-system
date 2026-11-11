@@ -1,0 +1,35 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vra/path-policy.schema.json",
+    "title": "vra merge path policy (ledger/path-policy.yaml)",
+    "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/rule" } },
+        {
+            "type": "object",
+            "required": ["rules"],
+            "properties": {
+                "default": { "enum": ["upstream", "fork", "union", "regenerate", "agent"] },
+                "unregisteredCoreEdits": {
+                    "enum": ["refuse", "warn"],
+                    "description": "fork edits outside the lanes, not in core-patches.md and not matched by a rule: refuse (default) stops the merge, warn reports them"
+                },
+                "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" } }
+            }
+        }
+    ],
+    "$defs": {
+        "rule": {
+            "type": "object",
+            "required": ["glob", "strategy"],
+            "properties": {
+                "glob": { "type": "string", "minLength": 1 },
+                "strategy": { "enum": ["upstream", "fork", "union", "regenerate", "agent"] },
+                "regenerate": {
+                    "type": ["string", "null"],
+                    "description": "command run in the file's directory after taking upstream (e.g. npm install --package-lock-only)"
+                },
+                "note": { "type": "string" }
+            }
+        }
+    }
+}

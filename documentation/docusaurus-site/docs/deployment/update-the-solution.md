@@ -11,6 +11,10 @@ VAMS supports two update methods depending on the scope of changes being applied
 | **In-place update** | Minor updates, bug fixes, feature additions within the same major version.                                        | Minimal (during AWS CloudFormation changeset execution). |
 | **A/B deployment**  | Major version upgrades, KMS key changes, distribution type changes (Amazon CloudFront to ALB), region migrations. | Moderate (during data migration and DNS switchover).     |
 
+:::tip[Updating a customer fork across several environments]
+If you run a fork of VAMS with your own changes and more than one environment, [Release Automation](release-automation/index.md) runs these update steps for you: it merges the upstream release into the fork, builds once, takes a data checkpoint, deploys, tests and promotes the change through each environment behind approvals, chains the version-specific data migrations below, and rolls back on failure. See also [Productionizing VAMS](productionizing/index.md).
+:::
+
 ## Pre-update checklist
 
 Complete the following steps before applying any update.
@@ -931,3 +935,4 @@ A rollback deployment creates its own tables; it does not reattach the ones a re
 -   [Deploy the solution](deploy-the-solution.md)
 -   [Uninstall the solution](uninstall.md)
 -   [Configuration reference](configuration-reference.md)
+-   [Release Automation](release-automation/index.md)

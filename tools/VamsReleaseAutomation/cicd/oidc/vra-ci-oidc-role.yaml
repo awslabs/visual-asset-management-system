@@ -1,0 +1,516 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+    vams-release-automation (vra) CI role for GitHub Actions or GitLab CI, assumed with OIDC (no
+    long-lived keys), or for any other CI (Provider=generic: Jenkins, Azure Pipelines) assumed from the CI's own
+    agent role. Deploy in the TOOLS account once per CI environment (build, watch, one per env):
+    GitHub pins the role to the job's environment through the subject (repo:<repo>:environment:<env>);
+    GitLab pins it through a per-environment audience (id_tokens aud vra-<env>), because its default subject
+    is the same for every job on a branch. A job outside the env's own job can never obtain the env's role.
+    The role may only assume vra-deploy-* / vra-data-copy-* roles of its envs (and vra-test-* of TestEnvs)
+    and use the vra state store (run state, its env's locks, create-only history and bundles, never a delete).
+    Partition-generic.
+
+Parameters:
+    Provider:
+        Type: String
+        AllowedValues: [github, gitlab, generic]
+        Description: >-
+            github / gitlab: OIDC federation. generic: the role is assumed by TrustedPrincipalArns (the CI agent's role),
+            one role per CI environment, so each env's stage runs with its own role (cicd/generic/README.md).
+    CiEnvName:
+        Type: String
+        Description: CI environment this role serves (build, dev, dev-preview, test, prod). Role name vra-ci-<Provider>-<CiEnvName>.
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,30}$"
+    Repository:
+        Type: String
+        Default: ""
+        Description: >-
+            The vra home repository running the CI jobs: owner/repo (GitHub) or group/project (GitLab). With it the
+            subject is derived: GitHub repo:<Repository>:environment:<GitHubEnvironment>, GitLab
+            project_path:<Repository>:ref_type:branch:ref:<Branch>. SubjectPatterns overrides it.
+    GitHubEnvironment:
+        Type: String
+        Default: ""
+        Description: GitHub environment of the jobs this role serves. Empty = CiEnvName.
+    RepositoryOwnerId:
+        Type: String
+        Default: ""
+        AllowedPattern: "^[0-9]*$"
+        Description: >-
+            GitHub only, with RepositoryId and Repository: the immutable subject
+            repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:<env> that repositories with immutable OIDC subjects
+            send (github_trust.py). A renamed or re-created repository of the same name no longer matches.
+    RepositoryId:
+        Type: String
+        Default: ""
+        AllowedPattern: "^[0-9]*$"
+        Description: GitHub only, with RepositoryOwnerId (the numeric repository id).
+    Branch:
+        Type: String
+        Default: main
+        Description: GitLab protected branch the jobs run on (subject ref).
+    SubjectPatterns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Optional override of the allowed OIDC "sub" values (StringLike), e.g. a GitLab custom subject that
+            includes deployment_tier / environment_protected (GitLab 18.7+ ci_id_token_sub_claim_components). Never a
+            branch-only GitHub subject (repo:<repo>:ref:refs/heads/main): every job on main would match it.
+    TrustedPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Provider=generic only: IAM principals (the CI agent role of this CI environment) allowed to assume the role.
+            Give each env stage its own agent identity; never one shared by the build and a gated env.
+    ExternalId:
+        Type: String
+        Default: ""
+        NoEcho: true
+        Description: Provider=generic only, optional sts:ExternalId the agent passes.
+    OidcProviderArn:
+        Type: String
+        Default: ""
+        Description: Existing IAM OIDC provider ARN. Empty = create one for the issuer below.
+    Audience:
+        Type: String
+        Default: ""
+        Description: >-
+            Token audience this role accepts. Empty = sts.amazonaws.com for GitHub (the subject carries the
+            environment) and vra-<CiEnvName> for GitLab (each job requests its own audience in id_tokens; a token for
+            another env's audience is refused). A GitLab role must not use sts.amazonaws.com.
+    ProviderAudiences:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Only when this stack creates the OIDC provider: every audience any CI role of this account uses (GitLab:
+            vra-build,vra-watch,vra-dev,vra-test,vra-prod,...). One provider per issuer serves all roles. Empty = this
+            role's audience only.
+    TestEnvs:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Ledger envs whose live-test role vra-test-<env> (vra-deploy-role.yaml CreateTestRole) this CI role may
+            assume. A test-only CI role (the <env>-tests job): DeployableEnvs=none, TestEnvs=<env>; it never reaches a
+            deploy role.
+    EnvAccountIds:
+        Type: CommaDelimitedList
+        Description: Env accounts whose roles this CI role may assume. Use a single account for test / prod roles.
+    DeployableEnvs:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Ledger envs whose vra-deploy-<env> and vra-data-copy-*-<env> roles this CI role may assume. Default (empty)
+            = only CiEnvName itself. The watch CI role: "dev,dev-preview". The build CI role: "none" (it gets only the
+            build-only vra-synth-* roles, see AllowSynthRoles). Never list a gated env in a role that is not that
+            env's own protected CI environment.
+    AllowSynthRoles:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: '"true" for the build CI role: it may assume vra-synth-* (CDK lookups only) in EnvAccountIds.'
+    StateBucketName:
+        Type: String
+        Default: ""
+        Description: vra state bucket (vra-state-store.yaml). Empty = no state-store access.
+    StatePrefix:
+        Type: String
+        Default: vra
+        AllowedPattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+        Description: vra.yaml stateStore.prefix (default vra). The role reaches only objects below it.
+    LockTableName:
+        Type: String
+        Default: vra-locks
+    StateKeyArn:
+        Type: String
+        Default: ""
+    AllowWatchLock:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            "true" for the watch CI role only: it may take the env#watch lock (one watch cycle at a time). Every role
+            may take run leases (run#*) and the env#<env> locks of its DeployableEnvs (CiEnvName by default).
+    ApprovalSigningKeyArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            envs/<env>/env.yaml approvalSigningKeyArn of the envs this role runs gated actions in: kms:Verify of the
+            approval record signatures. Empty = none.
+    PermissionsBoundaryArn:
+        Type: String
+        Default: ""
+    MaxSessionDurationSeconds:
+        Type: Number
+        Default: 14400
+        MinValue: 3600
+        MaxValue: 43200
+    SigningKeyArn:
+        Type: String
+        Default: ""
+        Description: >-
+            Optional ledger build.signing.kmsKeyArn (ECC_NIST_P256). Every CI role may verify signed manifests and tags;
+            only a build-tier role (AllowSigning=true) may sign.
+    AllowSigning:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: "true only for the build job's role: kms:Sign on SigningKeyArn."
+
+Rules:
+    SubjectGiven:
+        RuleCondition: !Not [!Equals [!Ref Provider, generic]]
+        Assertions:
+            - Assert: !Or
+                  - !Not [!Equals [!Ref Repository, ""]]
+                  - !Not [!Equals [!Join [",", !Ref SubjectPatterns], ""]]
+              AssertDescription: Set Repository (or SubjectPatterns) so the role trusts only this CI environment's jobs.
+    GitLabAudiencePerEnv:
+        RuleCondition: !Equals [!Ref Provider, gitlab]
+        Assertions:
+            - Assert: !Not [!Equals [!Ref Audience, sts.amazonaws.com]]
+              AssertDescription: >-
+                  GitLab roles need a per-environment audience (default vra-<CiEnvName>); sts.amazonaws.com would let
+                  every job on the branch assume this role.
+    GenericTrustGiven:
+        RuleCondition: !Equals [!Ref Provider, generic]
+        Assertions:
+            - Assert: !Not [!Equals [!Join [",", !Ref TrustedPrincipalArns], ""]]
+              AssertDescription: Provider=generic needs TrustedPrincipalArns (the CI agent role of this CI environment).
+
+Conditions:
+    IsGeneric: !Equals [!Ref Provider, generic]
+    CreateProvider: !And [!Equals [!Ref OidcProviderArn, ""], !Not [!Condition IsGeneric]]
+    IsGitHub: !Equals [!Ref Provider, github]
+    HasExternalId: !Not [!Equals [!Ref ExternalId, ""]]
+    HasSubjectPatterns: !Not [!Equals [!Join [",", !Ref SubjectPatterns], ""]]
+    HasAudience: !Not [!Equals [!Ref Audience, ""]]
+    HasProviderAudiences: !Not [!Equals [!Join [",", !Ref ProviderAudiences], ""]]
+    HasGitHubEnvironment: !Not [!Equals [!Ref GitHubEnvironment, ""]]
+    HasRepositoryIds: !And
+        - !Not [!Equals [!Ref RepositoryId, ""]]
+        - !Not [!Equals [!Ref RepositoryOwnerId, ""]]
+    HasTestEnvs: !Not [!Equals [!Join [",", !Ref TestEnvs], ""]]
+    OwnEnvOnly: !Equals [!Join [",", !Ref DeployableEnvs], ""]
+    NoEnvRoles: !Equals [!Join [",", !Ref DeployableEnvs], "none"]
+    SynthRoles: !Equals [!Ref AllowSynthRoles, "true"]
+    HasStateStore: !Not [!Equals [!Ref StateBucketName, ""]]
+    HasStateKey: !Not [!Equals [!Ref StateKeyArn, ""]]
+    HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+    HasSigningKey: !Not [!Equals [!Ref SigningKeyArn, ""]]
+    MaySign: !And [!Condition HasSigningKey, !Equals [!Ref AllowSigning, "true"]]
+    WatchLock: !Equals [!Ref AllowWatchLock, "true"]
+    HasApprovalSigningKeys: !Not [!Equals [!Join [",", !Ref ApprovalSigningKeyArns], ""]]
+
+Resources:
+    OidcProvider:
+        Type: AWS::IAM::OIDCProvider
+        Condition: CreateProvider
+        Properties:
+            Url: !If [IsGitHub, https://token.actions.githubusercontent.com, https://gitlab.com]
+            ClientIdList: !If
+                - HasProviderAudiences
+                - !Ref ProviderAudiences
+                - - !If [
+                        HasAudience,
+                        !Ref Audience,
+                        !If [IsGitHub, sts.amazonaws.com, !Sub "vra-${CiEnvName}"],
+                    ]
+
+    CiRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: !Sub vra-ci-${Provider}-${CiEnvName}
+            MaxSessionDuration: !Ref MaxSessionDurationSeconds
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - !If
+                      - IsGeneric
+                      # Generic CI: the agent role of this CI environment; it chains here with its own session.
+                      - Effect: Allow
+                        Principal:
+                            AWS: !Ref TrustedPrincipalArns
+                        Action:
+                            - sts:AssumeRole
+                            - sts:SetSourceIdentity
+                        Condition: !If
+                            - HasExternalId
+                            - StringEquals:
+                                  sts:ExternalId: !Ref ExternalId
+                            - !Ref AWS::NoValue
+                      - Effect: Allow
+                        Principal:
+                            Federated: !If [CreateProvider, !Ref OidcProvider, !Ref OidcProviderArn]
+                        Action: sts:AssumeRoleWithWebIdentity
+                        # Condition keys cannot be computed in CloudFormation. GitHub Enterprise Server and the
+                        # GHEC enterprise issuer: render this file for your issuer with
+                        # `github_trust.py template --issuer <host>` (the same source the pipeline hand-off role
+                        # uses). Self-managed GitLab: replace "gitlab.com" in the keys with your host.
+                        Condition: !If
+                            - IsGitHub
+                            - StringEquals:
+                                  token.actions.githubusercontent.com:aud:
+                                      !If [HasAudience, !Ref Audience, sts.amazonaws.com]
+                              StringLike:
+                                  token.actions.githubusercontent.com:sub: !If
+                                      - HasSubjectPatterns
+                                      - !Ref SubjectPatterns
+                                      - - !If
+                                          - HasRepositoryIds
+                                          # immutable subject (github_trust.py IMMUTABLE_SUBJECT)
+                                          - !Sub
+                                            - repo:${O}@${RepositoryOwnerId}/${R}@${RepositoryId}:environment:${E}
+                                            - O: !Select [0, !Split ["/", !Ref Repository]]
+                                              R: !Select [1, !Split ["/", !Ref Repository]]
+                                              E:
+                                                  !If [
+                                                      HasGitHubEnvironment,
+                                                      !Ref GitHubEnvironment,
+                                                      !Ref CiEnvName,
+                                                  ]
+                                          # github_trust.py NAME_SUBJECT
+                                          - !Sub
+                                            - repo:${Repository}:environment:${E}
+                                            - E:
+                                                  !If [
+                                                      HasGitHubEnvironment,
+                                                      !Ref GitHubEnvironment,
+                                                      !Ref CiEnvName,
+                                                  ]
+                            - StringEquals:
+                                  gitlab.com:aud:
+                                      !If [HasAudience, !Ref Audience, !Sub "vra-${CiEnvName}"]
+                              StringLike:
+                                  gitlab.com:sub: !If
+                                      - HasSubjectPatterns
+                                      - !Ref SubjectPatterns
+                                      - - !Sub project_path:${Repository}:ref_type:branch:ref:${Branch}
+            Tags:
+                - Key: vra:ci-env
+                  Value: !Ref CiEnvName
+
+    CiPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            ManagedPolicyName: !Sub vra-ci-${Provider}-${CiEnvName}
+            Roles: [!Ref CiRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: CallerIdentity
+                      Effect: Allow
+                      Action: sts:GetCallerIdentity
+                      Resource: "*"
+                    # Pinned to the envs this CI environment serves: a dev or watch job can never obtain a gated
+                    # env's role, whatever the target role's trust says. Every vra role carries the tag vra:env=<env>
+                    # (vra-deploy-role.yaml, vra-data-copy-roles.yaml), so the env list is enforced with aws:ResourceTag.
+                    - !If
+                      - NoEnvRoles
+                      - !Ref AWS::NoValue
+                      - Sid: AssumeOwnEnvRoles
+                        Effect: Allow
+                        Action:
+                            - sts:AssumeRole
+                            - sts:TagSession
+                            - sts:SetSourceIdentity
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:iam::*:role/vra-deploy-*
+                            - !Sub arn:${AWS::Partition}:iam::*:role/vra-data-copy-*
+                        Condition:
+                            StringEquals:
+                                aws:ResourceAccount: !Ref EnvAccountIds
+                                aws:ResourceTag/vra:env:
+                                    !If [OwnEnvOnly, [!Ref CiEnvName], !Ref DeployableEnvs]
+                    - !If
+                      - SynthRoles
+                      - Sid: AssumeBuildOnlySynthRoles
+                        Effect: Allow
+                        Action: sts:AssumeRole
+                        Resource: !Sub arn:${AWS::Partition}:iam::*:role/vra-synth-*
+                        Condition:
+                            StringEquals:
+                                aws:ResourceAccount: !Ref EnvAccountIds
+                      - !Ref AWS::NoValue
+                    - Sid: VraSecrets
+                      Effect: Allow
+                      Action:
+                          - secretsmanager:GetSecretValue
+                          - secretsmanager:DescribeSecret
+                      Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:vra/*
+                    - Sid: Notifications
+                      Effect: Allow
+                      Action: sns:Publish
+                      Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:vra-notifications
+                    - !If
+                      - HasSigningKey
+                      - Sid: VerifyBuildSignatures
+                        Effect: Allow
+                        Action:
+                            - kms:Verify
+                            - kms:GetPublicKey
+                            - kms:DescribeKey
+                        Resource: !Ref SigningKeyArn
+                      - !Ref AWS::NoValue
+                    - !If
+                      - MaySign
+                      - Sid: SignBuilds
+                        Effect: Allow
+                        Action: kms:Sign
+                        Resource: !Ref SigningKeyArn
+                      - !Ref AWS::NoValue
+
+    # The vra state store (vra.yaml stateStore.type s3, iam/cloudformation/vra-state-store.yaml). Objects below
+    # StatePrefix only; history and bundles create-only (If-None-Match); nothing is ever deleted. Locks: run leases
+    # (run#*), the env#<env> locks of this role's envs, env#watch for the watch role.
+    CiStateStorePolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: HasStateStore
+        Properties:
+            ManagedPolicyName: !Sub vra-ci-${Provider}-${CiEnvName}-state
+            Roles: [!Ref CiRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: StateRuns
+                      Effect: Allow
+                      Action:
+                          - s3:GetObject
+                          - s3:PutObject
+                      Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/runs/*
+                    - Sid: StateRead
+                      Effect: Allow
+                      Action: s3:GetObject
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/history/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/artifacts/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/signatures/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/checkpoints/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/sync-state.json
+                    - Sid: StateCreateOnly
+                      Effect: Allow
+                      Action: s3:PutObject
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/history/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/artifacts/*
+                      Condition:
+                          "Null":
+                              s3:if-none-match: "false"
+                    - Sid: StateApprovalClaims
+                      Effect: Allow
+                      Action:
+                          - s3:GetObject
+                          - s3:PutObject
+                      Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/approvals-consumed/*
+                    - Sid: StateRecords
+                      Effect: Allow
+                      Action: s3:PutObject
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/signatures/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/checkpoints/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/${StatePrefix}/sync-state.json
+                    # Not narrowed by s3:prefix: without ListBucket a read of a missing key is a 403, not a 404.
+                    - Sid: StateList
+                      Effect: Allow
+                      Action: s3:ListBucket
+                      Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucketName}
+                    - Sid: StateHistoryNeverDeleted
+                      Effect: Deny
+                      Action:
+                          - s3:DeleteObject
+                          - s3:DeleteObjectVersion
+                          - s3:PutObjectRetention
+                          - s3:PutObjectLegalHold
+                          - s3:PutObjectAcl
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/*/history/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/*/approvals-consumed/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/*/artifacts/*
+                          - !Sub arn:${AWS::Partition}:s3:::${StateBucketName}/*/runs/*
+                    - Sid: StateLocks
+                      Effect: Allow
+                      Action:
+                          - dynamodb:GetItem
+                          - dynamodb:PutItem
+                          - dynamodb:DeleteItem
+                      Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LockTableName}
+                      Condition:
+                          ForAllValues:StringLike:
+                              dynamodb:LeadingKeys: !If
+                                  - NoEnvRoles
+                                  - !If [WatchLock, ["run#*", "env#watch"], ["run#*"]]
+                                  - !Split
+                                    - ","
+                                    - !Sub
+                                      - "run#*,${W}env#${E}"
+                                      - W: !If [WatchLock, "env#watch,", ""]
+                                        E:
+                                            !Join [
+                                                ",env#",
+                                                !If [
+                                                    OwnEnvOnly,
+                                                    [!Ref CiEnvName],
+                                                    !Ref DeployableEnvs,
+                                                ],
+                                            ]
+                    - Sid: StateLockTable
+                      Effect: Allow
+                      Action: dynamodb:DescribeTable
+                      Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${LockTableName}
+                    - !If
+                      - HasStateKey
+                      - Sid: StateStoreKey
+                        Effect: Allow
+                        Action:
+                            - kms:Decrypt
+                            - kms:GenerateDataKey
+                            - kms:DescribeKey
+                        Resource: !Ref StateKeyArn
+                      - !Ref AWS::NoValue
+
+    # envs/<env>/env.yaml approvalSigningKeyArn: vra verifies the KMS signature of every approval record of the env.
+    CiApprovalVerifyPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: HasApprovalSigningKeys
+        Properties:
+            ManagedPolicyName: !Sub vra-ci-${Provider}-${CiEnvName}-approval-verify
+            Roles: [!Ref CiRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: VerifyApprovalSignatures
+                      Effect: Allow
+                      Action:
+                          - kms:Verify
+                          - kms:DescribeKey
+                      Resource: !Ref ApprovalSigningKeyArns
+
+    # Live-test roles only (vra-test-<env>: stack outputs, resource names, the test secret).
+    TestRolesPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: HasTestEnvs
+        Properties:
+            ManagedPolicyName: !Sub vra-ci-${Provider}-${CiEnvName}-tests
+            Roles: [!Ref CiRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: AssumeOwnTestRoles
+                      Effect: Allow
+                      Action:
+                          - sts:AssumeRole
+                          - sts:TagSession
+                          - sts:SetSourceIdentity
+                      Resource: !Sub arn:${AWS::Partition}:iam::*:role/vra-test-*
+                      Condition:
+                          StringEquals:
+                              aws:ResourceAccount: !Ref EnvAccountIds
+                              aws:ResourceTag/vra:env: !Ref TestEnvs
+
+Outputs:
+    CiRoleArn:
+        Value: !GetAtt CiRole.Arn
+        Description: >-
+            Set as the CI variable VRA_CI_ROLE_ARN for this CI environment; add it to TrustedPrincipalArns of
+            vra-deploy-<env> for exactly the envs in DeployableEnvs (CiEnvName by default), and to
+            SynthTrustedPrincipalArns of vra-synth-<env> for the build role.

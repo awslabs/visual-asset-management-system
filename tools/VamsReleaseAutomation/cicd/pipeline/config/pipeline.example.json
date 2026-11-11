@@ -1,0 +1,73 @@
+{
+    "prefix": "vra",
+    "toolsAccount": "111111111111",
+    "region": "us-gov-west-1",
+    "sources": {
+        "fork": {
+            "type": "codecommit",
+            "repositoryName": "vams-fork",
+            "branch": "main"
+        },
+        "forkPreview": {
+            "type": "codecommit",
+            "repositoryName": "vams-fork",
+            "branch": "preview/main"
+        },
+        "vra": {
+            "type": "codecommit",
+            "repositoryName": "vams-release-automation",
+            "branch": "release-0.1"
+        }
+    },
+    "home": {
+        "repoUrl": "codecommit::us-gov-west-1://vams-home",
+        "ref": "main"
+    },
+    "release": {
+        "envs": [
+            {
+                "name": "dev",
+                "account": "222222222222"
+            },
+            {
+                "name": "test",
+                "account": "333333333333",
+                "promotesFrom": "dev",
+                "requiresApproval": true
+            },
+            {
+                "name": "prod",
+                "account": "444444444444",
+                "promotesFrom": "test",
+                "requiresApproval": true
+            }
+        ],
+        "testSuites": "live-cli,live-web,customer"
+    },
+    "preview": {
+        "env": {
+            "name": "dev-preview",
+            "account": "222222222222"
+        },
+        "testSuites": "live-cli,live-web"
+    },
+    "watch": {
+        "enabled": true,
+        "schedule": "cron(0 6 * * ? *)",
+        "timeZone": "UTC",
+        "command": "sync",
+        "packageRepoUrl": "codecommit::us-gov-west-1://vams-release-automation",
+        "packageRef": "v0.4.0"
+    },
+    "stateStore": {
+        "bucketName": "vra-state-111111111111-us-gov-west-1",
+        "lockTableName": "vra-locks",
+        "keyArn": "arn:aws-us-gov:kms:us-gov-west-1:111111111111:key/00000000-0000-0000-0000-000000000000"
+    },
+    "notifications": {
+        "topicArn": "arn:aws-us-gov:sns:us-gov-west-1:111111111111:vra-notifications"
+    },
+    "codebuild": {
+        "environment": {}
+    }
+}

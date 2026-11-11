@@ -1,0 +1,142 @@
+# IAM action manifest: iam-verify (`vra iam verify`, read-only)
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+workflow: iam-verify
+schemaVersion: 1
+role: deploy
+description: >-
+    Read the IAM roles IT created for the env (envs/<env>/env.yaml iam.mode precreated or bootstrap) and simulate
+    their policies against the applied IT role package. Read-only. Uses readOnlyRoleArn when the env has one,
+    else the deploy role (iam/cloudformation/vra-deploy-role.yaml EnableIamVerify=true). A denied read is
+    reported as "not checked", never as a pass.
+statements:
+    - sid: IamVerifyReadRoles
+      actions:
+          - iam:GetRole
+          - iam:SimulatePrincipalPolicy
+          - iam:ListAttachedRolePolicies
+          - iam:ListRolePolicies
+          - iam:GetRolePolicy
+      resources:
+          - arn:${Partition}:iam::${Account}:role/*
+      note: >-
+          The role names come from IT (the applied package); narrow to the env's role name prefix with
+          IamVerifyRolePrefix. Simulation does not evaluate conditions, SCPs or resource policies. The policy
+          listings find grants broader than the package (extra managed policies, unlisted inline actions).
+
+    - sid: IamVerifyReadBoundary
+      actions:
+          - iam:GetPolicy
+      resources:
+          - arn:${Partition}:iam::${Account}:policy/*
+      note: The permission boundary policy IT returned (boundary mode) exists.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

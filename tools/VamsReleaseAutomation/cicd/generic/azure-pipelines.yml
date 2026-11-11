@@ -1,0 +1,129 @@
+# Reference Azure Pipelines definition for vra (VRA_CI_PROVIDER=generic). Copy into the PRIVATE vra home
+# repository and adapt the stages to your ledger's release lane (envs/*/env.yaml promotesFrom /
+# requiresApproval):  python3 vra-src/cicd/codebuild/scripts/ci_graph.py graph --ledger ledger
+# Every step calls cicd/generic/vra-ci.sh; vra enforces every gate.
+#
+# Azure DevOps setup:
+#  - Environments vra-test and vra-prod with an "Approvals" check (approvers = the env's approvers in
+#    envs/<env>/env.yaml, "Approvers can't approve their own runs" on). Each deployment job below waits for it.
+#  - One service connection per tier (federated workload identity to AWS, or the AWS Toolkit task with an OIDC
+#    role): vra-aws-build may assume only vra-synth-<env>, vra-aws-<env> only vra-deploy-<env>. Placeholders below.
+#  - Variable group vra (secrets): VRA_GIT_TOKEN, VRA_HOME_TOKEN (optional; omit with stateStore.type s3).
+#  - The pipeline's build service identity needs "View" on the pipeline approvals (to read who approved).
+# Separation of duties: VRA_INITIATOR is Build.RequestedForEmail (the authenticated user who queued the run),
+# the approver is read from the approvals API for THIS run, and vra refuses an approval by the initiator.
+# Not exercised on a live Azure DevOps organization.
+
+trigger: none
+
+parameters:
+    - name: forkRef
+      displayName: Fork commit or tag to build
+      type: string
+      default: main
+
+variables:
+    - group: vra
+    - name: VRA_CI_PROVIDER
+      value: generic
+    - name: VRA_INITIATOR
+      value: $(Build.RequestedForEmail)
+    - name: VRA_RUN_REF
+      value: azure-devops:$(System.TeamProject)/builds/$(Build.BuildId)
+    - name: VRA_HOME
+      value: $(Pipeline.Workspace)/vra-home
+    - name: VRA_HOME_REPO
+      value: https://dev.azure.com/example-org/example-project/_git/vams-home
+    - name: VRA_HOME_REF
+      value: main
+    - name: VRA_PACKAGE_REF
+      value: v0.4.0
+
+pool:
+    vmImage: ubuntu-24.04
+
+stages:
+    - stage: build
+      jobs:
+          - job: build
+            timeoutInMinutes: "120"
+            steps:
+                - template: vra-steps-setup.yml
+                - bash: |
+                      set -euo pipefail
+                      build_id="$(bash vra-src/cicd/generic/vra-ci.sh build --lane release --ref "${FORK_REF}")"
+                      echo "##vso[task.setvariable variable=buildId;isOutput=true]${build_id}"
+                  name: vra
+                  env:
+                      FORK_REF: ${{ parameters.forkRef }}
+                      VRA_GIT_TOKEN: $(VRA_GIT_TOKEN)
+                      VRA_HOME_TOKEN: $(VRA_HOME_TOKEN)
+                - template: vra-steps-finish.yml
+                - publish: vra-bundle
+                  artifact: vra-bundle
+
+    - stage: dev
+      dependsOn: build
+      variables:
+          buildId: $[ stageDependencies.build.build.outputs['vra.buildId'] ]
+      jobs:
+          - job: deploy_dev
+            timeoutInMinutes: "480"
+            steps:
+                - template: vra-steps-setup.yml
+                - download: current
+                  artifact: vra-bundle
+                - bash: |
+                      set -euo pipefail
+                      cp -R "$(Pipeline.Workspace)/vra-bundle" vra-bundle
+                      bash vra-src/cicd/generic/vra-ci.sh deploy --env dev --build "$(buildId)"
+                      commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' \
+                        "${VRA_HOME}/artifacts/$(buildId)/manifest.json")"
+                      git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet \
+                        https://dev.azure.com/example-org/example-project/_git/vams-fork fork
+                      git -C fork checkout --quiet "${commit}"
+                      bash vra-src/cicd/generic/vra-ci.sh test --env dev --suites live-cli,live-web,customer --fork-dir fork
+                  env:
+                      VRA_GIT_TOKEN: $(VRA_GIT_TOKEN)
+                      VRA_HOME_TOKEN: $(VRA_HOME_TOKEN)
+                - template: vra-steps-finish.yml
+
+    - stage: test
+      dependsOn: [build, dev]
+      variables:
+          buildId: $[ stageDependencies.build.build.outputs['vra.buildId'] ]
+      jobs:
+          - deployment: promote_test
+            environment: vra-test # Approvals check: waits for the env's approvers
+            timeoutInMinutes: "480"
+            strategy:
+                runOnce:
+                    deploy:
+                        steps:
+                            - checkout: self
+                            - template: vra-steps-setup.yml
+                            - template: vra-steps-promote.yml
+                              parameters:
+                                  env: test
+                                  from: dev
+                                  testSuites: live-cli,live-web,customer
+
+    - stage: prod
+      dependsOn: [build, test]
+      variables:
+          buildId: $[ stageDependencies.build.build.outputs['vra.buildId'] ]
+      jobs:
+          - deployment: promote_prod
+            environment: vra-prod
+            timeoutInMinutes: "480"
+            strategy:
+                runOnce:
+                    deploy:
+                        steps:
+                            - checkout: self
+                            - template: vra-steps-setup.yml
+                            - template: vra-steps-promote.yml
+                              parameters:
+                                  env: prod
+                                  from: test
+                                  testSuites: ""

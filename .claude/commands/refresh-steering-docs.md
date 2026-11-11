@@ -28,7 +28,7 @@ For each CLAUDE.md file, update these specific sections:
 
 ### Process
 
-**Discover the document set first — do not work from a hardcoded list.** Glob `**/CLAUDE.md` (excluding `node_modules`) plus `tools/VamsAgentSkill/SKILL.md`, and walk every result. Cross-check the glob against the Rule 11 Kiro mapping table in the root `CLAUDE.md`: any document on disk with no row there, or any row naming a document that no longer exists, is itself a defect to fix in this pass. The directory-scoped documents (`backend/tests/`, `backendPipelines/`, `infra/lib/nestedStacks/pipelines/`, `web/e2e/`, `web/src/visualizerPlugin/`) auto-load only when the working context is inside their directory, so they drift the most quietly.
+**Discover the document set first — do not work from a hardcoded list.** Glob `**/CLAUDE.md` (excluding `node_modules`) plus `tools/VamsAgentSkill/SKILL.md` and `tools/VamsReleaseAutomation/skill/SKILL.md`, and walk every result. Cross-check the glob against the Rule 11 Kiro mapping table in the root `CLAUDE.md`: any document on disk with no row there, or any row naming a document that no longer exists, is itself a defect to fix in this pass. The directory-scoped documents (`backend/tests/`, `backendPipelines/`, `infra/lib/nestedStacks/pipelines/`, `web/e2e/`, `web/src/visualizerPlugin/`) auto-load only when the working context is inside their directory, so they drift the most quietly.
 
 Per-document scan targets:
 
@@ -58,9 +58,13 @@ Per-document scan targets:
 
 13. **Add-on-local `CLAUDE.md` files** (beside an add-on's code: `backend/backend/handlers/addon/<addon>/`, `infra/lib/nestedStacks/addon/<addon>/`, `web/src/addons/<addon>/`) **and their `.kiro/steering/ADDON_*.md` mirrors**: Scan the add-on's handler, stack, web and CLI and MCP lane files. Update its layout tables, the test names its invariants cite, and the `fileMatchPattern` of its Kiro mirror, which must cover every add-on path the files describe.
 
-14. **`tools/VamsAgentSkill/SKILL.md`**: Verify only the structural rules — entity creation/deletion ordering, identifier semantics, permission scoping, and mutating categories. It self-discovers commands via `vamscli --help`, so command additions need no edit here.
+14. **`tools/VamsReleaseAutomation/CLAUDE.md`**: Scan `tools/VamsReleaseAutomation/` (the `engine/vra/` modules, `skill/workflows/`, `adapters/`, `cicd/`, `iam/`) against its directory structure, and `engine/vra/mcp_server.py` and `engine/vra/human.py` against the MCP tool tiers and the human-only list. Update the directory structure and those lists, check the tool's own version (`pyproject.toml`, `engine/vra/__init__.py` and `cicd/pipeline/package.json`, which move together and not with the VAMS version), and run `make check` there (`make index` first when files were added or removed: it rewrites `FILES.md`). Mirror changes in `.kiro/steering/RELEASE_AUTOMATION_WORKFLOW.md`.
 
-15. **Kiro steering mirrors (`.kiro/steering/`)**: If any factual updates above changed a rule, pattern, or convention (not just a file list), make the equivalent change in the corresponding Kiro steering document per the mapping in root `CLAUDE.md` Rule 11.
+15. **`tools/VamsReleaseAutomation/skill/SKILL.md`**: Verify the MCP tier table and the human-only list against `engine/vra/mcp_server.py` and `engine/vra/human.py`, and that every workflow it names exists in `skill/workflows/`. It has no Kiro mirror; the Kiro adapter loads it directly.
+
+16. **`tools/VamsAgentSkill/SKILL.md`**: Verify only the structural rules — entity creation/deletion ordering, identifier semantics, permission scoping, and mutating categories. It self-discovers commands via `vamscli --help`, so command additions need no edit here.
+
+17. **Kiro steering mirrors (`.kiro/steering/`)**: If any factual updates above changed a rule, pattern, or convention (not just a file list), make the equivalent change in the corresponding Kiro steering document per the mapping in root `CLAUDE.md` Rule 11.
 
 ### Verification
 
@@ -70,7 +74,7 @@ After updating, briefly confirm:
 -   No major new directories are missing from trees
 -   Every `CLAUDE.md` found by the glob has a row in the root `CLAUDE.md` Rule 11 mapping table, and every row names a document that exists
 -   Every `<file>` + quoted-"Section Title" pointer in `.claude/commands/*.md` and `.kiro/steering/*.md` resolves to a Markdown heading that exists in that file — a moved section leaves a pointer to nothing
--   Version numbers match source files (`infra/config/config.ts` for VAMS_VERSION, `tools/VamsCLI/vamscli/version.py` for CLI version, `tools/VamsMCP/pyproject.toml` + `vams_mcp/__init__.py` for the MCP version)
+-   Version numbers match source files (`infra/config/config.ts` for VAMS_VERSION, `tools/VamsCLI/vamscli/version.py` for CLI version, `tools/VamsMCP/pyproject.toml` + `vams_mcp/__init__.py` for the MCP version, `tools/VamsReleaseAutomation/pyproject.toml` + `engine/vra/__init__.py` + `cicd/pipeline/package.json` for the release automation version)
 
 Report a summary of what changed in each file.
 

@@ -1,0 +1,849 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+    vams-release-automation (vra) per-environment deploy role. Deploy one stack per VAMS env into
+    the env account (and region). Trusted by the tools account / CI principals. The role drives the
+    CDK bootstrap roles; it does not create VAMS resources itself. Policies mirror
+    iam/actions/{deploy,backup,migrate,test-live,preflight,restore}.yaml. Partition-generic.
+
+Parameters:
+    EnvName:
+        Type: String
+        Description: Ledger env name (dev, dev-preview, test, prod ...). Role name becomes vra-deploy-<EnvName>.
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,40}$"
+    ConfigName:
+        Type: String
+        Default: vams
+        Description: VAMS config "name" (infra/config/config.json). Stack names start with it.
+        # Lowercase only: generated bucket names are lowercase and IAM ARN matching is case-sensitive.
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,29}$"
+    BaseStackName:
+        Type: String
+        Description: >-
+            VAMS app.baseStackName for this env (raw value; VAMS appends -<region>). Lowercase only: S3 bucket names
+            generated from the stack name are lowercase and IAM ARN matching is case-sensitive, so an upper-case value
+            would grant nothing on the env's buckets.
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,39}$"
+    VamsRegion:
+        Type: String
+        Default: ""
+        Description: Region VAMS is deployed to. Empty = the region this stack is deployed in.
+    TrustedPrincipalArns:
+        Type: CommaDelimitedList
+        Description: >-
+            Principals allowed to assume this role, e.g. the CodeBuild service roles in the tools account
+            (arn:<partition>:iam::111111111111:role/vra-codebuild-*) or an operator SSO role. Do not use an
+            account root unless the tools account itself is tightly controlled.
+    ExternalId:
+        Type: String
+        Default: ""
+        NoEcho: true
+        Description: Optional sts:ExternalId required on AssumeRole.
+    PermissionsBoundaryArn:
+        Type: String
+        Default: ""
+        Description: Optional permissions boundary policy ARN (often mandated by an enterprise landing zone).
+    RolePath:
+        Type: String
+        Default: /
+        AllowedPattern: "^/([A-Za-z0-9+=,.@_-]+/)*$"
+    EnableRestore:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: Attach the restore policy (writes into live tables / buckets). Keep false in prod until a restore is approved.
+    EnableCognitoExport:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+    EnableIamVerify:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Let `vra iam verify` read and simulate the roles IT created for VAMS (envs/<env>/env.yaml iam.mode
+            precreated or bootstrap): iam:GetRole and iam:SimulatePrincipalPolicy on the env's roles, iam:GetPolicy
+            for the permission boundary. Read-only.
+    IamVerifyRolePrefix:
+        Type: String
+        Default: ""
+        Description: Narrow EnableIamVerify to roles whose name starts with this prefix (envs/<env>/env.yaml iam.rolePrefix).
+    MaxSessionDurationSeconds:
+        Type: Number
+        Default: 14400
+        MinValue: 3600
+        MaxValue: 43200
+        Description: VAMS deploys can exceed one hour; the CI session must outlive the longest deploy.
+    EnvTier:
+        Type: String
+        Default: prod
+        AllowedValues: [dev, test, prod]
+        Description: >-
+            Trust tier of the env. test and prod roles require sts:SourceIdentity by default (RequireSourceIdentity=auto);
+            dev (and dev-preview) roles do not. Defaults to the strictest tier.
+    RequireSourceIdentity:
+        Type: String
+        Default: auto
+        AllowedValues: ["auto", "true", "false"]
+        Description: >-
+            auto (default) = required for EnvTier test and prod, optional for dev. "true" = AssumeRole must carry
+            sts:SourceIdentity (vra sets it to the run initiator; ledger setSourceIdentity defaults to true for gated
+            envs), so CloudTrail in this account attributes every deploy call to a person. Requires the CDK bootstrap
+            roles to trust sts:SetSourceIdentity (iam/scripts/patch-bootstrap-template.py, iam/cdk-bootstrap.md).
+    EnableChangeSetGate:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Grant the optional CloudFormation change-set gate (envs/<env> diffGate: changeset): create, describe and
+            delete change sets on the VAMS stacks of this env.
+    EnableWorkflowAbort:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Grant states:StopExecution so `--abort-workflow-executions` can stop running VAMS workflow executions before
+            a restore or a deploy with data migrations. Listing them (DescribeExecution) is always granted.
+    CreateSynthRole:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Also create vra-synth-<EnvName>: a build-only role that can only assume the CDK lookup role (cdk synth
+            context lookups). Put its ARN in envs/<env>/env.yaml synthRoleArn and trust only the BUILD tier with it
+            (SynthTrustedPrincipalArns); the build tier never gets this env's deploy role.
+    SynthTrustedPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: Build-tier principals allowed to assume vra-synth-<EnvName> (CreateSynthRole=true).
+    CreateTestRole:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Also create vra-test-<EnvName>: a live-test-only role (read the VAMS stack outputs and resource-name
+            parameters, read this env's live-test secret). The live suites install and run the fork's web/e2e
+            dependencies; running them under this role instead of the deploy role keeps that code away from deploy
+            permissions. Put its ARN in envs/<env>/env.yaml testRoleArn and trust only the env's test CI identity
+            (TestTrustedPrincipalArns).
+    TestTrustedPrincipalArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: Test-tier principals allowed to assume vra-test-<EnvName> (CreateTestRole=true).
+    AdditionalBucketArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Asset buckets registered in VAMS (s3AssetBucketsStorage) that are NOT named after this env's core stack:
+            customer-named buckets, buckets in other accounts. Bucket ARNs (arn:<partition>:s3:::<name>), copied from the
+            vra IT request. Grants the checkpoint and migration reads and, with EnableRestore, the restore writes on
+            them and their objects. A bucket in another account also needs its bucket policy to allow this role.
+            Record the same ARNs in envs/<env>/env.yaml registeredBuckets.bucketArns.
+    AdditionalKmsKeyArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Default-encryption KMS keys of those buckets (key ARNs from the vra IT request). A key in another account
+            also needs its key policy to allow this role. Record them in registeredBuckets.kmsKeyArns.
+    ExternalTableKmsKeyArn:
+        Type: String
+        Default: ""
+        Description: >-
+            VAMS app.useKmsCmkEncryption.optionalExternalCmkArn, when the VAMS tables are encrypted with a key that
+            VAMS did not create (same region, possibly another account). Grants checkpoints, migrations and restores
+            the use of that key through DynamoDB only. A key in another account also needs its key policy to allow
+            this role.
+
+    BootstrapRoleArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            env.yaml iam.mode bootstrap (custom bootstrap roles): the deploy, lookup, file-publishing and
+            image-publishing role ARNs IT created (any names; `vra iam plan` lists them in the vra-deploy-<env> notes).
+            Empty: the `cdk bootstrap` names cdk-<qualifier>-<kind>-role-<account>-<region>.
+    CliCredentialsDeploy:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            env.yaml iam.cliCredentialsSynthesizer: there are no bootstrap roles and CloudFormation runs with this
+            role's own credentials, so it gets the CDK execution policy (CdkExecutionPolicyArn) and the staging
+            bucket and ECR repository. No cdk-* role is assumed.
+    CdkExecutionPolicyArn:
+        Type: String
+        Default: ""
+        Description: >-
+            With CliCredentialsDeploy=true: the managed policy of iam/cloudformation/vra-cdk-execution-policy.yaml
+            (what the CloudFormation execution role would have).
+    StagingBucketName:
+        Type: String
+        Default: ""
+        Description: With CliCredentialsDeploy=true, the asset staging bucket (iamRoleConfig bootstrap fileAssetsBucketName).
+    StagingRepositoryName:
+        Type: String
+        Default: ""
+        Description: With CliCredentialsDeploy=true, the image asset repository (bootstrap imageAssetsRepositoryName).
+
+Conditions:
+    HasBootstrapRoleArns: !Not [!Equals [!Join ["", !Ref BootstrapRoleArns], ""]]
+    CliCredentials: !Equals [!Ref CliCredentialsDeploy, "true"]
+    CliCredentialsWithPolicy:
+        !And [!Condition CliCredentials, !Not [!Equals [!Ref CdkExecutionPolicyArn, ""]]]
+    CliCredentialsStaging:
+        !And [!Condition CliCredentials, !Not [!Equals [!Ref StagingBucketName, ""]]]
+    CliCredentialsRepository:
+        !And [!Condition CliCredentials, !Not [!Equals [!Ref StagingRepositoryName, ""]]]
+    HasAdditionalBuckets: !Not [!Equals [!Join ["", !Ref AdditionalBucketArns], ""]]
+    HasAdditionalKeys: !Not [!Equals [!Join ["", !Ref AdditionalKmsKeyArns], ""]]
+    HasExternalTableKey: !Not [!Equals [!Ref ExternalTableKmsKeyArn, ""]]
+    RestoreAdditionalBuckets: !And [!Condition RestoreEnabled, !Condition HasAdditionalBuckets]
+    HasExternalId: !Not [!Equals [!Ref ExternalId, ""]]
+    SourceIdentityRequired: !Or
+        - !Equals [!Ref RequireSourceIdentity, "true"]
+        - !And
+          - !Equals [!Ref RequireSourceIdentity, "auto"]
+          - !Not [!Equals [!Ref EnvTier, dev]]
+    ChangeSetGateEnabled: !Equals [!Ref EnableChangeSetGate, "true"]
+    WorkflowAbortEnabled: !Equals [!Ref EnableWorkflowAbort, "true"]
+    SynthRoleWanted: !Equals [!Ref CreateSynthRole, "true"]
+    TestRoleWanted: !Equals [!Ref CreateTestRole, "true"]
+    HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+    HasVamsRegion: !Not [!Equals [!Ref VamsRegion, ""]]
+    RestoreEnabled: !Equals [!Ref EnableRestore, "true"]
+    CognitoExportEnabled: !Equals [!Ref EnableCognitoExport, "true"]
+    IamVerifyEnabled: !Equals [!Ref EnableIamVerify, "true"]
+    HasIamVerifyRolePrefix: !Not [!Equals [!Ref IamVerifyRolePrefix, ""]]
+
+Resources:
+    DeployRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: !Sub vra-deploy-${EnvName}
+            Path: !Ref RolePath
+            Description: !Sub vra deploy role for env ${EnvName}
+            MaxSessionDuration: !Ref MaxSessionDurationSeconds
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            ManagedPolicyArns:
+                !If [CliCredentialsWithPolicy, [!Ref CdkExecutionPolicyArn], !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action:
+                          - sts:AssumeRole
+                      Condition: !If
+                          - HasExternalId
+                          - !If
+                            - SourceIdentityRequired
+                            - StringEquals:
+                                  sts:ExternalId: !Ref ExternalId
+                              "Null":
+                                  sts:SourceIdentity: "false"
+                            - StringEquals:
+                                  sts:ExternalId: !Ref ExternalId
+                          - !If
+                            - SourceIdentityRequired
+                            - "Null":
+                                  sts:SourceIdentity: "false"
+                            - !Ref AWS::NoValue
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action:
+                          - sts:TagSession
+                      Condition:
+                          ForAllValues:StringLike:
+                              aws:TagKeys: "vra:*"
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action:
+                          - sts:SetSourceIdentity
+            Tags:
+                - Key: vra:env
+                  Value: !Ref EnvName
+
+    DeployPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            ManagedPolicyName: !Sub vra-deploy-${EnvName}-deploy
+            Roles: [!Ref DeployRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: CallerIdentity
+                      Effect: Allow
+                      Action:
+                          - sts:GetCallerIdentity
+                          - cloudformation:ListStacks
+                          # no resource-level permissions: polls the drift detection DetectStackDrift started
+                          - cloudformation:DescribeStackDriftDetectionStatus
+                          - dynamodb:ListBackups
+                          - sts:DecodeAuthorizationMessage
+                      Resource: "*"
+                    - !If
+                      - CliCredentials
+                      - !Ref AWS::NoValue
+                      - Sid: CdkBootstrapRolesAssume
+                        Effect: Allow
+                        Action:
+                            - sts:AssumeRole
+                            - sts:TagSession
+                            # role chaining with a source identity needs SetSourceIdentity here AND in the bootstrap roles' trust
+                            - sts:SetSourceIdentity
+                        Resource: !If
+                            - HasBootstrapRoleArns
+                            - !Ref BootstrapRoleArns
+                            - - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*-deploy-role-${AWS::AccountId}-*
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*-file-publishing-role-${AWS::AccountId}-*
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*-image-publishing-role-${AWS::AccountId}-*
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*-lookup-role-${AWS::AccountId}-*
+                    # cliCredentialsSynthesizer: CDK uploads assets with this role's credentials
+                    - !If
+                      - CliCredentialsStaging
+                      - Sid: CliCredentialsStagingBucket
+                        Effect: Allow
+                        Action:
+                            - s3:GetObject
+                            - s3:PutObject
+                            - s3:GetBucketLocation
+                            - s3:ListBucket
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:s3:::${StagingBucketName}
+                            - !Sub arn:${AWS::Partition}:s3:::${StagingBucketName}/*
+                      - !Ref AWS::NoValue
+                    - !If
+                      - CliCredentialsRepository
+                      - Sid: CliCredentialsStagingRepository
+                        Effect: Allow
+                        Action:
+                            - ecr:BatchCheckLayerAvailability
+                            - ecr:CompleteLayerUpload
+                            - ecr:InitiateLayerUpload
+                            - ecr:PutImage
+                            - ecr:UploadLayerPart
+                            - ecr:BatchGetImage
+                            - ecr:DescribeImages
+                            - ecr:DescribeRepositories
+                        Resource: !Sub arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${StagingRepositoryName}
+                      - !Ref AWS::NoValue
+                    - !If
+                      - CliCredentialsRepository
+                      - Sid: CliCredentialsEcrLogin
+                        Effect: Allow
+                        Action: ecr:GetAuthorizationToken
+                        Resource: "*"
+                      - !Ref AWS::NoValue
+                    - Sid: CdkBootstrapVersionRead
+                      Effect: Allow
+                      Action: ssm:GetParameter
+                      Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter/cdk-bootstrap/*/version
+                    - Sid: VamsStacksRead
+                      Effect: Allow
+                      Action:
+                          - cloudformation:DescribeStacks
+                          - cloudformation:DescribeStackEvents
+                          - cloudformation:DescribeStackResource
+                          - cloudformation:DescribeStackResources
+                          - cloudformation:ListStackResources
+                          - cloudformation:GetTemplate
+                          - cloudformation:GetTemplateSummary
+                          - cloudformation:DescribeChangeSet
+                          - cloudformation:ListChangeSets
+                          - cloudformation:DetectStackDrift
+                          - cloudformation:DetectStackResourceDrift
+                          - cloudformation:DescribeStackResourceDrifts
+                      Resource:
+                          - !Sub
+                            - arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ConfigName}-*-${BaseStackName}-${R}/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - !Sub
+                            - arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ConfigName}-*-${BaseStackName}-${R}-*/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: VamsResourceNamesRead
+                      Effect: Allow
+                      Action:
+                          - ssm:GetParameter
+                          - ssm:GetParameters
+                          - ssm:GetParametersByPath
+                      Resource:
+                          - !Sub
+                            - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/resourceNames
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - !Sub
+                            - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/resourceNames/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          # the deployed web URL (CloudFront or ALB, custom domain or not) for the live suites
+                          - !Sub
+                            - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/web/deployedUrl
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          # the OpenSearch index names and endpoint, read by `vra reindex --mode direct`
+                          - !Sub
+                            - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/aos/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: SimulateOwnRole
+                      Effect: Allow
+                      Action:
+                          - iam:SimulatePrincipalPolicy
+                          - iam:GetContextKeysForPrincipalPolicy
+                          - iam:GetRole
+                          - iam:ListAttachedRolePolicies
+                          - iam:ListRolePolicies
+                          - iam:GetRolePolicy
+                      Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/vra-*
+                    - Sid: ReadAttachedPolicies
+                      Effect: Allow
+                      Action:
+                          - iam:GetPolicy
+                          - iam:GetPolicyVersion
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vra-*
+                    - Sid: CdkRolesTrustRead
+                      Effect: Allow
+                      Action: iam:GetRole
+                      Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*
+                    # IAM quota check before cdk deploy (and the advisory one before a rollback redeploy): counts
+                    # only (Roles/RolesQuota, Policies/PoliciesQuota); not resource-scoped, IAM accepts only `*`
+                    - Sid: IamQuotaRead
+                      Effect: Allow
+                      Action: iam:GetAccountSummary
+                      Resource: "*"
+                    # CloudFront quota check before cdk deploy (and the advisory one before a rollback redeploy),
+                    # only when the change adds CloudFront resources: counts of the account's custom cache / origin
+                    # request / response headers policies and distributions; List* accept only `*`
+                    - Sid: CloudFrontQuotaRead
+                      Effect: Allow
+                      Action:
+                          - cloudfront:ListCachePolicies
+                          - cloudfront:ListOriginRequestPolicies
+                          - cloudfront:ListResponseHeadersPolicies
+                          - cloudfront:ListDistributions
+                      Resource: "*"
+                    # the account's applied CloudFront quotas (service code cloudfront); values only
+                    - Sid: CloudFrontQuotaLimitsRead
+                      Effect: Allow
+                      Action: servicequotas:GetServiceQuota
+                      Resource: "*"
+                    - !If
+                      - ChangeSetGateEnabled
+                      - Sid: ChangeSetGate
+                        Effect: Allow
+                        Action:
+                            - cloudformation:CreateChangeSet
+                            - cloudformation:DescribeChangeSet
+                            - cloudformation:DeleteChangeSet
+                            - cloudformation:ListChangeSets
+                        Resource:
+                            - !Sub
+                              - arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ConfigName}-*-${BaseStackName}-${R}/*
+                              - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                            - !Sub
+                              - arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ConfigName}-*-${BaseStackName}-${R}-*/*
+                              - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                            - !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:changeSet/vra-gate-*/*
+                      - !Ref AWS::NoValue
+                    # liveTest.credentialsSecret of this env: vra/<BaseStackName>/<name> (test-user, smoke-user, ...)
+                    - Sid: TestUserCredentials
+                      Effect: Allow
+                      Action:
+                          - secretsmanager:GetSecretValue
+                          - secretsmanager:DescribeSecret
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:secretsmanager:${R}:${AWS::AccountId}:secret:vra/${BaseStackName}/*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+
+    DataPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            ManagedPolicyName: !Sub vra-deploy-${EnvName}-backup-migrate
+            Roles: [!Ref DeployRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: TableBackupsAndMigrations
+                      Effect: Allow
+                      Action:
+                          - dynamodb:CreateBackup
+                          - dynamodb:DescribeTable
+                          - dynamodb:DescribeContinuousBackups
+                          - dynamodb:Scan
+                          - dynamodb:Query
+                          - dynamodb:GetItem
+                          - dynamodb:BatchGetItem
+                          - dynamodb:PutItem
+                          - dynamodb:UpdateItem
+                          - dynamodb:DeleteItem
+                          - dynamodb:BatchWriteItem
+                      Resource:
+                          - !Sub
+                            - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${R}*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - !Sub
+                            - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${R}*/index/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: BackupStatus
+                      Effect: Allow
+                      Action: dynamodb:DescribeBackup
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${R}*/backup/*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: AssetBucketsRead
+                      Effect: Allow
+                      Action:
+                          - s3:GetBucketVersioning
+                          - s3:GetBucketLocation
+                          - s3:GetEncryptionConfiguration
+                          - s3:ListBucket
+                          - s3:ListBucketVersions
+                          - s3:GetObject
+                          - s3:GetObjectTagging
+                      Resource:
+                          - !Sub
+                            - arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${R}*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - !Sub
+                            - arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${R}*/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - !If
+                      - HasAdditionalBuckets
+                      - Sid: RegisteredAssetBucketsRead
+                        Effect: Allow
+                        Action:
+                            - s3:GetBucketVersioning
+                            - s3:GetBucketLocation
+                            - s3:GetEncryptionConfiguration
+                            - s3:ListBucket
+                            - s3:ListBucketVersions
+                            - s3:GetObject
+                            - s3:GetObjectTagging
+                        Resource: !Split
+                            - ","
+                            - !Join [
+                                  "",
+                                  [
+                                      !Join [",", !Ref AdditionalBucketArns],
+                                      ",",
+                                      !Join ["/*,", !Ref AdditionalBucketArns],
+                                      "/*",
+                                  ],
+                              ]
+                      - !Ref AWS::NoValue
+                    - !If
+                      - HasAdditionalKeys
+                      - Sid: RegisteredBucketKeys
+                        Effect: Allow
+                        Action:
+                            - kms:Decrypt
+                            - kms:Encrypt
+                            - kms:GenerateDataKey
+                            - kms:DescribeKey
+                        Resource: !Ref AdditionalKmsKeyArns
+                        Condition:
+                            StringLike:
+                                kms:ViaService: s3.*
+                      - !Ref AWS::NoValue
+                    - Sid: WorkflowExecutionsRead
+                      Effect: Allow
+                      Action: states:DescribeExecution
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:states:${R}:${AWS::AccountId}:execution:*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - !If
+                      - WorkflowAbortEnabled
+                      - Sid: WorkflowExecutionsAbort
+                        Effect: Allow
+                        Action: states:StopExecution
+                        Resource: !Sub
+                            - arn:${AWS::Partition}:states:${R}:${AWS::AccountId}:execution:*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                      - !Ref AWS::NoValue
+                    - Sid: ReindexInvoke
+                      Effect: Allow
+                      Action:
+                          - lambda:InvokeFunction
+                          - lambda:GetFunction
+                      Resource: !Sub
+                          # generated Lambda names keep at most 25 characters of the core stack name
+                          # (vams-core-prodfr-us-east-1 -> vams-core-prodfr-us-east--crOsReindexer...), so the region
+                          # part may be cut; the ARN's region field still scopes it
+                          - arn:${AWS::Partition}:lambda:${R}:${AWS::AccountId}:function:${ConfigName}-core-${BaseStackName}-*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: DataKms
+                      Effect: Allow
+                      Action:
+                          - kms:Decrypt
+                          - kms:Encrypt
+                          - kms:GenerateDataKey
+                          - kms:DescribeKey
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:kms:${R}:${AWS::AccountId}:key/*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                      Condition:
+                          StringEquals:
+                              kms:CallerAccount: !Ref AWS::AccountId
+                          StringLike:
+                              kms:ViaService:
+                                  - dynamodb.*
+                                  - s3.*
+                    - !If
+                      - HasExternalTableKey
+                      - Sid: ExternalTableKey
+                        Effect: Allow
+                        Action:
+                            - kms:Decrypt
+                            - kms:Encrypt
+                            - kms:GenerateDataKey
+                            - kms:DescribeKey
+                            - kms:CreateGrant
+                        Resource: !Ref ExternalTableKmsKeyArn
+                        Condition:
+                            StringLike:
+                                kms:ViaService: dynamodb.*
+                      - !Ref AWS::NoValue
+                    - !If
+                      - CognitoExportEnabled
+                      - Sid: CognitoExport
+                        Effect: Allow
+                        Action:
+                            - cognito-idp:ListUsers
+                            - cognito-idp:ListGroups
+                            - cognito-idp:ListUsersInGroup
+                            - cognito-idp:DescribeUserPool
+                        Resource: !Sub
+                            - arn:${AWS::Partition}:cognito-idp:${R}:${AWS::AccountId}:userpool/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                      - !Ref AWS::NoValue
+
+    RestorePolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: RestoreEnabled
+        Properties:
+            ManagedPolicyName: !Sub vra-deploy-${EnvName}-restore
+            Roles: [!Ref DeployRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: RestoreFromBackupToTempTable
+                      Effect: Allow
+                      Action:
+                          - dynamodb:RestoreTableFromBackup
+                          - dynamodb:RestoreTableToPointInTime
+                      Resource:
+                          - !Sub
+                            - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${R}*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - !Sub
+                            - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${R}*/backup/*
+                            - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: TempTableLifecycle
+                      Effect: Allow
+                      Action:
+                          - dynamodb:RestoreTableFromBackup
+                          - dynamodb:RestoreTableToPointInTime
+                          - dynamodb:DescribeTable
+                          - dynamodb:Scan
+                          - dynamodb:DeleteTable
+                          - dynamodb:PutItem
+                          - dynamodb:UpdateItem
+                          - dynamodb:DeleteItem
+                          - dynamodb:GetItem
+                          - dynamodb:Query
+                          - dynamodb:BatchWriteItem
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:dynamodb:${R}:${AWS::AccountId}:table/vra-restore-${BaseStackName}-*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: TableKmsForRestore
+                      Effect: Allow
+                      Action:
+                          - kms:CreateGrant
+                          - kms:ReEncryptFrom
+                          - kms:ReEncryptTo
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:kms:${R}:${AWS::AccountId}:key/*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                      Condition:
+                          StringEquals:
+                              kms:CallerAccount: !Ref AWS::AccountId
+                          StringLike:
+                              kms:ViaService: dynamodb.*
+                    - Sid: MaintenanceModeSwitch
+                      Effect: Allow
+                      Action:
+                          - ssm:GetParameter
+                          - ssm:PutParameter
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/resourceNames/maintenanceMode*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - Sid: S3RollbackToRecordedVersions
+                      Effect: Allow
+                      Action:
+                          - s3:GetObjectVersion
+                          - s3:GetObjectVersionTagging
+                          - s3:PutObject
+                          - s3:PutObjectTagging
+                          - s3:DeleteObject
+                      Resource: !Sub
+                          - arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${R}*/*
+                          - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                    - !If
+                      - RestoreAdditionalBuckets
+                      - Sid: RegisteredAssetBucketsRollback
+                        Effect: Allow
+                        Action:
+                            - s3:GetObjectVersion
+                            - s3:GetObjectVersionTagging
+                            - s3:PutObject
+                            - s3:PutObjectTagging
+                            - s3:DeleteObject
+                        Resource: !Split
+                            - ","
+                            - !Join ["", [!Join ["/*,", !Ref AdditionalBucketArns], "/*"]]
+                      - !Ref AWS::NoValue
+
+    # `vra iam verify` (iam/actions/iam-verify.yaml): read the roles IT created for VAMS and simulate them.
+    # Read-only; IT may instead give readOnlyRoleArn a role that can read IAM.
+    IamVerifyPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: IamVerifyEnabled
+        Properties:
+            ManagedPolicyName: !Sub vra-deploy-${EnvName}-iam-verify
+            Roles: [!Ref DeployRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: IamVerifyReadRoles
+                      Effect: Allow
+                      Action:
+                          - iam:GetRole
+                          - iam:SimulatePrincipalPolicy
+                          # find grants broader than the package
+                          - iam:ListAttachedRolePolicies
+                          - iam:ListRolePolicies
+                          - iam:GetRolePolicy
+                      Resource: !If
+                          - HasIamVerifyRolePrefix
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${IamVerifyRolePrefix}*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*
+                    - Sid: IamVerifyReadBoundary
+                      Effect: Allow
+                      Action:
+                          - iam:GetPolicy
+                      Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/*
+
+    # Build-only identity: cdk synth runs fork + upstream code and its dependency tree, so it gets no
+    # deploy permissions at all, only the CDK lookup role for context lookups.
+    SynthRole:
+        Type: AWS::IAM::Role
+        Condition: SynthRoleWanted
+        Properties:
+            RoleName: !Sub vra-synth-${EnvName}
+            Path: !Ref RolePath
+            Description: !Sub vra build-only synth role for env ${EnvName} (CDK lookups only)
+            MaxSessionDuration: 7200
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref SynthTrustedPrincipalArns
+                      Action:
+                          - sts:AssumeRole
+                          - sts:SetSourceIdentity
+            Policies:
+                - PolicyName: cdk-lookup-only
+                  PolicyDocument:
+                      Version: "2012-10-17"
+                      Statement:
+                          - Sid: AssumeCdkLookupRole
+                            Effect: Allow
+                            Action:
+                                - sts:AssumeRole
+                                - sts:SetSourceIdentity
+                            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*-lookup-role-${AWS::AccountId}-*
+                          - Sid: CallerIdentity
+                            Effect: Allow
+                            Action: sts:GetCallerIdentity
+                            Resource: "*"
+            Tags:
+                - Key: vra:env
+                  Value: !Ref EnvName
+
+    # Live-test-only identity: `vra test` runs the fork's web/e2e dependency tree, so it gets read access to the
+    # env's endpoints and its test secret, nothing that changes the env.
+    TestRole:
+        Type: AWS::IAM::Role
+        Condition: TestRoleWanted
+        Properties:
+            RoleName: !Sub vra-test-${EnvName}
+            Path: !Ref RolePath
+            Description: !Sub vra live-test role for env ${EnvName} (read endpoints and the live-test secret only)
+            MaxSessionDuration: 7200
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TestTrustedPrincipalArns
+                      Action:
+                          - sts:AssumeRole
+                          - sts:TagSession
+                          - sts:SetSourceIdentity
+            Policies:
+                - PolicyName: live-test-read-only
+                  PolicyDocument:
+                      Version: "2012-10-17"
+                      Statement:
+                          - Sid: CallerIdentity
+                            Effect: Allow
+                            Action: sts:GetCallerIdentity
+                            Resource: "*"
+                          - Sid: StackOutputsRead
+                            Effect: Allow
+                            Action: cloudformation:DescribeStacks
+                            Resource: !Sub
+                                - arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${ConfigName}-*-${BaseStackName}-${R}/*
+                                - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - Sid: VamsResourceNamesRead
+                            Effect: Allow
+                            Action:
+                                - ssm:GetParameter
+                                - ssm:GetParametersByPath
+                            Resource:
+                                - !Sub
+                                  - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/resourceNames
+                                  - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                                - !Sub
+                                  - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/resourceNames/*
+                                  - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                                - !Sub
+                                  - arn:${AWS::Partition}:ssm:${R}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${R}/web/deployedUrl
+                                  - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+                          - Sid: TestUserCredentials
+                            Effect: Allow
+                            Action:
+                                - secretsmanager:GetSecretValue
+                                - secretsmanager:DescribeSecret
+                            Resource: !Sub
+                                - arn:${AWS::Partition}:secretsmanager:${R}:${AWS::AccountId}:secret:vra/${BaseStackName}/*
+                                - R: !If [HasVamsRegion, !Ref VamsRegion, !Ref AWS::Region]
+            Tags:
+                - Key: vra:env
+                  Value: !Ref EnvName
+                - Key: vra:role-kind
+                  Value: test
+
+Outputs:
+    DeployRoleArn:
+        Value: !GetAtt DeployRole.Arn
+        Description: envs/<env>/env.yaml deployRoleArn
+    SynthRoleArn:
+        Condition: SynthRoleWanted
+        Value: !GetAtt SynthRole.Arn
+        Description: envs/<env>/env.yaml synthRoleArn (build tier only)
+    TestRoleArn:
+        Condition: TestRoleWanted
+        Value: !GetAtt TestRole.Arn
+        Description: envs/<env>/env.yaml testRoleArn (test tier only)

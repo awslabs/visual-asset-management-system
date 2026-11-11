@@ -1,0 +1,10 @@
+{
+    "connectSrc": ["https://telemetry.example.com"],
+    "scriptSrc": [],
+    "workerSrc": [],
+    "imgSrc": ["https://cdn.example.com"],
+    "mediaSrc": [],
+    "fontSrc": [],
+    "styleSrc": [],
+    "frameSrc": []
+}

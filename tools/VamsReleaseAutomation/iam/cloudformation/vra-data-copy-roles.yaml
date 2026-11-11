@@ -1,0 +1,719 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+    vams-release-automation (vra) cross-account data copy (prod -> test).
+    Deploy TWICE: Side=target in the target account FIRST (creates the loader role), then Side=source
+    in the source account (creates the export role, the staging CMK and the TLS-only, SSE-KMS,
+    versioned staging bucket whose bucket and key policies grant the target loader role read).
+    KMS and S3 reject policies that name a role that does not exist yet, hence the order.
+    Policies mirror iam/actions/data-copy-source.yaml and data-copy-target.yaml. Partition-generic.
+
+Parameters:
+    Side:
+        Type: String
+        AllowedValues: [source, target]
+    EnvName:
+        Type: String
+        Description: Ledger env name of THIS side (e.g. prod for source, test for target).
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,40}$"
+    ConfigName:
+        Type: String
+        Default: vams
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,29}$"
+    BaseStackName:
+        Type: String
+        Description: >-
+            VAMS app.baseStackName of THIS side's env (raw value; VAMS appends -<region>). Lowercase only (generated
+            bucket names are lowercase; IAM ARN matching is case-sensitive).
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,39}$"
+    TrustedPrincipalArns:
+        Type: CommaDelimitedList
+        Description: Tools-account / CI principals allowed to assume this side's role.
+    ExternalId:
+        Type: String
+        Default: ""
+        NoEcho: true
+    PermissionsBoundaryArn:
+        Type: String
+        Default: ""
+    PeerAccountId:
+        Type: String
+        Description: >-
+            Side=source: the TARGET account id (111111111111-style). Side=target: the SOURCE account id.
+            May equal this account for a single-account install.
+        AllowedPattern: "^[0-9]{12}$"
+    PeerEnvName:
+        Type: String
+        Description: Ledger env name of the other side (role names derive from it).
+        AllowedPattern: "^[a-z0-9][a-z0-9-]{0,40}$"
+    StagingRetentionDays:
+        Type: Number
+        Default: 7
+        MinValue: 1
+        Description: Staging objects (table exports, staged assets) expire after this many days; noncurrent versions after 1 more day.
+    AccessLogBucketName:
+        Type: String
+        Default: ""
+        Description: Optional S3 server access log bucket for the staging bucket (Side=source).
+    TrustPeerLoaderRole:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Role chaining for orchestrators that may only reach the target side (ledger dataCopy.chainSourceRole).
+            Side=source: the export role also trusts the peer's vra-data-copy-target-<PeerEnvName>. Side=target:
+            the loader role may assume the peer's vra-data-copy-source-<PeerEnvName>. Set it on both sides.
+
+    EnableWorkflowAbort:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Side=target: grant states:StopExecution so `vra data-copy --abort-workflow-executions` can stop running
+            VAMS workflow executions in the target env. Listing them is always granted.
+    AdditionalBucketArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Asset buckets registered in VAMS (s3AssetBucketsStorage) that are NOT named after this env's core stack:
+            customer-named buckets, buckets in other accounts. Bucket ARNs (arn:<partition>:s3:::<name>), copied from the
+            vra IT request. Side=source: read them and their objects; Side=target: write their objects. A bucket in
+            another account also needs its bucket policy to allow this role. Record the same ARNs in
+            envs/<env>/env.yaml registeredBuckets.bucketArns.
+    AdditionalKmsKeyArns:
+        Type: CommaDelimitedList
+        Default: ""
+        Description: >-
+            Default-encryption KMS keys of those buckets (key ARNs from the vra IT request). A key in another account
+            also needs its key policy to allow this role. Record them in registeredBuckets.kmsKeyArns.
+    ExternalTableKmsKeyArn:
+        Type: String
+        Default: ""
+        Description: >-
+            VAMS app.useKmsCmkEncryption.optionalExternalCmkArn of THIS side's env, when its tables use a key VAMS did
+            not create. Side=source: export / scan the tables; Side=target: load them. DynamoDB use only.
+
+Conditions:
+    HasExternalTableKey: !Not [!Equals [!Ref ExternalTableKmsKeyArn, ""]]
+    HasAdditionalBuckets: !Not [!Equals [!Join ["", !Ref AdditionalBucketArns], ""]]
+    HasAdditionalKeys: !Not [!Equals [!Join ["", !Ref AdditionalKmsKeyArns], ""]]
+    SourceAdditionalBuckets: !And [!Condition IsSource, !Condition HasAdditionalBuckets]
+    TargetAdditionalBuckets: !And [!Condition IsTarget, !Condition HasAdditionalBuckets]
+    IsSource: !Equals [!Ref Side, source]
+    WorkflowAbortEnabled: !Equals [!Ref EnableWorkflowAbort, "true"]
+    TargetMayAbort: !And [!Condition IsTarget, !Condition WorkflowAbortEnabled]
+    IsTarget: !Equals [!Ref Side, target]
+    HasExternalId: !Not [!Equals [!Ref ExternalId, ""]]
+    HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+    HasAccessLogs: !Not [!Equals [!Ref AccessLogBucketName, ""]]
+    SourceWithAccessLogs: !And [!Condition IsSource, !Condition HasAccessLogs]
+    TrustPeer: !Equals [!Ref TrustPeerLoaderRole, "true"]
+    SourceTrustsPeer: !And [!Condition IsSource, !Condition TrustPeer]
+    TargetChainsToPeer: !And [!Condition IsTarget, !Condition TrustPeer]
+
+Resources:
+    # ---------------------------------------------------------------- shared
+    CopyRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: !Sub vra-data-copy-${Side}-${EnvName}
+            MaxSessionDuration: 43200
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action: sts:AssumeRole
+                      Condition: !If
+                          - HasExternalId
+                          - StringEquals:
+                                sts:ExternalId: !Ref ExternalId
+                          - !Ref AWS::NoValue
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action: sts:TagSession
+                    # vra sets sts:SourceIdentity (the run initiator) on sessions of gated envs (ledger setSourceIdentity)
+                    - Effect: Allow
+                      Principal:
+                          AWS: !Ref TrustedPrincipalArns
+                      Action: sts:SetSourceIdentity
+                    - !If
+                      - SourceTrustsPeer
+                      - Effect: Allow
+                        Principal:
+                            AWS: !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-target-${PeerEnvName}
+                        Action:
+                            - sts:AssumeRole
+                            - sts:TagSession
+                            - sts:SetSourceIdentity
+                      - !Ref AWS::NoValue
+            Tags:
+                - Key: vra:env
+                  Value: !Ref EnvName
+                - Key: vra:data-copy-side
+                  Value: !Ref Side
+
+    BatchOperationsRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: !Sub vra-data-copy-batch-${EnvName}
+            PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: batchoperations.s3.amazonaws.com
+                      Action: sts:AssumeRole
+                      Condition:
+                          StringEquals:
+                              aws:SourceAccount: !Ref AWS::AccountId
+            Policies:
+                - PolicyName: copy
+                  PolicyDocument:
+                      Version: "2012-10-17"
+                      Statement:
+                          - Sid: ReadSource
+                            Effect: Allow
+                            Action:
+                                - s3:GetObject
+                                - s3:GetObjectVersion
+                                - s3:GetObjectTagging
+                                - s3:GetObjectVersionTagging
+                                - s3:ListBucket
+                            Resource: !If
+                                - IsSource
+                                - - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                                  - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*/*
+                                - - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${PeerAccountId}-${AWS::Region}
+                                  - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${PeerAccountId}-${AWS::Region}/*
+                          - Sid: WriteDestination
+                            Effect: Allow
+                            Action:
+                                - s3:PutObject
+                                - s3:PutObjectTagging
+                            Resource: !If
+                                - IsSource
+                                - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${AWS::AccountId}-${AWS::Region}/*
+                                - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*/*
+                          - Sid: ManifestAndReport
+                            Effect: Allow
+                            Action:
+                                - s3:GetObject
+                                - s3:GetObjectVersion
+                                - s3:PutObject
+                            Resource: !If
+                                - IsSource
+                                - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${AWS::AccountId}-${AWS::Region}/batch/*
+                                - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${PeerAccountId}-${AWS::Region}/batch/*
+                          - Sid: Kms
+                            Effect: Allow
+                            Action:
+                                - kms:Decrypt
+                                - kms:Encrypt
+                                - kms:GenerateDataKey
+                                - kms:DescribeKey
+                            Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:*:key/*
+                            Condition:
+                                StringLike:
+                                    kms:ViaService: s3.*
+                          - !If
+                            - HasAdditionalBuckets
+                            - Sid: RegisteredAssetBuckets
+                              Effect: Allow
+                              Action: !If
+                                  - IsSource
+                                  - - s3:GetObject
+                                    - s3:GetObjectVersion
+                                    - s3:GetObjectTagging
+                                    - s3:GetObjectVersionTagging
+                                    - s3:ListBucket
+                                  - - s3:PutObject
+                                    - s3:PutObjectTagging
+                              Resource: !Split
+                                  - ","
+                                  - !Join [
+                                        "",
+                                        [
+                                            !Join [",", !Ref AdditionalBucketArns],
+                                            ",",
+                                            !Join ["/*,", !Ref AdditionalBucketArns],
+                                            "/*",
+                                        ],
+                                    ]
+                            - !Ref AWS::NoValue
+                          - !If
+                            - HasAdditionalKeys
+                            - Sid: RegisteredBucketKeys
+                              Effect: Allow
+                              Action:
+                                  - kms:Decrypt
+                                  - kms:Encrypt
+                                  - kms:GenerateDataKey
+                                  - kms:DescribeKey
+                              Resource: !Ref AdditionalKmsKeyArns
+                              Condition:
+                                  StringLike:
+                                      kms:ViaService: s3.*
+                            - !Ref AWS::NoValue
+
+    CommonPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            ManagedPolicyName: !Sub vra-data-copy-${Side}-${EnvName}-common
+            Roles: [!Ref CopyRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: NotResourceScoped
+                      Effect: Allow
+                      Action:
+                          - sts:GetCallerIdentity
+                          - dynamodb:ListExports
+                          - s3:CreateJob
+                          - s3:ListJobs
+                      Resource: "*"
+                    - Sid: BatchJobControl
+                      Effect: Allow
+                      Action:
+                          - s3:DescribeJob
+                          - s3:UpdateJobStatus
+                      Resource: !Sub arn:${AWS::Partition}:s3:${AWS::Region}:${AWS::AccountId}:job/*
+                    - Sid: BatchOperationsPassRole
+                      Effect: Allow
+                      Action: iam:PassRole
+                      Resource: !GetAtt BatchOperationsRole.Arn
+                      Condition:
+                          StringEquals:
+                              iam:PassedToService: batchoperations.s3.amazonaws.com
+                    - Sid: VamsResourceNamesRead
+                      Effect: Allow
+                      Action:
+                          - ssm:GetParameter
+                          - ssm:GetParameters
+                          - ssm:GetParametersByPath
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${AWS::Region}/resourceNames
+                          - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${AWS::Region}/resourceNames/*
+                    - Sid: VamsDataKms
+                      Effect: Allow
+                      Action:
+                          - kms:Decrypt
+                          - kms:Encrypt
+                          - kms:GenerateDataKey
+                          - kms:DescribeKey
+                      Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                      Condition:
+                          StringEquals:
+                              kms:CallerAccount: !Ref AWS::AccountId
+                          StringLike:
+                              kms:ViaService:
+                                  - dynamodb.*
+                                  - s3.*
+
+    # Tables encrypted with a key VAMS did not create (app.useKmsCmkEncryption.optionalExternalCmkArn).
+    ExternalTableKeyPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: HasExternalTableKey
+        Properties:
+            ManagedPolicyName: !Sub vra-data-copy-${Side}-${EnvName}-table-key
+            Roles: [!Ref CopyRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: ExternalTableKey
+                      Effect: Allow
+                      Action:
+                          - kms:Decrypt
+                          - kms:Encrypt
+                          - kms:GenerateDataKey
+                          - kms:DescribeKey
+                      Resource: !Ref ExternalTableKmsKeyArn
+                      Condition:
+                          StringLike:
+                              kms:ViaService: dynamodb.*
+
+    # ---------------------------------------------------------------- source side
+    StagingKey:
+        Type: AWS::KMS::Key
+        Condition: IsSource
+        Properties:
+            Description: vra data-copy staging (DynamoDB exports and staged assets)
+            EnableKeyRotation: true
+            PendingWindowInDays: 7
+            KeyPolicy:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: AccountRootDelegatesToIam
+                      Effect: Allow
+                      Principal:
+                          AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+                      Action: kms:*
+                      Resource: "*"
+                    - Sid: TargetLoaderDecrypt
+                      Effect: Allow
+                      Principal:
+                          AWS:
+                              - !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-target-${PeerEnvName}
+                              - !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-batch-${PeerEnvName}
+                      Action:
+                          - kms:Decrypt
+                          - kms:DescribeKey
+                      Resource: "*"
+                      Condition:
+                          StringLike:
+                              kms:ViaService: s3.*
+                    - Sid: TargetLoaderGrant
+                      Effect: Allow
+                      Principal:
+                          AWS: !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-target-${PeerEnvName}
+                      Action: kms:CreateGrant
+                      Resource: "*"
+                      Condition:
+                          Bool:
+                              kms:GrantIsForAWSResource: "true"
+
+    StagingKeyAlias:
+        Type: AWS::KMS::Alias
+        Condition: IsSource
+        Properties:
+            AliasName: alias/vra-data-copy
+            TargetKeyId: !Ref StagingKey
+
+    StagingBucket:
+        Type: AWS::S3::Bucket
+        Condition: IsSource
+        DeletionPolicy: Retain
+        UpdateReplacePolicy: Retain
+        Properties:
+            BucketName: !Sub vra-data-copy-${AWS::AccountId}-${AWS::Region}
+            VersioningConfiguration:
+                Status: Enabled
+            BucketEncryption:
+                ServerSideEncryptionConfiguration:
+                    - ServerSideEncryptionByDefault:
+                          SSEAlgorithm: aws:kms
+                          KMSMasterKeyID: !GetAtt StagingKey.Arn
+                      BucketKeyEnabled: true
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: true
+                BlockPublicPolicy: true
+                IgnorePublicAcls: true
+                RestrictPublicBuckets: true
+            OwnershipControls:
+                Rules:
+                    - ObjectOwnership: BucketOwnerEnforced
+            LifecycleConfiguration:
+                Rules:
+                    - Id: ExpireStagedData
+                      Status: Enabled
+                      ExpirationInDays: !Ref StagingRetentionDays
+                      NoncurrentVersionExpiration:
+                          NoncurrentDays: 1
+                      AbortIncompleteMultipartUpload:
+                          DaysAfterInitiation: 1
+                    - Id: RemoveExpiredDeleteMarkers
+                      Status: Enabled
+                      ExpiredObjectDeleteMarker: true
+            LoggingConfiguration: !If
+                - SourceWithAccessLogs
+                - DestinationBucketName: !Ref AccessLogBucketName
+                  LogFilePrefix: vra-data-copy/
+                - !Ref AWS::NoValue
+
+    StagingBucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Condition: IsSource
+        Properties:
+            Bucket: !Ref StagingBucket
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: DenyInsecureTransport
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:*
+                      Resource:
+                          - !GetAtt StagingBucket.Arn
+                          - !Sub ${StagingBucket.Arn}/*
+                      Condition:
+                          Bool:
+                              aws:SecureTransport: "false"
+                    - Sid: DenyOldTls
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:*
+                      Resource:
+                          - !GetAtt StagingBucket.Arn
+                          - !Sub ${StagingBucket.Arn}/*
+                      Condition:
+                          NumericLessThan:
+                              s3:TlsVersion: 1.2
+                    - Sid: DenyUnencryptedOrWrongKey
+                      Effect: Deny
+                      Principal: "*"
+                      Action: s3:PutObject
+                      Resource: !Sub ${StagingBucket.Arn}/*
+                      Condition:
+                          StringNotEqualsIfExists:
+                              s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt StagingKey.Arn
+                    - Sid: TargetLoaderRead
+                      Effect: Allow
+                      Principal:
+                          AWS:
+                              - !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-target-${PeerEnvName}
+                              - !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-batch-${PeerEnvName}
+                      Action:
+                          - s3:GetObject
+                          - s3:GetObjectVersion
+                          - s3:GetObjectTagging
+                          - s3:ListBucket
+                          - s3:GetBucketLocation
+                      Resource:
+                          - !GetAtt StagingBucket.Arn
+                          - !Sub ${StagingBucket.Arn}/*
+                    - Sid: TargetBatchReport
+                      Effect: Allow
+                      Principal:
+                          AWS: !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-batch-${PeerEnvName}
+                      Action: s3:PutObject
+                      Resource: !Sub ${StagingBucket.Arn}/batch/*
+
+    SourcePolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: IsSource
+        Properties:
+            ManagedPolicyName: !Sub vra-data-copy-source-${EnvName}-export
+            Roles: [!Ref CopyRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: TableExport
+                      Effect: Allow
+                      Action:
+                          - dynamodb:DescribeTable
+                          - dynamodb:DescribeContinuousBackups
+                          - dynamodb:ExportTableToPointInTime
+                          # --method scan: the SOURCE role reads the source tables (never the target role)
+                          - dynamodb:Scan
+                      Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                    - Sid: TableExportStatus
+                      Effect: Allow
+                      Action: dynamodb:DescribeExport
+                      Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${AWS::Region}*/export/*
+                    - Sid: SourceAssetsRead
+                      Effect: Allow
+                      Action:
+                          - s3:ListBucket
+                          - s3:GetBucketLocation
+                          - s3:GetEncryptionConfiguration
+                          - s3:GetObject
+                          - s3:GetObjectVersion
+                          - s3:GetObjectTagging
+                          - s3:GetObjectVersionTagging
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                          - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*/*
+                    - !If
+                      - SourceAdditionalBuckets
+                      - Sid: RegisteredSourceAssetsRead
+                        Effect: Allow
+                        Action:
+                            - s3:ListBucket
+                            - s3:GetBucketLocation
+                            - s3:GetEncryptionConfiguration
+                            - s3:GetObject
+                            - s3:GetObjectVersion
+                            - s3:GetObjectTagging
+                            - s3:GetObjectVersionTagging
+                        Resource: !Split
+                            - ","
+                            - !Join [
+                                  "",
+                                  [
+                                      !Join [",", !Ref AdditionalBucketArns],
+                                      ",",
+                                      !Join ["/*,", !Ref AdditionalBucketArns],
+                                      "/*",
+                                  ],
+                              ]
+                      - !Ref AWS::NoValue
+                    - !If
+                      - HasAdditionalKeys
+                      - Sid: RegisteredSourceKeys
+                        Effect: Allow
+                        Action:
+                            - kms:Decrypt
+                            - kms:DescribeKey
+                        Resource: !Ref AdditionalKmsKeyArns
+                        Condition:
+                            StringLike:
+                                kms:ViaService: s3.*
+                      - !Ref AWS::NoValue
+                    - Sid: StagingWrite
+                      Effect: Allow
+                      Action:
+                          - s3:ListBucket
+                          - s3:GetBucketLocation
+                          - s3:GetObject
+                          - s3:PutObject
+                          - s3:PutObjectTagging
+                          - s3:AbortMultipartUpload
+                          - s3:ListMultipartUploadParts
+                      Resource:
+                          - !GetAtt StagingBucket.Arn
+                          - !Sub ${StagingBucket.Arn}/*
+                    - Sid: StagingKms
+                      Effect: Allow
+                      Action:
+                          - kms:GenerateDataKey
+                          - kms:Encrypt
+                          - kms:Decrypt
+                          - kms:DescribeKey
+                      Resource: !GetAtt StagingKey.Arn
+
+    # ---------------------------------------------------------------- target side
+    TargetPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: IsTarget
+        Properties:
+            ManagedPolicyName: !Sub vra-data-copy-target-${EnvName}-load
+            Roles: [!Ref CopyRole]
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: StagingRead
+                      Effect: Allow
+                      Action:
+                          - s3:ListBucket
+                          - s3:GetBucketLocation
+                          - s3:GetObject
+                          - s3:GetObjectVersion
+                          - s3:GetObjectTagging
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${PeerAccountId}-${AWS::Region}
+                          - !Sub arn:${AWS::Partition}:s3:::vra-data-copy-${PeerAccountId}-${AWS::Region}/*
+                    - Sid: StagingKmsDecrypt
+                      Effect: Allow
+                      Action:
+                          - kms:Decrypt
+                          - kms:DescribeKey
+                          - kms:CreateGrant
+                      Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${PeerAccountId}:key/*
+                      Condition:
+                          StringLike:
+                              kms:ViaService: s3.*
+                    - Sid: TargetTablesLoad
+                      Effect: Allow
+                      Action:
+                          - dynamodb:DescribeTable
+                          - dynamodb:Scan
+                          - dynamodb:BatchWriteItem
+                          - dynamodb:DeleteItem
+                          - dynamodb:PutItem
+                      Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                    - Sid: TargetAssetsWrite
+                      Effect: Allow
+                      Action:
+                          - s3:ListBucket
+                          - s3:GetBucketLocation
+                          - s3:GetEncryptionConfiguration
+                          - s3:PutObject
+                          - s3:PutObjectTagging
+                          - s3:DeleteObject
+                          - s3:AbortMultipartUpload
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                          - !Sub arn:${AWS::Partition}:s3:::${ConfigName}-core-${BaseStackName}-${AWS::Region}*/*
+                    - !If
+                      - TargetAdditionalBuckets
+                      - Sid: RegisteredTargetAssetsWrite
+                        Effect: Allow
+                        Action:
+                            - s3:ListBucket
+                            - s3:GetBucketLocation
+                            - s3:GetEncryptionConfiguration
+                            - s3:PutObject
+                            - s3:PutObjectTagging
+                            - s3:DeleteObject
+                            - s3:AbortMultipartUpload
+                        Resource: !Split
+                            - ","
+                            - !Join [
+                                  "",
+                                  [
+                                      !Join [",", !Ref AdditionalBucketArns],
+                                      ",",
+                                      !Join ["/*,", !Ref AdditionalBucketArns],
+                                      "/*",
+                                  ],
+                              ]
+                      - !Ref AWS::NoValue
+                    - !If
+                      - HasAdditionalKeys
+                      - Sid: RegisteredTargetKeys
+                        Effect: Allow
+                        Action:
+                            - kms:Decrypt
+                            - kms:Encrypt
+                            - kms:GenerateDataKey
+                            - kms:DescribeKey
+                        Resource: !Ref AdditionalKmsKeyArns
+                        Condition:
+                            StringLike:
+                                kms:ViaService: s3.*
+                      - !Ref AWS::NoValue
+                    - Sid: ReindexInvoke
+                      Effect: Allow
+                      Action:
+                          - lambda:InvokeFunction
+                          - lambda:GetFunction
+                      # generated Lambda names keep at most 25 characters of the core stack name, so the
+                      # region part may be cut; the ARN's region field still scopes it
+                      Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ConfigName}-core-${BaseStackName}-*
+                    - Sid: WorkflowExecutionsRead
+                      Effect: Allow
+                      Action:
+                          - dynamodb:Scan
+                          - states:DescribeExecution
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ConfigName}-core-${BaseStackName}-${AWS::Region}*
+                          - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:*
+                    - !If
+                      - TargetMayAbort
+                      - Sid: WorkflowExecutionsAbort
+                        Effect: Allow
+                        Action: states:StopExecution
+                        Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:*
+                      - !Ref AWS::NoValue
+                    - Sid: MaintenanceModeSwitch
+                      Effect: Allow
+                      Action:
+                          - ssm:GetParameter
+                          - ssm:PutParameter
+                      Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ConfigName}-${BaseStackName}-${AWS::Region}/resourceNames/maintenanceMode*
+                    - !If
+                      - TargetChainsToPeer
+                      - Sid: ChainToSourceExportRole
+                        Effect: Allow
+                        Action:
+                            - sts:AssumeRole
+                            - sts:TagSession
+                            - sts:SetSourceIdentity
+                        Resource: !Sub arn:${AWS::Partition}:iam::${PeerAccountId}:role/vra-data-copy-source-${PeerEnvName}
+                      - !Ref AWS::NoValue
+
+Outputs:
+    CopyRoleArn:
+        Value: !GetAtt CopyRole.Arn
+        Description: Role vra assumes for this side of `vra data-copy`
+    BatchOperationsRoleArn:
+        Value: !GetAtt BatchOperationsRole.Arn
+    StagingBucketName:
+        Condition: IsSource
+        Value: !Ref StagingBucket
+    StagingKeyArn:
+        Condition: IsSource
+        Value: !GetAtt StagingKey.Arn

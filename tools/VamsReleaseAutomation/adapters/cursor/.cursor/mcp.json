@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+        "vra": {
+            "type": "stdio",
+            "command": "vra",
+            "args": ["mcp"],
+            "env": {
+                "VRA_AGENT": "1",
+                "VRA_MCP_ENABLE_WRITES": "true",
+                "VRA_MCP_ENABLE_GATED": "${env:VRA_MCP_ENABLE_GATED}"
+            }
+        }
+    }
+}

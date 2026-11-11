@@ -1,0 +1,36 @@
+{
+    "prefix": "vra",
+    "toolsAccount": "111111111111",
+    "region": "us-east-1",
+    "automationMode": "pipeline",
+    "ledgerGraph": "ledger-graph.json",
+    "sources": {
+        "fork": {
+            "type": "codeconnections",
+            "provider": "GitHub",
+            "repo": "example-user/visual-asset-management-system",
+            "branch": "test/fork-main"
+        },
+        "vra": {
+            "type": "s3",
+            "objectKey": "vra/vams-release-automation.zip"
+        }
+    },
+    "home": {
+        "repoUrl": "https://github.com/example-user/vams-release-home.git",
+        "ref": "main",
+        "tokenSecretName": "vra/github-home-token"
+    },
+    "release": {
+        "testSuites": "live-cli,live-web"
+    },
+    "watch": {
+        "enabled": true,
+        "schedule": "cron(0 6 * * ? *)",
+        "timeZone": "UTC",
+        "gitTokenSecretName": "vra/github-token"
+    },
+    "notifications": {
+        "topicArn": "arn:aws:sns:us-east-1:111111111111:vra-notifications"
+    }
+}

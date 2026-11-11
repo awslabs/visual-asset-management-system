@@ -1,0 +1,59 @@
+{
+    "about": "Every third-party action the vra workflows use, pinned to a full commit SHA (resolved from the release tag on 2026-11-04). pins.py check refuses any other ref; pins.py ghes rewrites the entries with a ghes pin for GitHub Enterprise Server.",
+    "actions": {
+        "actions/checkout": { "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1", "tag": "v7.0.1" },
+        "actions/setup-node": {
+            "sha": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+            "tag": "v7.1.0"
+        },
+        "actions/setup-python": {
+            "sha": "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "tag": "v7.1.0"
+        },
+        "actions/upload-artifact": {
+            "sha": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "tag": "v7.0.2",
+            "ghes": { "sha": "c6a366c94c3e0affe28c06c8df20a878f24da3cf", "tag": "v3.2.2" }
+        },
+        "actions/download-artifact": {
+            "sha": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "tag": "v8.0.2",
+            "ghes": { "sha": "a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59", "tag": "v3.1.0" }
+        },
+        "aws-actions/configure-aws-credentials": {
+            "sha": "e1253824e5c10ff9df46874f81ed3ec929e19cfd",
+            "tag": "v6.3.0"
+        },
+        "astral-sh/setup-uv": {
+            "sha": "68559e99cc807c1eb7e9238fd43a15bba460eec2",
+            "tag": "v10.3.3"
+        },
+        "github/codeql-action": {
+            "sha": "1fc58d04a4d4374f921bdac573c3811c240f9c26",
+            "tag": "v4.39.2"
+        },
+        "actions/dependency-review-action": {
+            "sha": "a1d282b36b6f3519aa1f3fc636f609c47dddb294",
+            "tag": "v5.0.0"
+        },
+        "anchore/sbom-action": {
+            "sha": "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
+            "tag": "v0.24.3"
+        },
+        "stelligent/cfn_nag": { "sha": "8b5f03da74202ba323a145e9d037ddce6cab9dec", "tag": "commit" }
+    },
+    "tools": {
+        "aws-samples/automated-security-helper": {
+            "sha": "af1206aff596f1288ad066828058b3011de2a998",
+            "tag": "v3.7.1"
+        },
+        "trivy": {
+            "version": "0.69.3",
+            "sha256": "1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75"
+        },
+        "gitleaks": {
+            "version": "8.30.1",
+            "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        }
+    }
+}

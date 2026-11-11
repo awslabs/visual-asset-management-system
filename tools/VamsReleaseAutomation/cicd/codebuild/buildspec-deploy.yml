@@ -1,0 +1,103 @@
+# vra: deploy stage for one env. A root env (no promotesFrom) uses `vra deploy`; an env with promotesFrom
+# uses `vra promote`. An approval record is written only when the ledger says the env requires approval
+# (envs/<env>/env.yaml requiresApproval), from the CodePipeline manual approval of this execution; an
+# ungated env (promoted or not) gets none.
+# Inputs (CodePipeline): primary = BuildOutput (from buildspec-build.yml), secondary = Vra. The home
+#   repository is cloned by vra-home.sh (VRA_HOME_REPO, VRA_HOME_REF, VRA_HOME_TOKEN).
+# Environment:
+#   VRA_ENV               target env (required)
+#   VRA_PROMOTE_FROM      source env for a promotion (empty = plain deploy)
+#   VRA_DEPLOY_MODE       in-place | ab (empty = env.yaml default)
+#   VRA_PIPELINE_NAME, VRA_PIPELINE_EXECUTION_ID   every action (#{codepipeline.PipelineExecutionId}):
+#                         vra binds the approval to this execution and takes the run initiator from the
+#                         execution's trigger (vra.identity)
+#   VRA_APPROVAL_STAGE, VRA_APPROVAL_ACTION   set for approval-gated envs
+#   VRA_LOCK_WAIT_MINUTES wait up to this long for the env lock (an operator or another host holds it) before
+#                         stopping with exit 20 (vra --lock-wait; default 30)
+# Whether the env is gated comes from `vra ledger graph` (ci_graph.py requires-approval); --approval is passed
+# only then. The job environment never sets a VAMS config variable (run-vra.sh refuses them).
+# Project: privileged mode ON (CDK publishes docker image assets from cdk.out). One project per env,
+# running as that env's own CodeBuild role (the only role that may assume vra-deploy-<env>), at most one
+# build at a time (concurrent build limit 1).
+# The engine enforces every gate (approver list, separation of duties, promotesFrom, change window,
+# approval bound to this execution); this buildspec only supplies the inputs.
+version: 0.2
+
+env:
+    shell: bash
+    variables:
+        VRA_ENV: ""
+        VRA_PROMOTE_FROM: ""
+        VRA_DEPLOY_MODE: ""
+        VRA_LOCK_WAIT_MINUTES: "30"
+        VRA_REQUIRE_DOCKER: "true"
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 22
+            python: 3.12
+        commands:
+            - export VRA_PKG_DIR="${CODEBUILD_SRC_DIR_Vra:?secondary source Vra missing}"
+            - export VRA_HOME="${CODEBUILD_SRC_DIR}/vra-home"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/install-toolchain.sh"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" checkout
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-pull
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" bundle-in vra-bundle
+    pre_build:
+        commands:
+            - test -n "${VRA_ENV}" || { echo "VRA_ENV is required"; exit 2; }
+            - export VRA_BUILD_ID="${VRA_BUILD_ID:-$(python3 -c 'import json;print(json.load(open("vra-out/build.json"))["buildId"])')}"
+            - echo "env ${VRA_ENV} build ${VRA_BUILD_ID}"
+            - |
+                needs_approval="$(bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-py.sh" ci_graph.py requires-approval \
+                  --ledger "${VRA_HOME}/ledger" --env "${VRA_ENV}")"
+                if [ "${needs_approval}" = "true" ] && [ -z "${VRA_APPROVAL_ACTION:-}" ]; then
+                  echo "envs/${VRA_ENV}/env.yaml requires approval but this pipeline has no approval before it:" \
+                    "redeploy the pipeline stack (its topology comes from the ledger)"
+                  exit 20
+                fi
+                APPROVAL_ARGS=()
+                if [ "${needs_approval}" = "true" ]; then
+                  scope=promote
+                  [ -z "${VRA_PROMOTE_FROM}" ] && scope=deploy
+                  bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/record-approval.sh" \
+                    "${VRA_ENV}" "${VRA_BUILD_ID}" "vra-out/approval-${VRA_ENV}.yaml" "${scope}"
+                  APPROVAL_ARGS=(--approval "vra-out/approval-${VRA_ENV}.yaml")
+                fi
+                printf '%s\n' "${APPROVAL_ARGS[@]}" > vra-out/approval-args.txt
+    build:
+        commands:
+            - |
+                mapfile -t APPROVAL_ARGS < <(grep -v '^$' vra-out/approval-args.txt)
+                MODE_ARGS=()
+                [ -n "${VRA_DEPLOY_MODE}" ] && MODE_ARGS=(--mode "${VRA_DEPLOY_MODE}")
+                if [ -n "${VRA_PROMOTE_FROM}" ]; then
+                  bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "promote-${VRA_ENV}" \
+                    promote --from "${VRA_PROMOTE_FROM}" --to "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${APPROVAL_ARGS[@]}" \
+                    --lock-wait "${VRA_LOCK_WAIT_MINUTES}"
+                else
+                  bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "deploy-${VRA_ENV}" \
+                    deploy --env "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${APPROVAL_ARGS[@]}" "${MODE_ARGS[@]}" \
+                    --lock-wait "${VRA_LOCK_WAIT_MINUTES}"
+                fi
+    post_build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "report-${VRA_ENV}" report --notify || true
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-push
+
+reports:
+    vra-deploy:
+        files:
+            - "**/*.xml"
+        base-directory: vra-home/state/runs
+        file-format: JUNITXML
+        discard-paths: no
+
+artifacts:
+    name: vra-deploy
+    files:
+        - vra-out/**/*
+        - vra-home/state/iam/**/*
+        - vra-home/state/runs/**/*
+    discard-paths: no

@@ -1,0 +1,528 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+    vams-release-automation (vra) scoped CloudFormation execution policy for CDK bootstrap, used
+    INSTEAD of AdministratorAccess:
+      cdk bootstrap --cloudformation-execution-policies arn:<partition>:iam::<account>:policy/vra-cdk-execution
+    Allows the service surface VAMS (infra/lib) deploys, restricted to the allowed regions, and closes the
+    escalation paths a synthesized template could otherwise use: roles can be created, changed, deleted and
+    passed only when their names are VAMS's own (CoreRoleNameStem, ConfigName, RoleNamePrefix), never the
+    cdk-* / vra-* roles;
+    every role CloudFormation creates must carry a permissions boundary (created here by default); the
+    execution policy and the vra/cdk policies cannot be rewritten; iam:PassRole also names the services VAMS
+    passes roles to; AWS-managed admin policies cannot be attached; and CloudTrail trails / KMS keys that VAMS
+    does not own cannot be stopped, deleted or re-keyed. Deploy this stack in each env account BEFORE
+    `cdk bootstrap` with the parameter values `vra iam plan` gives; set the env's permissionsBoundaryName in the vra ledger so `vra build` applies the boundary at synth.
+    See iam/cdk-bootstrap.md. Partition-generic.
+
+Parameters:
+    PolicyName:
+        Type: String
+        Default: vra-cdk-execution
+    AllowedRegions:
+        Type: CommaDelimitedList
+        Description: >-
+            Regions VAMS may create resources in. Commercial CloudFront deployments also need us-east-1
+            (the CloudFront WAF stack). GovCloud example: us-gov-west-1. aws:RequestedRegion is not
+            evaluated for global services (IAM, CloudFront, Route 53) which are allowed separately.
+    ConfigName:
+        Type: String
+        Default: vams
+        AllowedPattern: "^[A-Za-z][A-Za-z0-9-]*$"
+        ConstraintDescription: a VAMS config name (letters, digits and hyphens, starting with a letter)
+        Description: >-
+            VAMS config "name" (the env's configName in the vra ledger; `vra iam plan` writes the value). VAMS stack
+            names (and so the aws:cloudformation:stack-name tag CloudFormation puts on the keys and trails it creates)
+            start with "<ConfigName>-"; trails and keys outside that prefix are protected. Roles CloudFormation names
+            in the VAMS stacks (for example the cross-Region export providers) start with "<ConfigName>-".
+    CoreRoleNameStem:
+        Type: String
+        Default: vamscore
+        AllowedPattern: "^[A-Za-z0-9]{1,16}$"
+        ConstraintDescription: 1-16 letters and digits
+        Description: >-
+            Start of the names VAMS gives its core-stack roles without a role-name prefix: ConfigName without its
+            non-alphanumeric characters, then "core", cut to 16 characters (`my-vams` -> `myvamscore`). `vra iam plan`
+            computes it. Only roles named "<CoreRoleNameStem>...", "<ConfigName>-..." or "<RoleNamePrefix>..." can be
+            created, changed, deleted or passed.
+    RoleNamePrefix:
+        Type: String
+        Default: ""
+        AllowedPattern: "^[A-Za-z0-9+=,.@_-]{0,32}$"
+        Description: >-
+            The env's IAM role-name prefix (iam.rolePrefix in the vra ledger, cdk.json
+            environments.aws.IamRoleNamePrefix; required for iam.mode precreated, where IT's roles start with it);
+            `vra iam plan` writes the value. Empty: none. Roles named "<RoleNamePrefix>..." can be created, changed,
+            deleted and passed too, except "<RoleNamePrefix>cdk-*" and "<RoleNamePrefix>vra-*".
+    RequiredPermissionsBoundaryArn:
+        Type: String
+        Default: ""
+        Description: >-
+            Permissions boundary every role CloudFormation creates must carry. Empty (default) = use the boundary
+            this stack creates (<PolicyName>-role-boundary). An enterprise landing-zone boundary can be given instead.
+            The boundary NAME goes into the env's permissionsBoundaryName in the vra ledger.
+    AllowRolesWithoutBoundary:
+        Type: String
+        Default: "false"
+        AllowedValues: ["true", "false"]
+        Description: >-
+            Escape hatch for a first evaluation only: "true" lets CloudFormation create roles without the boundary
+            (which allows a template to create an administrator role). Never in prod.
+    ProtectForeignTrailsAndKeys:
+        Type: String
+        Default: "true"
+        AllowedValues: ["true", "false"]
+        Description: Deny stopping/deleting CloudTrail trails and re-keying / deleting KMS keys that VAMS stacks did not create.
+
+Conditions:
+    CreateBoundary: !Equals [!Ref RequiredPermissionsBoundaryArn, ""]
+    BoundaryOptional: !Equals [!Ref AllowRolesWithoutBoundary, "true"]
+    BoundaryEnforced: !Not [!Condition BoundaryOptional]
+    ProtectForeign: !Equals [!Ref ProtectForeignTrailsAndKeys, "true"]
+    HasRoleNamePrefix: !Not [!Equals [!Ref RoleNamePrefix, ""]]
+
+Resources:
+    # Maximum permissions of every role a VAMS stack creates. VAMS roles (Lambda, Step Functions, Batch, ECS
+    # tasks, ...) work within it; what it removes is the ability of such a role to create or widen IAM, leave the
+    # account's audit trail, or destroy keys.
+    RoleBoundary:
+        Type: AWS::IAM::ManagedPolicy
+        Condition: CreateBoundary
+        Metadata:
+            checkov:
+                skip:
+                    - id: CKV_AWS_107
+                      comment: Permissions boundary, not a grant; the role's own policy grants. The denies below cap it.
+                    - id: CKV_AWS_108
+                      comment: Permissions boundary, not a grant; the role's own policy grants. The denies below cap it.
+                    - id: CKV_AWS_109
+                      comment: Permissions boundary; IAM permission management is denied explicitly (DenyIamEscalation).
+                    - id: CKV_AWS_110
+                      comment: Permissions boundary; escalation actions are denied explicitly (DenyIamEscalation).
+                    - id: CKV_AWS_111
+                      comment: Permissions boundary, not a grant; the role's own policy grants. The denies below cap it.
+        Properties:
+            ManagedPolicyName: !Sub ${PolicyName}-role-boundary
+            Description: vra permissions boundary for roles created by VAMS CloudFormation stacks
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Sid: AllowWorkloadActions
+                      Effect: Allow
+                      Action: "*"
+                      Resource: "*"
+                    - Sid: DenyIamEscalation
+                      Effect: Deny
+                      Action:
+                          - iam:CreateRole
+                          - iam:CreateUser
+                          - iam:CreateAccessKey
+                          - iam:CreateLoginProfile
+                          - iam:UpdateLoginProfile
+                          - iam:CreatePolicy
+                          - iam:CreatePolicyVersion
+                          - iam:SetDefaultPolicyVersion
+                          - iam:DeletePolicyVersion
+                          - iam:PutRolePolicy
+                          - iam:AttachRolePolicy
+                          - iam:DetachRolePolicy
+                          - iam:DeleteRolePolicy
+                          - iam:PutUserPolicy
+                          - iam:AttachUserPolicy
+                          - iam:PutGroupPolicy
+                          - iam:AttachGroupPolicy
+                          - iam:AddUserToGroup
+                          - iam:UpdateAssumeRolePolicy
+                          - iam:PutRolePermissionsBoundary
+                          - iam:DeleteRolePermissionsBoundary
+                          - iam:PutUserPermissionsBoundary
+                          - iam:DeleteUserPermissionsBoundary
+                          - organizations:*
+                          - account:*
+                      Resource: "*"
+                    - Sid: DenyAuditAndKeyDestruction
+                      Effect: Deny
+                      Action:
+                          - cloudtrail:StopLogging
+                          - cloudtrail:DeleteTrail
+                          - cloudtrail:UpdateTrail
+                          - cloudtrail:PutEventSelectors
+                          - kms:PutKeyPolicy
+                          - kms:ScheduleKeyDeletion
+                          - kms:DisableKey
+                      Resource: "*"
+                    - Sid: DenyAssumingDeploymentRoles
+                      Effect: Deny
+                      Action: sts:AssumeRole
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::*:role/cdk-*
+                          - !Sub arn:${AWS::Partition}:iam::*:role/vra-*
+
+    ExecutionPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            ManagedPolicyName: !Ref PolicyName
+            Description: Scoped CDK CloudFormation execution policy for VAMS (vra)
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    # One entry per service the VAMS CDK app (infra/lib, every config option) creates resources in.
+                    # iam/vams-services.json lists them, extracted from the VAMS source by
+                    # iam/scripts/extract_vams_services.py; iam/tests/test_execution_policy_services.py fails when this
+                    # list and the extraction disagree (missing service or unused extra).
+                    - Sid: VamsServiceSurfaceRegional
+                      Effect: Allow
+                      Action:
+                          - acm:*
+                          - aoss:*
+                          - apigateway:*
+                          - batch:*
+                          - bedrock:*
+                          - bedrock-agentcore:*
+                          - cloudformation:*
+                          - codeartifact:*
+                          - codebuild:*
+                          - cognito-identity:*
+                          - cognito-idp:*
+                          - dynamodb:*
+                          - ec2:*
+                          - ecr:*
+                          - ecs:*
+                          - eks:*
+                          - elasticfilesystem:*
+                          - elasticloadbalancing:*
+                          - es:*
+                          - events:*
+                          - gameliftstreams:*
+                          - geo:*
+                          - lambda:*
+                          - logs:*
+                          - s3:*
+                          - secretsmanager:*
+                          - sns:*
+                          - sqs:*
+                          - ssm:*
+                          - states:*
+                          - wafv2:*
+                      Resource: "*"
+                      Condition:
+                          StringEquals:
+                              aws:RequestedRegion: !Ref AllowedRegions
+                    # VAMS creates CloudWatch metric alarms (indexer dead-letter queues); alarms only, no
+                    # dashboards, metric streams or insight rules.
+                    - Sid: CloudWatchAlarmsForVams
+                      Effect: Allow
+                      Action:
+                          - cloudwatch:PutMetricAlarm
+                          - cloudwatch:DeleteAlarms
+                          - cloudwatch:DescribeAlarms
+                          - cloudwatch:TagResource
+                          - cloudwatch:UntagResource
+                          - cloudwatch:ListTagsForResource
+                      Resource: "*"
+                      Condition:
+                          StringEquals:
+                              aws:RequestedRegion: !Ref AllowedRegions
+                    # VAMS optionally creates its own trail (app.addStackCloudTrailLogs); no cloudtrail:* any more.
+                    - Sid: CloudTrailForVamsTrail
+                      Effect: Allow
+                      Action:
+                          - cloudtrail:CreateTrail
+                          - cloudtrail:UpdateTrail
+                          - cloudtrail:DeleteTrail
+                          - cloudtrail:StartLogging
+                          - cloudtrail:StopLogging
+                          - cloudtrail:PutEventSelectors
+                          - cloudtrail:PutInsightSelectors
+                          - cloudtrail:AddTags
+                          - cloudtrail:RemoveTags
+                          - cloudtrail:GetTrail
+                          - cloudtrail:GetTrailStatus
+                          - cloudtrail:GetEventSelectors
+                          - cloudtrail:GetInsightSelectors
+                          - cloudtrail:DescribeTrails
+                          - cloudtrail:ListTags
+                          - cloudtrail:ListTrails
+                      Resource: "*"
+                      Condition:
+                          StringEquals:
+                              aws:RequestedRegion: !Ref AllowedRegions
+                    # KMS: VAMS creates and manages its own keys; no kms:* on keys it does not own (deny below).
+                    - Sid: KmsForVamsKeys
+                      Effect: Allow
+                      Action:
+                          - kms:CreateKey
+                          - kms:CreateAlias
+                          - kms:UpdateAlias
+                          - kms:DeleteAlias
+                          - kms:DescribeKey
+                          - kms:GetKeyPolicy
+                          - kms:GetKeyRotationStatus
+                          - kms:ListAliases
+                          - kms:ListKeys
+                          - kms:ListResourceTags
+                          - kms:ListGrants
+                          - kms:TagResource
+                          - kms:UntagResource
+                          - kms:EnableKeyRotation
+                          - kms:PutKeyPolicy
+                          - kms:ScheduleKeyDeletion
+                          - kms:CancelKeyDeletion
+                          - kms:EnableKey
+                          - kms:DisableKey
+                          - kms:UpdateKeyDescription
+                          - kms:CreateGrant
+                          - kms:RetireGrant
+                          - kms:Encrypt
+                          - kms:Decrypt
+                          - kms:GenerateDataKey
+                          - kms:GenerateDataKeyWithoutPlaintext
+                          - kms:ReEncryptFrom
+                          - kms:ReEncryptTo
+                      Resource: "*"
+                      Condition:
+                          StringEquals:
+                              aws:RequestedRegion: !Ref AllowedRegions
+                    - Sid: GlobalServices
+                      Effect: Allow
+                      Action:
+                          - cloudfront:*
+                          - route53:*
+                          - iam:GetRole
+                          - iam:GetRolePolicy
+                          - iam:ListRoles
+                          - iam:ListRolePolicies
+                          - iam:ListAttachedRolePolicies
+                          - iam:ListRoleTags
+                          - iam:GetPolicy
+                          - iam:GetPolicyVersion
+                          - iam:ListPolicyVersions
+                          - iam:ListInstanceProfilesForRole
+                          - iam:GetInstanceProfile
+                          - iam:CreateInstanceProfile
+                          - iam:DeleteInstanceProfile
+                          - iam:AddRoleToInstanceProfile
+                          - iam:RemoveRoleFromInstanceProfile
+                          - iam:CreatePolicy
+                          - iam:DeletePolicy
+                          - iam:CreatePolicyVersion
+                          - iam:DeletePolicyVersion
+                          - iam:TagPolicy
+                          - iam:UntagPolicy
+                          - iam:CreateServiceLinkedRole
+                          - iam:DeleteServiceLinkedRole
+                          - iam:GetServiceLinkedRoleDeletionStatus
+                          - iam:CreateOpenIDConnectProvider
+                          - iam:DeleteOpenIDConnectProvider
+                          - iam:GetOpenIDConnectProvider
+                          - iam:TagOpenIDConnectProvider
+                          - iam:UpdateOpenIDConnectProviderThumbprint
+                          - sts:GetCallerIdentity
+                      Resource: "*"
+                    # Role changes only on VAMS's own roles (names: ConfigName, RoleNamePrefix). Pre-existing roles of
+                    # the account are out of reach; the cdk-* / vra-* roles are denied below.
+                    - Sid: ChangeVamsRoles
+                      Effect: Allow
+                      Action:
+                          - iam:DeleteRole
+                          - iam:UpdateRole
+                          - iam:UpdateRoleDescription
+                          - iam:UpdateAssumeRolePolicy
+                          - iam:PutRolePolicy
+                          - iam:DeleteRolePolicy
+                          - iam:AttachRolePolicy
+                          - iam:DetachRolePolicy
+                          - iam:TagRole
+                          - iam:UntagRole
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                            - !Ref AWS::NoValue
+                    # VAMS's own roles (names as in ChangeVamsRoles) may only be handed to the services VAMS wires them
+                    # to (iam/vams-services.json passRoleServices): function, state machine, Batch / ECS / EKS, CodeBuild and EventBridge target roles,
+                    # instance profiles, the API Gateway logging role, the Cognito SMS role and identity-pool roles, the
+                    # CloudTrail-to-CloudWatch-Logs role, the VPC flow-log role and the AgentCore runtime role.
+                    - Sid: PassRoleToVamsServices
+                      Effect: Allow
+                      Action: iam:PassRole
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                            - !Ref AWS::NoValue
+                      Condition:
+                          StringLike:
+                              iam:PassedToService:
+                                  - apigateway.amazonaws.com*
+                                  - batch.amazonaws.com*
+                                  - bedrock-agentcore.amazonaws.com*
+                                  - cloudtrail.amazonaws.com*
+                                  - codebuild.amazonaws.com*
+                                  - cognito-identity.amazonaws.com*
+                                  - cognito-idp.amazonaws.com*
+                                  - ec2.amazonaws.com*
+                                  - ecs-tasks.amazonaws.com*
+                                  - eks.amazonaws.com*
+                                  - es.amazonaws.com*
+                                  - events.amazonaws.com*
+                                  - lambda.amazonaws.com*
+                                  - opensearchservice.amazonaws.com*
+                                  - states.amazonaws.com*
+                                  - vpc-flow-logs.amazonaws.com*
+                    - !If
+                      - BoundaryEnforced
+                      - Sid: CreateRoleWithBoundary
+                        Effect: Allow
+                        Action:
+                            - iam:CreateRole
+                            - iam:PutRolePermissionsBoundary
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
+                            - !If
+                              - HasRoleNamePrefix
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                              - !Ref AWS::NoValue
+                        Condition:
+                            StringEquals:
+                                iam:PermissionsBoundary:
+                                    !If [
+                                        CreateBoundary,
+                                        !Ref RoleBoundary,
+                                        !Ref RequiredPermissionsBoundaryArn,
+                                    ]
+                      - Sid: CreateRoleWithoutBoundaryNotForProd
+                        Effect: Allow
+                        Action: iam:CreateRole
+                        Resource:
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ConfigName}-*
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CoreRoleNameStem}*
+                            - !If
+                              - HasRoleNamePrefix
+                              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}*
+                              - !Ref AWS::NoValue
+                    - Sid: DenyProtectedRoles
+                      Effect: Deny
+                      Action:
+                          - iam:CreateRole
+                          - iam:TagRole
+                          - iam:UntagRole
+                          - iam:UpdateRoleDescription
+                          - iam:AttachRolePolicy
+                          - iam:DetachRolePolicy
+                          - iam:PutRolePolicy
+                          - iam:DeleteRolePolicy
+                          - iam:DeleteRole
+                          - iam:UpdateRole
+                          - iam:UpdateAssumeRolePolicy
+                          - iam:PutRolePermissionsBoundary
+                          - iam:DeleteRolePermissionsBoundary
+                          - iam:PassRole
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/vra-*
+                          # bootstrap and vra roles IT names with the env's prefix (iam.mode bootstrap)
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}cdk-*
+                            - !Ref AWS::NoValue
+                          - !If
+                            - HasRoleNamePrefix
+                            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleNamePrefix}vra-*
+                            - !Ref AWS::NoValue
+                    # A template could otherwise rewrite this very policy (or the boundary) to *:* (CreatePolicyVersion).
+                    - Sid: DenyProtectedPolicies
+                      Effect: Deny
+                      Action:
+                          - iam:CreatePolicyVersion
+                          - iam:DeletePolicyVersion
+                          - iam:SetDefaultPolicyVersion
+                          - iam:DeletePolicy
+                          - iam:TagPolicy
+                          - iam:UntagPolicy
+                      Resource:
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vra-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cdk-*
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PolicyName}
+                          - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PolicyName}-role-boundary
+                    - Sid: DenyAdministratorPolicyAttachment
+                      Effect: Deny
+                      Action:
+                          - iam:AttachRolePolicy
+                          - iam:AttachUserPolicy
+                          - iam:AttachGroupPolicy
+                      Resource: "*"
+                      Condition:
+                          ArnLike:
+                              iam:PolicyARN:
+                                  - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+                                  - !Sub arn:${AWS::Partition}:iam::aws:policy/PowerUserAccess
+                                  - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMFullAccess
+                                  - !Sub arn:${AWS::Partition}:iam::aws:policy/*FullAccess
+                    - Sid: DenyAccountLevelAndUserCredentials
+                      Effect: Deny
+                      Action:
+                          - iam:CreateUser
+                          - iam:CreateAccessKey
+                          - iam:CreateLoginProfile
+                          - iam:UpdateLoginProfile
+                          - iam:AddUserToGroup
+                          - iam:AttachUserPolicy
+                          - iam:PutUserPolicy
+                          - iam:CreateSAMLProvider
+                          - iam:UpdateAccountPasswordPolicy
+                          - iam:DeleteAccountPasswordPolicy
+                          - organizations:*
+                          - account:*
+                          - s3:PutAccountPublicAccessBlock
+                      Resource: "*"
+                    - !If
+                      - BoundaryEnforced
+                      - Sid: DenyBoundaryRemoval
+                        Effect: Deny
+                        Action: iam:DeleteRolePermissionsBoundary
+                        Resource: "*"
+                      - !Ref AWS::NoValue
+                    - !If
+                      - ProtectForeign
+                      - Sid: DenyForeignTrailTampering
+                        Effect: Deny
+                        Action:
+                            - cloudtrail:StopLogging
+                            - cloudtrail:DeleteTrail
+                            - cloudtrail:UpdateTrail
+                            - cloudtrail:PutEventSelectors
+                            - cloudtrail:PutInsightSelectors
+                            - cloudtrail:RemoveTags
+                        NotResource: !Sub arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:trail/${ConfigName}-*
+                      - !Ref AWS::NoValue
+                    - !If
+                      - ProtectForeign
+                      - Sid: DenyForeignKeyDestruction
+                        Effect: Deny
+                        Action:
+                            - kms:PutKeyPolicy
+                            - kms:ScheduleKeyDeletion
+                            - kms:DisableKey
+                            - kms:CancelKeyDeletion
+                            - kms:UntagResource
+                        Resource: "*"
+                        Condition:
+                            StringNotLike:
+                                aws:ResourceTag/aws:cloudformation:stack-name: !Sub ${ConfigName}-*
+                      - !Ref AWS::NoValue
+
+Outputs:
+    ExecutionPolicyArn:
+        Value: !Ref ExecutionPolicy
+        Description: Pass to cdk bootstrap --cloudformation-execution-policies
+    RoleBoundaryName:
+        Condition: CreateBoundary
+        Value: !Sub ${PolicyName}-role-boundary
+        Description: >-
+            Set envs/<env>/env.yaml permissionsBoundaryName to this value (vra build applies it at synth). With
+            RequiredPermissionsBoundaryArn, use that policy's name instead.

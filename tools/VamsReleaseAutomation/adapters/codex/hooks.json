@@ -1,0 +1,16 @@
+{
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": ".*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" || exit 2",
+                        "timeout": 10
+                    }
+                ]
+            }
+        ]
+    }
+}

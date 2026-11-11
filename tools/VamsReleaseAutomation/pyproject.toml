@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vams-release-automation"
+version = "0.5.1"
+description = "Deterministic release-automation engine (vra) for customer forks of VAMS (Visual Asset Management System)."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "AWS Labs", email = "aws-labs@amazon.com" }]
+# Runtime: Python 3.12 (the CI jobs and the CodeBuild image). Development: Python 3.13.
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+# Exact pins: the engine runs deploys; its toolchain must be reproducible.
+dependencies = [
+    "boto3==1.43.123",
+    "botocore==1.43.123",
+    "PyYAML==6.0.3",
+    "jsonschema==4.26.0",
+]
+
+[project.optional-dependencies]
+# `vra mcp` (the MCP server for agent front-ends). Pinned to a release at least 7 days old.
+mcp = [
+    "mcp==2.3.0",
+]
+dev = [
+    "pytest==9.2.0",
+    "moto[dynamodb,s3,ssm]==5.2.5",
+    "mcp==2.3.0",
+]
+
+[project.scripts]
+vra = "vra.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/awslabs/visual-asset-management-system"
+Repository = "https://github.com/awslabs/visual-asset-management-system"
+"Bug Reports" = "https://github.com/awslabs/visual-asset-management-system/issues"
+
+[tool.setuptools]
+package-dir = { "" = "engine" }
+
+[tool.setuptools.packages.find]
+where = ["engine"]
+include = ["vra*"]
+
+[tool.setuptools.package-data]
+vra = ["data/*", "data/**/*"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["engine/tests", "adapters/shared", "scripts/tests", "iam/tests", "cicd/tests"]
+addopts = "-q --strict-markers --strict-config"
+# An xfail marks a test written against a defect that is not fixed yet; strict mode turns an XPASS red
+# so the marker is removed when the fix lands.
+xfail_strict = true
+markers = [
+    "temporary: pins one specific past change rather than a durable rule; list with '-m temporary' and remove at release cleanup (root CLAUDE.md Rule 13)",
+]

@@ -1,0 +1,318 @@
+# Reusable workflow: deploy (or promote) one vra build into one env, then run the live suites.
+# Copy next to vra-release.yml in the vra home repository's .github/workflows/.
+# The deploy job runs in the GitHub environment named like the vra env, so environment protection rules
+# (required reviewers, prevent self-review, branch rules) gate it. Whether an approval record is written comes
+# from the ledger (envs/<env>/env.yaml requiresApproval), not from whether the job is a promotion: an ungated
+# promoted env gets none, a gated root env gets one (scope deploy). vra itself checks the approver against
+# envs/<env>/env.yaml approvers and against the run initiator (separation of duties).
+# requires-approval is rendered from `vra ledger graph` (ci_graph.py render); the job re-reads the ledger and
+# stops when the two disagree (the caller is out of date: regenerate it).
+# One job per env at a time: concurrency group vra-env-<env> (queued, never cancelled); a vra env lock held by
+# an operator is waited for up to vars.VRA_LOCK_WAIT_MINUTES (default 30) minutes (--lock-wait).
+name: vra-deploy-env
+
+on:
+    workflow_call:
+        inputs:
+            env-name:
+                type: string
+                required: true
+            promote-from:
+                type: string
+                required: false
+                default: ""
+            requires-approval:
+                description: The ledger's requiresApproval of env-name (rendered by ci_graph.py render --platform github)
+                type: boolean
+                required: true
+            build-id:
+                type: string
+                required: true
+            test-suites:
+                type: string
+                required: false
+                default: live-cli,live-web,customer
+            isolate-tests:
+                description: >-
+                    Run the live suites in a separate job in GitHub environment <env>-tests, whose VRA_CI_ROLE_ARN
+                    may assume only vra-test-<env> (vra-deploy-role.yaml CreateTestRole; env.yaml testRoleArn).
+                    The suites install the fork's web/e2e dependencies; this keeps that code away from the
+                    deploy role. Approval-gated envs (requires-approval true) always isolate their tests; an env
+                    the ledger marks prod-class refuses tests that are not isolated.
+                type: boolean
+                required: false
+                default: false
+
+permissions:
+    contents: read
+
+env:
+    VRA_HOME: ${{ github.workspace }}/vra-home
+    VRA_ENV: ${{ inputs.env-name }}
+    VRA_BUILD_ID: ${{ inputs.build-id }}
+    VRA_LOCK_WAIT_MINUTES: ${{ vars.VRA_LOCK_WAIT_MINUTES || '30' }}
+
+jobs:
+    deploy:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: ${{ inputs.env-name }}
+        timeout-minutes: 480
+        concurrency:
+            group: vra-env-${{ inputs.env-name }}
+            cancel-in-progress: false
+        permissions:
+            id-token: write
+            contents: read
+            actions: read # read the environment approval record of this run
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: vra-build
+                  path: build-output
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-${{ inputs.env-name }}-${{ github.run_id }}
+                  role-duration-seconds: 14400
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+                  VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-in build-output/vra-bundle
+            - name: approval record
+              # Only when the ledger gates the env. The environment's required reviewers of THIS run are the
+              # approvers; vra's initiator is GITHUB_TRIGGERING_ACTOR (vra.identity). The record is bound to this
+              # run (source github:<repo>/actions/runs/<id>) and valid 24 h; vra rejects it for any other run.
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_ENTERPRISE_TOKEN: ${{ github.token }} # gh on a GHES host
+                  PROMOTE_FROM: ${{ inputs.promote-from }}
+                  RENDERED_APPROVAL: ${{ inputs.requires-approval }}
+                  TESTS_ISOLATED: ${{ inputs.isolate-tests || inputs.requires-approval }}
+                  TEST_SUITES: ${{ inputs.test-suites }}
+              run: |
+                  mkdir -p vra-out
+                  prod_class="$(bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py is-prod-class \
+                    --ledger "${VRA_HOME}/ledger" --env "${VRA_ENV}")"
+                  if [ "${prod_class}" = "true" ] && [ -n "${TEST_SUITES}" ] && [ "${TESTS_ISOLATED}" != "true" ]; then
+                    echo "envs/${VRA_ENV} is prod-class: its live tests run the fork's web/e2e dependencies and" \
+                      "must not share the deploy job; set isolate-tests: true (GitHub environment ${VRA_ENV}-tests)"
+                    exit 20
+                  fi
+                  needs_approval="$(bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py requires-approval \
+                    --ledger "${VRA_HOME}/ledger" --env "${VRA_ENV}")"
+                  if [ "${needs_approval}" != "${RENDERED_APPROVAL}" ]; then
+                    echo "envs/${VRA_ENV}: the ledger says requiresApproval ${needs_approval}, this workflow was rendered" \
+                      "with ${RENDERED_APPROVAL}: regenerate vra-release.yml (ci_graph.py render --platform github)"
+                    exit 20
+                  fi
+                  if [ "${needs_approval}" = "true" ]; then
+                    scope=promote
+                    [ -z "${PROMOTE_FROM}" ] && scope=deploy
+                    gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > approvals.json
+                    python3 vra-src/cicd/codebuild/scripts/approval_record.py github --approvals approvals.json \
+                      --env "${VRA_ENV}" --build "${VRA_BUILD_ID}" --scope "${scope}" \
+                      --out "vra-out/approval-${VRA_ENV}.yaml"
+                  fi
+            - name: vra deploy / promote
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  PROMOTE_FROM: ${{ inputs.promote-from }}
+              run: |
+                  approval=()
+                  if [ -f "vra-out/approval-${VRA_ENV}.yaml" ]; then
+                    approval=(--approval "vra-out/approval-${VRA_ENV}.yaml")
+                  fi
+                  if [ -n "${PROMOTE_FROM}" ]; then
+                    bash vra-src/cicd/codebuild/scripts/run-vra.sh "promote-${VRA_ENV}" \
+                      promote --from "${PROMOTE_FROM}" --to "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${approval[@]}" \
+                      --lock-wait "${VRA_LOCK_WAIT_MINUTES}"
+                  else
+                    bash vra-src/cicd/codebuild/scripts/run-vra.sh "deploy-${VRA_ENV}" \
+                      deploy --env "${VRA_ENV}" --build "${VRA_BUILD_ID}" "${approval[@]}" \
+                      --lock-wait "${VRA_LOCK_WAIT_MINUTES}"
+                  fi
+            - name: build commit
+              id: commit
+              if: inputs.test-suites != '' && !(inputs.isolate-tests || inputs.requires-approval)
+              run: |
+                  # test the deployed revision, not the fork trunk tip
+                  echo "sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' \
+                    "${VRA_HOME}/artifacts/${VRA_BUILD_ID}/manifest.json")" >> "$GITHUB_OUTPUT"
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              if: inputs.test-suites != '' && !(inputs.isolate-tests || inputs.requires-approval)
+              with:
+                  # The fork checkout at the build commit supplies web/e2e and VamsCLI for the live suites.
+                  repository: ${{ vars.VRA_FORK_REPO }}
+                  ref: ${{ steps.commit.outputs.sha }}
+                  path: fork
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - name: vra test
+              if: inputs.test-suites != '' && !(inputs.isolate-tests || inputs.requires-approval)
+              env:
+                  SUITES: ${{ inputs.test-suites }}
+              working-directory: fork
+              run: |
+                  if [[ ",${SUITES}," == *",live-web,"* ]]; then
+                    (cd web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+                  fi
+                  VRA_OUT_DIR="${GITHUB_WORKSPACE}/vra-out" bash ../vra-src/cicd/codebuild/scripts/run-vra.sh \
+                    "test-${VRA_ENV}" test --env "${VRA_ENV}" --suites "${SUITES}"
+            - name: vra report
+              if: always()
+              run: bash vra-src/cicd/codebuild/scripts/run-vra.sh "report-${VRA_ENV}" report --notify || true
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-${{ inputs.env-name }}-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-${{ inputs.env-name }}
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-deploy:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [deploy]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-${{ inputs.env-name }}-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit
+
+    tests:
+        # Live suites under a test-only role (isolate-tests). Same env concurrency group as the deploy.
+        needs: deploy
+        if: (inputs.isolate-tests || inputs.requires-approval) && inputs.test-suites != ''
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: ${{ inputs.env-name }}-tests
+        timeout-minutes: 120
+        concurrency:
+            group: vra-env-${{ inputs.env-name }}
+            cancel-in-progress: false
+        permissions:
+            id-token: write
+            contents: read
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: vra-build
+                  path: build-output
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-${{ inputs.env-name }}-tests-${{ github.run_id }}
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+                  VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-in build-output/vra-bundle
+            - name: build commit
+              id: commit
+              run: |
+                  echo "sha=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' \
+                    "${VRA_HOME}/artifacts/${VRA_BUILD_ID}/manifest.json")" >> "$GITHUB_OUTPUT"
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_FORK_REPO }}
+                  ref: ${{ steps.commit.outputs.sha }}
+                  path: fork
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - name: vra test
+              env:
+                  SUITES: ${{ inputs.test-suites }}
+              working-directory: fork
+              run: |
+                  if [[ ",${SUITES}," == *",live-web,"* ]]; then
+                    (cd web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+                  fi
+                  VRA_OUT_DIR="${GITHUB_WORKSPACE}/vra-out" bash ../vra-src/cicd/codebuild/scripts/run-vra.sh \
+                    "test-${VRA_ENV}" test --env "${VRA_ENV}" --suites "${SUITES}"
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-${{ inputs.env-name }}-tests-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-${{ inputs.env-name }}-tests
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-tests:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [tests]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-${{ inputs.env-name }}-tests-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit

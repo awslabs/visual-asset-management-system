@@ -1,0 +1,320 @@
+# IAM action manifest: deploy
+# Schema: engine/vra/data/iam-actions.schema.json
+#   {workflow, schemaVersion, role, description, statements:[{sid, actions, resources, condition?, note, optional?}]}
+# Placeholders rendered by `vra preflight` (engine/vra/permissions.py placeholders()):
+#   ${Partition} ${Account} ${Region} ${ConfigName}
+#   ${BaseStackName}  the REGION-SUFFIXED base name, "<app.baseStackName>-<region>" (as VAMS config.ts sets it)
+#   ${CoreStack}      "<configName>-core-<baseStackName>-<region>" (VAMS tables, buckets, Lambdas are auto-named under it)
+#   ${SsmPrefix}      "/<configName>-<baseStackName>-<region>/resourceNames"
+#   ${RegisteredBucket} / ${RegisteredBucketKmsKey}  only in `forEach: registeredBucket|registeredBucketKmsKey`
+#                     statements (backup, restore, migrate, data-copy-*): expanded at run time to every bucket of
+#                     the env (SSM s3Buckets/* + each asset bucket registered in s3AssetBucketsStorage) and each
+#                     bucket's default-encryption KMS key (GetBucketEncryption). No bucket list (dry run, stack not
+#                     deployed): ${RegisteredBucket} = ${CoreStack}* and key statements are skipped.
+#   A VAMS stack is "${ConfigName}-<kind>-${BaseStackName}" (kind = core | waf | waf-regional ...).
+# `role` selects the env role preflight simulates (deploy -> deployRoleArn, dataCopy -> dataCopyRoleArn).
+# `condition` is informational for reviewers; simulation evaluates actions and resources.
+# Principal convention: statements whose sid starts with "Tools" apply to the orchestrator identity
+#   (CI role / operator in the tools account). All others apply to the env deploy role
+#   (iam/cloudformation/vra-deploy-role.yaml) in the env account.
+# A deploy that runs a checkpoint or a data migration ALSO needs backup.yaml and migrate.yaml.
+workflow: deploy
+schemaVersion: 1
+role: deploy
+description: >-
+    Deploy a pre-synthesized bundle (cdk.out/<env>) into one environment through the CDK bootstrap
+    roles. The deploy role never creates VAMS resources itself: CloudFormation does that with the
+    bootstrap CloudFormation execution role, whose permissions are the scoped execution policy passed
+    to `cdk bootstrap --cloudformation-execution-policies` (see iam/cdk-bootstrap.md).
+statements:
+    - sid: ToolsAssumeEnvDeployRole
+      actions:
+          - sts:AssumeRole
+          - sts:TagSession
+          - sts:SetSourceIdentity
+      resources:
+          - arn:${Partition}:iam::${Account}:role/vra-deploy-*
+      note: The orchestrator in the tools account assumes the per-env deploy role named in envs/<env>/env.yaml (deployRoleArn).
+
+    - sid: CallerIdentity
+      actions:
+          - sts:GetCallerIdentity
+      resources:
+          - "*"
+      note: Derive partition and account from the caller ARN; sts:GetCallerIdentity is not resource-scoped.
+
+    - sid: CdkBootstrapRolesAssume
+      actions:
+          - sts:AssumeRole
+          - sts:TagSession
+          - sts:SetSourceIdentity # role chaining with a source identity (gated envs)
+      resources:
+          - arn:${Partition}:iam::${Account}:role/cdk-*-deploy-role-${Account}-*
+          - arn:${Partition}:iam::${Account}:role/cdk-*-file-publishing-role-${Account}-*
+          - arn:${Partition}:iam::${Account}:role/cdk-*-image-publishing-role-${Account}-*
+          - arn:${Partition}:iam::${Account}:role/cdk-*-lookup-role-${Account}-*
+      note: >-
+          The CDK CLI publishes assets and drives CloudFormation by assuming the bootstrap roles. The
+          region suffix is a wildcard because the CloudFront WAF stack is always deployed in us-east-1
+          (commercial) even when VAMS runs elsewhere. The qualifier is a wildcard so custom qualifiers work.
+
+    - sid: CdkBootstrapVersionRead
+      actions:
+          - ssm:GetParameter
+      resources:
+          - arn:${Partition}:ssm:*:${Account}:parameter/cdk-bootstrap/*/version
+      note: The CDK CLI checks the bootstrap stack version before deploying.
+
+    - sid: VamsStacksRead
+      actions:
+          - cloudformation:DescribeStacks
+          - cloudformation:DescribeStackEvents
+          - cloudformation:DescribeStackResource
+          - cloudformation:DescribeStackResources
+          - cloudformation:ListStackResources
+          - cloudformation:GetTemplate
+          - cloudformation:GetTemplateSummary
+          - cloudformation:DescribeChangeSet
+          - cloudformation:ListChangeSets
+          - cloudformation:DetectStackDrift
+          - cloudformation:DetectStackResourceDrift
+          - cloudformation:DescribeStackResourceDrifts
+      resources:
+          - arn:${Partition}:cloudformation:*:${Account}:stack/${ConfigName}-*-${BaseStackName}/*
+          - arn:${Partition}:cloudformation:*:${Account}:stack/${ConfigName}-*-${BaseStackName}-*/*
+      note: >-
+          Read stack status, outputs (ResourceNamesSSMParamPrefixOutput), events for failure
+          classification, the deployed template for the diff report, and drift before deploying.
+          The second pattern covers nested stacks.
+
+    - sid: StacksList
+      actions:
+          - cloudformation:ListStacks
+          - cloudformation:DescribeStackDriftDetectionStatus
+      resources:
+          - "*"
+      note: >-
+          cloudformation:ListStacks and DescribeStackDriftDetectionStatus are not resource-scoped (IAM accepts
+          only `*`): discover the env's VAMS stacks and poll the drift detection started on them.
+
+    - sid: VamsResourceNamesRead
+      actions:
+          - ssm:GetParameter
+          - ssm:GetParameters
+          - ssm:GetParametersByPath
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}/*
+      note: Resolve VAMS table and bucket names for the pre-deploy checkpoint and post-deploy smoke.
+
+    - sid: PreDeployDataStateRead
+      actions:
+          - dynamodb:DescribeTable
+          - dynamodb:DescribeContinuousBackups
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+      note: >-
+          Confirm PITR is on before a deploy that changes data. VAMS tables are CloudFormation
+          auto-named under the core stack name; the engine resolves exact names from SSM, and
+          preflight simulates those exact ARNs.
+
+    - sid: CdkRolesTrustRead
+      optional: true
+      actions:
+          - iam:GetRole
+      resources:
+          - arn:${Partition}:iam::${Account}:role/cdk-*
+      note: >-
+          With sts:SourceIdentity on (gated envs), vra checks that the CDK bootstrap roles trust sts:SetSourceIdentity
+          before deploying; without this read it records the check as unverified.
+
+    - sid: IamQuotaRead
+      actions:
+          - iam:GetAccountSummary
+      resources:
+          - "*"
+      note: >-
+          IAM quota check before `cdk deploy`: vra counts the IAM roles and managed policies the change adds or
+          replaces (a replaced role exists twice while CloudFormation swaps it) and compares them with the account's
+          Roles / RolesQuota and Policies / PoliciesQuota. iam:GetAccountSummary is not resource-scoped (IAM accepts
+          only `*`) and returns counts only, no names or policies.
+
+    - sid: CloudFrontQuotaRead
+      feature: cloudFrontQuota
+      actions:
+          - cloudfront:ListCachePolicies
+          - cloudfront:ListOriginRequestPolicies
+          - cloudfront:ListResponseHeadersPolicies
+          - cloudfront:ListDistributions
+      resources:
+          - "*"
+      note: >-
+          CloudFront quota check before `cdk deploy`, only when the change adds or replaces CloudFront resources (a
+          first install or a switch to CloudFront; never on ALB or GovCloud deployments). ListCachePolicies,
+          ListOriginRequestPolicies and ListResponseHeadersPolicies (with type custom) count the account's custom
+          policies of each kind; ListDistributions counts its distributions. A VAMS CloudFront deployment adds 2 cache
+          policies, 1 origin request policy, 1 response headers policy and 1 distribution. The List actions support no
+          resource-level permissions (CloudFront accepts only `*`) and change nothing.
+
+    - sid: CloudFrontQuotaLimitsRead
+      feature: cloudFrontQuota
+      actions:
+          - servicequotas:GetServiceQuota
+      resources:
+          - "*"
+      note: >-
+          CloudFront quota check before `cdk deploy`: GetServiceQuota reads the account's applied CloudFront quotas
+          (service code cloudfront: L-7D134442 cache policies, L-C3659C43 origin request policies, L-CF0D4FC5 response
+          headers policies, L-24B04930 distributions; global quotas, read in us-east-1). Read-only, values only.
+          Without a readable value vra uses the documented AWS default and says so.
+
+    - sid: ChangeSetGate
+      feature: changeSetGate
+      actions:
+          - cloudformation:CreateChangeSet
+          - cloudformation:DescribeChangeSet
+          - cloudformation:DeleteChangeSet
+          - cloudformation:ListChangeSets
+      resources:
+          - arn:${Partition}:cloudformation:*:${Account}:stack/${ConfigName}-*-${BaseStackName}/*
+          - arn:${Partition}:cloudformation:*:${Account}:stack/${ConfigName}-*-${BaseStackName}-*/*
+      note: >-
+          Only for envs with diffGate: changeset. `cdk deploy --method=prepare-change-set` creates the change sets
+          (through the CDK deploy role), vra describes them with nested stacks and deletes them; nothing is executed.
+          vra-deploy-role.yaml grants it with EnableChangeSetGate=true.
+
+    - sid: ToolsVerifyBuildSignatures
+      optional: true
+      actions:
+          - kms:Verify
+          - kms:GetPublicKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      note: >-
+          Only with build.signing in vra.yaml: deploy, promote and rollback verify the manifest and release-tag
+          signatures and refuse unsigned or invalid builds. Scope the resource to the signing key ARN; never grant
+          kms:Sign to a deploying identity.
+
+    - sid: ToolsVerifyApprovalSignature
+      optional: true
+      actions:
+          - kms:Verify
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      note: >-
+          Only when envs/<env>/env.yaml sets approvalSigningKeyArn: every approval record of the env (also
+          human:<action> records) must carry a KMS signature, which vra verifies. Scope the resource to that key ARN;
+          the identity that runs gated actions never needs kms:Sign on it.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

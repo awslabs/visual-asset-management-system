@@ -1,0 +1,27 @@
+{
+    "version": 1,
+    "hooks": {
+        "beforeShellExecution": [
+            {
+                "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" --format cursor || exit 2",
+                "timeout": 10,
+                "failClosed": true
+            }
+        ],
+        "beforeMCPExecution": [
+            {
+                "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" --format cursor || exit 2",
+                "timeout": 10,
+                "failClosed": true
+            }
+        ],
+        "preToolUse": [
+            {
+                "matcher": "MCP:.*",
+                "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" --format cursor || exit 2",
+                "timeout": 10,
+                "failClosed": true
+            }
+        ]
+    }
+}

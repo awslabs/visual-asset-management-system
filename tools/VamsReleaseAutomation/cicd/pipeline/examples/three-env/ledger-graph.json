@@ -1,0 +1,43 @@
+{
+    "result": {
+        "envs": {
+            "dev": {
+                "lane": "release",
+                "promotesFrom": null,
+                "requiresApproval": false,
+                "autoDeploy": false,
+                "tier": "nonprod",
+                "isProdClass": false,
+                "requiredSuites": ["live-cli"],
+                "account": "111111111111",
+                "region": "us-east-1",
+                "children": ["test"]
+            },
+            "prod": {
+                "lane": "release",
+                "promotesFrom": "test",
+                "requiresApproval": true,
+                "autoDeploy": false,
+                "tier": "prod",
+                "isProdClass": true,
+                "requiredSuites": ["live-cli"],
+                "account": "111111111111",
+                "region": "us-east-1",
+                "children": []
+            },
+            "test": {
+                "lane": "release",
+                "promotesFrom": "dev",
+                "requiresApproval": true,
+                "autoDeploy": false,
+                "tier": "nonprod",
+                "isProdClass": false,
+                "requiredSuites": ["live-cli"],
+                "account": "111111111111",
+                "region": "us-east-1",
+                "children": ["prod"]
+            }
+        },
+        "roots": ["dev"]
+    }
+}

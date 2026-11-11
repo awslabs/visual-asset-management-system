@@ -1,0 +1,27 @@
+{
+    "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+    "watch": {
+        "include": ["**"],
+        "exclude": [
+            "README.md",
+            "cdk*.json",
+            "**/*.d.ts",
+            "**/*.js",
+            "tsconfig.json",
+            "package*.json",
+            "node_modules",
+            "test"
+        ]
+    },
+    "context": {
+        "vraPipelineConfig": "config/pipeline.json",
+        "@aws-cdk/core:checkSecretUsage": true,
+        "@aws-cdk/aws-iam:minimizePolicies": true,
+        "@aws-cdk/aws-kms:aliasNameRef": true,
+        "@aws-cdk/aws-codepipeline:defaultPipelineTypeToV2": true,
+        "@aws-cdk/aws-codepipeline:crossAccountKeysDefaultValueToFalse": true,
+        "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+        "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
+        "@aws-cdk/aws-iam:standardizedServicePrincipals": true
+    }
+}

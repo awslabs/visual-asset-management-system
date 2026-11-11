@@ -1,0 +1,90 @@
+# vra ledger project file. Schema: engine/vra/data/schemas/vra.schema.json
+# Placeholder values only. Replace every <...>, example.com and 1111... value before use.
+# Secrets never live here: only Secrets Manager / SSM NAMES.
+schemaVersion: 1
+
+project:
+    name: <customer>-vams
+    description: <customer> fork of VAMS, managed by vams-release-automation
+
+upstream:
+    url: https://github.com/awslabs/visual-asset-management-system.git
+
+fork:
+    url: https://github.com/example-org/vams-fork.git
+    localPath: null # optional existing clone for local / agent runs
+
+githost:
+    type: github # github | gitlab | bitbucket | codecommit | local
+    repo: example-org/vams-fork # owner/repo (github), group/project (gitlab), workspace/repo (bitbucket)
+    apiUrl: null # GitHub Enterprise / self-managed GitLab API URL
+    tokenSecret: null # Secrets Manager secret NAME (bitbucket); github/gitlab use their CLI auth or VRA_GIT_TOKEN
+    pushVendorBranches: true # mirror vendor/vams-main and vendor/vams-development into the fork
+    # CodeCommit fork (works in every partition, IAM auth):
+    # type: codecommit
+    # repositoryName: vams-fork
+    # region: us-gov-west-1
+
+trunk: main
+tagPrefix: cust- # build tags: cust-v<vams-version>-<n>, e.g. cust-v2.6.6-1
+
+lanes:
+    release:
+        source: main # upstream branch; releases are tags vX.Y.Z on it
+        vendorBranch: vendor/vams-main
+        autoMerge: false # sync/release-* merges land through a reviewed PR into trunk
+    preview:
+        source: development # upstream preview branch; feeds dev-preview only, never promoted
+        vendorBranch: vendor/vams-development
+        targetBranch: preview/main
+        autoMerge: true
+
+notifications:
+    type: sns # none | sns | email | slack-webhook | teams-webhook
+    target: vra/notifications-target # Secrets Manager secret NAME holding the topic ARN / address / webhook URL
+    region: us-east-1
+    onlyOn:
+        [BLOCKED_ON_IT, NEEDS_HUMAN, TESTS_FAILED, ROLLED_BACK, ROLLBACK_FAILED, FAILED, SUCCEEDED]
+
+stateStore:
+    type:
+        s3 # local (single operator) | s3 (required for CI lanes: run state, bundles, locks
+        #   and the append-only env history that promotion and rollback read)
+    bucket: vra-state-111111111111-us-east-1 # iam/cloudformation/vra-state-store.yaml output
+    prefix: vra/
+    lockTable: vra-locks
+    region: us-east-1
+
+toolsAccount: "111111111111"
+
+# Automation tier (one ladder, same engine, gates and ledger in every tier):
+#   agent (default)    a local agent or operator runs vra (cron through the agent CLI)
+#   hybrid             the CodePipeline app runs the watch, the build and the envs without approval (scope dev)
+#   pipeline           CodePipeline end to end; manual approvals bound to the execution
+#   pipeline+actions   as pipeline; GitHub Actions (automation.actions) runs PR checks and scans
+# automation.pipeline is the cicd/pipeline config without the topology: `vra pipeline plan` renders it from
+# `vra ledger graph`. Example: cicd/pipeline/examples/three-env/vra-automation.yaml.
+automation:
+    mode: agent
+
+build:
+    ash: true # AWS Automated Security Helper scan in vra build
+    sbom: true
+    signTags: false # true = git tag -s with the build host's own key (vra does not verify it); prefer signing.tags
+    # Optional, recommended for production: one asymmetric KMS key per customer (key spec ECC_NIST_P256, usage
+    # SIGN_VERIFY) in the tools account. vra build signs every bundle manifest and, with tags: true, every release
+    # tag (SSH signature format, `git verify-tag` compatible); deploy, promote and rollback verify both and refuse
+    # unsigned or invalid builds. Needs kms:Sign, kms:Verify, kms:GetPublicKey on the key (docs/09).
+    # signing:
+    #   kmsKeyArn: arn:aws:kms:us-east-1:111111111111:key/00000000-0000-0000-0000-000000000000
+    #   tags: true
+    pushTags: true
+    unitSuites: [lint, web, infra, backend, vamscli, vamsmcp, pipelines] # names from engine/vra/data/suites.yaml
+    cdkCli: null # null = the aws-cdk version pinned by the fork's infra/package-lock.json
+
+cdk:
+    qualifier: hnb659fds # CDK bootstrap qualifier (default); must match iamRoleConfig.json bootstrap.qualifier if customized
+
+# GovCloud variant (see variants/govcloud/README.md):
+#   stateStore.bucket: vra-state-111111111111-us-gov-west-1, stateStore.region / notifications.region: us-gov-west-1
+#   githost.type: codecommit (or a git host reachable from the GovCloud tools account)

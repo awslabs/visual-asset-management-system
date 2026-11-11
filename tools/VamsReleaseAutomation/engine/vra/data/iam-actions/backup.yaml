@@ -1,0 +1,223 @@
+# IAM action manifest: backup (checkpoint)
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+workflow: backup
+schemaVersion: 1
+role: backup
+description: >-
+    Create a checkpoint: an on-demand DynamoDB backup of every table under the VAMS SSM prefix, a
+    PITR status check, an S3 versioning check plus an object-version manifest per asset bucket, and
+    an optional Cognito user export. Read-mostly; the only writes are the backups themselves.
+statements:
+    - sid: CallerIdentity
+      actions:
+          - sts:GetCallerIdentity
+      resources:
+          - "*"
+      note: Derive partition and account; not resource-scoped.
+
+    - sid: VamsResourceNamesRead
+      actions:
+          - ssm:GetParameter
+          - ssm:GetParameters
+          - ssm:GetParametersByPath
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}/*
+      note: Discover every VAMS table and bucket name (GetParametersByPath on the resourceNames prefix).
+
+    - sid: TableBackups
+      actions:
+          - dynamodb:CreateBackup
+          - dynamodb:DescribeTable
+          - dynamodb:DescribeContinuousBackups
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+      note: On-demand backup per table and PITR status (the RPO baseline recorded in the checkpoint).
+
+    - sid: TableKmsForBackup
+      actions:
+          - kms:Decrypt
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:${Region}:${Account}:key/*
+      condition:
+          StringEquals:
+              kms:CallerAccount: ${Account}
+          StringLike:
+              kms:ViaService: dynamodb.*
+      note: >-
+          CreateBackup on a table encrypted with the VAMS customer managed key (useKmsCmkEncryption)
+          needs kms:Decrypt through DynamoDB (seen live: an E2E checkpoint of a CMK stack was denied
+          kms:Decrypt). The key policy must delegate to IAM (VAMS default). Unused on AWS-owned keys.
+
+    - sid: BackupStatus
+      actions:
+          - dynamodb:DescribeBackup
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*/backup/*
+      note: Wait until each backup is AVAILABLE before reporting the checkpoint id.
+
+    - sid: BackupList
+      actions:
+          - dynamodb:ListBackups
+      resources:
+          - "*"
+      note: dynamodb:ListBackups is not resource-scoped; used to verify and prune vra-created backups.
+
+    - sid: AssetBucketVersionManifest
+      forEach: registeredBucket
+      actions:
+          - s3:GetBucketVersioning
+          - s3:GetBucketLocation
+          - s3:GetEncryptionConfiguration
+          - s3:ListBucket
+          - s3:ListBucketVersions
+      resources:
+          - arn:${Partition}:s3:::${RegisteredBucket}
+      note: >-
+          Confirm versioning is enabled and record the current version id of every object so restore can
+          roll objects back. Simulated once per bucket of the env: the SSM s3Buckets/* buckets and every asset
+          bucket registered in s3AssetBucketsStorage (customer-named and other-account buckets included).
+          Buckets named after the core stack are covered by the stock role templates; any other bucket needs
+          envs/<env>/env.yaml registeredBuckets and the grant (iam/cloudformation AdditionalBucketArns).
+
+    - sid: CognitoExportOptional
+      actions:
+          - cognito-idp:ListUsers
+          - cognito-idp:ListGroups
+          - cognito-idp:ListUsersInGroup
+          - cognito-idp:DescribeUserPool
+      resources:
+          - arn:${Partition}:cognito-idp:${Region}:${Account}:userpool/*
+      feature: cognitoExport
+      note: >-
+          Optional user/group export for DR evidence (envs/<env>/env.yaml cognitoExport: true; the role templates
+          grant it through EnableCognitoExport). Passwords and MFA secrets cannot be exported. Not simulated
+          when the export is off.
+
+    - sid: ExternalTableKey
+      actions:
+          - kms:Decrypt
+          - kms:Encrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - ${ExternalTableKmsKey}
+      condition:
+          StringLike:
+              kms:ViaService: dynamodb.*
+      feature: externalTableKey
+      note: >-
+          Only when the VAMS tables use app.useKmsCmkEncryption.optionalExternalCmkArn (a key VAMS did not create);
+          the role templates grant it through ExternalTableKmsKeyArn.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

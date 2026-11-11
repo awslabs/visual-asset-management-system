@@ -1,0 +1,80 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vra/iam-actions.schema.json",
+    "title": "vra IAM action manifest (iam/actions/<workflow>.yaml; Lane C mirrors these)",
+    "description": "Least-privilege action set a workflow needs, used for iam:SimulatePrincipalPolicy preflight and for IT-request policy generation. Partition-generic: resources use ${Partition}, ${Region}, ${Account}, ${CoreStack}, ${SsmPrefix}, ${LiveTestSecret}, ${ExternalTableKmsKey} placeholders resolved at runtime, and ${RegisteredBucket} / ${RegisteredBucketKmsKey} in forEach statements; never a literal commercial-partition ARN prefix.",
+    "type": "object",
+    "required": ["workflow", "statements"],
+    "additionalProperties": false,
+    "properties": {
+        "workflow": {
+            "type": "string",
+            "minLength": 1
+        },
+        "description": {
+            "type": "string"
+        },
+        "schemaVersion": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "role": {
+            "enum": ["deploy", "dataCopy", "backup", "readonly"],
+            "description": "which env role this manifest is simulated against"
+        },
+        "statements": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["actions"],
+                "additionalProperties": false,
+                "properties": {
+                    "sid": {
+                        "type": "string"
+                    },
+                    "actions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9-]+:[A-Za-z0-9*]+$"
+                        }
+                    },
+                    "resources": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "ARN templates with ${\u2026} placeholders, or [\"*\"]"
+                    },
+                    "condition": {
+                        "type": "object"
+                    },
+                    "note": {
+                        "type": "string"
+                    },
+                    "optional": {
+                        "type": "boolean",
+                        "description": "a gap here warns rather than blocks"
+                    },
+                    "feature": {
+                        "enum": [
+                            "changeSetGate",
+                            "maintenanceMode",
+                            "externalTableKey",
+                            "cognitoExport",
+                            "cloudFrontQuota",
+                            "reindexDirect"
+                        ],
+                        "description": "simulated only when the env enables the feature (changeSetGate: diffGate changeset; maintenanceMode: writeFreeze backend maintenance-mode, optional for auto; externalTableKey: the overlay sets app.useKmsCmkEncryption.optionalExternalCmkArn, resources use ${ExternalTableKmsKey}; cognitoExport: env.yaml cognitoExport true; cloudFrontQuota: the overlay deploys on CloudFront, app.useCloudFront.enabled in the aws partition, optional without an overlay; reindexDirect: env.yaml reindex.mode direct, resources may use ${SsmRoot}, the SSM prefix without /resourceNames)"
+                    },
+                    "forEach": {
+                        "enum": ["registeredBucket", "registeredBucketKmsKey"],
+                        "description": "expanded at run time: one statement per bucket of the env (SSM s3Buckets/* + every registered asset bucket of s3AssetBucketsStorage; resources use ${RegisteredBucket}) or per distinct default-encryption KMS key of those buckets (resources use ${RegisteredBucketKmsKey}). Without a resolvable bucket list (dry run, stack not deployed) ${RegisteredBucket} falls back to ${CoreStack}* and key statements are not simulated."
+                    }
+                }
+            }
+        }
+    }
+}

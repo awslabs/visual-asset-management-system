@@ -1,0 +1,85 @@
+# vra: test stage for one env. VAMS live smokes + customer regression hooks, JUnit report group.
+# Inputs (CodePipeline): primary = Fork (web/e2e and VamsCLI sources), secondary = Vra, BuildOutput. The
+#   home repository is cloned by vra-home.sh (VRA_HOME_REPO, VRA_HOME_REF, VRA_HOME_TOKEN).
+# Environment:
+#   VRA_ENV           env to test (required)
+#   VRA_TEST_SUITES   default "live-cli,live-web,customer"
+#   VRA_ROLLBACK_ON_TEST_FAILURE  "true" (set by the stack for envs without approval, pipeline config
+#                     release.autoRollback): failed tests run `vra rollback --env <env>` when the env's
+#                     rollbackPolicy is auto; the action still fails
+# A retry of this action in the same pipeline execution resumes a parked run (run-vra.sh, pipeline_ci.py).
+# Project role: the env's deploy tier, or (pipeline config isolateTests) a test-only tier that may assume only
+# vra-test-<env> (iam/cloudformation/vra-deploy-role.yaml CreateTestRole; envs/<env>/env.yaml testRoleArn).
+# The live suites install the fork's web/e2e dependencies, so a test-only role keeps that code away from
+# deploy permissions.
+version: 0.2
+
+env:
+    shell: bash
+    variables:
+        VRA_ENV: ""
+        VRA_TEST_SUITES: "live-cli,live-web,customer"
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 22
+            python: 3.12
+        commands:
+            - export VRA_PKG_DIR="${CODEBUILD_SRC_DIR_Vra:?secondary source Vra missing}"
+            - export VRA_HOME="${CODEBUILD_SRC_DIR}/vra-home"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/install-toolchain.sh"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" checkout
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-pull
+            - |
+                if [ -n "${CODEBUILD_SRC_DIR_BuildOutput:-}" ]; then
+                  bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" bundle-in "${CODEBUILD_SRC_DIR_BuildOutput}/vra-bundle"
+                fi
+            - |
+                if [[ ",${VRA_TEST_SUITES}," == *",live-web,"* ]]; then
+                  (cd web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium)
+                fi
+    pre_build:
+        commands:
+            - test -n "${VRA_ENV}" || { echo "VRA_ENV is required"; exit 2; }
+    build:
+        commands:
+            - |
+                set +e
+                bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "test-${VRA_ENV}" test --env "${VRA_ENV}" --suites "${VRA_TEST_SUITES}"
+                code=$?
+                # auto-rollback (VRA_ROLLBACK_ON_TEST_FAILURE, set by the stack for envs without approval): failed
+                # tests roll the env back to its previous good build when the env's rollbackPolicy is auto. The
+                # action still fails (30), so the pipeline stops before any env promotes from this one.
+                if [ "${code}" = "30" ] && [ "${VRA_ROLLBACK_ON_TEST_FAILURE:-false}" = "true" ]; then
+                  policy="$(bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-py.sh" pipeline_ci.py rollback-policy \
+                    --ledger "${VRA_HOME}/ledger" --env "${VRA_ENV}")"
+                  if [ "${policy}" = "auto" ]; then
+                    bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "rollback-${VRA_ENV}" \
+                      rollback --env "${VRA_ENV}" --lock-wait "${VRA_LOCK_WAIT_MINUTES:-30}" || exit 40
+                    echo "tests failed on ${VRA_ENV}; rolled back to the previous good build"
+                  else
+                    echo "tests failed on ${VRA_ENV}; rollbackPolicy=${policy}: run vra rollback --env ${VRA_ENV} yourself"
+                  fi
+                fi
+                exit "${code}"
+    post_build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" "report-${VRA_ENV}" report --notify || true
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-push
+
+reports:
+    vra-tests:
+        files:
+            - "**/*.xml"
+        base-directory: vra-home/state/runs
+        file-format: JUNITXML
+        discard-paths: no
+
+artifacts:
+    name: vra-test
+    files:
+        - vra-out/**/*
+        - vra-home/state/iam/**/*
+        - vra-home/state/runs/**/*
+    discard-paths: no

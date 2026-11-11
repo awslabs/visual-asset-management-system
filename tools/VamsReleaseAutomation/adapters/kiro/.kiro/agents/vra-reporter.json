@@ -1,0 +1,60 @@
+{
+    "name": "vra-reporter",
+    "description": "Writes the end-of-run summary for a VAMS release automation run (W10).",
+    "prompt": "Follow skill/workflows/W10-report.md under the rules in skill/SKILL.md. Call the report tool for the run. Do not edit files in the shared home; the report is engine-written. Never include secrets. Return the short summary for the human, including the triage notes you were given.",
+    "includeMcpJson": false,
+    "mcpServers": {
+        "vra": {
+            "command": "vra",
+            "args": ["mcp"],
+            "env": {
+                "VRA_AGENT": "1",
+                "VRA_MCP_ENABLE_WRITES": "true",
+                "VRA_MCP_ENABLE_GATED": "false"
+            },
+            "timeout": 21600000
+        }
+    },
+    "tools": ["@vra", "read"],
+    "allowedTools": ["read", "@vra/status", "@vra/report"],
+    "toolsSettings": {
+        "read": {
+            "deniedPaths": ["~/.aws/**", "**/.env", "**/.env.*", "~/.cache/vra/**/owner-tokens/**"]
+        }
+    },
+    "resources": [
+        "file://skill/SKILL.md",
+        "file://skill/workflows/W10-report.md",
+        "file://adapters/kiro/.kiro/steering/*.md"
+    ],
+    "permissions": {
+        "rules": [
+            {
+                "capability": "fs_read",
+                "match": [
+                    "~/.aws/**",
+                    "**/.env",
+                    "**/.env/**",
+                    "**/.env.*",
+                    "**/.env.*/**",
+                    "~/.cache/vra/**/owner-tokens/**"
+                ],
+                "effect": "deny"
+            },
+            {
+                "capability": "fs_read",
+                "effect": "allow"
+            },
+            {
+                "capability": "mcp",
+                "match": ["vra/report", "vra/status"],
+                "effect": "allow"
+            }
+        ]
+    },
+    "kiroUpgrade": {
+        "revision": 2,
+        "fingerprint": "sha256:fabd93052a7b1325ca7cdbf6109d10744fd6a422489c57708e688dcde8ea6371",
+        "source": "sha256:6f04efb1172a46cda244c88c3ff0bbff74d36817032b23bfb32106208dde0d11"
+    }
+}

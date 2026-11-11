@@ -1,0 +1,23 @@
+# Customer regression hooks, run by `vra test --suites customer` after VAMS's own suites.
+# Schema: engine/vra/data/schemas/customer-tests.schema.json
+# Each hook runs with cwd = the ledger root (or `cwd`), and gets:
+#   VRA_ENV, VRA_RUN_DIR, VRA_JUNIT_DIR, VAMS_API_URL, VAMS_WEB_URL, VAMSCLI_PROFILE
+# Contract: exit 0 = pass; write JUnit XML into $VRA_JUNIT_DIR to get per-test results in reports.
+# Credentials come from the env's liveTest.credentialsSecret through vamscli / the engine, never from here.
+hooks:
+    - name: api-smoke
+      cmd: ["bash", "tests/customer/api_smoke.sh"]
+      envs: [dev, dev-preview, test, prod]
+      timeoutMin: 10
+
+    # More examples (scripts not shipped; write your own against the same contract):
+    # - name: custom-pipeline-roundtrip
+    #   # Upload a sample asset, run the customer's custom pipeline, check the output file appears.
+    #   cmd: "python3 tests/customer/pipeline_roundtrip.py --database vra-regression"
+    #   envs: [dev, test]
+    #   timeoutMin: 45
+    # - name: uat-playwright
+    #   # Customer UI flows on top of VAMS web/e2e.
+    #   cmd: "npx playwright test --config tests/customer/playwright.config.ts --reporter=junit"
+    #   envs: [test]
+    #   timeoutMin: 60

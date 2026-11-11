@@ -1,0 +1,32 @@
+# vra.yaml `automation` block of the three-env live test (merge it into the ledger's vra.yaml).
+# `vra pipeline plan` renders pipeline.json (next to this file) from it plus `vra ledger graph`; the engine test
+# engine/tests/test_pipeline.py checks that the two agree. Placeholder account and names: replace them.
+automation:
+    mode: pipeline
+    approvalEnv: prod # approvers of prod authorize the first `vra pipeline deploy` without a terminal
+    pipeline:
+        prefix: vra
+        toolsAccount: "111111111111" # one account: tools account = the three sandbox envs' account
+        region: us-east-1
+        sources:
+            fork: # CodeConnections to the personal fork; the stack creates the connection (PENDING)
+                type: codeconnections
+                provider: GitHub
+                repo: example-user/visual-asset-management-system
+                branch: test/fork-main
+            vra: # the package zip, uploaded by `vra pipeline push-source --package`
+                type: s3
+                objectKey: vra/vams-release-automation.zip
+        home:
+            repoUrl: https://github.com/example-user/vams-release-home.git
+            ref: main
+            tokenSecretName: vra/github-home-token
+        release:
+            testSuites: live-cli,live-web
+        watch:
+            enabled: true
+            schedule: cron(0 6 * * ? *)
+            timeZone: UTC
+            gitTokenSecretName: vra/github-token
+        notifications:
+            topicArn: arn:aws:sns:us-east-1:111111111111:vra-notifications

@@ -1,0 +1,187 @@
+# Replaced by deploy.yml in vra 0.5.0 (same deploy jobs, plus GitHub Enterprise Server runners and OIDC audience,
+# and a workflow_call trigger). Kept for one release; use one of the two, not both.
+#
+# Reference workflow: vra release lane on GitHub Actions. Copy into the PRIVATE vra home repository
+# (vra-home.yaml, ledger/, state/) as .github/workflows/vra-release.yml. Every step wraps the vra CLI; vra
+# enforces the gates.
+#
+# The deploy jobs below follow the engine's view of the ledger (`vra --json ledger graph`: promotesFrom,
+# requiresApproval, requiredSuites). Regenerate them after a topology change with
+#   bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py render --platform github --ledger ledger
+# The build job checks this file against the ledger and fails on any difference.
+#
+# GitHub environments (Settings > Environments) and what to configure on each:
+#   vra-build   no reviewers; deployment branch rule: main
+#   <env>       one per release-lane env. Envs with requiresApproval: required reviewers, prevent self-review,
+#               branch rule main. Ungated envs: no reviewers, branch rule main.
+#   <env>-tests only with isolate-tests: no reviewers, branch rule main, VRA_CI_ROLE_ARN = a test-only role
+# Each environment holds variable VRA_CI_ROLE_ARN = the role from cicd/oidc/vra-ci-oidc-role.yaml deployed for
+# that environment (sub repo:<org>/<home-repo>:environment:<name>), so a job outside the environment cannot
+# assume its role at all. The vra-build role is deployed with DeployableEnvs=none and AllowSynthRoles=true: it
+# can only assume the build-only vra-synth-<env> roles, never a deploy role.
+# Separation of duties: the initiator is GITHUB_TRIGGERING_ACTOR; the approver is a required reviewer of this
+# run (approval_record.py github). List GitHub logins in envs/<env>/env.yaml approvers.
+# Repository variables: VRA_AWS_REGION, VRA_PACKAGE_REPO (owner/name of vams-release-automation),
+# VRA_PACKAGE_REF (pinned tag or commit), VRA_FORK_REPO. Secrets: VRA_GIT_TOKEN (read the fork and the package,
+# push sync/*), VRA_HOME_TOKEN (optional: contents write on this repository, so jobs push the state they write;
+# leave it unset with stateStore.type s3). No AWS access keys are stored anywhere.
+#
+# Concurrency: one job per env at a time (group vra-env-<env>, in vra-deploy-env.yml). A release waiting for
+# prod reviewers does not hold back the next release's dev deploy.
+name: vra-release
+
+on:
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: Fork commit or tag to build (default = fork trunk head)
+                required: false
+    repository_dispatch:
+        # Sent by the fork repo on pushes to its trunk (merged sync PRs / customer features).
+        types: [vra-fork-trunk-updated]
+
+permissions:
+    contents: read
+
+env:
+    NODE_VERSION: "22"
+    NPM_VERSION: "11.19.1"
+    PYTHON_VERSION: "3.12"
+    UV_VERSION: "0.12.17"
+    VRA_HOME: ${{ github.workspace }}/vra-home
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        environment: vra-build
+        timeout-minutes: 120
+        permissions:
+            id-token: write
+            contents: read
+        outputs:
+            build-id: ${{ steps.build.outputs.build-id }}
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  npm-version: ${{ env.NPM_VERSION }}
+                  python-version: ${{ env.PYTHON_VERSION }}
+                  uv-version: ${{ env.UV_VERSION }}
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  role-session-name: vra-build-${{ github.run_id }}
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+                  VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: ledger validate
+              # No env preflight here: the build tier holds no env deploy role. Each deploy job preflights its
+              # own env, with that env's role, after its approval.
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh ledger-validate ledger validate
+                  bash vra-src/cicd/codebuild/scripts/vra-py.sh ci_graph.py check --platform github \
+                    --ledger "${VRA_HOME}/ledger" --file "${VRA_HOME}/.github/workflows/vra-release.yml"
+            - name: vra build
+              id: build
+              env:
+                  VRA_GIT_TOKEN: ${{ secrets.VRA_GIT_TOKEN }}
+                  VRA_REF: ${{ inputs.ref || github.event.client_payload.ref || 'main' }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/run-vra.sh build build --lane release --ref "${VRA_REF}"
+                  echo "build-id=$(python3 -c 'import json;print(json.load(open("vra-out/build.json"))["buildId"])')" >> "$GITHUB_OUTPUT"
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh bundle-out vra-bundle
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-build-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-build
+                  path: |
+                      vra-out/
+                      vra-bundle/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    # Promotion graph of the SAME build, generated from the ledger (ci_graph.py render --platform github).
+    # Each call runs in its GitHub environment, so gated envs wait for their required reviewers before any
+    # step runs. Siblings (same promotesFrom) run in parallel.
+
+    publish-build:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [build]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-build-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit
+
+    deploy-dev:
+        needs: [build]
+        uses: ./.github/workflows/vra-deploy-env.yml
+        with:
+            env-name: dev
+            promote-from: ""
+            requires-approval: false
+            build-id: ${{ needs.build.outputs.build-id }}
+            test-suites: "live-cli,live-web,customer"
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit
+
+    deploy-test:
+        needs: [build, deploy-dev]
+        uses: ./.github/workflows/vra-deploy-env.yml
+        with:
+            env-name: test
+            promote-from: "dev"
+            requires-approval: true
+            build-id: ${{ needs.build.outputs.build-id }}
+            test-suites: "live-cli,live-web,customer"
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit
+
+    deploy-prod:
+        needs: [build, deploy-test]
+        uses: ./.github/workflows/vra-deploy-env.yml
+        with:
+            env-name: prod
+            promote-from: "test"
+            requires-approval: true
+            build-id: ${{ needs.build.outputs.build-id }}
+            test-suites: ""
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit

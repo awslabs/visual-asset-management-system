@@ -1,0 +1,331 @@
+{
+    "bootstrapVersion": "32",
+    "roles": {
+        "cfn-exec": {
+            "managedPolicyArns": [],
+            "notes": [
+                "LogicalId CloudFormationExecutionRole; its policy is --cloudformation-execution-policies (use iam/cloudformation/vra-cdk-execution-policy.yaml)"
+            ],
+            "policy": {
+                "Statement": [],
+                "Version": "2012-10-17"
+            },
+            "purpose": "CloudFormation execution role: creates every VAMS resource",
+            "trust": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "cloudformation.amazonaws.com"
+                    }
+                }
+            ],
+            "trustPrincipals": ["Service:cloudformation.amazonaws.com"]
+        },
+        "deploy": {
+            "managedPolicyArns": [
+                {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AWSCloudFormationReadOnlyAccess"
+                }
+            ],
+            "notes": ["LogicalId DeploymentActionRole"],
+            "policy": {
+                "Statement": [
+                    {
+                        "Action": [
+                            "cloudformation:CreateChangeSet",
+                            "cloudformation:DeleteChangeSet",
+                            "cloudformation:ExecuteChangeSet",
+                            "cloudformation:CreateStack",
+                            "cloudformation:UpdateStack",
+                            "cloudformation:RollbackStack",
+                            "cloudformation:ContinueUpdateRollback"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "DeployPermissions"
+                    },
+                    {
+                        "Action": [
+                            "s3:GetObject*",
+                            "s3:GetBucket*",
+                            "s3:List*",
+                            "s3:Abort*",
+                            "s3:DeleteObject*",
+                            "s3:PutObject*"
+                        ],
+                        "Condition": {
+                            "StringNotEquals": {
+                                "s3:ResourceAccount": {
+                                    "Ref": "AWS::AccountId"
+                                }
+                            }
+                        },
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "PipelineCrossAccountArtifactsBucket"
+                    },
+                    {
+                        "Action": [
+                            "kms:Decrypt",
+                            "kms:DescribeKey",
+                            "kms:Encrypt",
+                            "kms:ReEncrypt*",
+                            "kms:GenerateDataKey*"
+                        ],
+                        "Condition": {
+                            "StringEquals": {
+                                "kms:ViaService": {
+                                    "Fn::Sub": "s3.${AWS::Region}.amazonaws.com"
+                                }
+                            }
+                        },
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "PipelineCrossAccountArtifactsKey"
+                    },
+                    {
+                        "Action": "iam:PassRole",
+                        "Effect": "Allow",
+                        "Resource": {
+                            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RolePrefix}cdk-${Qualifier}-cfn-exec-role-${AWS::AccountId}-${AWS::Region}"
+                        }
+                    },
+                    {
+                        "Action": [
+                            "cloudformation:DeleteStack",
+                            "cloudformation:UpdateTerminationProtection",
+                            "sts:GetCallerIdentity"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "CliPermissions"
+                    },
+                    {
+                        "Action": ["s3:GetObject*", "s3:GetBucket*", "s3:List*"],
+                        "Effect": "Allow",
+                        "Resource": [
+                            {
+                                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FileAssetsBucketName}"
+                            },
+                            {
+                                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FileAssetsBucketName}/*"
+                            }
+                        ],
+                        "Sid": "CliStagingBucket"
+                    },
+                    {
+                        "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+                        "Effect": "Allow",
+                        "Resource": [
+                            {
+                                "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${Qualifier}/version"
+                            }
+                        ],
+                        "Sid": "ReadVersion"
+                    },
+                    {
+                        "Action": [
+                            "cloudformation:CreateStackRefactor",
+                            "cloudformation:ExecuteStackRefactor"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "Refactor"
+                    }
+                ],
+                "Version": "2012-10-17"
+            },
+            "purpose": "CDK deploy role: starts CloudFormation change sets, passes the execution role",
+            "trust": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                },
+                {
+                    "Action": "sts:TagSession",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                }
+            ],
+            "trustPrincipals": ["AWS:this account"]
+        },
+        "file-publishing": {
+            "managedPolicyArns": [],
+            "notes": ["LogicalId FilePublishingRole"],
+            "policy": {
+                "Statement": [
+                    {
+                        "Action": [
+                            "s3:GetObject*",
+                            "s3:GetBucket*",
+                            "s3:GetEncryptionConfiguration",
+                            "s3:List*",
+                            "s3:DeleteObject*",
+                            "s3:PutObject*",
+                            "s3:Abort*"
+                        ],
+                        "Condition": {
+                            "StringEquals": {
+                                "aws:ResourceAccount": [
+                                    {
+                                        "Fn::Sub": "${AWS::AccountId}"
+                                    }
+                                ]
+                            }
+                        },
+                        "Effect": "Allow",
+                        "Resource": [
+                            {
+                                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FileAssetsBucketName}"
+                            },
+                            {
+                                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FileAssetsBucketName}/*"
+                            }
+                        ]
+                    },
+                    {
+                        "Action": [
+                            "kms:Decrypt",
+                            "kms:DescribeKey",
+                            "kms:Encrypt",
+                            "kms:ReEncrypt*",
+                            "kms:GenerateDataKey*"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": {
+                            "Fn::Sub": "${FileAssetsKmsKeyArn}"
+                        }
+                    }
+                ],
+                "Version": "2012-10-17"
+            },
+            "purpose": "CDK file-asset publishing role: uploads Lambda code and nested templates to the staging bucket",
+            "trust": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                },
+                {
+                    "Action": "sts:TagSession",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                }
+            ],
+            "trustPrincipals": ["AWS:this account"]
+        },
+        "image-publishing": {
+            "managedPolicyArns": [],
+            "notes": ["LogicalId ImagePublishingRole"],
+            "policy": {
+                "Statement": [
+                    {
+                        "Action": [
+                            "ecr:PutImage",
+                            "ecr:InitiateLayerUpload",
+                            "ecr:UploadLayerPart",
+                            "ecr:CompleteLayerUpload",
+                            "ecr:BatchCheckLayerAvailability",
+                            "ecr:DescribeRepositories",
+                            "ecr:DescribeImages",
+                            "ecr:BatchGetImage",
+                            "ecr:GetDownloadUrlForLayer"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": {
+                            "Fn::Sub": "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ImageAssetsRepositoryName}"
+                        }
+                    },
+                    {
+                        "Action": ["ecr:GetAuthorizationToken"],
+                        "Effect": "Allow",
+                        "Resource": "*"
+                    }
+                ],
+                "Version": "2012-10-17"
+            },
+            "purpose": "CDK image-asset publishing role: pushes container images to the staging ECR repository",
+            "trust": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                },
+                {
+                    "Action": "sts:TagSession",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                }
+            ],
+            "trustPrincipals": ["AWS:this account"]
+        },
+        "lookup": {
+            "managedPolicyArns": [
+                {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess"
+                }
+            ],
+            "notes": ["LogicalId LookupRole"],
+            "policy": {
+                "Statement": [
+                    {
+                        "Action": ["kms:Decrypt"],
+                        "Effect": "Deny",
+                        "Resource": "*",
+                        "Sid": "DontReadSecrets"
+                    }
+                ],
+                "Version": "2012-10-17"
+            },
+            "purpose": "CDK lookup role: read-only context lookups at synth",
+            "trust": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                },
+                {
+                    "Action": "sts:TagSession",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": {
+                            "Ref": "AWS::AccountId"
+                        }
+                    }
+                }
+            ],
+            "trustPrincipals": ["AWS:this account"]
+        }
+    },
+    "source": "aws-cdk 2.1135.0 bootstrap template version 32"
+}

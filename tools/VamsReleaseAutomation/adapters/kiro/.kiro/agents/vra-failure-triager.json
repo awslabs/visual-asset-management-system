@@ -1,0 +1,68 @@
+{
+    "name": "vra-failure-triager",
+    "description": "Read-only classification of VAMS release automation failures from vra run state, logs and JUnit into the W5 triage classes.",
+    "prompt": "Follow the Triage section of skill/workflows/W5-test.md under the rules in skill/SKILL.md. Read the run with the status tool, then the step logs under <runDir>/logs/ and JUnit under <runDir>/junit/. You may re-run one failed suite once with the test tool to check for a flake. Never edit or skip tests; never quote secrets. Return per failure: class, evidence path, short excerpt, next workflow, who decides.",
+    "includeMcpJson": false,
+    "mcpServers": {
+        "vra": {
+            "command": "vra",
+            "args": ["mcp"],
+            "env": {
+                "VRA_AGENT": "1",
+                "VRA_MCP_ENABLE_WRITES": "true",
+                "VRA_MCP_ENABLE_GATED": "false"
+            },
+            "timeout": 21600000
+        }
+    },
+    "tools": ["@vra", "glob", "grep", "read"],
+    "allowedTools": [
+        "read",
+        "glob",
+        "grep",
+        "@vra/status",
+        "@vra/report",
+        "@vra/history_show",
+        "@vra/test"
+    ],
+    "toolsSettings": {
+        "read": {
+            "deniedPaths": ["~/.aws/**", "**/.env", "**/.env.*", "~/.cache/vra/**/owner-tokens/**"]
+        }
+    },
+    "resources": [
+        "file://skill/SKILL.md",
+        "file://skill/workflows/W5-test.md",
+        "file://adapters/kiro/.kiro/steering/*.md"
+    ],
+    "permissions": {
+        "rules": [
+            {
+                "capability": "fs_read",
+                "match": [
+                    "~/.aws/**",
+                    "**/.env",
+                    "**/.env/**",
+                    "**/.env.*",
+                    "**/.env.*/**",
+                    "~/.cache/vra/**/owner-tokens/**"
+                ],
+                "effect": "deny"
+            },
+            {
+                "capability": "fs_read",
+                "effect": "allow"
+            },
+            {
+                "capability": "mcp",
+                "match": ["vra/history_show", "vra/report", "vra/status", "vra/test"],
+                "effect": "allow"
+            }
+        ]
+    },
+    "kiroUpgrade": {
+        "revision": 2,
+        "fingerprint": "sha256:ad0521ecac64d354e35fd069a982933f15504acf1b6d1f63cac8e36c87fed84b",
+        "source": "sha256:cd8f0371bff7467ad6e9100561afe3f9fa2b10dbae2438ce926653cd49aa7dd6"
+    }
+}

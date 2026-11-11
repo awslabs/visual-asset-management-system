@@ -1,0 +1,99 @@
+# Codex command rules for VAMS release automation (Starlark execpolicy). Installed as
+# <package root>/.codex/rules/vra.rules; Codex loads project rules only for a trusted project. Check the syntax
+# with `codex execpolicy check` against your installed version (see README sources).
+#
+# These rules apply to the shell fallback; the primary surface is the vra MCP server. Read-only vra and git are
+# allowed; vra commands that change an environment prompt (in the cron profile, approval_policy "never" refuses
+# every prompt); anything that bypasses the engine or is human-only is forbidden. Prefix rules cannot see flags
+# in the middle of a command or a command inside `bash -lc "..."`, so the PreToolUse guard (.codex/hooks.json)
+# and the engine itself (VRA_AGENT=1) refuse those.
+
+prefix_rule(pattern = ["vra", "status"], decision = "allow", match = ["vra status --all"])
+prefix_rule(pattern = ["vra", "--json", "status"], decision = "allow")
+prefix_rule(pattern = ["vra", "report"], decision = "allow")
+prefix_rule(pattern = ["vra", "ledger", "validate"], decision = "allow")
+prefix_rule(pattern = ["vra", "ledger", "show"], decision = "allow")
+prefix_rule(pattern = ["vra", "ledger", "diff"], decision = "allow")
+prefix_rule(pattern = ["vra", "ledger", "graph"], decision = "allow")
+prefix_rule(pattern = ["vra", "history"], decision = "allow", match = ["vra history verify --env prod"])
+prefix_rule(pattern = ["vra", "home", "show"], decision = "allow")
+prefix_rule(pattern = ["vra", "preflight"], decision = "allow")
+prefix_rule(pattern = ["vra", "iam", "verify"], decision = "allow")
+prefix_rule(pattern = ["vra", "pipeline", "status"], decision = "allow")
+prefix_rule(pattern = ["vra", "pipeline", "plan"], decision = "allow")
+prefix_rule(pattern = ["vra", "pipeline", "sync-ledger"], decision = "allow")
+
+prefix_rule(pattern = ["vra", "setup"], decision = "prompt", match = ["vra setup --answers a.yaml"])
+prefix_rule(pattern = ["vra", "sync"], decision = "prompt")
+prefix_rule(pattern = ["vra", "merge"], decision = "prompt")
+prefix_rule(pattern = ["vra", "build"], decision = "prompt")
+prefix_rule(pattern = ["vra", "test"], decision = "prompt")
+prefix_rule(pattern = ["vra", "backup"], decision = "prompt")
+prefix_rule(pattern = ["vra", "watch"], decision = "prompt")
+prefix_rule(pattern = ["vra", "resume"], decision = "prompt")
+prefix_rule(pattern = ["vra", "home", "sync"], decision = "prompt")
+prefix_rule(pattern = ["vra", "deploy"], decision = "prompt")
+prefix_rule(pattern = ["vra", "promote"], decision = "prompt")
+prefix_rule(pattern = ["vra", "rollback"], decision = "prompt")
+prefix_rule(pattern = ["vra", "restore"], decision = "prompt")
+prefix_rule(pattern = ["vra", "migrate"], decision = "prompt")
+prefix_rule(pattern = ["vra", "data-copy"], decision = "prompt")
+prefix_rule(pattern = ["vra", "reindex"], decision = "prompt")
+prefix_rule(pattern = ["vra", "ledger", "upgrade-config"], decision = "prompt")
+prefix_rule(pattern = ["vra", "iam", "plan"], decision = "prompt")
+prefix_rule(pattern = ["vra", "pipeline", "deploy"], decision = "prompt")
+prefix_rule(pattern = ["vra", "pipeline", "push-source"], decision = "prompt")
+prefix_rule(pattern = ["vra", "pipeline", "sync-ledger", "--deploy"], decision = "prompt")
+
+prefix_rule(pattern = ["vra", "unlock"], decision = "forbidden",
+            justification = "Releasing another run's lock is human-only; give the human the command.",
+            match = ["vra unlock --env prod --reason x"])
+prefix_rule(pattern = ["vra", "iam", "apply"], decision = "forbidden",
+            justification = "Wiring IT's roles into an env's config is human-only; give the human the command.",
+            match = ["vra iam apply --env prod --from it-response.yaml"])
+prefix_rule(pattern = ["vra", "ledger", "import"], decision = "forbidden",
+            justification = "Replacing an env's VAMS config is human-only.")
+prefix_rule(pattern = ["vra", "home", "migrate"], decision = "forbidden",
+            justification = "Creating the shared home from an old ledger is human-only.")
+prefix_rule(pattern = ["vra", "credential-process"], decision = "forbidden",
+            justification = "Internal helper of the engine; never run directly.")
+prefix_rule(pattern = ["vra", "mcp"], decision = "forbidden",
+            justification = "The MCP server is started by Codex from config.toml, not from the shell.")
+prefix_rule(pattern = ["python", "-m", "vra"], decision = "forbidden",
+            justification = "Run the engine as `vra` so these rules and the guard see it.")
+prefix_rule(pattern = ["python3", "-m", "vra"], decision = "forbidden",
+            justification = "Run the engine as `vra` so these rules and the guard see it.")
+
+prefix_rule(pattern = ["git", "status"], decision = "allow")
+prefix_rule(pattern = ["git", "diff"], decision = "allow")
+prefix_rule(pattern = ["git", "log"], decision = "allow")
+prefix_rule(pattern = ["git", "show"], decision = "allow")
+prefix_rule(pattern = ["git", "branch", "--list"], decision = "allow")
+prefix_rule(pattern = ["git", "remote", "-v"], decision = "allow")
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+
+prefix_rule(pattern = ["git", "push", "--force"], decision = "forbidden",
+            justification = "Force pushes are never allowed.", match = ["git push --force origin main"])
+prefix_rule(pattern = ["git", "push", "-f"], decision = "forbidden", justification = "Force pushes are never allowed.")
+prefix_rule(pattern = ["git", "push", "--force-with-lease"], decision = "forbidden",
+            justification = "Force pushes are never allowed.")
+prefix_rule(pattern = ["git", "push", "--delete"], decision = "forbidden",
+            justification = "Deleting remote refs is never allowed.")
+prefix_rule(pattern = ["git", "push", "--mirror"], decision = "forbidden",
+            justification = "Mirror pushes are never allowed.")
+prefix_rule(pattern = ["git", "rebase"], decision = "forbidden", justification = "vra merges with --no-ff; never rebase.")
+prefix_rule(pattern = ["git", "reset", "--hard"], decision = "forbidden", justification = "Never discard work.")
+prefix_rule(pattern = ["git", "tag", "-d"], decision = "forbidden", justification = "Tags are never moved or deleted.")
+prefix_rule(pattern = ["git", "tag", "-f"], decision = "forbidden", justification = "Tags are never moved or deleted.")
+prefix_rule(pattern = ["git", "branch", "-D"], decision = "forbidden", justification = "Branches are never deleted.")
+prefix_rule(pattern = ["git", "update-ref"], decision = "forbidden", justification = "Refs are changed only by vra.")
+
+prefix_rule(pattern = ["cdk"], decision = "forbidden", justification = "vra deploys from the build bundle.",
+            match = ["cdk deploy --all"])
+prefix_rule(pattern = ["npx", "cdk"], decision = "forbidden", justification = "vra deploys from the build bundle.")
+prefix_rule(pattern = ["npx", "aws-cdk"], decision = "forbidden", justification = "vra deploys from the build bundle.")
+prefix_rule(pattern = ["aws"], decision = "forbidden", justification = "vra performs every AWS change.",
+            match = ["aws s3 ls"], not_match = ["vra status"])
+prefix_rule(pattern = ["env", "aws"], decision = "forbidden", justification = "vra performs every AWS change.")
+prefix_rule(pattern = ["uvx", "awscli"], decision = "forbidden", justification = "vra performs every AWS change.")
+prefix_rule(pattern = ["eval"], decision = "forbidden", justification = "eval hides the command it runs.")

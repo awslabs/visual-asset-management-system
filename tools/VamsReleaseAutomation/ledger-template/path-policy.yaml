@@ -1,0 +1,71 @@
+# Merge policy for upstream VAMS refs merged into the customer fork (`vra merge`).
+# Schema: engine/vra/data/schemas/path-policy.schema.json. `vra setup` writes this file into a new
+# ledger; ledger-template/path-policy.yaml is a byte-identical copy (scripts/check.sh enforces it).
+#
+# Rules apply only to paths git could NOT merge cleanly. First matching glob wins.
+#   fork        keep the fork's side (customer code lanes, see VAMS docs developer/customizing-vams.md)
+#   upstream    take upstream's side
+#   regenerate  take upstream, then run `regenerate` in the file's directory
+#   union       keep both sides' lines
+#   agent       leave the conflict for the agent / a human (conflicts.json, exit 20)
+# Paths listed in core-patches.md always resolve as `agent`, before any rule here.
+default: agent
+unregisteredCoreEdits: refuse
+rules:
+    # --- lockfiles: take upstream, then regenerate against the merged manifests ------------
+    - glob: "**/package-lock.json"
+      strategy: regenerate
+      regenerate: "npm install --package-lock-only --ignore-scripts"
+      note: "root, web/, infra/ and any other npm workspace"
+    - glob: "**/poetry.lock"
+      strategy: regenerate
+      regenerate: "poetry lock --no-update"
+    - glob: "**/uv.lock"
+      strategy: regenerate
+      regenerate: "uv lock"
+
+    # --- customer fork lanes (VAMS extension points): fork wins ----------------------------
+    - { glob: "backend/backend/custom/**", strategy: fork }
+    - { glob: "backend/backend/handlers/custom/**", strategy: fork }
+    - { glob: "backend/backend/models/custom/**", strategy: fork }
+    - {
+          glob: "backend/backend/customConfigCommon/**",
+          strategy: fork,
+          note: "authentication override hooks",
+      }
+    - { glob: "infra/lib/nestedStacks/custom/**", strategy: fork }
+    - { glob: "infra/common/custom*.ts", strategy: fork }
+    # infra/config/custom/customConfig.json is customer-owned: VAMS ships it empty and never edits it, so
+    # the fork's copy wins. Its upstream copy can still gain keys: `vra ledger upgrade-config` reports
+    # them (result.customConfig) and `--write` adds them to the env overlay without touching your keys.
+    - { glob: "infra/config/custom/**", strategy: fork }
+    - { glob: "web/src/custom/**", strategy: fork }
+    # the release tool itself: never forked silently; the operator's vra comes from the ledger's engineVersion
+    - { glob: "tools/VamsReleaseAutomation/**", strategy: upstream }
+    - { glob: "web/src/visualizerPlugin/viewers/custom/**", strategy: fork }
+    - { glob: "web/src/visualizerPlugin/**/custom*", strategy: fork }
+    - { glob: "web/src/visualizerPlugin/config/customViewerConfig.json", strategy: fork }
+    - { glob: "web/customInstalls/custom/**", strategy: fork }
+    - { glob: "tools/VamsCLI/vamscli/custom_*", strategy: fork }
+    - { glob: "tools/VamsCLI/vamscli/commands/custom/**", strategy: fork }
+    - { glob: "tools/VamsCLI/vamscli/utils/custom_api_client.py", strategy: fork }
+    - { glob: "tools/VamsMCP/vams_mcp/custom_tools.py", strategy: fork }
+
+    # --- env config is ledger-managed (envs/<env>/overlay/), so the tree copy follows upstream
+    - { glob: "infra/config/config.json", strategy: upstream }
+
+    # --- release notes: keep both sides' entries --------------------------------------------
+    - { glob: "CHANGELOG.md", strategy: union }
+    - { glob: "**/revisions.md", strategy: union }
+
+    # --- registered core patches ------------------------------------------------------------
+    # Edits outside the fork lanes belong in core-patches.md (one `path` per bullet); those paths
+    # go to the agent automatically. To force review of a path without registering it, add e.g.:
+    # - { glob: "web/src/components/Header.tsx", strategy: agent, note: "core patch CP-001" }
+
+    # --- everything else: no rule, so `default: agent` applies -------------------------------
+    # A conflict on a path no rule covers goes to the agent / a human; nothing is overwritten silently.
+    # Before merging, vra also lists fork edits to existing files that no rule and no core-patches.md
+    # entry covers, and stops (unregisteredCoreEdits: refuse). Register each such edit in core-patches.md.
+    # For upstream to win on every unregistered conflict, add explicitly:
+    # - { glob: "**/*", strategy: upstream }

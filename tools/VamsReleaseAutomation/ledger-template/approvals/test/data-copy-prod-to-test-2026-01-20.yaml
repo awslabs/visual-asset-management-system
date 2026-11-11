@@ -1,0 +1,14 @@
+# Approval for a prod -> test data copy (data owner signs off). EXAMPLE ONLY.
+# `vra data-copy --from prod --to test --approval approvals/test/data-copy-prod-to-test-2026-01-20.yaml`
+# (a path relative to the ledger root, or the bare id data-copy-prod-to-test-2026-01-20).
+# `build` is the gate subject: data-copy:<source env>. Without --approval the engine looks for
+# approvals/test/data-copy_prod.yaml.
+build: "data-copy:prod"
+env: test
+approver: data-owner@example.com
+approvedAt: "2026-01-20T14:00:00Z"
+expiresAt: "2026-01-21T14:00:00Z"
+ticket: DATA-0001
+notes: Full copy approved for UAT regression on production-shaped data; Cognito users not copied.
+scope: [data-copy]
+source: manual

@@ -1,0 +1,280 @@
+{
+    "name": "vra-conflict-resolver",
+    "description": "Resolves merge conflicts left by vra merge (exit 20 with conflicts.json) by path-policy category, proposes core patches, and escalates semantic conflicts.",
+    "prompt": "Follow skill/workflows/conflict-resolution.md exactly under the rules in skill/SKILL.md. Edit only the conflicted files in the engine's fork clone (the repo directory of the work dir that the status tool reports). Use shell only for read-only git and git add <path> in that clone, and vra merge --abort when the workflow says so; continue the merge with the merge_continue tool. Never commit the merge yourself, never rebase, never use tree-wide -X ours/theirs, never push. Return per path: category, resolution, core patch proposed or retired; escalate semantic conflicts with two candidate resolutions.",
+    "includeMcpJson": false,
+    "mcpServers": {
+        "vra": {
+            "command": "vra",
+            "args": ["mcp"],
+            "env": {
+                "VRA_AGENT": "1",
+                "VRA_MCP_ENABLE_WRITES": "true",
+                "VRA_MCP_ENABLE_GATED": "false"
+            },
+            "timeout": 21600000
+        }
+    },
+    "tools": ["@vra", "glob", "grep", "read", "shell", "write"],
+    "allowedTools": ["read", "glob", "grep", "@vra/status", "@vra/merge_continue", "@vra/build"],
+    "toolsSettings": {
+        "shell": {
+            "allowedCommands": [
+                "git status",
+                "git status .*",
+                "git diff",
+                "git diff .*",
+                "git log",
+                "git log .*",
+                "git show",
+                "git show .*",
+                "git branch --list",
+                "git branch --list .*",
+                "git rev-parse",
+                "git rev-parse .*",
+                "git ls-files",
+                "git ls-files .*",
+                "git tag -l",
+                "git tag -l .*",
+                "git add",
+                "git add .*",
+                "git remote -v"
+            ],
+            "deniedCommands": [
+                ".*git push .*--force.*",
+                ".*git push -f.*",
+                ".*git push .* -f.*",
+                ".*git push .*--delete.*",
+                ".*git push .*--mirror.*",
+                ".*git push .*--prune.*",
+                ".*git rebase.*",
+                ".*git reset --hard.*",
+                ".*git tag .*-d.*",
+                ".*git tag .*-f.*",
+                ".*git branch .*-D.*",
+                ".*git update-ref.*",
+                ".*git filter-.*",
+                "cdk",
+                "cdk .*",
+                ".* cdk .*",
+                ".*npx .*aws-cdk.*",
+                "aws",
+                "aws .*",
+                ".* aws .*",
+                ".*/aws .*",
+                ".*uvx .*awscli.*",
+                ".*pipx .*aws.*",
+                ".*python .*-c .*boto3.*",
+                ".*python3 .*-c .*boto3.*",
+                ".*python -m vra.*",
+                ".*python3 -m vra.*",
+                "eval .*",
+                ".* eval .*",
+                ".*\\$\\(.*",
+                ".*`.*",
+                ".*vra unlock.*",
+                ".*vra iam apply.*",
+                ".*vra credential-process.*",
+                ".*vra ledger import.*",
+                ".*vra ledger upgrade-config .*--write.*",
+                ".*vra home migrate.*",
+                ".*vra .*--confirm.*",
+                ".*vra .*--takeover.*",
+                ".*vra .*--allow-replacements.*",
+                ".*vra .*--accept-drift.*",
+                ".*vra .*--emergency.*",
+                ".*vra .*--allow-missing-scanners.*",
+                ".*vra .*--writes-stopped.*",
+                ".*vra .*--abort-workflow-executions.*",
+                ".*vra .*--include-auth-tables.*",
+                ".*vra .*--human-approval.*",
+                ".*vra .*--force.*",
+                ".*git commit.*"
+            ]
+        },
+        "read": {
+            "deniedPaths": ["~/.aws/**", "**/.env", "**/.env.*", "~/.cache/vra/**/owner-tokens/**"]
+        },
+        "write": {
+            "allowedPaths": ["~/.cache/vra/**/repo/**"],
+            "deniedPaths": [
+                "~/.aws/**",
+                "**/.env",
+                "**/.env.*",
+                "~/.cache/vra/**/owner-tokens/**",
+                "**/ledger/approvals/**",
+                "**/vra-home.yaml",
+                "**/state/history/**",
+                "**/state/locks/**",
+                "**/state/approvals-consumed/**",
+                "**/state/runs/*/state.json",
+                "**/state/iam/**",
+                "**/state/pipeline/**",
+                "**/ledger/envs/*/overlay/**",
+                "**/envs/*/overlay/**"
+            ]
+        }
+    },
+    "resources": [
+        "file://skill/SKILL.md",
+        "file://skill/workflows/conflict-resolution.md",
+        "file://adapters/kiro/.kiro/steering/*.md"
+    ],
+    "hooks": [
+        {
+            "name": "preToolUse-0",
+            "trigger": "preToolUse",
+            "matcher": "execute_bash",
+            "action": {
+                "type": "command",
+                "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" || exit 2"
+            },
+            "timeout": 10
+        },
+        {
+            "name": "preToolUse-1",
+            "trigger": "preToolUse",
+            "matcher": "shell",
+            "action": {
+                "type": "command",
+                "command": "python3 \"${VRA_PACKAGE:-.}/adapters/shared/vra-guard.py\" || exit 2"
+            },
+            "timeout": 10
+        }
+    ],
+    "permissions": {
+        "rules": [
+            {
+                "capability": "shell",
+                "match": [
+                    "git status",
+                    "git status *",
+                    "git diff",
+                    "git diff *",
+                    "git log",
+                    "git log *",
+                    "git show",
+                    "git show *",
+                    "git branch --list",
+                    "git branch --list *",
+                    "git rev-parse",
+                    "git rev-parse *",
+                    "git ls-files",
+                    "git ls-files *",
+                    "git tag -l",
+                    "git tag -l *",
+                    "git add",
+                    "git add *",
+                    "git remote -v"
+                ],
+                "effect": "allow"
+            },
+            {
+                "capability": "shell",
+                "match": [
+                    "*git push *--force*",
+                    "*git push -f*",
+                    "*git push * -f*",
+                    "*git push *--delete*",
+                    "*git push *--mirror*",
+                    "*git push *--prune*",
+                    "*git rebase*",
+                    "*git reset --hard*",
+                    "*git tag *-d*",
+                    "*git tag *-f*",
+                    "*git branch *-D*",
+                    "*git update-ref*",
+                    "*git filter-*",
+                    "cdk",
+                    "cdk *",
+                    "* cdk *",
+                    "*npx *aws-cdk*",
+                    "aws",
+                    "aws *",
+                    "* aws *",
+                    "*/aws *",
+                    "*uvx *awscli*",
+                    "*pipx *aws*",
+                    "*python *-c *boto3*",
+                    "*python3 *-c *boto3*",
+                    "*python -m vra*",
+                    "*python3 -m vra*",
+                    "eval *",
+                    "* eval *",
+                    "*$(*",
+                    "*`*",
+                    "*vra unlock*",
+                    "*vra iam apply*",
+                    "*vra credential-process*",
+                    "*vra ledger import*",
+                    "*vra ledger upgrade-config *--write*",
+                    "*vra home migrate*",
+                    "*vra *--confirm*",
+                    "*vra *--takeover*",
+                    "*vra *--allow-replacements*",
+                    "*vra *--accept-drift*",
+                    "*vra *--emergency*",
+                    "*vra *--allow-missing-scanners*",
+                    "*vra *--writes-stopped*",
+                    "*vra *--abort-workflow-executions*",
+                    "*vra *--include-auth-tables*",
+                    "*vra *--human-approval*",
+                    "*vra *--force*",
+                    "*git commit*"
+                ],
+                "effect": "deny"
+            },
+            {
+                "capability": "fs_read",
+                "match": [
+                    "~/.aws/**",
+                    "**/.env",
+                    "**/.env/**",
+                    "**/.env.*",
+                    "**/.env.*/**",
+                    "~/.cache/vra/**/owner-tokens/**"
+                ],
+                "effect": "deny"
+            },
+            {
+                "capability": "fs_write",
+                "match": ["~/.cache/vra/**/repo/**"],
+                "effect": "allow"
+            },
+            {
+                "capability": "fs_write",
+                "match": [
+                    "~/.aws/**",
+                    "**/.env",
+                    "**/.env.*",
+                    "~/.cache/vra/**/owner-tokens/**",
+                    "**/ledger/approvals/**",
+                    "**/vra-home.yaml",
+                    "**/state/history/**",
+                    "**/state/locks/**",
+                    "**/state/approvals-consumed/**",
+                    "**/state/runs/*/state.json",
+                    "**/state/iam/**",
+                    "**/state/pipeline/**",
+                    "**/ledger/envs/*/overlay/**",
+                    "**/envs/*/overlay/**"
+                ],
+                "effect": "deny"
+            },
+            {
+                "capability": "fs_read",
+                "effect": "allow"
+            },
+            {
+                "capability": "mcp",
+                "match": ["vra/build", "vra/merge_continue", "vra/status"],
+                "effect": "allow"
+            }
+        ]
+    },
+    "kiroUpgrade": {
+        "revision": 2,
+        "fingerprint": "sha256:8c4eef98f1f35c3e80c2fbbe1d5c70ac0328e9c186a9cf8910e1e499c3cea009",
+        "source": "sha256:f3463d5568a10a012514e934f0eb0885dbb9609d4281e2d84e63bddb79c21813"
+    }
+}

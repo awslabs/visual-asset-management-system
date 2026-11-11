@@ -1,0 +1,16 @@
+---
+description: VAMS release automation through the vra engine (setup, watch, sync, merge, build, deploy, test, promote, rollback, data copy, reports)
+alwaysApply: true
+---
+
+This workspace operates the release lifecycle of a VAMS fork through the `vra` engine.
+
+-   Read `skill/SKILL.md` before any release task and follow it and the workflow it names in `skill/workflows/`. It is
+    the single source of truth; this rule only points to it.
+-   Use the tools of the `vra` MCP server first; the `vra` CLI is the fallback the skill describes.
+-   The human-only actions are listed in `skill/SKILL.md`. Hand them to the person with the exact command; never run
+    them, never look for another way to do them.
+-   Cursor specifics: the hooks in `.cursor/hooks.json` run `adapters/shared/vra-guard.py` before every shell command
+    and MCP call. A deny from the guard is final: do not retry the same action in another spelling. Deploys and the
+    approval-gated tools ask the person first; the approval-gated tools exist only when the person started Cursor with
+    `VRA_MCP_ENABLE_GATED=true`.

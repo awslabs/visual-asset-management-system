@@ -1,0 +1,63 @@
+# vra: build stage. Unit suites + synth per env of the lane + bundle (+ tag on the release lane).
+# Inputs (CodePipeline): primary = Fork (customer VAMS fork at the triggering commit), secondary = Vra.
+#   The home repository (ledger + shared state) is cloned by vra-home.sh (VRA_HOME_REPO, VRA_HOME_REF,
+#   VRA_HOME_TOKEN).
+# Project: privileged mode ON (CDK Lambda bundling and asset builds use docker).
+# Output artifact BuildOutput carries vra-bundle/artifacts/<buildId>/ and vra-out/build.json to the deploy
+# stages, so every env deploys the identical bundle. With stateStore.type s3 the engine also mirrors the
+# bundle to the state bucket.
+version: 0.2
+
+env:
+    shell: bash
+    variables:
+        VRA_LANE: release
+        VRA_REQUIRE_DOCKER: "true"
+    exported-variables:
+        - VRA_BUILD_ID
+        - VRA_REF
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 22
+            python: 3.12
+        commands:
+            - export VRA_PKG_DIR="${CODEBUILD_SRC_DIR_Vra:?secondary source Vra missing}"
+            - export VRA_HOME="${CODEBUILD_SRC_DIR}/vra-home"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/install-toolchain.sh"
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" checkout
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-pull
+    pre_build:
+        commands:
+            # an S3 fork source resolves to the object's version id: `vra pipeline push-source` puts the commit
+            # in .vra-revision (a CodeConnections source resolves to the commit itself)
+            - if [ -s .vra-revision ]; then VRA_SRC_REF="$(head -n1 .vra-revision)"; else VRA_SRC_REF="${CODEBUILD_RESOLVED_SOURCE_VERSION}"; fi
+            - export VRA_REF="${VRA_REF_OVERRIDE:-${VRA_SRC_REF}}"
+            - echo "building lane ${VRA_LANE} at ${VRA_REF}"
+    build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/run-vra.sh" build build --lane "${VRA_LANE}" --ref "${VRA_REF}"
+            - export VRA_BUILD_ID="$(python3 -c 'import json;print(json.load(open("vra-out/build.json"))["buildId"])')"
+            - test -n "${VRA_BUILD_ID}"
+            - echo "VRA_BUILD_ID=${VRA_BUILD_ID}"
+    post_build:
+        commands:
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" bundle-out vra-bundle
+            - bash "${VRA_PKG_DIR}/cicd/codebuild/scripts/vra-home.sh" sync home-push
+
+reports:
+    vra-unit:
+        files:
+            - "**/*.xml"
+        base-directory: vra-home/state/runs
+        file-format: JUNITXML
+        discard-paths: no
+
+artifacts:
+    name: vra-build
+    files:
+        - vra-out/**/*
+        - vra-home/state/iam/**/*
+        - vra-bundle/**/*
+    discard-paths: no

@@ -1,0 +1,302 @@
+# IAM action manifest: restore
+# See deploy.yaml for the placeholder and principal ("Tools*" sid) conventions.
+# Approval-gated in envs with requiresApproval.
+workflow: restore
+schemaVersion: 1
+role: deploy
+description: >-
+    Restore a checkpoint. DynamoDB tables are CDK-owned, so each backup is restored to a NEW
+    temporary table (vra-restore-*), its items are copied back into the live table (clear + batch
+    write), and the temporary table is deleted. S3 objects are rolled back to the recorded versions.
+statements:
+    - sid: CallerIdentity
+      actions:
+          - sts:GetCallerIdentity
+      resources:
+          - "*"
+      note: Derive partition and account; not resource-scoped.
+
+    - sid: VamsResourceNamesRead
+      actions:
+          - ssm:GetParameter
+          - ssm:GetParameters
+          - ssm:GetParametersByPath
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}/*
+      note: Resolve live table and bucket names.
+
+    - sid: RestoreFromBackupToTempTable
+      actions:
+          - dynamodb:RestoreTableFromBackup
+          - dynamodb:RestoreTableToPointInTime
+          - dynamodb:DescribeBackup
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*/backup/*
+      note: Start the restore from the checkpoint backup (or PITR timestamp) of each live table.
+
+    - sid: TempTableLifecycle
+      actions:
+          # RestoreTableFromBackup / RestoreTableToPointInTime are also authorized on the TARGET (new) table
+          - dynamodb:RestoreTableFromBackup
+          - dynamodb:RestoreTableToPointInTime
+          - dynamodb:DescribeTable
+          - dynamodb:Scan
+          - dynamodb:DeleteTable
+          # The following are required on the TARGET table by RestoreTableFromBackup itself.
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+          - dynamodb:GetItem
+          - dynamodb:Query
+          - dynamodb:BatchWriteItem
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/vra-restore-${BaseStackName}-*
+      note: >-
+          Create, read and delete only the vra-owned temporary tables, named
+          vra-restore-<baseStackName>-<region>-<tableKey>-<tag> by the engine (restore.temp_table_name; a test
+          checks every name the engine creates against this pattern and the CloudFormation copy). DeleteTable is
+          never granted on CDK-owned tables.
+
+    - sid: LiveTableCopyBack
+      actions:
+          - dynamodb:DescribeTable
+          - dynamodb:Scan
+          - dynamodb:BatchWriteItem
+          - dynamodb:DeleteItem
+          - dynamodb:PutItem
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+      note: Clear the live table and load the restored items back into it, keeping CloudFormation ownership intact.
+
+    - sid: TableKmsForRestore
+      actions:
+          - kms:CreateGrant
+          - kms:Decrypt
+          - kms:DescribeKey
+          - kms:Encrypt
+          - kms:GenerateDataKey
+          - kms:ReEncryptFrom
+          - kms:ReEncryptTo
+      resources:
+          - arn:${Partition}:kms:${Region}:${Account}:key/*
+      condition:
+          StringEquals:
+              kms:CallerAccount: ${Account}
+          StringLike:
+              kms:ViaService: dynamodb.*
+      note: >-
+          Restoring a table encrypted with the VAMS CMK (app.useKmsCmkEncryption) needs these on the CMK.
+          The key policy must delegate to IAM (VAMS default). kms:ViaService uses a wildcard host so the
+          statement works in every partition's endpoint domain.
+
+    - sid: S3RollbackBucket
+      forEach: registeredBucket
+      actions:
+          - s3:ListBucket
+          - s3:ListBucketVersions
+          - s3:GetEncryptionConfiguration
+      resources:
+          - arn:${Partition}:s3:::${RegisteredBucket}
+      note: Per bucket of the env (SSM s3Buckets/* and every registered asset bucket); see backup.yaml.
+
+    - sid: S3RollbackToRecordedVersions
+      forEach: registeredBucket
+      actions:
+          - s3:GetObjectVersion
+          - s3:GetObjectVersionTagging
+          - s3:PutObject
+          - s3:PutObjectTagging
+          - s3:DeleteObject
+      resources:
+          - arn:${Partition}:s3:::${RegisteredBucket}/*
+      note: >-
+          Copy each recorded version over the current one (CopyObject = GetObjectVersion + PutObject) and
+          add delete markers for objects created after the checkpoint. Old versions are never purged
+          (no s3:DeleteObjectVersion), so the restore itself stays reversible.
+
+    - sid: S3ObjectKms
+      forEach: registeredBucketKmsKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - ${RegisteredBucketKmsKey}
+      condition:
+          StringLike:
+              kms:ViaService: s3.*
+      note: >-
+          Per distinct default-encryption KMS key of the env's buckets (the VAMS CMK with useKmsCmkEncryption, or a
+          registered bucket's own key, possibly in another account: its key policy must allow the role as well).
+
+    - sid: WorkflowExecutionsRead
+      actions:
+          - dynamodb:Scan
+          - states:DescribeExecution
+      resources:
+          - arn:${Partition}:dynamodb:${Region}:${Account}:table/${CoreStack}*
+          - arn:${Partition}:states:${Region}:${Account}:execution:*
+      note: >-
+          List the VAMS workflow executions still running before data changes (workflow-executions table, confirmed
+          with Step Functions). They are reported, and stopped only with --abort-workflow-executions.
+
+    - sid: WorkflowExecutionsAbort
+      optional: true
+      actions:
+          - states:StopExecution
+      resources:
+          - arn:${Partition}:states:${Region}:${Account}:execution:*
+      note: Only for --abort-workflow-executions (never automatic). A gap here warns; it blocks only that flag.
+
+    - sid: MaintenanceModeSwitch
+      feature: maintenanceMode
+      actions:
+          - ssm:GetParameter
+          - ssm:PutParameter
+      resources:
+          - arn:${Partition}:ssm:${Region}:${Account}:parameter${SsmPrefix}/maintenanceMode*
+      note: >-
+          Write freeze through VAMS maintenance mode (awslabs/visual-asset-management-system#1002). Simulated only when
+          the env's writeFreeze backend is maintenance-mode (as an optional check for auto); the manual backend needs
+          nothing.
+
+    - sid: ExternalTableKey
+      actions:
+          - kms:Decrypt
+          - kms:Encrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - ${ExternalTableKmsKey}
+      condition:
+          StringLike:
+              kms:ViaService: dynamodb.*
+      feature: externalTableKey
+      note: >-
+          Only when the VAMS tables use app.useKmsCmkEncryption.optionalExternalCmkArn (a key VAMS did not create);
+          the role templates grant it through ExternalTableKmsKeyArn.
+
+    - sid: ToolsVerifyApprovalSignature
+      optional: true
+      actions:
+          - kms:Verify
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      note: >-
+          Only when envs/<env>/env.yaml sets approvalSigningKeyArn: every approval record of the env (also
+          human:<action> records) must carry a KMS signature, which vra verifies. Scope the resource to that key ARN;
+          the identity that runs gated actions never needs kms:Sign on it.
+
+    # ---- state store (vra.yaml stateStore.type s3; iam/cloudformation/vra-state-store.yaml). The same block in
+    # every manifest: each run writes its run state, takes its run lease and env lock, and appends history.
+    - sid: ToolsStateStoreRuns
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/runs/*
+      note: >-
+          Run state (state.json, written with If-Match / If-None-Match; a 412 is "changed elsewhere"), logs, JUnit,
+          reports and IT requests of the run. HeadObject is authorized as s3:GetObject.
+
+    - sid: ToolsStateStoreHistoryRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+      note: Read env history (promotion evidence, approval use) in sequence order.
+
+    - sid: ToolsStateStoreCreateOnly
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/history/*
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      condition:
+          "Null":
+              s3:if-none-match: "false"
+      note: >-
+          History records (history/<env>/<seq:012d>-<run>.json), build bundles, IT role packages and IT responses
+          (iam/<env>/<n>/*, iam/<env>/responses/*) and pipeline plans and deploy records (pipeline/*) are
+          create-only: the write must carry If-None-Match: *, so an existing record, bundle or package is never
+          overwritten (the bucket policy denies the rest). Deletes are never granted.
+
+    - sid: ToolsStateStoreClaims
+      actions:
+          - s3:GetObject
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/approvals-consumed/*
+      note: >-
+          Approval claims (approvals-consumed/<env>/<sha256>.json): created once; rewritten only when the earlier
+          claimer run stopped without using the approval.
+
+    - sid: ToolsStateStoreRecordsRead
+      actions:
+          - s3:GetObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/artifacts/*
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*
+          - arn:${Partition}:s3:::vra-state-*/*/pipeline/*
+      note: >-
+          Bundles, build signatures, checkpoint manifests, the last-seen upstream refs, IT role packages with their
+          apply record (iam/<env>/*, the IAM gates of preflight, build and deploy) and pipeline plans (pipeline/*).
+
+    - sid: ToolsStateStoreRecords
+      actions:
+          - s3:PutObject
+      resources:
+          - arn:${Partition}:s3:::vra-state-*/*/signatures/*
+          - arn:${Partition}:s3:::vra-state-*/*/checkpoints/*
+          - arn:${Partition}:s3:::vra-state-*/*/sync-state.json
+          - arn:${Partition}:s3:::vra-state-*/*/iam/*/applied.json
+      note: >-
+          Build signatures and tag signer keys, checkpoint manifests, sync state, and the current IT apply record
+          (iam/<env>/applied.json, replaced by `vra iam apply`; the create-only history record binds it).
+
+    - sid: ToolsStateStoreList
+      actions:
+          - s3:ListBucket
+      resources:
+          - arn:${Partition}:s3:::vra-state-*
+      note: >-
+          List runs, history sequences and bundles. Not narrowed by s3:prefix: without ListBucket S3 answers a read
+          of a missing key with 403 instead of 404, and create-only writes and approval claims read missing keys.
+
+    - sid: ToolsStateStoreLock
+      actions:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:DeleteItem
+          - dynamodb:DescribeTable
+      resources:
+          - arn:${Partition}:dynamodb:*:*:table/vra-locks
+      condition:
+          ForAllValues:StringLike:
+              dynamodb:LeadingKeys:
+                  - env#*
+                  - run#*
+      note: >-
+          Lock items env#<env>, env#watch and run#<runId> (run lease). GetItem is ConsistentRead; PutItem carries
+          attribute_not_exists(lockId) OR ver = :v, DeleteItem ver = :v (vra unlock deletes unconditionally).
+          UpdateItem is not used. Narrow the account at render time if the tools account is fixed.
+
+    - sid: ToolsStateStoreKey
+      actions:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+      resources:
+          - arn:${Partition}:kms:*:*:key/*
+      condition:
+          ForAnyValue:StringEquals:
+              kms:ResourceAliases: alias/vra-state
+      note: The state bucket and lock table are encrypted with the vra-state CMK.

@@ -1,0 +1,49 @@
+# Project configuration for VAMS release automation in Codex. Installed as <package root>/.codex/config.toml
+# (adapters/install.sh codex); Codex loads project configuration only for a trusted project. Keys follow the
+# Codex configuration reference (see adapters/codex/README.md); check them against your installed version.
+
+# Interactive default: Codex asks before running commands outside the sandbox's trusted set.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+# vra needs network for git fetch and AWS API calls.
+network_access = true
+# Conflict resolution edits files in the engine's fork clone (<work dir>/repo, default
+# ~/.cache/vra/<home id>/repo). Replace with the absolute path on this machine.
+writable_roots = ["/home/<user>/.cache/vra"]
+
+# VRA_AGENT=1 tells the engine an agent is driving it: it refuses every human-only action. Keep the shared
+# home outside the writable roots, so the agent can never write an approval record itself.
+[shell_environment_policy]
+set = { VRA_AGENT = "1" }
+
+# The primary agent surface: the vra MCP server. Writes are on; the approval-gated tier is off (set
+# VRA_MCP_ENABLE_GATED = "true" to let the agent run approval-gated actions a human asked for; the engine still
+# requires an approval record).
+[mcp_servers.vra]
+command = "vra"
+args = ["mcp"]
+env = { VRA_AGENT = "1", VRA_MCP_ENABLE_WRITES = "true", VRA_MCP_ENABLE_GATED = "false" }
+startup_timeout_sec = 30
+tool_timeout_sec = 21600
+
+# PreToolUse guard (adapters/shared/vra-guard.py) for the shell fallback; the hook itself is in
+# .codex/hooks.json.
+[features]
+hooks = true
+
+# Headless profile used by adapters/shared/vra-cron.sh: `codex exec --profile vra-cron ...`. No approval
+# prompts (nobody is there to answer), so every rule with decision "prompt" is refused.
+[profiles.vra-cron]
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[profiles.vra-cron.sandbox_workspace_write]
+network_access = true
+writable_roots = ["/home/<user>/.cache/vra"]
+
+# Read-only profile for status and triage questions.
+[profiles.vra-readonly]
+approval_policy = "never"
+sandbox_mode = "read-only"

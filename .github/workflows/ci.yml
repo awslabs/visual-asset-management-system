@@ -46,19 +46,20 @@ jobs:
                       web/package-lock.json
                       infra/package-lock.json
                       documentation/docusaurus-site/package-lock.json
+                      tools/VamsReleaseAutomation/cicd/pipeline/package-lock.json
 
             - name: Pin npm version
               run: npm install -g npm@11.19.1
 
             # `npm install` tolerates a package-lock.json that has drifted from its package.json and
             # silently rewrites it, so drift only surfaces for consumers who run `npm ci`. This dry run
-            # is the same check `npm ci` performs, over all four lockfiles, and fails the build instead.
+            # is the same check `npm ci` performs, over all five lockfiles, and fails the build instead.
             # npm 11.7 and later validate the optional native bindings for every platform; earlier
             # releases (including the npm bundled with Node 22) check only the runner's own, so the
             # check runs under a pinned npm 11 rather than the runner's bundled version.
             - name: Check package-lock.json files are in sync
               run: |
-                  for dir in . web infra documentation/docusaurus-site; do
+                  for dir in . web infra documentation/docusaurus-site tools/VamsReleaseAutomation/cicd/pipeline; do
                       echo "::group::npm ci --dry-run ($dir)"
                       (cd "$dir" && npx -y -p npm@11 npm ci --dry-run --ignore-scripts --no-audit --no-fund)
                       echo "::endgroup::"
@@ -661,3 +662,66 @@ jobs:
             - name: Run VamsMCP pytest tests
               working-directory: tools/VamsMCP
               run: pytest -q --tb=short
+
+    # The vra engine: its pytest suites, and the offline package check (parse, ledger-template validate,
+    # identical copies, doc commands against the CLI, agent policy, FILES.md, links, neutrality scan).
+    release-automation-test:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python Version
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.12.16
+
+            - name: Install release automation dependencies
+              working-directory: tools/VamsReleaseAutomation
+              run: pip install -e ".[dev]"
+
+            - name: Run the release automation check
+              working-directory: tools/VamsReleaseAutomation
+              run: bash scripts/check.sh
+
+    # The optional AWS CodePipeline lane (CDK app): lockfile sync, type check, and jest including the
+    # cdk-nag "no unsuppressed finding" test. ESLint runs in the lint job (root `npm run lint`).
+    release-automation-pipeline:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: tools/VamsReleaseAutomation/cicd/pipeline/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci release automation pipeline
+              working-directory: tools/VamsReleaseAutomation/cicd/pipeline
+              run: npm ci --ignore-scripts
+
+            - name: Pipeline type check
+              working-directory: tools/VamsReleaseAutomation/cicd/pipeline
+              run: npm run typecheck
+
+            - name: Pipeline jest (includes cdk-nag)
+              working-directory: tools/VamsReleaseAutomation/cicd/pipeline
+              run: npm test

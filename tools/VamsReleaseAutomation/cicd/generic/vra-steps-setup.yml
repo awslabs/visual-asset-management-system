@@ -1,0 +1,22 @@
+# Azure Pipelines step template: pinned toolchain, vra from the pinned package, home folder.
+steps:
+    - task: NodeTool@0
+      inputs:
+          versionSpec: "22.x"
+    - task: UsePythonVersion@0
+      inputs:
+          versionSpec: "3.12"
+    - bash: |
+          set -euo pipefail
+          npm install -g "npm@11.19.1" --no-audit --no-fund
+          python3 -m pip install --quiet "uv==0.12.17"
+          git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet \
+            https://dev.azure.com/example-org/example-project/_git/vams-release-automation vra-src
+          git -C vra-src checkout --quiet "${VRA_PACKAGE_REF}"
+          uv tool install --force --python "$(command -v python3)" ./vra-src
+          echo "##vso[task.prependpath]${HOME}/.local/bin"
+          bash vra-src/cicd/generic/vra-ci.sh home
+      displayName: vra setup
+      env:
+          VRA_GIT_TOKEN: $(VRA_GIT_TOKEN)
+          VRA_HOME_TOKEN: $(VRA_HOME_TOKEN)

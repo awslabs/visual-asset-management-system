@@ -1,0 +1,102 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "vra/approval.schema.json",
+    "title": "vra approval record (ledger/approvals/<env>/<buildId>.yaml)",
+    "type": "object",
+    "required": ["build", "env", "approver", "approvedAt", "scope"],
+    "properties": {
+        "build": {
+            "type": "string",
+            "minLength": 1
+        },
+        "env": {
+            "type": "string",
+            "minLength": 1
+        },
+        "approver": {
+            "type": "string",
+            "minLength": 1
+        },
+        "approvedAt": {
+            "type": "string",
+            "minLength": 1
+        },
+        "expiresAt": {
+            "type": ["string", "null"],
+            "description": "default: approvedAt + env approvalMaxAgeHours (72)"
+        },
+        "ticket": {
+            "type": ["string", "null"]
+        },
+        "notes": {
+            "type": ["string", "null"]
+        },
+        "scope": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "enum": [
+                    "deploy",
+                    "promote",
+                    "restore",
+                    "data-copy",
+                    "migrate",
+                    "emergency",
+                    "rollback",
+                    "reindex",
+                    "allow-replacements",
+                    "accept-drift",
+                    "confirm",
+                    "allow-missing-scanners",
+                    "writes-stopped",
+                    "unlock",
+                    "takeover",
+                    "abort-workflow-executions",
+                    "ledger-import",
+                    "upgrade-config-write",
+                    "setup-force",
+                    "home-migrate",
+                    "restore-auth-tables",
+                    "iam-apply",
+                    "pipeline-deploy"
+                ]
+            }
+        },
+        "source": {
+            "type": ["string", "null"],
+            "description": "CI run the approval was given in: codepipeline:<pipeline>/<executionId>, github:<repo>/actions/runs/<id>, gitlab:<project>/pipelines/<id>, or the VRA_RUN_REF of a generic CI. Required to match the run in CI."
+        },
+        "binding": {
+            "type": "object",
+            "description": "CI details recorded by the approval writer (pipeline execution id, CodeBuild build id, deployment id)"
+        },
+        "masked": {
+            "type": ["boolean", "null"],
+            "description": "data-copy records: whether the copy is masked (shown to the approver)"
+        },
+        "signature": {
+            "type": "object",
+            "required": ["kmsKeyArn", "value"],
+            "additionalProperties": false,
+            "description": "KMS signature over the SHA-256 of the record's canonical JSON without `signature` (required when the env sets approvalSigningKeyArn)",
+            "properties": {
+                "kmsKeyArn": {
+                    "type": "string",
+                    "pattern": "^arn:aws(-[a-z]+)*:kms:"
+                },
+                "algorithm": {
+                    "enum": [
+                        "ECDSA_SHA_256",
+                        "ECDSA_SHA_384",
+                        "RSASSA_PSS_SHA_256",
+                        "RSASSA_PKCS1_V1_5_SHA_256"
+                    ]
+                },
+                "value": {
+                    "type": "string",
+                    "minLength": 16
+                }
+            }
+        }
+    }
+}

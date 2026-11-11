@@ -1,0 +1,15 @@
+# Approval record (schema: engine/vra/data/schemas/approval.schema.json). EXAMPLE ONLY: delete
+# before first use. Written by a human (local runs), or by the CI lanes from the platform's own
+# approval (cicd/codebuild/scripts/approval_record.py). vra checks: approver is in envs/test/env.yaml
+# approvers (strict), approver is not the run initiator (separation of duties), scope covers the action,
+# not expired (expiresAt, else approvedAt + approvalMaxAgeHours), bound to this CI run when vra runs in CI
+# (source), and not already used by another run (each record authorizes one run).
+build: cust-v2.6.6-1
+env: test
+approver: uat-lead@example.com
+approvedAt: "2026-01-12T15:04:00Z"
+expiresAt: "2026-01-19T15:04:00Z"
+ticket: CHG-0001
+notes: Promote to UAT after dev suites passed (run 20260112-1402-a1b2).
+scope: [promote]
+source: manual

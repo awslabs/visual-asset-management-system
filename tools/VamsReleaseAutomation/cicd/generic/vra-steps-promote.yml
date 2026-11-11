@@ -1,0 +1,62 @@
+# Azure Pipelines step template: promote (or deploy) one env after its environment approval, then test it.
+# The approver is read from the pipeline approvals API for THIS run (Build.BuildId), never from a parameter.
+parameters:
+    - name: env
+      type: string
+    - name: from
+      type: string
+      default: ""
+    - name: testSuites
+      type: string
+      default: ""
+
+steps:
+    - download: current
+      artifact: vra-bundle
+    - bash: |
+          set -euo pipefail
+          cp -R "$(Pipeline.Workspace)/vra-bundle" vra-bundle
+          python3 - <<'PY' > approval.env
+          import json, os, urllib.request
+          url = (f"{os.environ['SYSTEM_COLLECTIONURI']}{os.environ['SYSTEM_TEAMPROJECT']}"
+                 "/_apis/pipelines/approvals?$expand=steps&api-version=7.1")
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {os.environ['SYSTEM_ACCESSTOKEN']}"})
+          with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed Azure DevOps API URL
+              approvals = json.load(r).get("value", [])
+          run = os.environ["BUILD_BUILDID"]
+          mine = [a for a in approvals if str(((a.get("pipeline") or {}).get("owner") or {}).get("id")) == run
+                  and a.get("status") == "approved"]
+          mine.sort(key=lambda a: a.get("lastModifiedOn", ""))
+          steps = [s for a in mine[-1:] for s in a.get("steps", []) if s.get("status") == "approved"]
+          if steps:
+              s = steps[-1]
+              print(f"APPROVER={(s.get('actualApprover') or {}).get('uniqueName', '')}")
+              print(f"APPROVED_AT={s.get('lastModifiedOn', '')}")
+              print(f"APPROVAL_REF=azure-devops:approval/{mine[-1].get('id', '')}")
+              print("COMMENT=" + (s.get("comment") or "").replace("\n", " "))
+          PY
+          approver="$(sed -n 's/^APPROVER=//p' approval.env)"
+          approved_at="$(sed -n 's/^APPROVED_AT=//p' approval.env)"
+          comment="$(sed -n 's/^COMMENT=//p' approval.env)"
+          export VRA_APPROVAL_REF="$(sed -n 's/^APPROVAL_REF=//p' approval.env)"
+          from_args=()
+          [ -n "${FROM}" ] && from_args=(--promote-from "${FROM}")
+          bash vra-src/cicd/generic/vra-ci.sh deploy --env "${ENV_NAME}" --build "$(buildId)" "${from_args[@]}" \
+            --approver "${approver}" --approved-at "${approved_at}" --comment "${comment}"
+          if [ -n "${TEST_SUITES}" ]; then
+            commit="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["commit"])' \
+              "${VRA_HOME}/artifacts/$(buildId)/manifest.json")"
+            git -c "http.extraHeader=Authorization: Bearer ${VRA_GIT_TOKEN}" clone --quiet \
+              https://dev.azure.com/example-org/example-project/_git/vams-fork fork
+            git -C fork checkout --quiet "${commit}"
+            bash vra-src/cicd/generic/vra-ci.sh test --env "${ENV_NAME}" --suites "${TEST_SUITES}" --fork-dir fork
+          fi
+      displayName: vra promote ${{ parameters.env }}
+      env:
+          ENV_NAME: ${{ parameters.env }}
+          FROM: ${{ parameters.from }}
+          TEST_SUITES: ${{ parameters.testSuites }}
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          VRA_GIT_TOKEN: $(VRA_GIT_TOKEN)
+          VRA_HOME_TOKEN: $(VRA_HOME_TOKEN)
+    - template: vra-steps-finish.yml

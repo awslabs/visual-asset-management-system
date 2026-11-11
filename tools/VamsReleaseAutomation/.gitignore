@@ -1,0 +1,15 @@
+# Agent adapter copies an operator installs into this directory (adapters/*/README.md). They are
+# local configuration, never part of the repository.
+/.claude/
+/.kiro/
+/.codex/
+/.cursor/
+/AGENTS.md
+/.mcp.json
+
+# Engine work directory and Python build output
+/.vra/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/

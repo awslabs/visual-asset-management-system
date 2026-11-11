@@ -1,0 +1,138 @@
+# Reference workflow: human-only vra actions on GitHub Actions (vra home repository .github/workflows/).
+# `vra unlock`, `vra resume --takeover` and `vra resume --confirm` need a person. Without a terminal vra accepts
+# them only with an approval record whose subject is human:<action> (scope [<action>]), bound to THIS run and used
+# once. The job runs in the env's GitHub environment, so the environment's required reviewers approve the run;
+# approval_record.py github --human writes the record from that approval. The person who dispatched the run
+# (GITHUB_TRIGGERING_ACTOR, vra's initiator) can never be the approver; enable "Prevent self-review".
+# Agents never run this workflow: vra refuses human-only actions under VRA_AGENT / VRA_MCP.
+name: vra-operator
+
+on:
+    workflow_dispatch:
+        inputs:
+            action:
+                description: Human-only action
+                type: choice
+                options: [unlock, takeover, confirm]
+                required: true
+            env-name:
+                description: Ledger env (the GitHub environment of the same name approves the run)
+                type: string
+                required: true
+            run-id:
+                description: Run id (takeover and confirm; optional for unlock = the run that holds the lock)
+                type: string
+                required: false
+                default: ""
+            reason:
+                description: Why (unlock; recorded in the env history)
+                type: string
+                required: false
+                default: ""
+
+permissions:
+    contents: read
+
+jobs:
+    operator:
+        runs-on: ${{ fromJSON(vars.VRA_RUNS_ON || '"ubuntu-latest"') }}
+        environment: ${{ inputs.env-name }}
+        timeout-minutes: 60
+        concurrency:
+            group: vra-env-${{ inputs.env-name }}
+            cancel-in-progress: false
+        permissions:
+            id-token: write
+            contents: read
+            actions: read # read the environment approval of this run
+        env:
+            VRA_HOME_DEFER_PUSH: "1"
+            VRA_HOME: ${{ github.workspace }}/vra-home
+            VRA_HOME_REF: ${{ github.event.repository.default_branch }}
+            VRA_ENV: ${{ inputs.env-name }}
+            ACTION: ${{ inputs.action }}
+            RUN_ID: ${{ inputs.run-id }}
+            REASON: ${{ inputs.reason }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: vra-home
+                  ref: ${{ github.event.repository.default_branch }}
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ vars.VRA_PACKAGE_REPO }}
+                  ref: ${{ vars.VRA_PACKAGE_REF }}
+                  path: vra-src
+                  token: ${{ secrets.VRA_GIT_TOKEN }}
+                  persist-credentials: false
+            - uses: ./vra-src/cicd/github-actions/setup-vra
+            - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+              with:
+                  role-to-assume: ${{ vars.VRA_CI_ROLE_ARN }}
+                  aws-region: ${{ vars.VRA_AWS_REGION }}
+                  audience: ${{ vars.VRA_OIDC_AUDIENCE || 'sts.amazonaws.com' }}
+                  role-session-name: vra-operator-${{ github.run_id }}
+            - name: vra home
+              env:
+                  VRA_HOME_TOKEN: ${{ github.token }}
+              run: |
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh checkout
+                  bash vra-src/cicd/codebuild/scripts/vra-home.sh sync home-pull
+            - name: approval record (human)
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_ENTERPRISE_TOKEN: ${{ github.token }} # gh on a GHES host
+              run: |
+                  [[ "${VRA_ENV}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "env-name is not an env name"; exit 2; }
+                  mkdir -p vra-out
+                  gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > approvals.json
+                  python3 vra-src/cicd/codebuild/scripts/approval_record.py github --approvals approvals.json \
+                    --env "${VRA_ENV}" --human "${ACTION}" --out "vra-out/human-${ACTION}.yaml"
+            - name: vra ${{ inputs.action }}
+              run: |
+                  [[ "${RUN_ID}" =~ ^[A-Za-z0-9._-]*$ ]] || { echo "run-id is not a run id"; exit 2; }
+                  case "${ACTION}" in
+                    unlock)
+                      [ -n "${REASON}" ] || { echo "unlock needs a reason"; exit 2; }
+                      args=(unlock --env "${VRA_ENV}" --reason "${REASON}")
+                      [ -n "${RUN_ID}" ] && args+=(--run "${RUN_ID}") ;;
+                    takeover | confirm)
+                      [ -n "${RUN_ID}" ] || { echo "${ACTION} needs run-id"; exit 2; }
+                      args=(resume "${RUN_ID}" "--${ACTION}") ;;
+                    *) echo "unknown action ${ACTION}"; exit 2 ;;
+                  esac
+                  VRA_HUMAN_APPROVAL="vra-out/human-${ACTION}.yaml" \
+                    bash vra-src/cicd/codebuild/scripts/run-vra.sh "operator-${ACTION}" "${args[@]}"
+            - name: vra home state (pushed by the publish job; this job holds no home write token)
+              if: always()
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: vra-home-state-operator-${{ github.run_id }}
+                  path: |
+                      vra-home/vra-home.yaml
+                      vra-home/state/
+                      vra-home/checkpoints/
+                  include-hidden-files: true
+                  if-no-files-found: ignore
+                  retention-days: 7
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: vra-operator-${{ github.run_id }}
+                  path: |
+                      vra-out/
+                      vra-home/state/runs/
+                  include-hidden-files: true
+                  retention-days: 90
+
+    publish-operator:
+        # the only place the home write token is used (no fork code runs here)
+        needs: [operator]
+        if: always()
+        uses: ./.github/workflows/vra-home-publish.yml
+        with:
+            state-artifact: vra-home-state-operator-${{ github.run_id }}
+        # inherit: no workflow that runs fork code names the home write token; only vra-home-publish.yml reads it
+        # nosemgrep: yaml.github-actions.security.secrets-inherit.secrets-inherit
+        secrets: inherit
