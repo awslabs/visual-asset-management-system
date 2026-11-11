@@ -250,7 +250,7 @@ The pipeline supports custom Isaac Lab environments packaged as Python packages.
 `customEnvironmentPath` is a path relative to the asset root, which the `openPipeline` Lambda resolves against the executing asset's bucket. `trainingConfig.customEnvironmentS3Uri` accepts a full Amazon S3 URI instead, and must name that same bucket -- a URI pointing anywhere else is rejected in the `openPipeline` state, before any AWS Batch job is submitted, with a message naming the offending bucket. Both keys are read from `trainingConfig`; a value placed at the top level of the configuration is ignored.
 
 :::warning[The package's install code runs in the container]
-`pip install` executes the package's build and setup code as root inside the GPU container, which is why the URI is constrained to the executing asset's own bucket. The same constraint applies to `trainingConfig.policyS3Uri`, whose `.pt` file is deserialized by PyTorch.
+`pip install` executes the package's build and setup code inside the GPU container, as the container's non-root user (uid 10000), which owns the Isaac Sim Python environment the package installs into. That is why the URI is constrained to the executing asset's own bucket. The same constraint applies to `trainingConfig.policyS3Uri`, whose `.pt` file is deserialized by PyTorch.
 :::
 
 The container downloads the package at runtime and installs it with `pip install --no-build-isolation <archive>` before starting training or evaluation. `pip install -e` is not used: the editable flag accepts only a local project directory or a version-control URL, never an archive.

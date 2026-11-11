@@ -1346,6 +1346,28 @@ files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by
 mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfile` and
 `conversion/coordinateTransform/container/Dockerfile`.
 
+## A Non-Root Container Owns Every Folder It Writes, Including Its Subprocesses' Working Directory
+
+The read bits above are half of the non-root rule. The other half: before `USER`, the Dockerfile
+creates and `chown`s to that user every folder the container writes at run time. That covers the
+entrypoint's own output folders and the working directory of every subprocess it starts, because
+upstream tools write relative to it. Folders under `/tmp` and `$HOME` are fine (Ubuntu's `/tmp` is
+`1777`; the image creates `$HOME` for the user). A folder the base image copied root-owned is not.
+
+The Isaac Lab image is the example (#1312). `__main__.py` runs Isaac Lab's `train.py` and `play.py`
+with `cwd=/workspace/isaaclab`, which `nvcr.io/nvidia/isaac-lab:2.3.0` copies root-owned `0755`.
+Hydra creates its run folder at `outputs/<date>/<time>` relative to that directory, and `train.py`
+writes its run under `logs/<library>/...`, so every run failed at Hydra's setup with
+`PermissionError: [Errno 13] Permission denied: 'outputs'`. The image builds green, the job starts,
+and Isaac Sim boots before the failure. The fix owns those two folders, not the whole tree, so the
+Isaac Lab sources stay root-owned. Paths a tool derives from an input count too: `play.py` writes its
+video beside the `--checkpoint` it is given. A policy downloaded to `/tmp/policy.pt` made rl_games and
+skrl record to `/videos/play`, so the container puts the policy two folders below its owned log root
+(`EVALUATION_POLICY_PATH`). `simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py`
+reads the working directory from the pipeline's own `subprocess.run` call, parses the Dockerfile's
+`mkdir`/`chown` lines before `USER`, and fails when a write root is not owned. Copy it for a new
+container that runs an upstream tool as a non-root user.
+
 ## Adding a New Processing Pipeline
 
 **In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
@@ -1458,6 +1480,9 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
    `COPY` preserves the build host's umask, and a hardened host's root-owned `600`/`640` files raise
    `PermissionError` at import under the non-root user, invisible to the build. See
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
+   Before `USER` it also creates and `chown`s to that user every folder it writes at run time,
+   including the working directory of each subprocess it starts. See
+   [A Non-Root Container Owns Every Folder It Writes](#a-non-root-container-owns-every-folder-it-writes-including-its-subprocesses-working-directory).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
    `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
