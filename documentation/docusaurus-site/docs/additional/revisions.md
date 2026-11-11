@@ -88,6 +88,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 -   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
+-   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 
 **Other changes:**
 

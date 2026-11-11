@@ -866,7 +866,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 onSearch={handleSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                resultCount={totalResults}
+                // No result yet (first load, or just after Clear All Filters): show no count rather
+                // than "0 results" until the search answers.
+                resultCount={searchState.result ? totalResults : undefined}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||
