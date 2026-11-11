@@ -808,7 +808,8 @@ class TestBOMAssembleTempFiles:
         assert os.listdir(dirs['systmp']) == []
 
     def test_failure_leaves_nothing_behind(self, cli_runner, dirs, assembly):
-        with patch('vamscli.utils.glb_combiner.read_glb_file', side_effect=ValueError('corrupt GLB')):
+        corrupt = ValueError('corrupt GLB')
+        with patch('vamscli.utils.glb_combiner.read_glb_file', side_effect=corrupt):
             result = self._assemble(cli_runner, dirs)
 
         assert result.exit_code == 1
@@ -817,7 +818,7 @@ class TestBOMAssembleTempFiles:
         assert os.listdir(dirs['work']) == []
         assert os.listdir(dirs['systmp']) == []
 
-    def test_keep_temp_files_keeps_downloads_in_the_temp_directory(self, cli_runner, dirs, assembly):
+    def test_keep_temp_files_keeps_downloads_in_temp_dir(self, cli_runner, dirs, assembly):
         result = self._assemble(cli_runner, dirs, '--keep-temp-files', '--json-output')
 
         assert result.exit_code == 0, result.output
@@ -841,6 +842,27 @@ class TestBOMAssembleTempFiles:
         assert result.exit_code == 0, result.output
         assert os.listdir(dirs['work']) == []
         assert os.listdir(dirs['systmp']) == []
+
+    def test_cleanup_failure_still_prints_the_result(self, cli_runner, dirs, assembly):
+        with patch('shutil.rmtree', side_effect=PermissionError('file in use')):
+            result = self._assemble(cli_runner, dirs, '--json-output')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['status'] == 'success'
+
+    @pytest.mark.parametrize('name', ['vams_bom_assembly_x', 'other_x'])
+    def test_cleanup_removes_only_its_own_temp_folder(self, dirs, name, tmp_path):
+        from vamscli.commands.industry.engineering.bom.Dynamic_BOM import remove_run_temp_dir
+        outside = tmp_path / 'elsewhere' / name
+        inside_wrong_prefix = dirs['systmp'] / 'other_x'
+        for folder in (outside, inside_wrong_prefix):
+            folder.mkdir(parents=True)
+
+        remove_run_temp_dir(str(outside), json_output=True)
+        remove_run_temp_dir(str(inside_wrong_prefix), json_output=True)
+
+        assert outside.is_dir()
+        assert inside_wrong_prefix.is_dir()
 
 
 if __name__ == '__main__':
