@@ -3,7 +3,7 @@
 
 """`add_fbx_light_shadow_placeholder` in `renderScene.py` (#1181).
 
-Blender 5.1 removed the Cycles light setting `cast_shadow`, and its bundled FBX importer (io_scene_fbx
+Cycles dropped the light setting `cast_shadow` in Blender 4.2, but the image's bundled FBX importer (io_scene_fbx
 5.15.0) still runs `lamp.cycles.cast_shadow = lamp.use_shadow` for every light, so an FBX with a light
 fails to import with AttributeError. The helper registers a placeholder property under that name on the
 Cycles light settings class, only when the class lacks it.
@@ -59,7 +59,7 @@ def _load_function(bpy):
         if isinstance(node, ast.FunctionDef) and node.name == FUNCTION:
             module = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
             namespace = {"bpy": bpy}
-            exec(compile(module, "<renderScene-placeholder>", "exec"), namespace)  # nosemgrep: dangerous-exec-audit
+            exec(compile(module, "<renderScene-placeholder>", "exec"), namespace)  # nosemgrep: dangerous-exec-audit -- runs one function parsed from this repository's renderScene.py against a stand-in bpy; no outside input
             return namespace[FUNCTION]
     raise AssertionError(f"renderScene.py defines no {FUNCTION}()")
 
@@ -97,7 +97,10 @@ def test_leaves_an_existing_cast_shadow_alone():
 def test_does_nothing_without_cycles():
     """Without Cycles a light has no `cycles` settings, and the importer skips the line."""
     bpy = _fake_bpy(lambda: SimpleNamespace())
+    bool_property_calls = []
+    bpy.props.BoolProperty = lambda **kwargs: bool_property_calls.append(kwargs)
     _load_function(bpy)()
+    assert bool_property_calls == []
     assert len(bpy.data.lights.created) == 1
 
 

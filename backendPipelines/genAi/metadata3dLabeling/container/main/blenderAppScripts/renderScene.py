@@ -60,8 +60,8 @@ def point_at(obj, target, roll=0):
     obj.matrix_world = quat @ rollMatrix
     obj.location = loc
 
-# Blender 5.1 removed the Cycles light setting `cast_shadow` (a light's shadow switch is `Light.use_shadow`),
-# but its bundled FBX importer (io_scene_fbx 5.15.0) still copies `use_shadow` into it, so importing any FBX
+# Cycles dropped the light setting `cast_shadow` in Blender 4.2 (a light's shadow switch is `Light.use_shadow`),
+# but the image's bundled FBX importer (io_scene_fbx 5.15.0) still copies `use_shadow` into it, so importing any FBX
 # that holds a light raises AttributeError. A placeholder property under the old name lets that line run;
 # the importer has already set `use_shadow`, and nothing reads the placeholder. Where the setting still
 # exists, or Cycles is absent (the importer then skips the line), this changes nothing.
