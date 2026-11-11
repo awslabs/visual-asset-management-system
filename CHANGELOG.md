@@ -373,6 +373,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Search page: the result count no longer reads "0 results" right after **Clear All Filters** (or before the first search answers); the title row shows no count until the reloaded list arrives. ([#1252](https://github.com/awslabs/visual-asset-management-system/issues/1252))
 -   **Pipelines** Fixed Isaac Lab evaluation with the rl_games or skrl library not uploading its recorded video when `recordVideo` is on. ([#1313](https://github.com/awslabs/visual-asset-management-system/issues/1313))
 -   **Documentation** The Isaac Lab pipeline page states that AWS Batch stops a training job after 6 hours of running, gives a CodeBuild status command that finds the project on the Isaac Lab nested stack, shows where checkpoints and videos land (`checkpoints/<executionId>/`, `videos/<executionId>/`), and notes that AutoMate assembly with rl_games needs a multiple of 128 environments. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
+-   **Documentation** The Physna integration page documents `credentialsSecretArn`, an existing Secrets Manager secret holding the Physna credentials, as the recommended option and the inline `clientId` and `clientSecret` as the alternative, and states where inline credentials are kept (the populate function's deployment package and the CDK assets bucket, not the CloudFormation template). ([#1335](https://github.com/awslabs/visual-asset-management-system/issues/1335))
 
 ### Chores
 
