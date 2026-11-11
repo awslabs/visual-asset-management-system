@@ -24,6 +24,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
+from common.snsTopicNames import asset_sns_topic_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -175,9 +176,14 @@ def save_asset_details(asset_data):
         raise VAMSGeneralErrorResponse("Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
-    """Create an SNS topic for an asset"""
+    """Create an SNS topic for an asset.
+
+    Topic names are built by common.snsTopicNames.asset_sns_topic_name so asset
+    creation and subscription recreate the same collision-safe name.
+    """
     try:
-        topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
+        topic_response = sns_client.create_topic(
+            Name=asset_sns_topic_name(database_id, asset_id))
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
