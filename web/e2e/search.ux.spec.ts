@@ -330,10 +330,17 @@ test.describe("Unified search — natural-language behaviour", () => {
             await expect(searchNotice(page)).toHaveCount(0);
         }
         // A filled window is stated on the page: a whole-file window (the answer is truncated) as
-        // the "top N" line, a segment window alone as the scenes-or-passages line.
+        // the "top N" line, or for an empty answer the no-match line, and a segment window alone as
+        // the scenes-or-passages line.
         const truncated = !!body.nlp?.truncated;
+        const empty = (body.hits?.hits ?? []).length === 0;
         const notice = page.getByText(/^Showing the top \d+ semantic matches; more may exist\.$/);
-        await expect(notice).toHaveCount(truncated ? 1 : 0);
+        await expect(notice).toHaveCount(truncated && !empty ? 1 : 0);
+        const emptyNotice = page.getByText(
+            "No match among the closest results searched; more may exist.",
+            { exact: true }
+        );
+        await expect(emptyNotice).toHaveCount(truncated && empty ? 1 : 0);
         const segmentNotice = page.getByText(
             "Some files have more matching scenes or passages than were checked; more may exist.",
             { exact: true }

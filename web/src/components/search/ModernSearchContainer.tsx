@@ -53,6 +53,11 @@ import Synonyms from "../../synonyms";
  * Columns shown when OpenSearch is off: the fields every natural-language hit carries without
  * OpenSearch enrichment. Per record type because asset-mode hits have no file fields.
  */
+// The note under an empty natural-language answer whose candidate window may hold more (nlp.truncated):
+// the search found no match among the closest results it checked, and the answer is still a minimum.
+export const NLP_EMPTY_TRUNCATED_NOTE =
+    "No match among the closest results searched; more may exist.";
+
 export const REDUCED_FILE_COLUMNS = [
     "relevance",
     "str_assetname",
@@ -932,15 +937,17 @@ const ModernSearchContainer: React.FC<
                         {renderContent()}
 
                         {/* A natural-language call that filled its candidate window found at least
-                            this many matches; there is no cursor to fetch the rest. */}
+                            this many matches; there is no cursor to fetch the rest. An empty answer
+                            names no number: nothing matched among the closest results searched. */}
                         {searchMode === "nlp" && nlpResult?.nlp?.truncated && (
                             <Box
                                 padding={{ top: "s" }}
                                 color="text-body-secondary"
                                 fontSize="body-s"
                             >
-                                Showing the top {nlpResult.hits.hits.length} semantic matches; more
-                                may exist.
+                                {nlpResult.hits.hits.length > 0
+                                    ? `Showing the top ${nlpResult.hits.hits.length} semantic matches; more may exist.`
+                                    : NLP_EMPTY_TRUNCATED_NOTE}
                             </Box>
                         )}
                         {/* Only a segment window filled: no whole-file window did, but some files

@@ -97,6 +97,9 @@ const keywordRows = {
 
 // The route's answer: its total is a minimum whether or not a window filled (approximate
 // matching); `truncated` alone says a window filled.
+// The note under an empty natural-language answer whose window may hold more
+const EMPTY_TRUNCATED_NOTE = "No match among the closest results searched; more may exist.";
+
 const nlpEnvelope = (truncated: boolean) => ({
     took: 5,
     timed_out: false,
@@ -358,6 +361,31 @@ describe("ModernSearchContainer search modes", () => {
         await screen.findByText("Showing the top 2 semantic matches; more may exist.");
         expect(screen.getByText("Truck")).toBeInTheDocument();
         expect(screen.getByText("90%")).toBeInTheDocument();
+        expect(screen.queryByText(EMPTY_TRUNCATED_NOTE)).toBeNull();
+    });
+
+    it("states an empty truncated natural-language answer without a count of zero matches", async () => {
+        // An empty answer whose window may hold more found no match among the closest results it
+        // searched; "Showing the top 0 semantic matches" would read as a count. The badge keeps the
+        // route's minimum ("0+"), as for any truncated answer.
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const envelope = nlpEnvelope(true);
+        (searchNlp as jest.Mock).mockResolvedValue([
+            true,
+            {
+                ...envelope,
+                hits: { ...envelope.hits, total: { value: 0, relation: "gte" }, hits: [] },
+                aggregationTotal: 0,
+            },
+        ]);
+        const { container } = renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText(EMPTY_TRUNCATED_NOTE);
+        expect(screen.queryByText(/semantic matches/)).toBeNull();
+        expect(createWrapper(container).findBadge()?.getElement().textContent).toBe("0+ results");
     });
 
     it("announces an explicit natural-language search's count in the polite live region, with no completion toast", async () => {
