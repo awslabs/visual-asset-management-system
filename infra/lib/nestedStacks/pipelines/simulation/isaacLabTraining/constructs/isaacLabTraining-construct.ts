@@ -357,12 +357,12 @@ export class IsaacLabTrainingConstruct extends Construct {
             }),
             // AWS Batch's own bound on one attempt, counted from the attempt's start. It equals the
             // training bundle's taskTimeout (28800 s) and executeBatchJobState's taskTimeout (8 h),
-            // so a training run gets the 8 hours the workflow allows (issue #1324; it was 6 h, which
-            // stopped the job early and surfaced as a heartbeat timeout). Both of those clocks start
-            // before the attempt (they include the RUNNABLE wait and the image pull), so the workflow
-            // times out first and its error handler terminates the registered job; this value is the
-            // backstop. Evaluation shares this job definition and is bounded by its own bundle's
-            // taskTimeout (7200 s). Keep it no lower than the training taskTimeout.
+            // so a training run gets the 8 hours the workflow allows; a lower value would stop the
+            // job while the workflow still waits and surface it as a heartbeat timeout. Both of those
+            // clocks start before the attempt (they include the RUNNABLE wait and the image pull), so
+            // the workflow times out first and its error handler terminates the registered job; this
+            // value is the backstop. Evaluation shares this job definition and is bounded by its own
+            // bundle's taskTimeout (7200 s). Keep it no lower than the training taskTimeout.
             timeout: cdk.Duration.hours(8),
         });
 
@@ -433,8 +433,9 @@ export class IsaacLabTrainingConstruct extends Construct {
             // It must stay BELOW the parent pipeline's taskHeartbeatTimeout (3600s in both Isaac Lab
             // vamsSchema bundles), because the parent is starved by the same silence: whichever fires
             // first decides the outcome, and this one firing first is what routes through
-            // executeBatchJobState's Catch, terminating the Batch job and reporting a diagnosable
-            // failure. If the parent won that race the job would keep running and billing.
+            // executeBatchJobState's Catch and reports a diagnosable failure. If the parent won that
+            // race, its error handler would still terminate the registered Batch job, but the run
+            // would be recorded with the parent's generic heartbeat timeout instead.
             heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(45)),
         });
 
