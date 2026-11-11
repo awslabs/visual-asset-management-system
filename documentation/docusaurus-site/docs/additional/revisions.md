@@ -136,6 +136,10 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   `zod` 3.25.76 in `web/` has a security advisory (GHSA-mrhx-c7xc-m3w5, memory exhaustion when validating oversized constrained collections) with no patched 3.x release; 2.7.0 resolves it with the upgrade to `zod` 4. (issue #976)
 
+<!-- TODO(D14): keep the next line only if #1347 is not fixed in 2.6.7, matching CHANGELOG.md. Remove this comment before the push. -->
+
+-   An update that takes VAMS Lambda functions out of the VPC (`app.useGlobalVpc.useForAllLambdas` from `true` to `false`, `app.useGlobalVpc.enabled` from `true` to `false`, or an update that adds the VPC to the functions and rolls back) leaves their network interfaces in the VPC, because the update removes the functions' permission to delete the interfaces before AWS Lambda deletes them. The old Lambda security groups then cannot be deleted, and a later uninstall fails on the VPC subnets until the interfaces, in the `available` state, are deleted from the Amazon EC2 console or with `aws ec2 delete-network-interface`. (issue #1347)
+
 ### 2.6.6
 
 **Release date:** 2026-10-30
