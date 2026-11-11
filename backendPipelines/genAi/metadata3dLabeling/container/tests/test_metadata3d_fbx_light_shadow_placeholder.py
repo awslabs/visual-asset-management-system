@@ -59,7 +59,7 @@ def _load_function(bpy):
         if isinstance(node, ast.FunctionDef) and node.name == FUNCTION:
             module = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
             namespace = {"bpy": bpy}
-            exec(compile(module, "<renderScene-placeholder>", "exec"), namespace)  # nosemgrep: dangerous-exec-audit -- runs one function parsed from this repository's renderScene.py against a stand-in bpy; no outside input
+            exec(compile(module, "<renderScene-placeholder>", "exec"), namespace)  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- runs one function parsed from this repository's renderScene.py against a stand-in bpy; no outside input
             return namespace[FUNCTION]
     raise AssertionError(f"renderScene.py defines no {FUNCTION}()")
 
