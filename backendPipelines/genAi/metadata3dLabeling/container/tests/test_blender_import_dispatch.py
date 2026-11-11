@@ -80,17 +80,30 @@ def _dispatch_node():
     raise AssertionError("no importExtension dispatch chain found in renderScene.py")
 
 
-def _run_dispatch(extension, filepath="/tmp/input/model.bin"):
-    """Execute only the dispatch chain and return the (operator, kwargs) calls it made."""
+FBX_LIGHT_PLACEHOLDER = "add_fbx_light_shadow_placeholder"
+
+
+def _run_dispatch_all(extension, filepath="/tmp/input/model.bin"):
+    """Execute only the dispatch chain and return every call it made, in order.
+
+    The chain's own helper (`add_fbx_light_shadow_placeholder`, defined above it in renderScene.py) is
+    recorded by name; its behaviour is tested in test_metadata3d_fbx_light_shadow_placeholder.py.
+    """
     module = ast.fix_missing_locations(ast.Module(body=[_dispatch_node()], type_ignores=[]))
     calls = []
     namespace = {
         "bpy": _fake_bpy(calls),
         "importExtension": extension,
         "inputFilePath": filepath,
+        FBX_LIGHT_PLACEHOLDER: lambda: calls.append((FBX_LIGHT_PLACEHOLDER, {})),
     }
     exec(compile(module, "<renderScene-dispatch>", "exec"), namespace)  # nosemgrep: dangerous-exec-audit
     return calls
+
+
+def _run_dispatch(extension, filepath="/tmp/input/model.bin"):
+    """Execute only the dispatch chain and return the (operator, kwargs) Blender operator calls it made."""
+    return [call for call in _run_dispatch_all(extension, filepath) if call[0].startswith("bpy.ops.")]
 
 
 def _dispatch_extensions():
@@ -138,6 +151,24 @@ def test_every_declared_format_reaches_a_real_importer(extension):
     operator, kwargs = calls[0]
     assert operator == EXPECTED_IMPORTERS[extension]
     assert kwargs == {"filepath": f"/tmp/input/model.{extension}"}
+
+
+@pytest.mark.unit
+def test_fbx_import_adds_the_light_shadow_placeholder_first():
+    """The FBX importer of the image's Blender 5.1 fails on any file with a light unless the
+    placeholder exists before `import_scene.fbx` runs (#1181)."""
+    calls = _run_dispatch_all("fbx", filepath="/tmp/input/model.fbx")
+    assert calls == [
+        (FBX_LIGHT_PLACEHOLDER, {}),
+        ("bpy.ops.import_scene.fbx", {"filepath": "/tmp/input/model.fbx"}),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("extension", sorted(set(EXPECTED_IMPORTERS) - {"fbx"}))
+def test_other_formats_do_not_add_the_placeholder(extension):
+    calls = _run_dispatch_all(extension, filepath=f"/tmp/input/model.{extension}")
+    assert [name for name, _ in calls if name == FBX_LIGHT_PLACEHOLDER] == []
 
 
 @pytest.mark.unit
