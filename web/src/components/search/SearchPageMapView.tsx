@@ -37,6 +37,7 @@ import {
 import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
+import { MAP_MARKER_SIZE_PX, POPUP_PADDING, popupOffsetsFor } from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 
 interface LocationDataWithDetails {
@@ -652,8 +653,8 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         >
                             <div
                                 style={{
-                                    width: "30px",
-                                    height: "30px",
+                                    width: `${MAP_MARKER_SIZE_PX}px`,
+                                    height: `${MAP_MARKER_SIZE_PX}px`,
                                     cursor: "pointer",
                                     transform: "translate(-50%, -100%)",
                                 }}
@@ -689,10 +690,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         if (popupLat === undefined || popupLon === undefined) return null;
 
                         return (
+                            // No fixed anchor: maplibre opens the popup on the side of the point
+                            // where it fits inside the map, and moves it on every pan and zoom
+                            // (utils/mapPopupPlacement.ts, #1303)
                             <Popup
                                 latitude={popupLat}
                                 longitude={popupLon}
-                                anchor="top"
+                                padding={POPUP_PADDING}
+                                offset={popupOffsetsFor(selectedItem.type)}
                                 onClose={() => setSelectedItem(null)}
                                 closeButton={true}
                                 closeOnClick={false}
