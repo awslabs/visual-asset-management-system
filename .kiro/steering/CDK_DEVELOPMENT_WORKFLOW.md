@@ -561,6 +561,33 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 
 `IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
 
+#### **CloudWatch Logs Resource Policies: Log-Group Scoped Only**
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (hard limit), so one per stack caps how many VAMS deployments fit in a Region (#1266). `aws-events-targets` `CloudWatchLogGroup`, `logs.LogGroup.addToResourcePolicy()`, `logs.ResourcePolicy` and a `putResourcePolicy` custom resource each create one; do not use them. Grant the service through the log group's own policy (mirrors `infra/CLAUDE.md` anti-pattern 14):
+
+```typescript
+// ✅ CORRECT - log-group-scoped policy; the log group name is a literal, not a Ref to itself (circular)
+(logGroup.node.defaultChild as logs.CfnLogGroup).resourcePolicyDocument = new iam.PolicyDocument({
+    statements: [
+        new iam.PolicyStatement({
+            principals: [Service("EVENTS").Principal],
+            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            resources: [`${logGroupArn}:*`],
+            conditions: {
+                StringEquals: { "aws:SourceAccount": stack.account },
+                ArnLike: { "aws:SourceArn": ruleArnPatternOnThisDeploymentsBus },
+            },
+        }),
+    ],
+});
+rule.addTarget({ bind: () => ({ arn: logGroupArn }) });
+
+// ❌ INCORRECT - adds a Custom::CloudwatchLogResourcePolicy (account-level) per stack
+rule.addTarget(new targets.CloudWatchLogGroup(logGroup));
+```
+
+The worked example is the orchestration bus audit rule in `storageBuilder-nestedStack.ts`, pinned by `infra/test/storage/orchestrationBusAuditLogPolicy.test.ts`. The CDK OpenSearch `Domain` still creates one account-level policy per provisioned domain for its logs.
+
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
@@ -1716,6 +1743,24 @@ files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by
 the mode stays restrictive. Worked examples: `backendPipelines/preview/3dThumbnail/container/Dockerfile`
 and `backendPipelines/conversion/coordinateTransform/container/Dockerfile`.
 
+#### **Write Ownership in a Non-Root Container**
+
+Before `USER`, the Dockerfile gives that user every folder the container writes at run time: the
+entrypoint's output folders and the working directory of every subprocess it starts, because
+upstream tools write relative to it, both into folders they create there and as plain files. `/tmp`
+(Ubuntu's `1777`) and the user's `$HOME` are fine; a folder the base image copied root-owned is not.
+A working directory that also holds upstream sources is not `chown`ed: it gets the user's group and
+mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`, the `/tmp` model), so the user can create
+entries while the sticky bit stops it renaming or deleting the root-owned ones. The Isaac Lab image
+runs `train.py` and `play.py` in `/workspace/isaaclab` (#1312), where Hydra writes
+`outputs/<date>/<time>`, `train.py` writes `logs/<library>/...` and the AutoMate tasks download
+their asset files into `./`: the image creates `logs` and `outputs` for the user, makes
+`/workspace/isaaclab` group `vams` with mode `1775`, and downloads the evaluation policy below
+`logs` because `play.py` writes its video beside the `--checkpoint`. The guard is
+`backendPipelines/simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py`,
+which also pins the Isaac Lab release its write paths were read from.
+See `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes".
+
 #### **Container Lambda Handler Pattern**
 
 A pipeline's VAMS-facing `vamsExecute` Lambda reads its inputs from the workflow manifest, not from the event body. The Step Functions task body (`stepfunctions_builder.py`) carries only the workflow-execution identity, the I/O bucket, the executing-user fields, `inputManifestS3Location`, `inputConfigurationS3Location`, and `TaskToken` when the pipeline is registered with `waitForCallback: "Enabled"`. The handler resolves input files, output paths and asset identity with `manifestHelper.resolve_pipeline_inputs`, then invokes the pipeline's `openPipeline` Lambda, which starts the pipeline state machine (`vamsExecute` → `openPipeline` → `constructPipeline` → container task → `pipelineEnd`). The full pattern — output paths, `assetId` threading, sub-process registration and failure reporting — is in `backendPipelines/CLAUDE.md` and the `/add-pipeline` skill (`.claude/commands/add-pipeline.md`).
@@ -1876,7 +1921,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
 14. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
-15. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
+15. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above. Before `USER` it also gives that user every folder it writes at run time, including the working directory of each subprocess it starts; a working directory holding root-owned upstream sources gets the user's group and mode `1775` instead of a `chown` (see "Write Ownership in a Non-Root Container", #1312).
 
 16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
