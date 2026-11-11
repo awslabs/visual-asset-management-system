@@ -86,6 +86,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **More than 10 deployments per Region** — The orchestration bus audit log group carries its own resource policy instead of adding an account-level Amazon CloudWatch Logs resource policy per deployment, which limited an account to 10 VAMS deployments per Region. The update removes the old policy. A provisioned Amazon OpenSearch Service domain still adds one account-level policy for its logs. (issue #1266)
 -   **Asset notification topics** — Asset creation and subscriptions share sanitized SNS topic names with a 16-character hash suffix on every new topic. Truncation preserves the suffix, separating IDs that sanitize alike or share a long prefix; existing stored topic ARNs remain unchanged. (issue #839)
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
+-   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
 
 **Other changes:**
 

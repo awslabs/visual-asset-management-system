@@ -62,6 +62,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: A deployment with a provisioned Amazon OpenSearch Service domain still adds one account-level policy for the domain's logs. ([#1266](https://github.com/awslabs/visual-asset-management-system/issues/1266))
 -   **Backend** Asset creation and subscriptions share SNS topic names with sanitized asset IDs and a 16-character hash suffix, retained when truncating long names, so dotted, spaced, and already-safe IDs get distinct topics. ([#839](https://github.com/awslabs/visual-asset-management-system/issues/839))
 -   **Web** Fixed the upload page naming the asset by its internal id in its completion and failure alerts; each now names the asset and uses the deployment's asset synonym. ([#1189](https://github.com/awslabs/visual-asset-management-system/issues/1189))
+-   **Pipelines** Fixed the CAD/Mesh Metadata Extraction failure message naming the temporary download (`input.step`) instead of the input file; it now names the input's path within its asset, so an asset holding several files says which one failed. ([#1188](https://github.com/awslabs/visual-asset-management-system/issues/1188))
 
 ### Chores
 
