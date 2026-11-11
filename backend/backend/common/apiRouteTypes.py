@@ -12,7 +12,7 @@ from there.
 
 import re
 from functools import lru_cache
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 # HTTP methods VAMS routes use.
 GET = "GET"
@@ -48,6 +48,10 @@ class ApiRoute(NamedTuple):
     are excluded from the public route listing.
     ``unauthenticated=True`` marks routes served without the custom Lambda
     authorizer (no Casbin enforcement applies).
+    ``addon_feature`` names the add-on feature switch (``common/addonFeatures.py``)
+    a route of ``common/addonApiRoutes.py`` is deployed under, so the route
+    listings leave it out on a deployment without that add-on; ``None`` for a
+    route every deployment serves.
     """
 
     path: str
@@ -55,6 +59,7 @@ class ApiRoute(NamedTuple):
     category: str
     internal: bool = False
     unauthenticated: bool = False
+    addon_feature: Optional[str] = None
 
     def matches(self, path: str) -> bool:
         """Return True if ``path`` (a concrete request path) matches this route."""

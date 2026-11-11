@@ -10,7 +10,7 @@ names, audit log group names, deprecated migration-only table names, and
 selected Lambda function names as SSM String parameters under a
 deployment-unique prefix. The prefix is exposed by the core stack output
 ``ResourceNamesSSMParamPrefixOutput`` (format:
-``/{configName}-{baseStackName}/resourceNames``).
+``/{configName}-{baseStackName}-{region}/resourceNames``).
 
 Migration scripts pass the prefix (plus optional profile/region) to
 ``SsmResourceLookup`` and resolve every table and function name they need,

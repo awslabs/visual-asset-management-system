@@ -1,0 +1,171 @@
+name: vams-isaacsim-install
+description: NVIDIA Isaac Sim unpacked under /opt with post_install.sh run, its first-run licence prompt pre-answered, and NVIDIA data collection declined unless the recipe's isaacSimDataCollectionConsent is Y.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: RecordDataCollectionChoice
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # The parameter is written out as data through a quoted heredoc, so nothing in it
+                        # is expanded, and it is checked before the download, so a bad value fails the build
+                        # in its first minutes. N, the shipped value, declines NVIDIA data collection on every
+                        # desktop; Y consents to it for every desktop user.
+                        cat > /var/tmp/vams-isaacsim-consent <<'VAMS_ISAACSIM_CONSENT'
+                        ${PARAM_isaacSimDataCollectionConsent}
+                        VAMS_ISAACSIM_CONSENT
+                        consent="$(cat /var/tmp/vams-isaacsim-consent)"
+                        rm -f /var/tmp/vams-isaacsim-consent /etc/vams-isaacsim-data-collection
+                        case "${consent}" in
+                            Y | N) ;;
+                            *)
+                                echo "isaacSimDataCollectionConsent must be N (desktops decline NVIDIA data collection) or Y (the image consents to it for every desktop user); got '${consent}'" >&2
+                                exit 1
+                                ;;
+                        esac
+                        printf '%s\n' "${consent}" > /etc/vams-isaacsim-data-collection
+                        chmod 0644 /etc/vams-isaacsim-data-collection
+          - name: Download
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - curl -fL -C - --retry 5 --retry-delay 15 --retry-connrefused "${PARAM_isaacSimDownloadUrl}" -o /var/tmp/isaacsim.zip
+                    - test -s /var/tmp/isaacsim.zip
+          - name: VerifyChecksum
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # NVIDIA publishes no SHA-256 for the standalone archive, so the checksum is an
+                        # opt-in an operator or an air-gapped mirror sets on the recipe.
+                        if [ -n "${PARAM_isaacSimSha256}" ]; then
+                            echo "${PARAM_isaacSimSha256}  /var/tmp/isaacsim.zip" | sha256sum -c -
+                        else
+                            echo "isaacSimSha256 is empty; the download is trusted to its HTTPS origin"
+                            sha256sum /var/tmp/isaacsim.zip
+                        fi
+          - name: Unpack
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - rm -rf "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - mkdir -p "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - unzip -q /var/tmp/isaacsim.zip -d "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - rm -f /var/tmp/isaacsim.zip
+                    - |
+                        # NVIDIA ships the archive without a top-level folder. If a later archive adds
+                        # one, flatten it so /opt/isaacsim always names the package root.
+                        root="/opt/isaacsim-${PARAM_isaacSimVersion}"
+                        if [ ! -f "$root/post_install.sh" ]; then
+                            inner="$(find "$root" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+                            if [ -n "$inner" ] && [ -f "$inner/post_install.sh" ]; then
+                                mv "$inner"/* "$root"/
+                                mv "$inner"/.[!.]* "$root"/ 2>/dev/null || true
+                                rmdir "$inner"
+                            fi
+                        fi
+                        test -f "$root/post_install.sh"
+                    - ln -sfn "/opt/isaacsim-${PARAM_isaacSimVersion}" /opt/isaacsim
+          - name: AnswerFirstRunPrompts
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /etc/profile.d/vams-isaacsim.sh <<'PROFILE'
+                        # Isaac Sim otherwise prompts for the NVIDIA licence on its first run, which an
+                        # auto-launched desktop session cannot answer; the operator who builds the recipe
+                        # accepts the licence.
+                        export OMNI_KIT_ACCEPT_EULA=Y
+                        export ACCEPT_EULA=Y
+                        export ISAACSIM_PATH=/opt/isaacsim
+                        PROFILE
+                        rm -f /etc/vams-isaacsim-privacy.toml
+                        if [ "$(cat /etc/vams-isaacsim-data-collection)" = Y ]; then
+                            printf '%s\n' \
+                                "# The recipe's isaacSimDataCollectionConsent is Y: the operator consented to NVIDIA" \
+                                "# data collection for every user of this desktop." \
+                                "export PRIVACY_CONSENT=Y" >> /etc/profile.d/vams-isaacsim.sh
+                        else
+                            # Isaac Sim's app file turns on Kit's anonymous data mode, which enables every
+                            # consent level whatever the privacy settings say; the variable turns that mode off,
+                            # and PRIVACY_CONSENT stays unset. The launcher points Kit at the privacy file below.
+                            printf '%s\n' \
+                                "# The recipe's isaacSimDataCollectionConsent is N: NVIDIA data collection is declined." \
+                                "# Kit's anonymous data mode is off, so Kit takes consent from the privacy settings." \
+                                "export OMNI_TELEMETRY_DISABLE_ANONYMOUS_DATA=1" >> /etc/profile.d/vams-isaacsim.sh
+                            printf '%s\n' \
+                                "# NVIDIA data collection is declined on this desktop. The Isaac Sim launcher points" \
+                                "# Kit at this file in place of the user's own privacy settings." \
+                                "[privacy]" \
+                                "usage = false" \
+                                "performance = false" \
+                                "personalization = false" > /etc/vams-isaacsim-privacy.toml
+                            chmod 0644 /etc/vams-isaacsim-privacy.toml
+                        fi
+                    - chmod 0644 /etc/profile.d/vams-isaacsim.sh
+          - name: PostInstall
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - . /etc/profile.d/vams-isaacsim.sh
+                    - cd /opt/isaacsim
+                    - |
+                        # post_install.sh links the bundled examples and installs the desktop icon through
+                        # python.sh. It needs no display today; xvfb-run stays as a guard because a build
+                        # host has no X server and a later Isaac Sim release's script may want one.
+                        if command -v xvfb-run > /dev/null 2>&1; then
+                            xvfb-run -a ./post_install.sh
+                        else
+                            ./post_install.sh
+                        fi
+          - name: OpenPermissionsToEveryDesktopUser
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - chmod -R a+rX "/opt/isaacsim-${PARAM_isaacSimVersion}"
+                    - find "/opt/isaacsim-${PARAM_isaacSimVersion}" -maxdepth 1 -name '*.sh' -exec chmod a+rx {} +
+                    - printf 'recipe=isaacsim\nisaacSimVersion=%s\nbuiltOn=%s\n' "${PARAM_isaacSimVersion}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/vams-image-release
+                    - chmod 0644 /etc/vams-image-release
+    - name: validate
+      steps:
+          - name: PackagePresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - test -L /opt/isaacsim
+                    - test -f /opt/isaacsim/post_install.sh
+                    - test -x "/opt/isaacsim/${PARAM_isaacSimLauncher}"
+                    - grep -q '^recipe=isaacsim$' /etc/vams-image-release
+          - name: DataCollectionChoiceApplied
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - |
+                        # The image carries the declined state or the consent the recipe asked for, never
+                        # both, and no per-user privacy settings for new users' homes.
+                        # A negated command does not stop a set -e script, so each absence is an explicit exit.
+                        consent="$(cat /etc/vams-isaacsim-data-collection)"
+                        if [ "${consent}" = Y ]; then
+                            grep -qx 'export PRIVACY_CONSENT=Y' /etc/profile.d/vams-isaacsim.sh
+                            if grep -q 'OMNI_TELEMETRY_DISABLE_ANONYMOUS_DATA' /etc/profile.d/vams-isaacsim.sh; then exit 1; fi
+                            test ! -e /etc/vams-isaacsim-privacy.toml
+                        else
+                            test "${consent}" = N
+                            if grep -q 'PRIVACY_CONSENT' /etc/profile.d/vams-isaacsim.sh; then exit 1; fi
+                            grep -qx 'export OMNI_TELEMETRY_DISABLE_ANONYMOUS_DATA=1' /etc/profile.d/vams-isaacsim.sh
+                            for level in usage performance personalization; do
+                                grep -qx "${level} = false" /etc/vams-isaacsim-privacy.toml
+                            done
+                        fi
+                        test ! -e /etc/skel/.nvidia-omniverse

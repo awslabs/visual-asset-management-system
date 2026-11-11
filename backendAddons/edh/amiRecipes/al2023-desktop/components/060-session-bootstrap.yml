@@ -1,0 +1,253 @@
+name: vams-session-bootstrap
+description: Signs the VAMS CLI in as the launching user from this workstation's session secret when the desktop session starts.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: InstallInstanceIdHelper
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-instance-id <<'INSTANCEID'
+                        #!/usr/bin/env bash
+                        # Prints this desktop's instance id. Every desktop of a user mounts the same home
+                        # directory, so what each desktop writes there is kept under this id.
+                        set -euo pipefail
+                        TOKEN="$(curl -fsS --retry 3 --retry-connrefused -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')"
+                        ID="$(curl -fsS --retry 3 --retry-connrefused -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/instance-id)"
+                        if ! [[ "${ID}" =~ ^i-[0-9a-f]{8,17}$ ]]; then
+                            echo "the instance metadata service answered '${ID}' for the instance id" >&2
+                            exit 1
+                        fi
+                        echo "${ID}"
+                        INSTANCEID
+                    - chmod 0755 /usr/local/bin/vams-instance-id
+          - name: InstallBootstrapScript
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-session-bootstrap.sh <<'BOOTSTRAP'
+                        #!/usr/bin/env bash
+                        set -euo pipefail
+
+                        # By hand it signs both profiles in; --fresh (the login) first re-creates this
+                        # desktop's own profile; --if-changed (the refresher) does nothing, silently, until
+                        # the secret changes.
+                        MODE="${1:-}"
+                        case "${MODE}" in
+                            "" | --fresh | --if-changed) ;;
+                            *) echo "usage: vams-session-bootstrap.sh [--fresh | --if-changed]" >&2; exit 2 ;;
+                        esac
+
+                        # The deployment's sessionBootstrap.secretNamePrefix.
+                        SECRET_PREFIX="${VAMS_SESSION_SECRET_PREFIX:-${DEPLOY_sessionSecretPrefix}}"
+                        VAMSCLI="${VAMSCLI:-/opt/vams/vamscli-venv/bin/vamscli}"
+
+                        INSTANCE_ID="$(/usr/local/bin/vams-instance-id)"
+                        TOKEN="$(curl -fsS --retry 3 --retry-connrefused -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')"
+                        REGION="$(curl -fsS --retry 3 --retry-connrefused -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/placement/region)"
+
+                        # Under this desktop's own directory of the shared home, and per user: a capture in
+                        # the shared temporary directory is readable by every other session on the desktop.
+                        HOST_DIR="${HOME}/.vams/hosts/${INSTANCE_ID}"
+                        ERR="${HOST_DIR}/session-bootstrap.err"
+                        mkdir -p "${HOST_DIR}"
+                        # The secret's expiresAt last signed in, or none after a sign-out; never the key.
+                        APPLIED="${HOST_DIR}/session-key-applied"
+                        LAST="$(cat "${APPLIED}" 2>/dev/null || true)"
+                        applied() {
+                            local tmp
+                            tmp="$(mktemp "${HOST_DIR}/.session-key-applied.XXXXXX")"
+                            echo "$1" >"${tmp}"
+                            mv -f "${tmp}" "${APPLIED}"
+                        }
+
+                        # This desktop's own profile can still hold the key of an earlier boot, which VAMS
+                        # revoked when the desktop stopped; signed out, it reads as not signed in rather than
+                        # as forbidden. 'edh' is left alone: it may hold another running desktop's key. A check
+                        # signs nothing out: the user may have signed in by hand since.
+                        nothing_to_sign_in() {
+                            if [ "${MODE}" = --if-changed ] && [ "${LAST}" = none ]; then
+                                exit 3
+                            fi
+                            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1; nothing to sign in" >&2
+                            if [ "${MODE}" != --if-changed ]; then
+                                "${VAMSCLI}" --profile "edh-${INSTANCE_ID}" auth logout --json-output >&2 || true
+                            fi
+                            applied none
+                            exit 3
+                        }
+
+                        # EDH tags the desktop with its session name; a VAMS launch names the session after
+                        # its bootstrap id with the hyphens removed (32 hex digits). Any other desktop has no
+                        # VAMS credential to look for.
+                        JOB_NAME="$(aws ec2 describe-tags --region "${REGION}" \
+                            --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=edh:JobName" \
+                            --query 'Tags[0].Value' --output text)"
+                        if ! [[ "${JOB_NAME}" =~ ^[0-9a-fA-F]{32}$ ]]; then
+                            nothing_to_sign_in "edh:JobName '${JOB_NAME}' is not a VAMS launch"
+                        fi
+                        BOOTSTRAP_ID="$(sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/' <<<"${JOB_NAME}")"
+
+                        if ! SECRET_JSON="$(aws secretsmanager get-secret-value --region "${REGION}" \
+                                --secret-id "${SECRET_PREFIX}${BOOTSTRAP_ID}" --query SecretString --output text 2>"${ERR}")"; then
+                            if grep -q ResourceNotFoundException "${ERR}"; then
+                                nothing_to_sign_in "no VAMS session secret for this desktop"
+                            fi
+                            cat "${ERR}" >&2
+                            exit 1
+                        fi
+                        if [ "$(jq -r '.revoked // false' <<<"${SECRET_JSON}")" = "true" ]; then
+                            nothing_to_sign_in "the VAMS session secret is revoked"
+                        fi
+
+                        BASE_URL="$(jq -r .baseUrl <<<"${SECRET_JSON}")"
+                        USER_ID="$(jq -r .userId <<<"${SECRET_JSON}")"
+                        EXPIRES_AT="$(jq -r .expiresAt <<<"${SECRET_JSON}")"
+                        if [ "${MODE}" = --if-changed ] && [ "${EXPIRES_AT}" = "${LAST}" ]; then
+                            exit 0
+                        fi
+
+                        # The key is piped on stdin, never passed as an argument, so it never appears in the
+                        # process table. A connector uses this desktop's own profile, which no other
+                        # desktop writes. 'edh' is the alias terminals use: every desktop on this home writes it,
+                        # so it holds the key of the desktop that signed in last and is signed out when that
+                        # desktop stops, and it is never re-created, since other desktops' terminals may be
+                        # using it.
+                        FORCE=""
+                        if [ "${MODE}" = --fresh ]; then
+                            FORCE=--force
+                        fi
+                        for PROFILE in "edh-${INSTANCE_ID}" edh; do
+                            "${VAMSCLI}" --profile "${PROFILE}" setup "${BASE_URL}" --skip-version-check --json-output ${FORCE}
+                            jq -r .apiKey <<<"${SECRET_JSON}" | "${VAMSCLI}" --profile "${PROFILE}" auth login \
+                                --user-id "${USER_ID}" --token-override-stdin --expires-at "${EXPIRES_AT}" \
+                                --skip-version-check --json-output
+                            FORCE=""
+                        done
+                        applied "${EXPIRES_AT}"
+                        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) signed in; the key expires at ${EXPIRES_AT}"
+                        BOOTSTRAP
+                    - chmod 0755 /usr/local/bin/vams-session-bootstrap.sh
+          - name: InstallRetryWrapper
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-session-bootstrap-retry.sh <<'RETRY'
+                        #!/usr/bin/env bash
+                        # The marker means the CLI is signed in; a desktop that has no VAMS session gets the
+                        # session-none marker instead. Every desktop of a user mounts the same home directory, so
+                        # the markers and the log sit under this desktop's instance id, and each marker holds the
+                        # boot it was written in. The session secret becomes readable only once VAMS has bound it
+                        # to this instance, so an early desktop login reads AccessDeniedException. Twelve attempts
+                        # run 10 s apart, then one a minute until 20 minutes have passed, past the 15-minute sweep
+                        # that repairs a binding. Then, whatever the outcome, the profile cleanup runs once, and
+                        # the sign-in is checked every minute for the rest of the session, which picks up a key
+                        # VAMS re-issued, a revoked one included.
+                        if ! INSTANCE_ID="$(/usr/local/bin/vams-instance-id)"; then
+                            echo "this desktop's instance id could not be read; nothing signed in" >&2
+                            exit 1
+                        fi
+                        HOST_DIR="${HOME}/.vams/hosts/${INSTANCE_ID}"
+                        LOG="${HOST_DIR}/session-bootstrap.log"
+                        MARKER="${HOST_DIR}/session-ready"
+                        NO_SESSION="${HOST_DIR}/session-none"
+                        BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
+                        WINDOW_SECONDS=1200
+                        mkdir -p "${HOST_DIR}"
+                        rm -f "${MARKER}" "${NO_SESSION}" "${HOST_DIR}/session-key-applied"
+                        # Re-creating this desktop's own profile makes it the active one; the cleanup undoes that.
+                        WAS_ACTIVE="$(jq -r '.active_profile // empty' "${HOME}/.config/vamscli/active_profile.json" 2>/dev/null)"
+                        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) boot ${BOOT_ID}" >>"${LOG}"
+                        attempt=0
+                        status=1
+                        while :; do
+                            attempt=$((attempt + 1))
+                            /usr/local/bin/vams-session-bootstrap.sh --fresh >>"${LOG}" 2>&1
+                            rc=$?
+                            if [ "${rc}" -eq 0 ]; then
+                                echo "${BOOT_ID}" > "${MARKER}"
+                                echo "attempt ${attempt}: signed in" >>"${LOG}"
+                                status=0
+                                break
+                            fi
+                            if [ "${rc}" -eq 3 ]; then
+                                echo "${BOOT_ID}" > "${NO_SESSION}"
+                                echo "attempt ${attempt}: no VAMS session for this desktop; nothing to sign in" >>"${LOG}"
+                                status=0
+                                break
+                            fi
+                            delay=60
+                            if [ "${attempt}" -lt 12 ]; then
+                                delay=10
+                            fi
+                            if [ $((SECONDS + delay)) -gt "${WINDOW_SECONDS}" ]; then
+                                echo "session bootstrap did not complete within 20 minutes; it keeps retrying every minute, or sign in with 'vamscli --profile edh-${INSTANCE_ID} auth login'" >>"${LOG}"
+                                break
+                            fi
+                            echo "attempt ${attempt}: not ready (exit ${rc}); retrying in ${delay}s" >>"${LOG}"
+                            sleep "${delay}"
+                        done
+                        if [ -x /usr/local/bin/vams-profile-cleanup.sh ]; then
+                            /usr/local/bin/vams-profile-cleanup.sh "${WAS_ACTIVE}" >>"${HOST_DIR}/profile-cleanup.log" 2>&1
+                        fi
+                        # One refresher per user on this desktop, across desktop logins. Its lock is on a local
+                        # path: locks on the shared home are not reliable. Without flock none runs, rather than
+                        # one per login.
+                        if ! command -v flock >/dev/null; then
+                            echo "flock is not available, so the sign-in is not checked again in this session" >>"${LOG}"
+                            exit "${status}"
+                        fi
+                        refresh() {
+                            if ! flock -n 9; then
+                                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) this user's refresher from an earlier login checks the sign-in" >&2
+                                return
+                            fi
+                            while :; do
+                                sleep 60 9>&-
+                                /usr/local/bin/vams-session-bootstrap.sh --if-changed >>"${LOG}" 2>&1 9>&-
+                            done
+                        }
+                        refresh 2>>"${LOG}" 9>>"${XDG_RUNTIME_DIR:-/tmp}/vams-session-refresh-$(id -u).lock"
+                        exit "${status}"
+                        RETRY
+                    - chmod 0755 /usr/local/bin/vams-session-bootstrap-retry.sh
+          - name: InstallAutostartEntry
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - mkdir -p /etc/xdg/autostart
+                    - |
+                        cat > /etc/xdg/autostart/vams-session-bootstrap.desktop <<'DESKTOP'
+                        [Desktop Entry]
+                        Type=Application
+                        Name=VAMS session sign-in
+                        Comment=Signs the VAMS CLI in as the user who launched this workstation
+                        Exec=/usr/local/bin/vams-session-bootstrap-retry.sh
+                        Terminal=false
+                        NoDisplay=true
+                        X-GNOME-Autostart-enabled=true
+                        X-GNOME-Autostart-Phase=Applications
+                        DESKTOP
+                    - chmod 0644 /etc/xdg/autostart/vams-session-bootstrap.desktop
+    - name: validate
+      steps:
+          - name: BootstrapInstalled
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - bash -n /usr/local/bin/vams-instance-id
+                    - test -x /usr/local/bin/vams-instance-id
+                    - bash -n /usr/local/bin/vams-session-bootstrap.sh
+                    - bash -n /usr/local/bin/vams-session-bootstrap-retry.sh
+                    - test -x /usr/local/bin/vams-session-bootstrap.sh
+                    - test -x /usr/local/bin/vams-session-bootstrap-retry.sh
+                    - grep -Fq 'Exec=/usr/local/bin/vams-session-bootstrap-retry.sh' /etc/xdg/autostart/vams-session-bootstrap.desktop
