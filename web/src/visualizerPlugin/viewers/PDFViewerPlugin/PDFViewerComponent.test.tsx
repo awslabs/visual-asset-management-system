@@ -113,3 +113,30 @@ describe("PDFViewerComponent theming", () => {
         expect(style).toMatch(/(^|;)\s*color:\s*var\(--color-/);
     });
 });
+
+describe("PDFViewerComponent download failures (#1211)", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("names the missing permission when the API refuses the download with 403", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+
+        render(<PDFViewerComponent {...props} />);
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(/You do not have permission to view or download this file\./)
+            ).toBeInTheDocument()
+        );
+        expect(screen.queryByTestId("pdf-document")).toBeNull();
+    });
+
+    it("[control] keeps the generic wording for a server error", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Internal error", 500]);
+
+        render(<PDFViewerComponent {...props} />);
+
+        await waitFor(() =>
+            expect(screen.getByText(/Failed to download PDF file/)).toBeInTheDocument()
+        );
+    });
+});

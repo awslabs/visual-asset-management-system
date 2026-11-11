@@ -112,7 +112,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 ### 2. Online3dViewerPlugin
 
--   **ID**: `online3d-viewer`
+-   **ID**: `online3d-viewer` (`.amf`, `.bim`, `.off`, `.wrl`) and `online3d-viewer-rhino` (`.3dm`, offered only with `ALLOWUNSAFEEVAL` because rhino3dm compiles with `eval`)
 -   **Extensions**: `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`
 -   **Features**: 3D model viewing with Online3DViewer
 -   **Multi-file**: Yes (can load multiple models simultaneously)
@@ -188,8 +188,8 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 10. TextViewerPlugin
 
 -   **ID**: `text-viewer`
--   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`
--   **Features**: View and syntax highlight text-based files with advanced formatting options
+-   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, and files with no extension (`(none)`: `README`, `LICENSE`, `.gitignore`)
+-   **Features**: View and syntax highlight text-based files with advanced formatting options. Reads the first 8 KiB through `core/textContent.ts` and shows a notice instead of binary content or an unsupported encoding; decodes UTF-16 with a byte-order mark
 -   **Multi-file**: No
 -   **Dependencies**: `react-syntax-highlighter`
 -   **Priority**: 1
@@ -287,7 +287,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 18. SuperSplatViewerPlugin
 
 -   **ID**: `supersplat-viewer`
--   **Extensions**: `.lcc`, `.ply`, `.sog`, `.splat`
+-   **Extensions**: `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, `.spz`
 -   **Features**: The PlayCanvas SuperSplat Gaussian splat editor, embedded in an iframe: scene panel, transform and selection tools, camera animation, and export menus. Edits and exports stay in the browser and are not saved back to VAMS.
 -   **Multi-file**: No
 -   **Dependencies**: A from-source SuperSplat build that `customInstalls/supersplat` places under `public/viewers/supersplat/`
@@ -498,6 +498,8 @@ Update `web/src/visualizerPlugin/config/viewerConfig.json`:
     ]
 }
 ```
+
+`supportedExtensions` holds lowercase extensions, `"*"` for any file, or `"(none)"` for files with no extension. The extension is read from the last part of the file name; a leading dot does not start one (`.gitignore` has none, `.eslintrc.json` has `.json`) and a trailing dot leaves none. See "Files Without an Extension and the Binary Guard" in `CLAUDE.md`.
 
 ### That's It! No Core Code Changes Needed!
 
