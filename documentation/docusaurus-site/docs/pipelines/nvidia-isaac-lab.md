@@ -8,16 +8,16 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 
 ## Overview
 
-| Property               | Value                                                                                                                                                             |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pipeline IDs**       | `isaaclab-training`, `isaaclab-evaluation`                                                                                                                        |
-| **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`                                                                                                                       |
-| **Execution type**     | Lambda (asynchronous with callback)                                                                                                                               |
-| **Launch**             | Manual only -- neither workflow registers a trigger                                                                                                               |
-| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)                                                                                                               |
-| **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                                                           |
-| **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance. AWS Batch stops the job after 6 hours of running, so plan training runs well under 6 hours. |
-| **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                                                              |
+| Property               | Value                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline IDs**       | `isaaclab-training`, `isaaclab-evaluation`                                                                                        |
+| **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`                                                                                       |
+| **Execution type**     | Lambda (asynchronous with callback)                                                                                               |
+| **Launch**             | Manual only -- neither workflow registers a trigger                                                                               |
+| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)                                                                               |
+| **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                           |
+| **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance and the image pull. The AWS Batch job limit is also 8 hours. |
+| **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                              |
 
 ## Architecture
 
