@@ -65,6 +65,33 @@ _AUTHORIZER_DENIED_MESSAGE = (
     "deployment may restrict API access by source IP address, or this credential is not accepted. "
     "Contact your administrator."
 )
+# A per-call token handed to APIClient(bearer_token=...) (issue #1328) is never refreshed, so its
+# rejection is reported at once, and in words that do not tell the caller to run a CLI login.
+_INJECTED_TOKEN_REJECTED_MESSAGE = (
+    "Authentication failed: the VAMS API did not accept the supplied token (HTTP 401). It may be "
+    "expired, or issued to a client this deployment does not accept. Sign in again to get a new token."
+)
+_INJECTED_TOKEN_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the supplied token. The deployment may restrict "
+    "API access by source IP address, or this token is not accepted. Contact your administrator."
+)
+
+
+def _validated_bearer_token(token: Any) -> str:
+    """Return a per-call bearer token, refusing one that cannot be sent as a header value as is.
+
+    The value is the raw token (a JWT or a VAMS API key), without a "Bearer " prefix; whitespace or a
+    control character anywhere would split or corrupt the Authorization header. The token itself is
+    never echoed in the error.
+    """
+    if not isinstance(token, str) or not token:
+        raise ValueError("bearer_token must be a non-empty string")
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in token):
+        raise ValueError(
+            "bearer_token must be the raw token without a 'Bearer ' prefix, whitespace or control characters")
+    return token
+
+
 _REDIRECT_TARGET_REFUSED_MESSAGE = (
     "The request was redirected to {host}, which refused it (HTTP 403). That host is not the VAMS API, so "
     "signing in again does not change the result: a presigned URL may have expired, or the network path "
@@ -334,15 +361,36 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
     """
     
-    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
+    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None,
+                 bearer_token: Optional[str] = None):
+        """Create a client for one VAMS API.
+
+        ``bearer_token`` (issue #1328) is for a process that serves several users, such as a remote
+        MCP server: it builds one client per request from the caller's own token. The token lives
+        on this instance only. It is sent as ``Authorization: Bearer <token>`` on every
+        authenticated request, never written to a profile file, never refreshed (the client holds
+        no refresh token), and a 401 or authorizer deny is reported at once rather than retried. In
+        that mode no profile is read or written: with no ``profile_manager`` given,
+        ``self.profile_manager`` is None and nothing reads the active profile. The CLI's own
+        commands keep passing a ``profile_manager`` and never set this.
+        """
         self.base_url = base_url.rstrip('/')
-        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
-        # constructed without one would read another deployment's credentials.
-        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
+        self._bearer_token = _validated_bearer_token(bearer_token) if bearer_token is not None else None
+        if self._bearer_token is not None:
+            self.profile_manager = profile_manager
+        else:
+            # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+            # constructed without one would read another deployment's credentials.
+            self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         # requests reads a timeout only from the per-request keyword, never from an attribute on the
         # Session, so the pair is applied in _make_request instead.
         self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
+    @property
+    def uses_injected_token(self) -> bool:
+        """True when this client authenticates with a per-instance ``bearer_token``."""
+        return self._bearer_token is not None
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
@@ -352,6 +400,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         }
         
         if include_auth:
+            if self._bearer_token is not None:
+                headers['Authorization'] = f"Bearer {self._bearer_token}"
+                return headers
             auth_profile = self.profile_manager.load_auth_profile()
             if auth_profile and 'access_token' in auth_profile:
                 headers['Authorization'] = f"Bearer {auth_profile['access_token']}"
@@ -360,7 +411,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         
     def _validate_token_before_request(self, include_auth: bool = True):
         """Validate token before making request (pre-flight check for override tokens)."""
-        if not include_auth:
+        if not include_auth or self._bearer_token is not None:
+            # An injected token is checked by the API's authorizer, which answers 401 for an
+            # expired one; there is no saved profile to read an expiry from.
             return
             
         # Check if we have an override token and validate it
@@ -479,6 +532,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                     raise RetryExhaustedError(error_msg)
             
             # Handle 401 errors with retry logic
+            if response.status_code == 401 and include_auth and self._bearer_token is not None:
+                # An injected per-call token has no refresh token behind it, so nothing is retried.
+                raise AuthenticationError(_INJECTED_TOKEN_REJECTED_MESSAGE)
             if response.status_code == 401 and include_auth and retry_count < MAX_AUTH_RETRIES:
                 # For override tokens, don't retry - fail immediately with clear message
                 if self.profile_manager.is_override_token():
@@ -534,6 +590,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                     raise PermissionDeniedError.for_code(code)(
                         f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
                         code=code)
+                if include_auth and self._bearer_token is not None:
+                    # The authorizer refused the injected token; there is no refresh to try.
+                    raise PermissionDeniedError(_INJECTED_TOKEN_DENIED_MESSAGE)
                 if include_auth and retry_count < MAX_AUTH_RETRIES:
                     # For override tokens, check if expired
                     if self.profile_manager.is_override_token():
@@ -631,6 +690,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         see that the saved access token already changed from the one their request used
         (token_before) and reuse it instead of triggering another refresh + token rotation."""
         from .logging import log_auth_diagnostic, log_config_diagnostic
+
+        if self._bearer_token is not None:
+            # An injected token is never refreshed or replaced from a profile.
+            return False
 
         with _TOKEN_REFRESH_LOCK:
             # Another thread may have already refreshed while we waited for the lock. If the saved
@@ -976,8 +1039,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [401, 403]:
-                # Authentication failed - clear credentials
-                self.profile_manager.delete_auth_profile()
+                # Authentication failed - clear credentials (an injected token has none saved)
+                if self.profile_manager is not None and self._bearer_token is None:
+                    self.profile_manager.delete_auth_profile()
                 
                 if e.response.status_code == 401:
                     raise AuthenticationError(
