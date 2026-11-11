@@ -102,6 +102,19 @@ def describe_profile(config: Config) -> Dict[str, Any]:
     return status
 
 
+def sign_in_marker(config: Config) -> Any:
+    """The stored sign-in's expiry, which every new sign-in or renewal rewrites; None without one.
+
+    The server compares it with the value seen when VAMS refused a call, so a sign-in the user made
+    since then is not reported as refused.
+    """
+    try:
+        name = config.profile or ProfileManager().get_active_profile()
+        return (ProfileManager(name).load_auth_profile() or {}).get("expires_at")
+    except Exception:  # noqa: BLE001 - a status read must not fail
+        return None
+
+
 class VamsClient:
     """MCP-oriented facade over the vamscli APIClient, using the vamscli profile."""
 

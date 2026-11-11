@@ -12,10 +12,15 @@ authors = [{ name = "AWS Labs", email = "aws-labs@amazon.com" }]
 keywords = ["aws", "vams", "mcp", "agentic", "3d", "asset", "management"]
 requires-python = ">=3.12"
 dependencies = [
-    # Supports both the mcp 1.x FastMCP and the mcp 2.x MCPServer entry points. 1.11.0 is the
-    # oldest 1.x that registers these tools: earlier releases reject the string annotations of
-    # `from __future__ import annotations`, and lack tool titles and structured output (#1326).
-    "mcp>=1.11.0,<3.0.0",
+    # Supports both the mcp 1.x FastMCP and the mcp 2.x MCPServer entry points. 1.10.0 is the
+    # oldest 1.x with tool titles and structured output (outputSchema); 1.9.x cannot register
+    # these tools. mcp 1.10.0 to 1.21.1 import a pydantic internal that pydantic 2.12 removed, so
+    # with those releases install pydantic<2.12; 1.21.2 and later, and 2.x, work with current
+    # pydantic.
+    "mcp>=1.10.0,<3.0.0",
+    # results.py declares the typed tool results as pydantic v2 models (this server's own venv;
+    # the backend's pydantic v1 pin does not apply here).
+    "pydantic>=2.11.0,<3.0.0",
     "requests>=2.25.0",
     # vamscli provides the battle-tested APIClient this server reuses.
     # Install it into the same environment: `pip install -e ../VamsCLI`

@@ -1,4 +1,4 @@
-"""The agent-facing surface of the server (#1326, Mandatory Rules 11-14 of tools/VamsMCP/CLAUDE.md).
+"""The agent-facing surface of the server (Mandatory Rules 11-14 of tools/VamsMCP/CLAUDE.md).
 
 What an MCP client shows the model before any call: the server `instructions`, each tool's
 description, title and annotations, and each typed tool's `outputSchema`. Plus the degraded start:
@@ -318,6 +318,42 @@ def test_an_expired_sign_in_during_a_session_is_not_authenticated(monkeypatch, e
     _assert_not_authenticated(server.get_asset("d", "a"))
 
 
+def test_vams_status_reports_a_sign_in_the_api_refused_until_a_call_succeeds(monkeypatch):
+    client = MagicMock()
+    client.api.get_asset.side_effect = TokenExpiredError("expired. Please run 'vamscli auth login'.")
+    monkeypatch.setattr(server, "CLIENT", client)
+    monkeypatch.setattr(server, "_SIGN_IN_FAILURE", None)
+    marker = {"expires_at": 1}
+    monkeypatch.setattr(server, "sign_in_marker", lambda config: marker["expires_at"])
+    monkeypatch.setattr(server, "describe_profile",
+                        lambda config: {"profile": "p", "userId": "u1", "tokenExpired": True})
+    first = server.vams_status()
+    assert first["authenticated"] is True and "renews" in first["note"]
+    _assert_not_authenticated(server.get_asset("d", "a"))
+    status = server.vams_status()
+    assert status["authenticated"] is False
+    assert status["reason"] == server._SIGN_IN_ERRORS[TokenExpiredError]
+    assert "the user runs `vamscli" in status["user_action"] and "note" not in status
+    client.api.get_asset.side_effect = None
+    client.api.get_asset.return_value = {"assetId": "a"}
+    assert server.get_asset("d", "a") == {"assetId": "a"}
+    assert server.vams_status()["authenticated"] is True
+
+
+def test_vams_status_drops_a_refusal_once_the_user_signed_in_again(monkeypatch):
+    client = MagicMock()
+    client.api.get_asset.side_effect = AuthenticationError("refused. Please run 'vamscli auth login'.")
+    monkeypatch.setattr(server, "CLIENT", client)
+    monkeypatch.setattr(server, "_SIGN_IN_FAILURE", None)
+    marker = {"expires_at": 1}
+    monkeypatch.setattr(server, "sign_in_marker", lambda config: marker["expires_at"])
+    monkeypatch.setattr(server, "describe_profile", lambda config: {"profile": "p", "tokenExpired": False})
+    server.get_asset("d", "a")
+    assert server.vams_status()["authenticated"] is False
+    marker["expires_at"] = 2  # a new `auth login` rewrote the stored sign-in
+    assert server.vams_status()["authenticated"] is True
+
+
 def test_the_server_starts_without_a_sign_in(signed_out, monkeypatch):
     ran = []
     monkeypatch.setattr(server.mcp, "run", lambda *a, **k: ran.append(True))
@@ -325,7 +361,7 @@ def test_the_server_starts_without_a_sign_in(signed_out, monkeypatch):
     assert ran == [True]
 
 
-# --- README autoApprove sample (requirement 7 of #1326) ---------------------------------------------
+# --- README autoApprove sample (the README sample) ---------------------------------------------
 
 # The reads that return a credential, a presigned URL or other users' identifiers (README "Security
 # notes", Mandatory Rule 4). Every other read tool is in the sample, so the agent is not prompted for

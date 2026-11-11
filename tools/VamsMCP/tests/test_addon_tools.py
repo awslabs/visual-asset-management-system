@@ -89,7 +89,7 @@ def _is_mcp_tool_decorator(decorator):
 
 def _decorator_violations(tool, tier, node):
     """The decorators are `@mcp.tool(title="...", annotations=<CONST>)` then `@tool_result`, and the
-    annotation constant is one of those its gate tier allows (vams_mcp/annotations.py, Rule 11)."""
+    annotation constant is one of those its gate tier allows (vams_mcp/annotations.py, Rule 12)."""
     decorators = node.decorator_list
     if len(decorators) != 2 or not _is_mcp_tool_decorator(decorators[0]) \
             or ast.unparse(decorators[1]) != "tool_result":

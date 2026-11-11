@@ -228,3 +228,4 @@ class Status(ToolResult):
     mcpVersion: Optional[str] = None
     cliVersion: Optional[str] = None
     reason: Optional[str] = None
+    note: Optional[str] = None

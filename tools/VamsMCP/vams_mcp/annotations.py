@@ -1,4 +1,4 @@
-"""MCP tool annotations, one per gate tier (Mandatory Rule 11 in ``tools/VamsMCP/CLAUDE.md``).
+"""MCP tool annotations, one per gate tier (Mandatory Rule 12 in ``tools/VamsMCP/CLAUDE.md``).
 
 Every tool passes exactly one of these to ``@mcp.tool(title=..., annotations=...)``, chosen by the
 gate block it is registered in — never by what the tool seems to do:
@@ -12,7 +12,7 @@ gate block it is registered in — never by what the tool seems to do:
 ``openWorldHint`` is stated on every constant because the MCP specification defaults it to true: a
 tool that only talks to this deployment's VAMS API sets it false, and the compute tools set it true.
 The hints are advisory for the client (auto-approval, confirmation prompts); the gates and the
-deployment's authorization stay the controls. ``tests/test_tool_annotations.py`` checks every core
+deployment's authorization stay the controls. ``tests/test_agent_surface.py`` checks every core
 and add-on tool against its block.
 """
 

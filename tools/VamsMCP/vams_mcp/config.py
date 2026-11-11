@@ -36,7 +36,7 @@ class ConfigError(RuntimeError):
     """Raised when configuration is missing or invalid.
 
     ``str()`` is the full message for a person, setup command included. A tool result must not tell
-    the agent to run a CLI (Mandatory Rule 12), so the server reports ``reason`` (the fact, with no
+    the agent to run a CLI (Mandatory Rule 14), so the server reports ``reason`` (the fact, with no
     command) to the agent and puts ``user_step`` (the command the USER runs) in ``user_action``.
     """
 

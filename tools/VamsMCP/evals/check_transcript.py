@@ -11,10 +11,11 @@ Usage: python check_transcript.py <transcript> --scenario S1 [--server vams]
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Set
 
 # Tools a scenario expects; one of them must be called.
 EXPECTED = {
@@ -25,8 +26,28 @@ EXPECTED = {
     "S5": {"vams_status", "list_databases"},
 }
 
-# Client tools that touch neither the shell nor the file system, so they break no rule.
-NEUTRAL_TOOLS = {"TodoWrite", "TodoRead", "Task", "todo_list", "thinking"}
+# Client tools that touch neither the shell nor the file system, so they break no rule. ToolSearch is
+# how Claude Code loads the schemas of deferred MCP tools before it calls them.
+NEUTRAL_TOOLS = {"TodoWrite", "TodoRead", "Task", "todo_list", "thinking", "ToolSearch"}
+
+SERVER_SOURCES = [Path(__file__).resolve().parents[1] / "vams_mcp" / "server.py",
+                  *sorted((Path(__file__).resolve().parents[1] / "vams_mcp" / "addon_tools").glob("*.py"))]
+
+
+def vams_tool_names() -> Set[str]:
+    """Every tool name the server can register, read from its source (no import, no sign-in).
+
+    A plain list gives bare names, and a client's own tools (Kiro's ``execute_bash``, ``fs_read``)
+    look like tool names too, so only a name the server defines counts as a VAMS tool.
+    """
+    names: Set[str] = set()
+    for path in SERVER_SOURCES:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                "tool" in ast.unparse(d) for d in node.decorator_list
+            ):
+                names.add(node.name)
+    return names
 
 
 def tool_calls(lines: Iterable[str]) -> List[str]:
@@ -64,9 +85,10 @@ def check(names: List[str], scenario: str, server: str = "vams", bare_names_are_
     """(passed, problems) for one scenario."""
     problems: List[str] = []
     used = set()
+    known = vams_tool_names() if bare_names_are_mcp else set()
     for name in names:
         tool = mcp_tool_name(name, server)
-        if tool is None and bare_names_are_mcp and "_" in name and name.islower():
+        if tool is None and name in known:
             tool = name
         if tool is not None:
             used.add(tool)

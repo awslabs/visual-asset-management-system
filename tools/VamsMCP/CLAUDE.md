@@ -63,7 +63,7 @@ tools/VamsMCP/
                              # probe hook's tools are registered under the server's own gates
     test_addon_tools.py      # the add-on lane: the hook's placement and order, and every
                              # addon_tools module's layout (see "Add-on Tools")
-    test_agent_surface.py    # what a client sees (#1326): instructions, description budgets, titles,
+    test_agent_surface.py    # what a client sees: instructions, description budgets, titles,
                              # annotations per gate (core + add-on), outputSchema and structured
                              # content, NotAuthenticated and vams_status, the README autoApprove sample
     test_agent_scenarios.py  # evals/check_transcript.py
@@ -300,11 +300,13 @@ asymmetry other callers rely on):
     `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
     `mcp.server.mcpserver` and removed the old module. `server.py` imports it
     through a `try`/`except ImportError` alias (`McpServer`) — keep that shim and
-    the `mcp>=1.11.0,<3.0.0` pin, and test against both before widening it (CI installs the
+    the `mcp>=1.10.0,<3.0.0` pin, and test against both before widening it (CI installs the
     newest release the pin allows; run the newest 1.x and the floor yourself,
-    `pip install "mcp==1.11.0" "pydantic<2.12"`, when you
-    touch `@mcp.tool(...)` arguments or return types). Older 1.x releases fail to register
-    these tools at all. mcp 2.x spells `ToolAnnotations` fields in snake_case in Python
+    `pip install "mcp==1.10.0" "pydantic<2.12"`, when you
+    touch `@mcp.tool(...)` arguments or return types). 1.10.0 is the oldest release with tool
+    titles and structured output; 1.9.x cannot register these tools. mcp 1.10.0 to 1.21.1 fail
+    at import with pydantic 2.12 or later (`eval_type_backport` was removed from a pydantic
+    internal they use), so those releases need `pydantic<2.12`; 1.21.2+ and 2.x do not. mcp 2.x spells `ToolAnnotations` fields in snake_case in Python
     (`read_only_hint`) and camelCase on the wire; a test reads a tool through
     `tool.model_dump(by_alias=True)` so it holds on both.
 

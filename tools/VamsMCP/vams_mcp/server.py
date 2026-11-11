@@ -44,6 +44,7 @@ from .client import (  # noqa: E402
     TokenExpiredError,
     describe_profile,
     login_step_for,
+    sign_in_marker,
 )
 from . import __version__ as MCP_VERSION  # noqa: E402
 from . import results  # noqa: E402
@@ -168,13 +169,16 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(*args: Any, **kwargs: Any) -> Dict[str, Any]:
         if fn.__name__ not in _WORKS_WITHOUT_SIGN_IN and _current_client() is None:
             return _not_authenticated(STARTUP_REASON or "no VAMS profile is signed in", STARTUP_USER_STEP)
+        global _SIGN_IN_FAILURE
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except _SIGN_IN_ERRORS_TUPLE as exc:
             # The stored sign-in stopped working mid-session (expired refresh token, a 401 that
             # survives a refresh). The exception's own text tells the reader to run vamscli, which is
             # an instruction for the USER, so it goes to user_action and not to the agent's error.
             reason = next(text for cls, text in _SIGN_IN_ERRORS.items() if isinstance(exc, cls))
+            # Remembered so vams_status reports the same state the tools answer with.
+            _SIGN_IN_FAILURE = (reason, sign_in_marker(CONFIG))
             return _not_authenticated(reason, login_step_for(CONFIG))
         except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
             result = {"error": str(exc), "error_type": type(exc).__name__}
@@ -185,8 +189,27 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
                 for key, value in fields.items():
                     result.setdefault(key, value)
             return result
+        if fn.__name__ not in _WORKS_WITHOUT_SIGN_IN:
+            # A call that reached the API without a sign-in error: the sign-in works again.
+            _SIGN_IN_FAILURE = None
+        return result
 
     return wrapper
+
+
+# (reason, sign_in_marker) of the last API call VAMS refused for its sign-in, until a later call
+# succeeds or the profile holds a newer sign-in. A profile can hold a sign-in that VAMS no longer
+# accepts; vams_status reads this so it does not say authenticated while the tools answer
+# NotAuthenticated.
+_SIGN_IN_FAILURE: Optional[Tuple[str, Any]] = None
+
+
+def _refused_sign_in() -> Optional[str]:
+    """Why VAMS refused the stored sign-in, or None when it was not refused or was replaced since."""
+    global _SIGN_IN_FAILURE
+    if _SIGN_IN_FAILURE is not None and sign_in_marker(CONFIG) != _SIGN_IN_FAILURE[1]:
+        _SIGN_IN_FAILURE = None
+    return _SIGN_IN_FAILURE[0] if _SIGN_IN_FAILURE else None
 
 
 # Tools that answer without a signed-in profile. Every other tool returns NotAuthenticated then.
@@ -341,10 +364,12 @@ def vams_status() -> results.Status:
     `profile`, `apiUrl` (the deployment), `userId` (who the tools act as), `featureSwitches` (what the
     deployment enabled at the last sign-in), `gates` (whether create/update and delete tools and
     which add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false,
-    `reason` says why and `user_action` is the step to ask the user to take."""
+    `reason` says why and `user_action` is the step to ask the user to take. `tokenExpired` true with
+    a `note`: the next call renews the sign-in or answers NotAuthenticated."""
     status = describe_profile(CONFIG)
     client = _current_client()
-    status["authenticated"] = client is not None
+    refused = _refused_sign_in() if client is not None else None
+    status["authenticated"] = client is not None and refused is None
     status["gates"] = {
         "reads": True,
         "writes": CONFIG.enable_writes,
@@ -357,7 +382,16 @@ def vams_status() -> results.Status:
         unauthenticated = _not_authenticated(STARTUP_REASON or "no VAMS profile is signed in", STARTUP_USER_STEP)
         status["reason"] = STARTUP_REASON
         status["user_action"] = unauthenticated["user_action"]
+    elif refused is not None:
+        status["reason"] = refused
+        status["user_action"] = _not_authenticated(refused, login_step_for(CONFIG))["user_action"]
+    elif status.get("tokenExpired"):
+        status["note"] = (
+            "The stored sign-in has expired. The next call renews it, or answers NotAuthenticated "
+            "when VAMS refuses the renewal."
+        )
     return status
+
 
 @mcp.tool(title="List my allowed API routes", annotations=READ)
 @tool_result
@@ -1145,7 +1179,7 @@ def list_executions(
     )
 
 
-# The description names only what an agent needs to reach a conclusion (#1326, Mandatory Rule 11).
+# The description names only what an agent needs to reach a conclusion (Mandatory Rule 11).
 # The full field reference of the detail view (sub-execution stages and `stageSource`,
 # `workflowVersionCurrent` and what redeploys a workflow, `availableLogs` kinds, the
 # `metadataSource*` fields) is the API documentation's workflows page
@@ -1157,20 +1191,20 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     """Use when asked why a run failed or what it produced: per-step (`pipelines`) status, error,
     inputs, outputs, config and `availableLogs` (pass a `logId` to get_execution_logs).
 
-    The response can be PARTIAL: `truncatedCollections` names each collection the server cut. Check it
-    before reporting a count or an absence; read the rest with page_execution_detail_metadata(),
+    It can be PARTIAL: `truncatedCollections` names each cut collection. Check it before reporting a
+    count or an absence; read the rest with page_execution_detail_metadata(),
     page_execution_detail_files() or get_execution_results().
 
-    Input metadata comes in two collections, `inputMetadata` (asset and file rows) and
-    `inputDatabaseMetadata` (database rows); each row has `metadata` and `attributes` maps, and a row
-    with `expanded` true is context, not an input file. `metadataSourceDatabases` lists every
-    database read. `renderedConfig` is the inline PRE-system-tag copy; `renderedConfigLocation`
-    (NOT only on truncation) holds the FULLY substituted body the step actually read.
+    Input metadata: `inputMetadata` (asset/file rows) and `inputDatabaseMetadata` (database
+    rows), each with `metadata` and `attributes`; `expanded` true marks context, not an input file.
+    `metadataSourceDatabases` lists every database read. `renderedConfig` is the PRE-system-tag
+    inline copy (`renderedConfigTruncated` when cut); `renderedConfigLocation` (NOT only on
+    truncation) holds the FULLY substituted body the step read.
 
-    A SKIPPED execution never ran: its `skip` block says why. include_sub_executions=True adds each
-    step's `subExecutions` (nested state machines, Batch, Deadline Cloud jobs) with status, error and
-    `stages` (`caught` marks a handled failure), to find where a run failed; a cut shows as
-    "pipelines.subExecutions"."""
+    A SKIPPED execution never ran (`skip` says why). include_sub_executions=True adds each step's
+    `subExecutions` (nested state machines, Batch and Deadline Cloud jobs: status, error,
+    `stages`; `caught` is a handled failure). Partial reads are marked `stagesTruncated`,
+    `historyTruncated`, `subExecutionsTruncated`, `subExecutionWarnings`, "pipelines.subExecutions"."""
     params = {"includeSubExecutions": "true"} if include_sub_executions else None
     return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id, params=params))
 
@@ -1314,7 +1348,7 @@ def get_execution_results(execution_id: str,
     return result
 
 
-# Log-source details trimmed from the description (#1326): a nested state machine's history line
+# Log-source details trimmed from the description: a nested state machine's history line
 # carries the logId of the group it writes to; a "deadlineCloudJob" source is read by the exact
 # session streams of the job's 10 most recent sessions, never by prefix ("notFound" until it has
 # a session); "skipped" is past the per-request registered-log cap; sfnHistoryEvents is served only
@@ -1347,7 +1381,8 @@ def get_execution_logs(
     literal substring; `start_time` / `end_time` are epoch MILLISECONDS.
 
     The first call without a step also returns `sfnHistoryEvents`. With a step, `logSources` gives
-    each source's `status`; "unscoped" and empty means unresolved, not silent."""
+    each source's `status`; "error" names its cause in `warnings`, and "unscoped" and empty means
+    unresolved, not silent."""
     params: Dict[str, Any] = {"mode": mode}
     if pipeline_execution_id:
         params["pipelineExecutionId"] = pipeline_execution_id

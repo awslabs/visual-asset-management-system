@@ -1,4 +1,4 @@
-"""The transcript checker of the agent-behaviour scenarios (evals/check_transcript.py, #1326)."""
+"""The transcript checker of the agent-behaviour scenarios (evals/check_transcript.py)."""
 
 import importlib.util
 import json
@@ -54,3 +54,20 @@ def test_the_cli_exit_code(tmp_path):
     bad.write_text("Bash\ngenerate_download_url\n", encoding="utf-8")
     assert check_transcript.main([str(good), "--scenario", "S3"]) == 0
     assert check_transcript.main([str(bad), "--scenario", "S3"]) == 1
+
+
+@pytest.mark.parametrize("builtin", ["execute_bash", "fs_read", "shell"])
+def test_a_client_builtin_in_a_plain_list_fails(builtin):
+    names = check_transcript.tool_calls(["search_assets", builtin])
+    passed, problems = check_transcript.check(names, "S1", bare_names_are_mcp=True)
+    assert not passed and problems == [f"non-MCP tool called: {builtin}"]
+
+
+def test_claude_codes_tool_loader_is_neutral():
+    names = check_transcript.tool_calls(_stream_json("ToolSearch", "mcp__vams__search_assets"))
+    assert check_transcript.check(names, "S1") == (True, [])
+
+
+def test_the_known_tool_names_cover_core_and_add_on_tools():
+    names = check_transcript.vams_tool_names()
+    assert {"vams_status", "search_assets", "get_execution_details", "list_edh_workstations"} <= names
