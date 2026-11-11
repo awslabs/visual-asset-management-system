@@ -156,7 +156,7 @@ def _quoted_value_branch(opening_backslashes):
 _QUOTED_VALUE_OVER_A_LINE_BREAK = re.compile(
     r'[:=]\s*+(?:' + "|".join(_quoted_value_branch(n) for n in list(range(9)) + [None]) + r')')
 _LINE_KEYS_ALT = "|".join(
-    re.escape(k) for k in SENSITIVE_KEYS + CLIENT_DETAIL_KEYS + ["apiKeyId", "bearer"])
+    re.escape(k) for k in (*SENSITIVE_KEYS, *CLIENT_DETAIL_KEYS, "apiKeyId", "bearer"))
 _LINE_ENDS_IN_A_KEY_OR_DELIMITER = re.compile(r'(?i)(?:["\':=,{]|' + _LINE_KEYS_ALT + r')\s*\Z')
 
 
