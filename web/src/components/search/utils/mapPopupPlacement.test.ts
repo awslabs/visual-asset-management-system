@@ -39,10 +39,11 @@ const overlaps = (
 ) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 
 describe("Map view popup placement (#1303)", () => {
-    it("draws the pin in the marker-sized square above and to the left of its coordinate", () => {
+    it("draws the pin in the marker-sized square centred above its coordinate (#1306)", () => {
         expect(PIN_BOX.right - PIN_BOX.left).toBe(MAP_MARKER_SIZE_PX);
         expect(PIN_BOX.bottom - PIN_BOX.top).toBe(MAP_MARKER_SIZE_PX);
-        expect(PIN_BOX.bottom).toBeLessThanOrEqual(0);
+        expect(PIN_BOX.left + PIN_BOX.right).toBe(0);
+        expect(PIN_BOX.bottom).toBe(0);
     });
 
     it.each(ANCHORS)("keeps a popup anchored %s clear of a point marker's pin", (anchor) => {
@@ -56,10 +57,15 @@ describe("Map view popup placement (#1303)", () => {
         }
     });
 
-    it("moves a popup placed below or to the right of a pin by nothing", () => {
+    it("moves a popup below the point by nothing and one beside it clear of the pin", () => {
         const offsets = popupOffsetsFor("point");
-        for (const anchor of ["top", "top-left", "top-right", "left"] as PopupAnchor[]) {
+        for (const anchor of ["top", "top-left", "top-right"] as PopupAnchor[]) {
             expect(offsets[anchor]).toEqual([0, 0]);
+        }
+        expect(offsets.left).toEqual([PIN_BOX.right, 0]);
+        expect(offsets.right).toEqual([PIN_BOX.left, 0]);
+        for (const anchor of ["bottom", "bottom-left", "bottom-right"] as PopupAnchor[]) {
+            expect(offsets[anchor]).toEqual([0, PIN_BOX.top]);
         }
     });
 

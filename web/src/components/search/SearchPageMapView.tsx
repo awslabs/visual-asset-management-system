@@ -37,7 +37,13 @@ import {
 import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
-import { MAP_MARKER_SIZE_PX, POPUP_PADDING, popupOffsetsFor } from "./utils/mapPopupPlacement";
+import {
+    MAP_MARKER_SIZE_PX,
+    MAP_PIN_PATH,
+    MAP_PIN_VIEW_BOX,
+    POPUP_PADDING,
+    popupOffsetsFor,
+} from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 
 interface LocationDataWithDetails {
@@ -651,20 +657,24 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                 setSelectedItem(item);
                             }}
                         >
+                            {/* No transform: anchor="bottom" already puts the bottom centre
+                                of this element, the icon's tip, on the point (#1306) */}
                             <div
                                 style={{
                                     width: `${MAP_MARKER_SIZE_PX}px`,
                                     height: `${MAP_MARKER_SIZE_PX}px`,
                                     cursor: "pointer",
-                                    transform: "translate(-50%, -100%)",
                                 }}
                             >
                                 <svg
-                                    viewBox="0 0 24 24"
+                                    viewBox={MAP_PIN_VIEW_BOX}
+                                    width={MAP_MARKER_SIZE_PX}
+                                    height={MAP_MARKER_SIZE_PX}
+                                    style={{ display: "block" }}
                                     fill={selectedItem?.id === item.id ? "#0972d3" : "#d91515"}
                                     xmlns="http://www.w3.org/2000/svg"
                                 >
-                                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
+                                    <path d={MAP_PIN_PATH} />
                                 </svg>
                             </div>
                         </Marker>
