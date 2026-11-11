@@ -307,7 +307,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 -   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
--   **Reindex utility exit code** — `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, and `2` when a synchronous invocation times out and the outcome is unverified, instead of exiting `0` in both cases. (issue #1296)
+-   **Reindex utility exit code** — `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, when the Lambda function raises or reaches its own time limit, and when the reindexer answers with an error status, and `2` when a synchronous invocation times out and the outcome is unverified, instead of exiting `0` in each case. (issue #1296)
 
 **Other changes:**
 

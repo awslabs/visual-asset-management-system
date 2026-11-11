@@ -464,6 +464,20 @@ def run_reindexer_direct(
         return {'statusCode': status_code, 'error': 'Reindexer run failed'}
 
 
+def response_body(result: Dict) -> Dict:
+    """
+    Return the body of a reindexer response as a dict, or an empty dict when it has none or it
+    does not parse. The Lambda answers with the body as a JSON string.
+    """
+    body = result.get('body')
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return {}
+    return body if isinstance(body, dict) else {}
+
+
 def reindex_failures(result: Dict) -> List[str]:
     """
     Return the reasons the reindexer gave for a run that did not fully complete.
@@ -471,15 +485,7 @@ def reindex_failures(result: Dict) -> List[str]:
     On a direct invocation the reindexer answers with status 200 and lists failed assets or files,
     errors and an index clear that did not finish in the body's 'failures' array.
     """
-    body = result.get('body')
-    if isinstance(body, str):
-        try:
-            body = json.loads(body)
-        except ValueError:
-            return []
-    if not isinstance(body, dict):
-        return []
-    failures = body.get('failures')
+    failures = response_body(result).get('failures')
     if not isinstance(failures, list):
         return []
     return [str(failure) for failure in failures]
@@ -491,7 +497,8 @@ def exit_code_for_result(result: Dict) -> int:
 
     Returns:
         EXIT_SUCCESS when the run completed (or an asynchronous invocation was submitted),
-        EXIT_FAILED when the run failed or the reindexer reported failures,
+        EXIT_FAILED when the run failed, the Lambda function raised or timed out, the reindexer
+        answered with an error status, or the reindexer reported failures,
         EXIT_UNVERIFIED when the invocation timed out and the outcome is unknown.
     """
     if result.get('timeout'):
@@ -501,6 +508,24 @@ def exit_code_for_result(result: Dict) -> int:
 
     if 'error' in result:
         logger.error("Reindexing failed")
+        return EXIT_FAILED
+
+    # A synchronous invoke answers status 200 also when the function raised or reached its own time
+    # limit; the payload is then the function error rather than the reindexer's response.
+    if 'errorMessage' in result or 'errorType' in result:
+        logger.error(
+            f"Reindexing failed: the Lambda function reported "
+            f"{result.get('errorType', 'an error')}: {result.get('errorMessage', 'no message')}"
+        )
+        return EXIT_FAILED
+
+    # The reindexer's own error answer carries its status in the payload and the error in the body.
+    status_code = result.get('statusCode')
+    if isinstance(status_code, int) and not isinstance(status_code, bool) and status_code >= 500:
+        logger.error(
+            f"Reindexing failed with status code {status_code}: "
+            f"{response_body(result).get('error', 'no error message returned')}"
+        )
         return EXIT_FAILED
 
     failures = reindex_failures(result)
