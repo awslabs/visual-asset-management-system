@@ -47,7 +47,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
     - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
-    - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC (this releases the Lambda Hyperplane ENIs that most commonly block subnet deletion)
+    - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC. Their network interfaces stay in the VPC afterwards; step 2 removes them
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
 
@@ -55,7 +55,32 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
     cd infra && npx cdk deploy --all --require-approval never
     ```
 
-    If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
+    The update that takes a function out of the VPC removes the function's permission to delete its network
+    interfaces before AWS Lambda deletes them, and Lambda does not try again. The interfaces stay in the VPC in the
+    `available` state, and the subnets and the old Lambda security groups cannot be deleted while they exist. List
+    them:
+
+    ```bash
+    aws ec2 describe-network-interfaces \
+        --filters Name=vpc-id,Values=<VAMS_VPC_ID> Name=status,Values=available "Name=description,Values=AWS Lambda VPC ENI-*" \
+        --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,RequesterId,Attachment.AttachmentId]' --output text
+    ```
+
+    Lambda changes such an interface's type from `lambda` to `interface` when it stops managing it, so do not filter
+    on the interface type. Delete an interface only when its status is `available` and it has no attachment, its
+    `RequesterId` is the AWS Lambda service rather than your own account ID, and the function named after
+    `AWS Lambda VPC ENI-` in its description no longer exists or has no subnets in its VPC configuration
+    (`aws lambda get-function-configuration --function-name <FUNCTION_NAME> --query 'VpcConfig.SubnetIds'` returns
+    an empty list, or the function is not found):
+
+    ```bash
+    aws ec2 delete-network-interface --network-interface-id <ENI_ID>
+    ```
+
+    An old Lambda security group that no stack owns any more stays behind too. Before deleting one by hand, check
+    that no stack owns it (`aws cloudformation describe-stack-resources --physical-resource-id <SECURITY_GROUP_ID>`
+    finds no stack), that no network interface uses it and that no rule in another group references it. Never delete
+    a security group that a stack still owns, or one that an AWS Batch compute environment of a GPU pipeline uses.
 
 3. Re-enable the features you need in `infra/config/config.json`, including any new subnet or availability-zone configuration (for example, set `openSearch.useProvisioned.availabilityZoneCount` to `2` for a two-AZ Region such as `eusc-de-east-1`).
 4. Deploy again so the VPC is provisioned with the new subnet layout:
