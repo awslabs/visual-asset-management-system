@@ -806,11 +806,14 @@ describe("EDH table names", () => {
 });
 
 describe("EDH AMI builds", () => {
-    // Every `Source.asset` call the AMI builds synth makes, recorded while it runs.
+    // Every `Source.asset` call the AMI builds synth makes, recorded while it runs. The synth must run
+    // here rather than come from the per-run disk cache, where another file's synth of the same
+    // configuration would leave the spy with no calls.
     const sourceAsset = jest.spyOn(s3deployment.Source, "asset");
     const withAmiBuilds = synthTemplate("commercial", {
         mutate: enableEdhAmiBuilds,
         mutateKey: "edhAmiBuilds",
+        sharedCache: false,
     });
     const sourceAssetCalls = [...sourceAsset.mock.calls];
     sourceAsset.mockRestore();
