@@ -106,6 +106,12 @@ class TestPropertyMapping:
 
 @pytest.mark.unit
 class TestCreateAndUpdate:
+    def test_a_dry_run_reports_a_dry_run_and_deletes_nothing(self, reindexer):
+        response = reindexer.lambda_handler(_cfn_event("Create", {"DryRun": "true"}), _context())
+        assert _deleted(reindexer.vector_store) == []
+        assert response["Data"]["Message"] == "Vector reindex dry run completed"
+        assert response["Data"]["Deleted"] == "1"
+
     def test_create_runs_both_and_reports_completed_when_the_run_finished(self, reindexer):
         response = reindexer.lambda_handler(_cfn_event("Create"), _context())
         assert _deleted(reindexer.vector_store) == [K1]

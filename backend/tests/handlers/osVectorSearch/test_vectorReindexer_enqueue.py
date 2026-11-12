@@ -118,6 +118,21 @@ class TestEnqueue:
         body = json.loads(reindexer.lambda_handler({"operation": "enqueue", "limit": 1}, _context())["body"])
         assert body["enqueued"] == 1 and len(_bodies(reindexer.sqs_client)) == 1 and body["continued"] is False
 
+    def test_a_dry_run_logs_the_files_it_would_enqueue(self, reindexer):
+        reindexer.logger = MagicMock()
+        reindexer.lambda_handler({"operation": "enqueue", "dryRun": True}, _context())
+        reindexer.sqs_client.send_message_batch.assert_not_called()
+        # The count is the last line a finished enqueue logs.
+        last = str(reindexer.logger.info.call_args.args[0])
+        assert "2 of 4 enumerated files would be enqueued (total 2)" in last, last
+
+    def test_a_real_run_logs_the_files_it_enqueued(self, reindexer):
+        reindexer.logger = MagicMock()
+        reindexer.lambda_handler({"operation": "enqueue"}, _context())
+        last = str(reindexer.logger.info.call_args.args[0])
+        assert "2 of 4 enumerated files enqueued (total 2)" in last, last
+        assert "would be" not in last, last
+
     def test_dry_run_sends_nothing_but_counts(self, reindexer):
         body = json.loads(reindexer.lambda_handler({"operation": "enqueue", "dryRun": True}, _context())["body"])
         reindexer.sqs_client.send_message_batch.assert_not_called()

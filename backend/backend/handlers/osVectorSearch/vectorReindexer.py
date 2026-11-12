@@ -280,8 +280,10 @@ def run_enqueue(state: Dict[str, Any], params: Dict[str, Any], time_left: Callab
     if params['limit'] is not None:
         selected = selected[:max(0, params['limit'] - state['enqueued'])]
     _send_launch_messages(selected, state, params['dryRun'])
+    # A dry run sends nothing, so its count is of the files a real run would enqueue.
+    outcome = "would be enqueued" if params['dryRun'] else "enqueued"
     logger.info(f"vector reindex run {state['runId']}: {len(selected)} of {len(refs)} enumerated files "
-                f"enqueued (total {state['enqueued']})")
+                f"{outcome} (total {state['enqueued']})")
     if params['limit'] is not None and state['enqueued'] >= params['limit']:
         state['startAfter'] = None
         return True
@@ -417,10 +419,11 @@ def handle_cfn_event(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # reported only in the log group, as the deploy has already moved on by then.
         raise RuntimeError(
             f"vector reindex run {body.get('reindexRunId')} failed in phase {body.get('phase')}")
+    run = 'Vector reindex dry run' if params['dryRun'] else 'Vector reindex'
     return {
         'PhysicalResourceId': physical_id,
         'Data': {
-            'Message': 'Vector reindex started' if body['continued'] else 'Vector reindex completed',
+            'Message': f"{run} started" if body['continued'] else f"{run} completed",
             'ReindexRunId': body['reindexRunId'],
             'Phase': body['phase'],
             'Deleted': str(body['deleted']),
