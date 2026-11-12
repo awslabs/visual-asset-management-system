@@ -363,28 +363,27 @@ fields @timestamp, @message
 
 ### What Is Never Logged
 
-The audit logging system is designed with security-first principles and never logs:
+The values of the redacted keys listed under [Automatic Data Masking](#automatic-data-masking) never reach an audit record. That covers:
 
--   JWT tokens (raw or decoded)
--   Authorization headers or bearer tokens
--   Passwords or secrets
--   API keys or access tokens
--   AWS credentials (access keys, secret keys, session tokens)
--   Token signatures or detailed token validation errors
+-   JWT tokens and bearer tokens in the `Authorization` header, and the raw token in `idJwtToken` fields
+-   API keys (`X-Api-Key` header, `apiKey`, `apiKeySecret` and `rawKey` fields) and cookies (`Cookie`, `Set-Cookie`)
+-   Proxy credentials (`Proxy-Authorization`) and AWS credentials (access keys, secret keys, session tokens, `X-Amz-Security-Token`)
+-   Token signatures or detailed token validation errors (the authorizer records a generic failure category)
 -   Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them
+
+Redaction is by key name. A secret typed into a free-form field that is not on the list, such as a description, a metadata value or a file name, is written as submitted.
 
 ### What Is Logged
 
-The system logs only non-sensitive operational data:
+Each record holds the bracketed prefix, a payload, and an echo of the triggering request:
 
--   User IDs (from verified JWT claims only)
--   Authorization results (boolean success/failure)
--   Generic failure reasons (safe categories)
--   Resource identifiers (database IDs, asset IDs, file paths)
--   Operation types (GET, POST, DELETE)
--   Source IP addresses (API Gateway authorizer only)
--   Timestamps
--   MFA status
+-   **Prefix** -- the event type, the user ID (from verified token claims), the user's roles and MFA status, and for the authorization log the allow or deny result.
+-   **Payload** -- what the calling handler records for the event: resource identifiers (database, asset, file path, pipeline, workflow and execution IDs), the action and the object checked, counts and flags, and for the authorizer the source IP address and a generic failure reason.
+-   **Request echo** (`--- [event: ...]`) -- the API Gateway event the handler received, after redaction: the method, path, path and query string parameters, the request headers other than the redacted ones (for example `User-Agent`, `Host`, `X-Forwarded-For`), the request context (source IP address, user agent, request ID and the claims the authorizer verified, which can include the user's email address and any other claim the identity provider puts in the token), and the request `body` with only the redacted keys removed. Data-level authorization records echo only the user ID.
+
+Because the body is echoed, whatever the caller submitted reaches the audit log: asset and database names and descriptions, metadata keys and values, tag names, comments, file names and paths, and any personal data a user types into them.
+
+Records are one line each, with every value in a bracketed field encoded as described in [Log Format](#log-format).
 
 ### Automatic Data Masking
 
@@ -429,24 +428,29 @@ VAMS audit logs can be forwarded to Security Information and Event Management (S
 
 ## Monitoring Audit Logging Health
 
-An entry that cannot be written to its audit log group is not dropped. The Lambda function that produced it writes the entry, exactly as it would have been written (masked event echo included, capped at the same 255 KB as an audit event), to its own log group (`/aws/lambda/<function name>`) as one JSON line:
+An entry that cannot be written to its audit log group is not dropped. The AWS Lambda function that produced it writes the entry, exactly as it would have been written (masked event echo included, capped at the same 255 KB as an audit event), to its own log group (`/aws/lambda/<function name>`) as one JSON line:
 
 ```json
-{"auditFallback": true, "logGroupKey": "auditActions", "reason": "putLogEventsFailed", "record": "[ACTIONS][type: assetCreate] [user: john.doe] ..."}
+{
+    "auditFallback": true,
+    "logGroupKey": "auditActions",
+    "reason": "putLogEventsFailed",
+    "record": "[ACTIONS][type: assetCreate] [user: john.doe] ..."
+}
 ```
 
 `logGroupKey` names the audit log group the entry was meant for (`auditAuthentication`, `auditAuthorization`, `auditFileUpload`, `auditFileDownload`, `auditFileDownloadStreamed`, `auditAuthOther`, `auditAuthChanges`, `auditActions`, `auditErrors`). `reason` is one of:
 
-| Reason                  | What happened                                                                                                                    |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Reason                  | What happened                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `putLogEventsFailed`    | Amazon CloudWatch Logs refused or did not answer the write (throttling, a missing log group or stream, an IAM or AWS KMS denial). |
 | `createLogStreamFailed` | The day's log stream could not be created.                                                                                        |
 | `clientUnavailable`     | The Amazon CloudWatch Logs client could not be created when the function started.                                                 |
 | `logGroupUnresolved`    | The audit log group name could not be read from AWS Systems Manager Parameter Store.                                              |
-| `formatFailed`          | The entry could not be formatted; a `[ERROR: Failed to format message]` entry was written in its place.                          |
-| `unexpectedError`       | Any other failure. `record` is `null` when the entry was never formatted.                                                        |
+| `formatFailed`          | The entry could not be formatted; a `[ERROR: Failed to format message]` entry was written in its place.                           |
+| `unexpectedError`       | Any other failure. `record` is `null` when the entry was never formatted.                                                         |
 
-The same write also emits an Amazon CloudWatch [embedded metric format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html) line, which CloudWatch turns into the metric `AuditWriteFailures` in the namespace `VAMS/Audit`, with the dimension `AuditLogType` set to the `logGroupKey` value and the number of entries lost as its value. The metric is extracted from the function's own log, so it needs no permission beyond the function's log delivery. A healthy deployment emits no data points.
+The same write also emits an Amazon CloudWatch [embedded metric format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html) line, which Amazon CloudWatch turns into the metric `AuditWriteFailures` in the namespace `VAMS/Audit`, with the dimension `AuditLogType` set to the `logGroupKey` value and the number of entries lost as its value. The metric is extracted from the function's own log, so it needs no permission beyond the function's log delivery. A healthy deployment emits no data points.
 
 Alarm on the metric for each audit log type you depend on, for example the authorization log:
 
@@ -593,7 +597,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerRest.py`) uses a 
     - "Token verification failed"
     - "API key is disabled", "API key has expired", and the other API key denial categories
 3. **User context after verification only** -- User IDs are only extracted and logged after successful JWT verification. For failed authorization attempts, the user field is set to `"unknown"`.
-4. **Source IP only** -- The authorizer logs only the requesting IP address, not request headers or other potentially sensitive fields.
+4. **Source IP and the masked request** -- The payload carries the requesting IP address and the generic failure reason. The record's request echo is the authorizer event after redaction: the method, path and query string, and the request headers other than the redacted ones (see [Automatic Data Masking](#automatic-data-masking)).
 
 ### Why a Separate Function
 
@@ -621,10 +625,10 @@ The API Gateway authorizer runs before normal request processing and handles raw
 ### Privacy and Data Protection
 
 -   User IDs are logged for audit purposes (legitimate interest for security monitoring).
--   No personally identifiable information (PII) beyond user IDs is logged.
+-   Records can contain personal data beyond the user ID: the request echo carries the claims the authorizer verified (which can include an email address), the source IP address and user agent, and the submitted request body after redaction, so names, descriptions, metadata values, comments and file names a user enters are logged as entered (see [What Is Logged](#what-is-logged)). Treat the audit log groups, and the function log groups that hold [undelivered entries](#monitoring-audit-logging-health), as containing personal data when you set their access, retention and export.
 -   Logs can be exported for data subject access requests.
 -   The retention period is configurable; regulated environments that require multi-year audit records can extend it (see [Configuring Log Retention](#configuring-log-retention)).
--   Automatic data masking removes all authorization tokens, credentials, and secrets before writing.
+-   Automatic data masking removes the values of the credential and content keys listed under [Automatic Data Masking](#automatic-data-masking) before writing; it does not inspect the text of other fields.
 
 ## Maintenance and Troubleshooting
 
