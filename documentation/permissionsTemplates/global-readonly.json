@@ -201,7 +201,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
-            "description": "Allow listing the caller's own Download as Zip jobs across assets (My zip downloads)",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My Download Queue)",
             "objectType": "api",
             "criteriaAnd": [
                 { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }

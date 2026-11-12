@@ -1202,7 +1202,7 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionServiceFun
 
 ## Zip downloads (`app.zipDownloads`)
 
-Download as Zip packages files, folders, or a whole asset into one zip (ZIP64), tar, or tar.gz archive in the background, built by the `utility-zip-archive` system pipeline on AWS Batch with AWS Fargate compute. See [Zip Downloads](../user-guide/zip-downloads.md) and the [Zip Archive pipeline](../pipelines/zip-archive.md).
+Download as Zip packages files, folders, or a whole asset into one zip (ZIP64), tar, or tar.gz archive in the background, built by the `utility-zip-archive` system pipeline on AWS Batch with AWS Fargate compute. See [Download as Zip and the Download Queue](../user-guide/zip-downloads.md) and the [Zip Archive pipeline](../pipelines/zip-archive.md).
 
 The `ZipDownloadRequestsStorageTable` table, the `vams.preparedDownloads/` lifecycle rules on the asset auxiliary bucket, and the zip download API routes and functions are deployed whether or not the feature is enabled; with `enabled` set to `false` every zip download route answers `404`. The Zip Archive pipeline, its AWS Batch resources and container image, its pipeline and workflow registration, and the `ZIPDOWNLOADS` feature switch are created only when `enabled` is `true`. **Requires VPC** when enabled.
 

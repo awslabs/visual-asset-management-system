@@ -175,7 +175,7 @@ The Zip Archive container ended before the archive was written. "The archive job
 
 ### A Job Fails With "Cancelled from workflow executions"
 
-The Zip Archive run was aborted from the workflow executions views rather than cancelled from **My zip downloads**. Create the job again.
+The Zip Archive run was aborted from the workflow executions views rather than cancelled from the **Download Queue**. Create the job again.
 
 ## Third-Party Library Licenses
 
@@ -183,7 +183,7 @@ The container uses only the Python standard library and the AWS SDK for Python (
 
 ## Related Resources
 
--   [Zip Downloads user guide](../user-guide/zip-downloads.md)
+-   [Download as Zip and the Download Queue user guide](../user-guide/zip-downloads.md)
 -   [Zip Downloads API](../api/zip-downloads.md)
 -   [Pipeline System Overview](overview.md)
 -   [Configuration Reference](../deployment/configuration-reference.md#zip-downloads-appzipdownloads)

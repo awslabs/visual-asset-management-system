@@ -1,6 +1,6 @@
-# Zip Downloads
+# Download as Zip and the Download Queue
 
-Download as Zip packages files, folders, or a whole asset into a single zip, tar, or tar.gz file. VAMS builds the archive in the background, so large selections do not have to finish while the browser waits, and the archive can reach 5 TiB. When the archive is ready, you download it from the **My zip downloads** list.
+Download as Zip packages files, folders, or a whole asset into a single zip, tar, or tar.gz file. VAMS builds the archive in the background, so large selections do not have to finish while the browser waits, and the archive can reach 5 TiB. When the archive is ready, you download it from your **Download Queue**.
 
 Download as Zip is available when your administrator enables it for the deployment (`app.zipDownloads.enabled`). The controls appear only when the deployment has the feature and your role allows the zip download routes.
 
@@ -22,15 +22,17 @@ VAMS refuses the whole archive, rather than leaving files out, when a selected f
     - **Format** -- **ZIP (.zip)** (default), **TAR (.tar)**, or **Compressed TAR (.tar.gz)**.
     - **Compression** -- for ZIP, **No compression** (default) or **Compress (deflate)**. Most 3D formats are already compressed, so no compression is usually as small and faster.
     - **Archive name** -- optional. VAMS adds the extension for the format and replaces characters that are not allowed in file names.
-5. Choose **Create zip download**. The job appears in **My zip downloads** with the status **Queued**.
+5. Choose **Create zip download**. The archive job appears in **My Download Queue** with the status **Queued**.
 
 **Download as Zip** is hidden for an asset that is not distributable or is archived.
 
 When the selection includes an archived or deleted file or folder, the dialog lists it and **Create zip download** stays unavailable; remove it from the selection, or restore it first. A selection can hold up to 1,000 files and folders; files inside a selected folder count as that folder, so select folders for larger selections.
 
-## Tracking and downloading
+## The Download Queue
 
-Each asset has a **My zip downloads** tab that lists your zip downloads for that asset. The **My zip downloads** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own downloads.
+The Download Queue lists your download jobs. Archive jobs from Download as Zip are the only kind today. Each asset has a **Download Queue** tab that lists your jobs for that asset. The **My Download Queue** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own jobs.
+
+The search box above each list finds jobs by asset ID, asset name, request ID, or archive name, and the refresh button beside it reloads the list. The search covers the jobs already loaded; when more jobs exist than one load holds, choose **Load more** to add older jobs, which the search then includes.
 
 | Status        | Meaning                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -38,10 +40,9 @@ Each asset has a **My zip downloads** tab that lists your zip downloads for that
 | **Running**   | The archive is being written. The progress bar shows files and bytes written.                               |
 | **Succeeded** | The archive is ready to download.                                                                           |
 | **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
+| **Cancelled** | You cancelled the job before it finished.                                                                   |
 
 If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
-
-| **Cancelled** | You cancelled the job before it finished. |
 
 While a job is queued or running, the list refreshes itself every few seconds.
 

@@ -621,8 +621,12 @@ and `useAllowedRoutes().can()` on the zip routes (a server decision) decides whe
 file manager's **Export** menu offers **Download as Zip** for file, folder, root and mixed selections (hidden for
 an asset that is not distributable or is archived). `buildZipSelection` lists archived or deleted selected items in
 `refused`, and the dialog then refuses the whole job (names them, no Create), as the API does; items inside a selected
-folder collapse into it, and more than `ZIP_MAX_SELECTION_ENTRIES` (1,000) entries is refused with a plain message. The asset tab `zipDownloads` (**My zip downloads**) and the
-global page `#/zipdownloads` list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+folder collapse into it, and more than `ZIP_MAX_SELECTION_ENTRIES` (1,000) entries is refused with a plain message. The asset tab `zipDownloads` (**Download Queue**) and the
+global page `#/zipdownloads` (**My Download Queue**) list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+The user-facing names come from `DOWNLOAD_QUEUE_PAGE_TITLE` / `DOWNLOAD_QUEUE_TAB_LABEL` and do not say "zip", so other kinds of
+download job can join the queue; the route, the tab id, the API routes and the CLI/MCP names keep `zip`. Both lists search the
+rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the
+search; the API pages the list, so **Load more** adds older jobs, which the search then covers.
 
 Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
 `ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
@@ -660,6 +664,15 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 
 ### **New Page Template**
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -667,10 +680,29 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;

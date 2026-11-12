@@ -787,17 +787,45 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
- * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;

@@ -25,13 +25,13 @@ jest.mock("./tabs/ZipDownloadsTab", () => ({
 const renderContainer = () =>
     render(<TabbedContainer assetName="A" assetId="a1" databaseId="db1" />);
 
-describe("TabbedContainer — My zip downloads tab", () => {
+describe("TabbedContainer — Download Queue tab", () => {
     afterEach(() => localStorage.clear());
 
     it("is listed when the deployment has the feature, and active only once chosen", async () => {
         appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
         renderContainer();
-        const tab = screen.getByRole("tab", { name: "My zip downloads" });
+        const tab = screen.getByRole("tab", { name: "Download Queue" });
         expect(screen.queryByTestId("zip-tab")).toBeNull();
         await userEvent.click(tab);
         expect(await screen.findByTestId("zip-tab")).toHaveTextContent("db1/a1/true");
@@ -41,6 +41,6 @@ describe("TabbedContainer — My zip downloads tab", () => {
         appCache.setItem("config", { featuresEnabled: ["LOCATIONSERVICES"] });
         renderContainer();
         expect(screen.getByRole("tab", { name: "Versions" })).toBeInTheDocument();
-        expect(screen.queryByRole("tab", { name: "My zip downloads" })).toBeNull();
+        expect(screen.queryByRole("tab", { name: "Download Queue" })).toBeNull();
     });
 });

@@ -8,7 +8,7 @@ import { featuresEnabled, normalizeFeaturesEnabled } from "../../common/constant
 
 /**
  * Download as Zip: shared types, route templates and pure helpers for the create modal, the asset
- * "My zip downloads" tab and the global page. Kept free of React so every rule here (selection
+ * page's "Download Queue" tab and the global "My Download Queue" page. Kept free of React so every rule here (selection
  * shapes, archive names, polling) is checked on its own.
  */
 
@@ -52,8 +52,15 @@ export const ZIP_ROUTES = {
     global: "/download/zip",
 } as const;
 
-/** Web route of the global "My zip downloads" page. */
+/** Web route of the global "My Download Queue" page (the route keeps its original name). */
 export const ZIP_DOWNLOADS_PAGE_PATH = "/zipdownloads";
+
+/**
+ * User-facing names of the queue. The queue lists download jobs; archive (zip) jobs are the only
+ * kind today, so the names do not say "zip".
+ */
+export const DOWNLOAD_QUEUE_PAGE_TITLE = "My Download Queue";
+export const DOWNLOAD_QUEUE_TAB_LABEL = "Download Queue";
 
 /** The API's 404 body while app.zipDownloads is disabled. */
 export const ZIP_DISABLED_MESSAGE = "Zip downloads are not enabled for this deployment";
@@ -95,6 +102,20 @@ export function mergeZipJobs(current: ZipDownloadJob[], fresh: ZipDownloadJob[])
     const rest = current.filter((job) => !freshIds.has(job.requestId));
     return [...fresh, ...rest].sort((a, b) =>
         a.requestId < b.requestId ? 1 : a.requestId > b.requestId ? -1 : 0
+    );
+}
+
+/**
+ * The Download Queue search: the jobs whose asset ID, asset name, request ID or archive name
+ * contains the text, ignoring case. It filters the rows already loaded; blank text keeps them all.
+ */
+export function filterZipJobs(jobs: ZipDownloadJob[], text: string): ZipDownloadJob[] {
+    const needle = text.trim().toLowerCase();
+    if (!needle) return jobs;
+    return jobs.filter((job) =>
+        [job.assetId, job.assetName, job.requestId, job.archiveFileName].some(
+            (value) => !!value && value.toLowerCase().includes(needle)
+        )
     );
 }
 

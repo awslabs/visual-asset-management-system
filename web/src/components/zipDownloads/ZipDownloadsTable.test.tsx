@@ -111,7 +111,7 @@ describe("ZipDownloadsTable", () => {
     it("shows the empty state", async () => {
         mockAssetList.mockResolvedValue(page([]));
         renderTable();
-        expect(await screen.findByText("No zip downloads")).toBeInTheDocument();
+        expect(await screen.findByText("No download jobs")).toBeInTheDocument();
     });
 
     it("shows a load error with Retry", async () => {
@@ -135,11 +135,11 @@ describe("ZipDownloadsTable", () => {
         ).toBeInTheDocument();
     });
 
-    it("loads nothing for a role that may not list zip downloads", () => {
+    it("loads nothing for a role that may not list download jobs", () => {
         mockAllowed = {};
         renderTable();
         expect(
-            screen.getByText("Your role does not allow listing zip downloads.")
+            screen.getByText("Your role does not allow listing download jobs.")
         ).toBeInTheDocument();
         expect(mockAssetList).not.toHaveBeenCalled();
     });
@@ -317,7 +317,7 @@ describe("ZipDownloadsTable", () => {
         ).toBeInTheDocument();
         // Announced through the dialog's polite live region.
         expect(within(dialog).getByRole("status")).toHaveTextContent(
-            "This zip download has finished"
+            "This archive job has finished"
         );
         expect(within(dialog).queryByText(/Stop preparing/)).toBeNull();
         const confirmButton = within(dialog).getByRole("button", { name: "Cancel download" });
@@ -367,6 +367,80 @@ describe("ZipDownloadsTable", () => {
             expect(within(dialog).queryAllByRole("button", { name: "" })).toHaveLength(0);
         }
     );
+
+    it("names the table Download jobs and shows each job's request ID", async () => {
+        mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        expect(
+            screen.getByRole("heading", { level: 2, name: /Download jobs/ })
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/zip downloads/i)).toBeNull();
+        expect(within(rowFor("archive-1.zip")).getByText("Request ID: 1")).toBeInTheDocument();
+    });
+
+    it("places the refresh button next to the search, not in the header", async () => {
+        mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        const search = screen.getByRole("searchbox", { name: "Search download jobs" });
+        const refresh = screen.getByRole("button", { name: "Refresh download queue" });
+        // Both sit in one filter row: the same wrapper holds the search box and the refresh button.
+        const filterRow = refresh.parentElement as HTMLElement;
+        expect(filterRow).toContainElement(search);
+        const heading = screen.getByRole("heading", { level: 2, name: /Download jobs/ });
+        expect(heading.closest("header") ?? heading.parentElement).not.toContainElement(refresh);
+
+        mockAssetList.mockResolvedValue(page([job("2", "QUEUED"), job("1", "SUCCEEDED")]));
+        await userEvent.click(refresh);
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        expect(mockAssetList).toHaveBeenCalledTimes(2);
+    });
+
+    it("searches the loaded jobs by asset ID, request ID and archive name", async () => {
+        mockGlobalList.mockResolvedValue(
+            page([
+                job("req-b", "SUCCEEDED", { assetId: "asset-two", assetName: "Two" }),
+                job("req-a", "SUCCEEDED", { assetId: "asset-one", assetName: "One" }),
+            ])
+        );
+        render(
+            <MemoryRouter>
+                <ZipDownloadsTable />
+            </MemoryRouter>
+        );
+        await screen.findByText("archive-req-a.zip");
+        const search = screen.getByRole("searchbox", { name: "Search download jobs" });
+
+        await userEvent.type(search, "ASSET-TWO");
+        expect(screen.getByText("archive-req-b.zip")).toBeInTheDocument();
+        expect(screen.queryByText("archive-req-a.zip")).toBeNull();
+        expect(screen.getAllByText("1 match").length).toBeGreaterThan(0);
+        expect(screen.getByRole("heading", { level: 2, name: /\(1\/2\)/ })).toBeInTheDocument();
+
+        await userEvent.clear(search);
+        await userEvent.type(search, "req-a");
+        expect(screen.getByText("archive-req-a.zip")).toBeInTheDocument();
+        expect(screen.queryByText("archive-req-b.zip")).toBeNull();
+
+        await userEvent.clear(search);
+        await userEvent.type(search, "nothing-like-this");
+        expect(screen.getByText("No matching download jobs")).toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "Clear search" }));
+        expect(screen.getByText("archive-req-a.zip")).toBeInTheDocument();
+        expect(screen.getByText("archive-req-b.zip")).toBeInTheDocument();
+    });
+
+    it("says the search covers the loaded jobs while more pages remain", async () => {
+        mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")], "tok"));
+        render(
+            <MemoryRouter>
+                <ZipDownloadsTable />
+            </MemoryRouter>
+        );
+        await screen.findByText("archive-1.zip");
+        expect(screen.getByText(/The search covers the jobs loaded so far/)).toBeInTheDocument();
+    });
 
     it("lists across assets with a link to each asset when not scoped", async () => {
         mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")], "tok"));

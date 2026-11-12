@@ -13,7 +13,7 @@ interface ZipDownloadsTabProps {
     isActive: boolean;
 }
 
-/** The asset page's "My zip downloads" tab: the caller's own zip downloads for this asset. */
+/** The asset page's "Download Queue" tab: the caller's own download jobs for this asset. */
 const ZipDownloadsTab: React.FC<ZipDownloadsTabProps> = ({ databaseId, assetId, isActive }) => (
     <ZipDownloadsTable databaseId={databaseId} assetId={assetId} isActive={isActive} />
 );

@@ -126,7 +126,7 @@ web/
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
         tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs,
-                                #   ZipDownloadsTab ("My zip downloads", only with ZIPDOWNLOADS)
+                                #   ZipDownloadsTab ("Download Queue", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       filemanager/            # Asset file manager (Cloudscape)
@@ -152,7 +152,7 @@ web/
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
-      ZipDownloadsPage.tsx    # #/zipdownloads "My zip downloads" (nav item only with ZIPDOWNLOADS)
+      ZipDownloadsPage.tsx    # #/zipdownloads "My Download Queue" (nav item only with ZIPDOWNLOADS)
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
@@ -836,6 +836,15 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -843,10 +852,29 @@ export default MyComponent;
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -960,7 +988,7 @@ Known feature flags:
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
--   `ZIPDOWNLOADS` -- Download as Zip (`app.zipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **My zip downloads** tab and the side navigation no **My zip downloads** link; `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are greyed the same way from the URL and DELETE routes. A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client.
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.zipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **Download Queue** tab and the side navigation no **My Download Queue** link; `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are greyed the same way from the URL and DELETE routes. A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client. The user-facing names (`DOWNLOAD_QUEUE_PAGE_TITLE` "My Download Queue", `DOWNLOAD_QUEUE_TAB_LABEL` "Download Queue") do not say "zip", so other kinds of download job can join the queue later; the `#/zipdownloads` route, the `zipDownloads` tab id, the API routes and the CLI and MCP names keep `zip`. Both lists search the rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the search; the API pages the list, so **Load more** adds older jobs, which the search then covers.
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)

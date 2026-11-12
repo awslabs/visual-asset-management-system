@@ -9,6 +9,7 @@ import {
     defaultArchiveName,
     describeSelection,
     expiresIn,
+    filterZipJobs,
     formatBytes,
     isTerminalStatus,
     isZipDownloadsEnabled,
@@ -207,5 +208,33 @@ describe("display helpers", () => {
         expect(expiresIn("2026-11-06T03:00:00Z", now)).toBe("in 3 hours");
         expect(expiresIn("2026-11-05T00:00:00Z", now)).toBe("Expired");
         expect(expiresIn(undefined, now)).toBe("-");
+    });
+});
+
+describe("filterZipJobs", () => {
+    const jobs = [
+        job("req-1", "SUCCEEDED", { assetId: "AssetOne", assetName: "Turbine" }),
+        job("req-2", "RUNNING", { assetId: "asset-two", archiveFileName: "Blades.zip" }),
+    ];
+
+    it("keeps every job for blank text", () => {
+        expect(filterZipJobs(jobs, "")).toBe(jobs);
+        expect(filterZipJobs(jobs, "   ")).toBe(jobs);
+    });
+
+    it("matches the asset ID, asset name, request ID and archive name, ignoring case", () => {
+        const ids = (text: string) => filterZipJobs(jobs, text).map((j) => j.requestId);
+        expect(ids("assetone")).toEqual(["req-1"]);
+        expect(ids("turbine")).toEqual(["req-1"]);
+        expect(ids("REQ-2")).toEqual(["req-2"]);
+        expect(ids("blades")).toEqual(["req-2"]);
+        expect(ids(" req ")).toEqual(["req-1", "req-2"]);
+        expect(ids("no-such-job")).toEqual([]);
+    });
+
+    it("does not match on fields it does not search", () => {
+        // The status and the database are not searched.
+        expect(filterZipJobs(jobs, "RUNNING")).toEqual([]);
+        expect(filterZipJobs(jobs, "db1")).toEqual([]);
     });
 });

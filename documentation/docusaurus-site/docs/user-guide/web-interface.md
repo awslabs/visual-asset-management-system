@@ -114,14 +114,14 @@ The details pane displays the asset's core properties and provides action button
 
 Below the details pane, a tabbed interface provides access to the following sections:
 
-| Tab                  | Description                                                                                                                                                                                                                                                                                         |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **File Manager**     | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
-| **Relationships**    | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                               |
-| **Executions**       | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
-| **Comments**         | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
-| **Versions**         | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
-| **My zip downloads** | Your zip downloads for this asset, with status and progress, and **Download**, **Cancel**, and **Delete** actions. Shown when the deployment enables Download as Zip. See [Zip Downloads](zip-downloads.md).                                                                                        |
+| Tab                | Description                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **File Manager**   | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only.           |
+| **Relationships**  | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                                         |
+| **Executions**     | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                           |
+| **Comments**       | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                                  |
+| **Versions**       | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                          |
+| **Download Queue** | Your download jobs for this asset (archive jobs from Download as Zip), with status and progress, a search box with a refresh button, and **Download**, **Cancel**, and **Delete** actions. Shown when the deployment enables Download as Zip. See [Download as Zip and the Download Queue](zip-downloads.md). |
 
 ### Metadata Section
 
@@ -195,9 +195,9 @@ A **Skipped** row records file-upload trigger launches that the workflow's concu
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
-## My Zip Downloads Page
+## My Download Queue Page
 
-When the deployment enables Download as Zip, the **My zip downloads** page (`#/zipdownloads`) lists your zip downloads across every asset, newest first, with each job's asset, archive name, status, progress, and expiry. A job that has succeeded can be downloaded; a queued or running job can be cancelled; a finished job can be deleted. The page lists only your own downloads. See [Zip Downloads](zip-downloads.md).
+When the deployment enables Download as Zip, the **My Download Queue** page (`#/zipdownloads`) lists your download jobs across every asset, newest first, with each job's asset, archive name, request ID, status, progress, and expiry. Archive jobs are the only kind of download job today. The search box finds jobs by asset ID, asset name, request ID, or archive name among the jobs loaded, and the refresh button beside it reloads the list. A job that has succeeded can be downloaded; a queued or running job can be cancelled; a finished job can be deleted. The page lists only your own jobs. See [Download as Zip and the Download Queue](zip-downloads.md).
 
 ---
 
@@ -230,7 +230,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at asset version | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page           | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
 | Upload to a database  | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
-| My zip downloads      | `https://<VAMS_WEBSITE>/#/zipdownloads`                                                                                 |
+| My Download Queue     | `https://<VAMS_WEBSITE>/#/zipdownloads`                                                                                 |
 
 ### File Path Encoding
 

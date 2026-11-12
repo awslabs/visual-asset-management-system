@@ -15,6 +15,7 @@ import ProgressBar from "@cloudscape-design/components/progress-bar";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table, { TableProps } from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
 import { useNavigate } from "react-router-dom";
 import {
     deleteZipDownload,
@@ -28,6 +29,7 @@ import Synonyms from "../../synonyms";
 import {
     describeSelection,
     expiresIn,
+    filterZipJobs,
     formatBytes,
     formatTimestamp,
     isTerminalStatus,
@@ -49,7 +51,7 @@ export interface ZipDownloadsTableProps {
     assetId?: string;
     /** False while the surface is hidden (an inactive tab): nothing loads or polls. */
     isActive?: boolean;
-    /** Header variant: the global page shows an h1, the asset tab an h2. */
+    /** Header variant of the table's own header (the global page carries the page's h1). */
     headerVariant?: "h1" | "h2";
     /** Bumped by the parent to force a reload (a job was just created). */
     refreshToken?: number;
@@ -145,13 +147,13 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         permissionsLoading,
         !!permissionsFailed,
         canDownload,
-        "Your role does not allow downloading zip downloads."
+        "Your role does not allow downloading archives from the Download Queue."
     );
     const removeReason = routeDisabledReason(
         permissionsLoading,
         !!permissionsFailed,
         canRemove,
-        "Your role does not allow cancelling or deleting zip downloads."
+        "Your role does not allow cancelling or deleting download jobs."
     );
 
     const [jobs, setJobs] = useState<ZipDownloadJob[]>([]);
@@ -165,6 +167,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const [busyId, setBusyId] = useState<string | null>(null);
     const [confirm, setConfirm] = useState<{ job: ZipDownloadJob; kind: ConfirmKind } | null>(null);
     const [confirming, setConfirming] = useState(false);
+    const [filterText, setFilterText] = useState("");
     const mounted = useRef(true);
     useEffect(() => {
         mounted.current = true;
@@ -203,7 +206,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 if (result?.[2] === 404 && `${message}`.includes(ZIP_DISABLED_MESSAGE)) {
                     setDisabled(true);
                 } else if (!quiet) {
-                    setLoadError(message || "Zip downloads could not be loaded.");
+                    setLoadError(message || "The Download Queue could not be loaded.");
                 }
                 return;
             }
@@ -244,7 +247,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         if (!Array.isArray(result) || result[0] !== true) {
             setNotice({
                 type: "error",
-                text: result?.[1] || "More zip downloads could not be loaded.",
+                text: result?.[1] || "More download jobs could not be loaded.",
             });
             return;
         }
@@ -353,7 +356,14 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         {
             id: "archive",
             header: "Archive",
-            cell: (job) => job.archiveFileName,
+            cell: (job) => (
+                <SpaceBetween size="xxs">
+                    <span>{job.archiveFileName}</span>
+                    <Box variant="small" color="text-body-secondary">
+                        {`Request ID: ${job.requestId}`}
+                    </Box>
+                </SpaceBetween>
+            ),
         },
         {
             id: "selection",
@@ -423,19 +433,33 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
 
     if (!permissionsLoading && !permissionsFailed && !canList) {
         return (
-            <Alert type="info" statusIconAriaLabel="Info" header="Zip downloads are not available">
-                Your role does not allow listing zip downloads.
+            <Alert
+                type="info"
+                statusIconAriaLabel="Info"
+                header="The Download Queue is not available"
+            >
+                Your role does not allow listing download jobs.
             </Alert>
         );
     }
 
     if (disabled) {
         return (
-            <Alert type="info" statusIconAriaLabel="Info" header="Zip downloads are not available">
+            <Alert
+                type="info"
+                statusIconAriaLabel="Info"
+                header="The Download Queue is not available"
+            >
                 {ZIP_DISABLED_MESSAGE}.
             </Alert>
         );
     }
+
+    // The search filters the rows loaded so far; Load more adds older jobs, which the search then
+    // also filters. The list is paged by the API (newest first), so nothing is searched server-side.
+    const shownJobs = filterZipJobs(jobs, filterText);
+    const filtering = filterText.trim() !== "";
+    const more = nextToken ? "+" : "";
 
     return (
         <SpaceBetween size="m">
@@ -454,7 +478,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 <Alert
                     type="error"
                     statusIconAriaLabel="Error"
-                    header="Zip downloads could not be loaded"
+                    header="The Download Queue could not be loaded"
                     action={<Button onClick={() => load(false)}>Retry</Button>}
                 >
                     {loadError}
@@ -462,40 +486,76 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             )}
             <Table
                 trackBy="requestId"
-                items={jobs}
+                items={shownJobs}
                 columnDefinitions={columns}
                 loading={loading || permissionsLoading || (!loaded && !loadError && isActive)}
-                loadingText="Loading zip downloads"
+                loadingText="Loading download jobs"
                 wrapLines
                 variant={assetScoped ? "embedded" : "container"}
+                filter={
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <TextFilter
+                            filteringText={filterText}
+                            filteringPlaceholder="Find by asset ID, request ID or archive name"
+                            filteringAriaLabel="Search download jobs"
+                            filteringClearAriaLabel="Clear search text"
+                            onChange={({ detail }) => setFilterText(detail.filteringText)}
+                            countText={
+                                filtering
+                                    ? `${shownJobs.length} ${
+                                          shownJobs.length === 1 ? "match" : "matches"
+                                      }`
+                                    : undefined
+                            }
+                        />
+                        <Button
+                            iconName="refresh"
+                            variant="icon"
+                            ariaLabel="Refresh download queue"
+                            onClick={() => load(false)}
+                            loading={loading}
+                        />
+                    </div>
+                }
                 header={
                     <Header
                         variant={headerVariant}
-                        counter={loaded ? `(${jobs.length}${nextToken ? "+" : ""})` : undefined}
-                        description={
-                            assetScoped
-                                ? `Archives you requested for this ${Synonyms.asset}. Only you can see them.`
-                                : `Archives you requested across all ${Synonyms.assets}. Only you can see them.`
+                        counter={
+                            !loaded
+                                ? undefined
+                                : filtering
+                                ? `(${shownJobs.length}/${jobs.length}${more})`
+                                : `(${jobs.length}${more})`
                         }
-                        actions={
-                            <Button
-                                iconName="refresh"
-                                ariaLabel="Refresh zip downloads"
-                                onClick={() => load(false)}
-                                disabled={loading}
-                            />
+                        description={
+                            (assetScoped
+                                ? `Archive jobs you requested for this ${Synonyms.asset}. Only you can see them.`
+                                : `Archive jobs you requested across all ${Synonyms.assets}. Only you can see them.`) +
+                            (nextToken
+                                ? " The search covers the jobs loaded so far; Load more adds older jobs."
+                                : "")
                         }
                     >
-                        My zip downloads
+                        Download jobs
                     </Header>
                 }
                 empty={
-                    <Box textAlign="center" color="inherit" padding="m">
-                        <b>No zip downloads</b>
-                        <Box variant="p" color="inherit">
-                            {`Select files or folders in the File Manager and choose Export, then Download as Zip.`}
+                    filtering && jobs.length > 0 ? (
+                        <Box textAlign="center" color="inherit" padding="m">
+                            <b>No matching download jobs</b>
+                            <Box variant="p" color="inherit">
+                                {`No loaded job matches "${filterText.trim()}".`}
+                            </Box>
+                            <Button onClick={() => setFilterText("")}>Clear search</Button>
                         </Box>
-                    </Box>
+                    ) : (
+                        <Box textAlign="center" color="inherit" padding="m">
+                            <b>No download jobs</b>
+                            <Box variant="p" color="inherit">
+                                {`Select files or folders in the File Manager and choose Export, then Download as Zip.`}
+                            </Box>
+                        </Box>
+                    )
                 }
                 footer={
                     nextToken ? (
@@ -513,7 +573,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                     if (!confirming) setConfirm(null);
                 }}
                 closeAriaLabel="Close modal"
-                header={confirm?.kind === "cancel" ? "Cancel zip download" : "Delete zip download"}
+                header={confirm?.kind === "cancel" ? "Cancel archive job" : "Delete archive job"}
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">
@@ -553,7 +613,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 <Alert
                                     type="info"
                                     statusIconAriaLabel="Info"
-                                    header="This zip download has finished"
+                                    header="This archive job has finished"
                                 >
                                     {`${confirmJob.archiveFileName} finished (${
                                         STATUS_LABELS[confirmJob.status] ?? confirmJob.status

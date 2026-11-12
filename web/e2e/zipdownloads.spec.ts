@@ -15,7 +15,7 @@ import {
 } from "./support/fixtures";
 
 /**
- * Download as Zip: the global "My zip downloads" page, the asset tab, and the file manager's
+ * Download as Zip: the global "My Download Queue" page, the asset's "Download Queue" tab, and the file manager's
  * Export > Download as Zip entry, for a deployment with the ZIPDOWNLOADS switch on or off (the spec
  * reads which one it is from the app and asserts that side).
  *
@@ -166,7 +166,7 @@ async function findAssetWithArchivedFile(page: Page): Promise<{
 }
 
 test.describe("Download as Zip", () => {
-    test("the global My zip downloads page renders, or is absent with the feature off", async ({
+    test("the global My Download Queue page renders, or is absent with the feature off", async ({
         page,
     }) => {
         const errors = collectPageErrors(page);
@@ -175,7 +175,7 @@ test.describe("Download as Zip", () => {
 
         if (enabled) {
             await expect(
-                page.getByRole("heading", { level: 1, name: /My zip downloads/ })
+                page.getByRole("heading", { level: 1, name: "My Download Queue" })
             ).toBeVisible({
                 timeout: 45_000,
             });
@@ -183,20 +183,30 @@ test.describe("Download as Zip", () => {
             // rendered inside a table row, so with no jobs both sides match; .first() keeps the
             // locator strict-mode safe (D15).
             const rows = page.locator("table tbody tr");
-            const empty = page.getByText("No zip downloads");
+            const empty = page.getByText("No download jobs");
             await expect(rows.first().or(empty).first()).toBeVisible({ timeout: 45_000 });
             await expect(
-                page.getByRole("link", { name: "My zip downloads" }).first()
+                page.getByRole("link", { name: "My Download Queue" }).first()
             ).toBeVisible();
+            // The search and the refresh button sit together in the table's filter row.
+            const search = page.getByRole("searchbox", { name: "Search download jobs" });
+            const refresh = page.getByRole("button", { name: "Refresh download queue" });
+            await expect(search).toBeVisible();
+            await expect(refresh).toBeVisible();
+            await search.fill("no-such-download-job");
+            await expect(
+                page.getByText("No matching download jobs").or(empty).first()
+            ).toBeVisible();
+            await search.fill("");
         } else {
             // The page states the feature is off (or the role has no access to the page at all),
             // and the side navigation does not offer it.
             await expect(
                 page
-                    .getByText("Zip downloads are not available")
+                    .getByText("The Download Queue is not available")
                     .or(page.getByText("You do not have access to this page"))
             ).toBeVisible({ timeout: 45_000 });
-            await expect(page.getByRole("link", { name: "My zip downloads" })).toHaveCount(0);
+            await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
             const api = await apiCaller(page);
             if (api) {
                 const res = await api.get("/download/zip");
@@ -224,7 +234,7 @@ test.describe("Download as Zip", () => {
         if (!enabled) {
             await expect(page.getByRole("menuitem", { name: /Download File/ })).toBeVisible();
             await expect(zipItem).toHaveCount(0);
-            await expect(page.getByRole("tab", { name: "My zip downloads" })).toHaveCount(0);
+            await expect(page.getByRole("tab", { name: "Download Queue" })).toHaveCount(0);
             return;
         }
 
@@ -246,13 +256,13 @@ test.describe("Download as Zip", () => {
         }
 
         // The asset's own tab renders rows or its empty state.
-        await page.getByRole("tab", { name: "My zip downloads" }).click();
+        await page.getByRole("tab", { name: "Download Queue" }).click();
         await expect(
             page
                 .locator("table tbody tr")
                 .first()
-                .or(page.getByText("No zip downloads"))
-                .or(page.getByText("Your role does not allow listing zip downloads."))
+                .or(page.getByText("No download jobs"))
+                .or(page.getByText("Your role does not allow listing download jobs."))
                 .first() // the empty state sits inside a table row (D15)
         ).toBeVisible({ timeout: 45_000 });
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
@@ -383,7 +393,7 @@ test.describe("Download as Zip (second user)", () => {
             await openDeepLink(otherPage, "/zipdownloads");
             await expect(
                 otherPage
-                    .getByRole("heading", { level: 1, name: /My zip downloads/ })
+                    .getByRole("heading", { level: 1, name: "My Download Queue" })
                     .or(otherPage.getByText("You do not have access to this page"))
             ).toBeVisible({ timeout: 45_000 });
             await otherPage.waitForLoadState("networkidle").catch(() => undefined);

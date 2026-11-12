@@ -90,7 +90,7 @@ describe("Navigation", () => {
         expect(screen.queryByText("User")).not.toBeInTheDocument();
     });
 
-    it("lists My zip downloads only when the deployment has the feature and the route is allowed", async () => {
+    it("lists My Download Queue only when the deployment has the feature and the route is allowed", async () => {
         localStorage.setItem("vams_cache_config", JSON.stringify({ featuresEnabled: [] }));
         allowRoutes("/zipdownloads", "/auth/api-keys");
         let container = await renderNavigation();
@@ -108,6 +108,9 @@ describe("Navigation", () => {
         await waitFor(() => {
             expect(findNavLink(container, "#/zipdownloads/")).toBeTruthy();
         });
+        expect(findNavLink(container, "#/zipdownloads/")?.getElement().textContent).toBe(
+            "My Download Queue"
+        );
 
         allowRoutes("/auth/api-keys");
         container = await renderNavigation();

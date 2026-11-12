@@ -8,7 +8,7 @@ import { Container, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
-import { isZipDownloadsEnabled } from "../zipDownloads/zipDownloads";
+import { DOWNLOAD_QUEUE_TAB_LABEL, isZipDownloadsEnabled } from "../zipDownloads/zipDownloads";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -18,7 +18,7 @@ const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 const ZipDownloadsTab = React.lazy(() => import("./tabs/ZipDownloadsTab"));
 
-/** Tab id of the asset page's "My zip downloads" tab. */
+/** Tab id of the asset page's "Download Queue" tab (the id keeps its original name). */
 export const ZIP_DOWNLOADS_TAB_ID = "zipDownloads";
 
 interface TabbedContainerProps {
@@ -142,11 +142,11 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                 ? [
                                       {
                                           id: ZIP_DOWNLOADS_TAB_ID,
-                                          label: "My zip downloads",
+                                          label: DOWNLOAD_QUEUE_TAB_LABEL,
                                           content: (
                                               <Suspense
                                                   fallback={
-                                                      <LoadingSpinner text="Loading zip downloads..." />
+                                                      <LoadingSpinner text="Loading download queue..." />
                                                   }
                                               >
                                                   <ZipDownloadsTab

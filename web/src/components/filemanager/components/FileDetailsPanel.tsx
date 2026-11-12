@@ -160,7 +160,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             statusIconAriaLabel="Success"
             action={
                 <Button onClick={() => navigate(ZIP_DOWNLOADS_PAGE_PATH)}>
-                    View my zip downloads
+                    View My Download Queue
                 </Button>
             }
         >
