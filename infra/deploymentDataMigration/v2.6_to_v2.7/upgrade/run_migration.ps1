@@ -1,6 +1,7 @@
 # PowerShell script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index
 # backfill, system-pipeline retirement report)
 # Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-ClearVectors] [-Async]
+#                            [-GenerateMetadataForExistingFiles]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
 #                            [-LogLevel <level>] [-ConfirmAccount <id>]
 #
@@ -16,7 +17,8 @@ param(
     [switch]$Execute,
     [switch]$ClearVectors,
     [switch]$Async,
-    [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "systemPipelineRetirement")]
+    [switch]$GenerateMetadataForExistingFiles,
+    [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -81,6 +83,7 @@ if ($RealRun) {
 }
 if ($ClearVectors) { $ExtraArgs += "--clear-vectors"; Write-Host "Mode: CLEAR VECTORS (every stored vector is deleted before re-embedding)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (reindexer results in CloudWatch Logs)" -ForegroundColor Yellow }
+if ($GenerateMetadataForExistingFiles) { $ExtraArgs += "--generate-metadata-for-existing-files"; Write-Host "Mode: GENERATE METADATA FOR EXISTING FILES (metadataBackfill, vector search off)" -ForegroundColor Yellow }
 # Valued parameters. PSBoundParameters rather than a truthiness test, so -Limit 0 is passed through
 # instead of being dropped as if it had not been given.
 if ($PSBoundParameters.ContainsKey("Steps"))          { $ExtraArgs += @("--steps", $Steps) }
@@ -106,8 +109,13 @@ try {
             Write-Host "     the workflows it lists as referencing a retired pipeline"
             # The migration's closing summary says when vectorBackfill was skipped on purpose.
             if (Select-String -Path $LogFile -SimpleMatch -Quiet -Pattern "vectorBackfill: skipped: vector search is not enabled") {
-                Write-Host "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
-                Write-Host "     is nothing to watch"
+                if (Select-String -Path $LogFile -SimpleMatch -Quiet -Pattern "metadataBackfill: completed") {
+                    Write-Host "  2. Watch the metadata backfill: vamscli execution list --workflow-database-id GLOBAL"
+                    Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+                } else {
+                    Write-Host "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
+                    Write-Host "     is nothing to watch"
+                }
             } else {
                 Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
                 Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"

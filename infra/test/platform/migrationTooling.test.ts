@@ -172,6 +172,31 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
         expect(stdout).not.toContain("Watch the vector backfill");
     });
 
+    it("names the metadata backfill to watch when the migration ran it with vector search off", () => {
+        const output = [
+            "  vectorBackfill: skipped: vector search is not enabled",
+            "  metadataBackfill: completed",
+        ].join("\n");
+        const { status, stdout } = runWrapper(CURRENT, 0, ["--execute"], "{}", output);
+        expect(status).toBe(0);
+        expect(stdout).toContain("Watch the metadata backfill");
+        expect(stdout).not.toContain("The vector backfill was skipped");
+        expect(readMigrationFile(CURRENT, "run_migration.ps1")).toContain(
+            'Select-String -Path $LogFile -SimpleMatch -Quiet -Pattern "metadataBackfill: completed"'
+        );
+    });
+
+    it("passes --generate-metadata-for-existing-files through in both wrappers", () => {
+        const { status, stdout } = runWrapper(CURRENT, 0, [
+            "--generate-metadata-for-existing-files",
+        ]);
+        expect(status).toBe(0);
+        expect(stdout).toContain("--generate-metadata-for-existing-files");
+        expect(readMigrationFile(CURRENT, "run_migration.ps1")).toMatch(
+            /if \(\$GenerateMetadataForExistingFiles\) \{ \$ExtraArgs \+= "--generate-metadata-for-existing-files"/
+        );
+    });
+
     it("keeps the PowerShell wrapper's skip footer on the same summary line", () => {
         const script = readMigrationFile(CURRENT, "run_migration.ps1");
         expect(script).toContain(

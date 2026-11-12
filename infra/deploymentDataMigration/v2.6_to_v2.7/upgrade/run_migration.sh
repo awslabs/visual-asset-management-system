@@ -2,6 +2,7 @@
 # Script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index backfill,
 # system-pipeline retirement report)
 # Usage: ./run_migration.sh [config_file] [--execute] [--clear-vectors] [--async]
+#                           [--generate-metadata-for-existing-files]
 #                           [--steps STEP] [--limit N] [--profile NAME] [--region NAME]
 #                           [--log-level LEVEL] [--confirm-account ID]
 #
@@ -33,7 +34,7 @@ while [ $# -gt 0 ]; do
             EXTRA_ARGS+=("$1")
             shift
             ;;
-        --clear-vectors|--async)
+        --clear-vectors|--async|--generate-metadata-for-existing-files)
             EXTRA_ARGS+=("$1")
             shift
             ;;
@@ -43,6 +44,7 @@ while [ $# -gt 0 ]; do
             ;;
         --*)
             echo "Error: unknown flag '$1'. Supported: --execute --clear-vectors --async"
+            echo "       --generate-metadata-for-existing-files"
             echo "       --steps --limit --profile --region --log-level --confirm-account"
             exit 1
             ;;
@@ -117,8 +119,13 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "     the workflows it lists as referencing a retired pipeline"
         # The migration's closing summary says when vectorBackfill was skipped on purpose.
         if grep -q "vectorBackfill: skipped: vector search is not enabled" "$LOG_FILE"; then
-            echo "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
-            echo "     is nothing to watch"
+            if grep -q "metadataBackfill: completed" "$LOG_FILE"; then
+                echo "  2. Watch the metadata backfill: vamscli execution list --workflow-database-id GLOBAL \\"
+                echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+            else
+                echo "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
+                echo "     is nothing to watch"
+            fi
         else
             echo "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL \\"
             echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"

@@ -26,6 +26,11 @@ The v2.7 release introduces:
      reads the deployment's VECTORSEARCH feature switch first: without it vector search is off and
      the step is skipped (exit 0), so the step also embeds the existing files on a 2.7 deployment
      whose vector search is turned on later.
+     ``metadataBackfill`` (opt-in: ``generate_metadata_for_existing_files`` or
+     ``--generate-metadata-for-existing-files``) is the same reindexer ``enqueue`` for a deployment with
+     the system pipeline on and vector search off: the system workflow analyzes every existing latest
+     live file and writes its GenAI metadata (no embeddings). It is skipped with vector search on, where
+     ``vectorBackfill`` already analyzes every file, and when the pipeline is not enabled.
   3. Executions of the retired workflows that were RUNNING during the deploy lose their inner state
      machine and stay RUNNING until the workflow task times out (18 000 s for GenAI labeling, 900 s
      for CAD/Mesh extraction), then turn FAILED. User workflows that reference a retired pipeline id
@@ -524,6 +529,21 @@ VECTOR_BACKFILL_SKIP_MESSAGE = ("Vector search is not enabled on this deployment
                                 "re-index; vectorBackfill skipped.")
 VECTOR_BACKFILL_SKIPPED_OUTCOME = 'skipped: vector search is not enabled'
 
+# metadataBackfill: the system workflow analyzes the existing files with vector search off. Each skip has
+# its INFO line and its closing-summary outcome.
+METADATA_BACKFILL_SKIPS = {
+    'vector-on': ("Vector search is enabled on this deployment, and vectorBackfill analyzes every file "
+                  "when vector search is on; metadataBackfill skipped.",
+                  'skipped: vectorBackfill analyzes every file when vector search is on'),
+    'not-requested': ("Metadata generation for existing files was not requested "
+                      "(generate_metadata_for_existing_files is false); metadataBackfill skipped.",
+                      'skipped: metadata generation for existing files not requested'),
+    'pipeline-off': ("The SYSTEM GenAI metadata pipeline is not enabled on this deployment (no "
+                     "vectorReindexer is published; the deploy publishes it whenever the pipeline is on "
+                     "and registers its workflow); metadataBackfill skipped.",
+                     'skipped: the SYSTEM GenAI metadata pipeline is not enabled'),
+}
+
 
 class VectorSearchState(NamedTuple):
     """What the deployment says about vector search, read once per run and shared by every step that
@@ -539,10 +559,12 @@ class VectorSearchState(NamedTuple):
 
 
 class VectorBackfillPlan(NamedTuple):
-    """``action`` is 'run' (with ``function_name``), 'skip' or 'error' (with ``reason``)."""
+    """``action`` is 'run' (with ``function_name``), 'skip' (with ``skip`` naming the case for a step that
+    has more than one) or 'error' (with ``reason``)."""
     action: str
     function_name: Optional[str] = None
     reason: Optional[str] = None
+    skip: Optional[str] = None
 
 
 class StepResult(NamedTuple):
@@ -629,6 +651,36 @@ def plan_vector_backfill(state: VectorSearchState, config: dict) -> VectorBackfi
             f"{source}. Redeploy so the search stack publishes it, or set vector_reindexer_function_name "
             "in the config. vectorBackfill did not run."))
     return VectorBackfillPlan('run', function_name=state.reindexer_function)
+
+
+def plan_metadata_backfill(state: VectorSearchState, config: dict, requested: bool) -> VectorBackfillPlan:
+    """Decide the metadataBackfill step from the same state as vectorBackfill.
+
+    The deploy publishes the vectorReindexer whenever the system GenAI metadata pipeline is on and
+    registers its workflow, so with the VECTORSEARCH switch absent a published reindexer means the
+    pipeline is on. Switch present: skip (vectorBackfill analyzes every file), unless the reindexer is
+    missing, which is the inconsistency vectorBackfill reports too. Switch absent and no reindexer: the
+    pipeline is off, skip. Switch absent and a reindexer: run when requested (the
+    ``vector_reindexer_function_name`` override replaces the published name), else skip. A state that
+    could not be read is an error, never a skip."""
+    if state.error:
+        return VectorBackfillPlan('error', reason=(
+            f"Cannot tell whether vector search or the SYSTEM GenAI metadata pipeline is enabled on this "
+            f"deployment: {state.error} metadataBackfill did not run."))
+    if state.enabled:
+        if not state.reindexer_function and _is_unset(config.get('vector_reindexer_function_name')):
+            return VectorBackfillPlan('error', reason=(
+                "Vector search is enabled on this deployment (the VECTORSEARCH feature switch is set), but "
+                "no vectorReindexer function is published, so the deployment is inconsistent. Redeploy, "
+                "or set vector_reindexer_function_name in the config. metadataBackfill did not run."))
+        return VectorBackfillPlan('skip', skip='vector-on')
+    if not state.reindexer_function:
+        return VectorBackfillPlan('skip', skip='pipeline-off')
+    if not requested:
+        return VectorBackfillPlan('skip', skip='not-requested')
+    override = config.get('vector_reindexer_function_name')
+    function_name = str(override) if not _is_unset(override) else state.reindexer_function
+    return VectorBackfillPlan('run', function_name=function_name)
 
 
 #######################
@@ -727,7 +779,7 @@ def invoke_vector_reindexer(lambda_client, function_name: str, payload: Dict,
 
 
 def describe_vector_backfill_result(result: Dict, function_name: str, clear_vectors: bool,
-                                    dry_run: bool) -> None:
+                                    dry_run: bool, title: str = 'VECTOR BACKFILL SUMMARY') -> None:
     """Summarise the invoke outcome and print how to watch the backfill it started. The reindexer's
     ``reindexRunId`` is the run id: its executions carry ``executionGroupId = vec-{reindexRunId}-{chunk}``
     (chunks numbered from 0, one per 1,000 files), the value ``vamscli execution list --group-id``
@@ -738,7 +790,7 @@ def describe_vector_backfill_result(result: Dict, function_name: str, clear_vect
     deleted_label = 'Would delete' if dry_run else 'Deleted'
     enqueued_label = 'Would enqueue' if dry_run else 'Enqueued'
     logger.info("=" * 80)
-    logger.info("VECTOR BACKFILL SUMMARY")
+    logger.info(title)
     logger.info(f"  Operation:       "
                 f"{'both (clear every vector, then enqueue)' if clear_vectors else 'enqueue'}"
                 f"   Dry run: {dry_run}")
@@ -837,6 +889,56 @@ def run_vector_backfill_step(config: dict, args, base_param_prefix, profile, reg
 
     if result.get('timeout'):
         # The reindexer self-continues; a timed-out client read is not a failed backfill.
+        return StepResult(0, "completed: the invocation timed out on the client; the reindexer "
+                             "continues in the background")
+    if 'error' in result:
+        return StepResult(1, f"failed: {result.get('error')}")
+    return StepResult(0, "completed (dry run: nothing launched)" if dry_run else "completed")
+
+
+#######################
+# STEP: metadataBackfill (opt-in)
+#######################
+
+def run_metadata_backfill_step(config: dict, args, base_param_prefix, profile, region, dry_run,
+                               clear_vectors: bool, requested: bool,
+                               state: Optional[VectorSearchState] = None) -> StepResult:
+    """With the system pipeline on and vector search off, and only when requested, invoke the reindexer
+    with ``enqueue`` so the system workflow analyzes every existing latest live file (GenAI metadata, no
+    embeddings). Skipped with vector search on (vectorBackfill analyzes every file), when not requested,
+    and when the pipeline is not enabled; an unreadable or inconsistent state is an error. Honours
+    ``dry_run`` (the reindexer counts instead of launching), ``limit`` and ``--async`` like vectorBackfill.
+    ``clear_vectors`` does not apply: there are no vectors with vector search off."""
+    if state is None:
+        state = read_vector_search_state(config, base_param_prefix, profile, region)
+    plan = plan_metadata_backfill(state, config, requested)
+    if plan.action == 'skip':
+        line, outcome = METADATA_BACKFILL_SKIPS[plan.skip]
+        logger.info(line)
+        return StepResult(0, outcome)
+    if plan.action == 'error':
+        logger.error(plan.reason)
+        return StepResult(1, f"failed: {plan.reason}")
+    if clear_vectors:
+        logger.info("--clear-vectors (clear_vectors) does not apply to metadataBackfill: vector search is "
+                    "off, so there are no vectors to clear. It is ignored for this step.")
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+    invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
+    payload = build_vector_reindexer_payload(False, dry_run, limit)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 METADATA BACKFILL (existing files, vector search off)")
+    logger.info(f"Function: {plan.function_name}")
+    logger.info(f"Operation: {payload['operation']}   Dry Run: {dry_run}   Limit: {limit}")
+    logger.info(f"Invocation Type: {invocation_type}")
+    logger.info("=" * 80)
+
+    lambda_client = _session(profile, region).client('lambda', config=_LAMBDA_CLIENT_CONFIG)
+    result = invoke_vector_reindexer(lambda_client, plan.function_name, payload, invocation_type)
+    describe_vector_backfill_result(result, plan.function_name, False, dry_run,
+                                    title='METADATA BACKFILL SUMMARY')
+    if result.get('timeout'):
         return StepResult(0, "completed: the invocation timed out on the client; the reindexer "
                              "continues in the background")
     if 'error' in result:
@@ -1045,10 +1147,11 @@ def run_system_pipeline_retirement_step(config: dict, args, base_param_prefix, p
 # CLI
 #######################
 
-STEP_CHOICES = ('orphanedTriggers', 'vectorBackfill', 'systemPipelineRetirement', 'all')
+STEP_CHOICES = ('orphanedTriggers', 'vectorBackfill', 'metadataBackfill', 'systemPipelineRetirement', 'all')
 
 
-def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool) -> str:
+def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
+                   backfills_metadata: bool = False) -> str:
     """What a real run deletes or bills, phrased to follow "This run will"."""
     parts = []
     if deletes_triggers:
@@ -1057,6 +1160,8 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
         parts.append('delete every stored vector (vectorBackfill --clear-vectors)')
     if backfills_vectors:
         parts.append('launch one Amazon Bedrock-billed execution per file (vectorBackfill)')
+    if backfills_metadata:
+        parts.append('launch one Amazon Bedrock-billed execution per file (metadataBackfill)')
     if not parts:
         return 'nothing'
     if len(parts) == 1:
@@ -1103,6 +1208,10 @@ Examples:
   # Rebuild the vector index from scratch (clears every stored vector first)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps vectorBackfill --clear-vectors
 
+  # Vector search off: analyze every existing file with the system pipeline (GenAI metadata, no vectors)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute \\
+      --steps metadataBackfill --generate-metadata-for-existing-files
+
   # Report in-flight retired executions and workflows that still reference a retired pipeline (reads only)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps systemPipelineRetirement
 
@@ -1119,6 +1228,10 @@ Notes:
   - vectorBackfill reads the deployment's VECTORSEARCH feature switch first. Without it, vector search is
     off, the step is skipped (exit 0) and the summary says so; with it, a missing vectorReindexer is an
     error. Run --steps vectorBackfill again on any 2.7 deployment after turning vector search on.
+  - metadataBackfill is opt-in (generate_metadata_for_existing_files, or
+    --generate-metadata-for-existing-files): with the system pipeline on and vector search off it runs the
+    system workflow over every existing file. It is skipped with vector search on (vectorBackfill does
+    it) and when the pipeline is not enabled.
   - vectorBackfill finishes when the reindexer has ENQUEUED the work; the executions it launches run on
     afterwards. The summary prints how to watch them.
   - --clear-vectors defaults to FALSE: the default re-embeds every latest file in place. Pass it only
@@ -1141,6 +1254,11 @@ Notes:
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
                         help='vectorBackfill: delete every stored vector before re-embedding '
                              '(reindexer operation "both" instead of "enqueue"). Default: false.')
+    parser.add_argument('--generate-metadata-for-existing-files', dest='generate_metadata',
+                        action='store_true',
+                        help='metadataBackfill: with the system pipeline on and vector search off, analyze '
+                             'every existing latest live file with the system workflow for this run (sets '
+                             'the config\'s generate_metadata_for_existing_files). Default: false.')
     parser.add_argument('--async', dest='async_invoke', action='store_true',
                         help='vectorBackfill: invoke the reindexer asynchronously and return at once '
                              '(recommended for very large deployments)')
@@ -1167,6 +1285,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     run_orphaned_triggers = args.steps in ('orphanedTriggers', 'all')
     run_vector_backfill = args.steps in ('vectorBackfill', 'all')
+    run_metadata_backfill = args.steps in ('metadataBackfill', 'all')
     run_retirement_report = args.steps in ('systemPipelineRetirement', 'all')
 
     # Dry run unless --execute was given (args.dry_run is False only then) AND the config does not
@@ -1179,6 +1298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     # CLI flag wins; otherwise fall back to config (default false)
     clear_vectors = args.clear_vectors or bool(config.get('clear_vectors', False))
+    generate_metadata = args.generate_metadata or bool(config.get('generate_metadata_for_existing_files', False))
     profile = args.profile or config.get('aws_profile')
     region = args.region or config.get('aws_region')
 
@@ -1189,12 +1309,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Whether vector search is on decides whether vectorBackfill runs, so it is read before the plan is
     # printed and before the account gate names what the run bills. The read only reads (SSM and one
     # DynamoDB GetItem); nothing is deleted or launched before the target is echoed and confirmed.
+    # metadataBackfill reads the same state, once.
     vector_state = None
     vector_plan = None
-    if run_vector_backfill:
+    metadata_plan = None
+    if run_vector_backfill or run_metadata_backfill:
         vector_state = read_vector_search_state(config, base_param_prefix, profile, region)
+    if run_vector_backfill:
         vector_plan = plan_vector_backfill(vector_state, config)
+    if run_metadata_backfill:
+        metadata_plan = plan_metadata_backfill(vector_state, config, generate_metadata)
     backfills_vectors = run_vector_backfill and vector_plan.action == 'run'
+    backfills_metadata = run_metadata_backfill and metadata_plan.action == 'run'
 
     step_plan = []
     if run_orphaned_triggers:
@@ -1206,6 +1332,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             step_plan.append("vectorBackfill (fails: the vector search state is inconsistent or unreadable)")
         else:
             step_plan.append('vectorBackfill')
+    if run_metadata_backfill:
+        if metadata_plan.action == 'skip':
+            step_plan.append(f"metadataBackfill ({METADATA_BACKFILL_SKIPS[metadata_plan.skip][1]})")
+        elif metadata_plan.action == 'error':
+            step_plan.append("metadataBackfill (fails: the deployment state is inconsistent or unreadable)")
+        else:
+            step_plan.append('metadataBackfill')
     if run_retirement_report:
         step_plan.append('systemPipelineRetirement')
 
@@ -1226,8 +1359,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_orphaned_triggers or backfills_vectors,
-        gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors),
+        gated=run_orphaned_triggers or backfills_vectors or backfills_metadata,
+        gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
+                                     backfills_metadata),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -1253,6 +1387,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = run_vector_backfill_step(config, args, base_param_prefix, profile, region, dry_run,
                                           clear_vectors=clear_vectors, state=vector_state)
         outcomes.append(('vectorBackfill', result.outcome))
+        if result.rc != 0:
+            exit_code = result.rc
+
+    if run_metadata_backfill:
+        logger.info("")
+        logger.info("##### STEP: Metadata backfill for existing files (vector search off) #####")
+        result = run_metadata_backfill_step(config, args, base_param_prefix, profile, region, dry_run,
+                                            clear_vectors=clear_vectors, requested=generate_metadata,
+                                            state=vector_state)
+        outcomes.append(('metadataBackfill', result.outcome))
         if result.rc != 0:
             exit_code = result.rc
 
