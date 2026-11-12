@@ -1212,6 +1212,10 @@ AUTH_METHOD_SYSTEM = "system"
 
 SYSTEM_USER = "SYSTEM_USER"
 
+# Inside an audit context a legacy record's payload gains the contract keys; a legacy key of the
+# same name with a different value is moved under this key.
+AUDIT_LEGACY_KEY = "legacy"
+
 # The id fields a record carries at the top level, by their record key.
 AUDIT_ID_FIELDS = (
     "databaseId", "assetId", "filePath", "versionId", "assetVersionId", "pipelineId", "templateId",
@@ -1929,11 +1933,24 @@ def _legacy_canonical_keys(ctx: AuditContext, action: Optional[str], outcome: st
 
 
 def _with_canonical_keys(custom_data: Any, canonical: Dict[str, Any]) -> Dict[str, Any]:
-    """A legacy payload with the contract keys added; a legacy key keeps its value."""
+    """
+    A legacy payload with the contract keys added. The contract keys win: a legacy key of the same
+    name with a different value (an AMI recipe build's ``outcome`` of ``in-progress``, a payload's
+    own ``action``) is moved under ``legacy`` (``{"legacy": {"outcome": "in-progress"}}``), so every
+    contract key keeps its contract type and values and the legacy value is still recorded. A legacy
+    payload that already has a ``legacy`` key keeps it inside that object as ``legacy.legacy``.
+    """
     if isinstance(custom_data, dict):
         merged = dict(custom_data)
+        moved: Dict[str, Any] = {}
         for key, value in canonical.items():
-            merged.setdefault(key, value)
+            if key in merged and merged[key] != value:
+                moved[key] = merged[key]
+            merged[key] = value
+        if moved:
+            if AUDIT_LEGACY_KEY in merged:
+                moved[AUDIT_LEGACY_KEY] = merged[AUDIT_LEGACY_KEY]
+            merged[AUDIT_LEGACY_KEY] = moved
         return merged
     merged = dict(canonical)
     if custom_data is not None:

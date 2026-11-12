@@ -640,11 +640,43 @@ class TestLegacyRecordsInAContext:
             auditLogging.log_actions(event, "workflowUpdate", {"workflowId": "w1", "action": "legacy-kept"})
         match, payload, echo = parse(clients.flush.messages()[0])
         assert match.group("prefix") == "[ACTIONS][type: workflowUpdate]"
-        assert payload["workflowId"] == "w1" and payload["action"] == "legacy-kept", "a legacy key keeps its value"
+        assert payload["workflowId"] == "w1"
+        assert payload["action"] == "workflowUpdate", "the contract key wins over a legacy key"
+        assert payload["legacy"] == {"action": "legacy-kept"}, "the clashing legacy value is kept under legacy"
         assert payload["auditVersion"] == 1 and payload["outcome"] == "success"
         assert payload["actor"]["userId"] == "alice" and payload["entity"] == {"type": "workflow"}
         assert "header-marker" in echo, "a legacy record keeps its full masked echo"
         assert "secret-token-value" not in echo
+
+    def test_contract_keys_win_over_clashing_legacy_keys(self, clients):
+        # An AMI recipe build writes its own outcome (in-progress); inside a context the contract
+        # outcome is written and the legacy value moves under legacy.
+        event = api_event(path="/addon/edh/admin/ami-recipes/r1/builds", method="POST")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_actions(event, "edhAmiRecipe", {
+                "operation": "build", "recipeId": "r1", "outcome": "in-progress",
+                "auditVersion": "x", "recordId": 7, "eventTime": None, "actor": "spoof",
+                "request": [], "entity": "e", "legacy": "older"})
+        _, payload, _ = parse(clients.flush.messages()[0])
+        assert payload["auditVersion"] == 1
+        assert payload["outcome"] in auditLogging.AUDIT_OUTCOMES and payload["outcome"] == "success"
+        assert payload["action"] == "edhAmiBuildCreate"
+        assert isinstance(payload["recordId"], str) and re.match(r"^[0-9a-f-]{36}$", payload["recordId"])
+        assert re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$", payload["eventTime"])
+        assert isinstance(payload["actor"], dict) and payload["actor"]["userId"] == "alice"
+        assert isinstance(payload["request"], dict) and payload["request"]["requestId"] == "req-1"
+        assert payload["entity"] == {"type": "amiBuild"}
+        assert payload["legacy"] == {"outcome": "in-progress", "auditVersion": "x", "recordId": 7,
+                                     "eventTime": None, "actor": "spoof", "request": [], "entity": "e",
+                                     "legacy": "older"}
+        assert payload["operation"] == "build" and payload["recipeId"] == "r1"
+
+    def test_an_equal_legacy_key_is_not_moved(self, clients):
+        event = api_event(path="/database/db1/workflows/w1", method="PUT")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_actions(event, "workflowUpdate", {"workflowId": "w1", "outcome": "success"})
+        _, payload, _ = parse(clients.flush.messages()[0])
+        assert "legacy" not in payload and payload["outcome"] == "success"
 
     def test_a_legacy_type_maps_to_the_route_action(self, clients):
         event = api_event(path="/auth/constraints/c1", method="PUT")

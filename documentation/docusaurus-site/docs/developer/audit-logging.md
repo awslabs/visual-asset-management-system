@@ -128,7 +128,7 @@ A key that does not apply is left out, never written as `null`.
 | `details`                                                                      | object  | Other facts about the action (flags, trigger type, index name).                                                                                                                                            |
 | `truncated`                                                                    | boolean | `true` when a value or the record was cut to the size caps.                                                                                                                                                |
 
-The keys of the earlier orchestration and authorization records stay alongside these.
+The keys of the earlier orchestration and authorization records stay alongside these. When an earlier record's own key has the name of a contract key with a different value (an AMI recipe build writes its own `outcome`, such as `in-progress`), the contract value is written and the earlier value moves under `legacy`, for example `"legacy": {"outcome": "in-progress"}`, so every contract key keeps its contract meaning.
 
 ### What Reads and Writes Record
 
@@ -340,7 +340,7 @@ def lambda_handler(event, context):
 | `bytes`, `file_count`, `item_count`, `duration_ms`     | Sizes and counts the handler already knows                                                         |
 | `changes`, `previous`, `request_parameters`, `details` | The value sections                                                                                 |
 
-`audit_request(event, context, on_behalf_of=None)` is a context manager; `@audited_handler` applies it to an entrypoint. Outside it, `log_action` writes each record at once and every other function writes exactly as before. Inside it, the `log_actions`, `log_file_*` and `log_errors` records keep their payload keys and gain the contract keys; the authorization and authentication functions are unchanged.
+`audit_request(event, context, on_behalf_of=None)` is a context manager; `@audited_handler` applies it to an entrypoint. Outside it, `log_action` writes each record at once and every other function writes exactly as before. Inside it, the `log_actions`, `log_file_*` and `log_errors` records keep their payload keys and gain the contract keys (see [Payload Keys](#payload-keys) for a legacy key that clashes); the authorization and authentication functions are unchanged.
 
 ## Handler Integration Example
 
