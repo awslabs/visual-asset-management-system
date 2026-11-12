@@ -219,9 +219,10 @@ class TestRegistryMatchesHandlers:
         assert not missing, ("registered actions that no handler records; call log_action from the "
                              f"handler or list them in AUDIT_PENDING_ACTIONS: {missing}")
 
-    # Temporary: the pending list exists only while handlers are being covered; this test and the
-    # list are removed when the list is empty.
-    @pytest.mark.temporary  # pins the shrinking pending list of actions handlers do not record yet
+    # Temporary: the pending list exists only while handlers are being covered. Remove this test, and
+    # the list, only once AUDIT_PENDING_ACTIONS is empty (the auth-records change empties it); removing
+    # it while entries remain would let a stale entry hide an action a handler already records.
+    @pytest.mark.temporary  # pins the shrinking AUDIT_PENDING_ACTIONS list; remove when the list is empty
     def test_no_pending_action_is_already_recorded(self, handler_scan):
         recorded = _recorded_actions(REGISTRY.AUDIT_ACTIONS, *handler_scan)
         stale = sorted(REGISTRY.AUDIT_PENDING_ACTIONS & recorded)

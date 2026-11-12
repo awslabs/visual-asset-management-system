@@ -1407,7 +1407,8 @@ def _resolve_actor(event: Dict[str, Any], claims: Dict[str, Any],
 def _request_facts(event: Dict[str, Any], lambda_context: Any) -> Dict[str, Any]:
     """
     The record's request object: requestId, method, route (the template, never the concrete path),
-    sourceIp (the address API Gateway reports for the connection) and lambdaRequestId. A key that
+    sourceIp (the address API Gateway reports for the connection, which on a CloudFront deployment is the
+    CloudFront edge, not the client) and lambdaRequestId. A key that
     does not apply is left out.
     """
     request: Dict[str, Any] = {}
