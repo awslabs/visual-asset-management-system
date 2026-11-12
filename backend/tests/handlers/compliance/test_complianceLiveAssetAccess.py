@@ -596,15 +596,18 @@ def test_the_sweeps_evaluate_only_the_assets_the_caller_may_read(
 def test_the_engine_says_which_templates_have_asset_rules(template, role_enforcer):
     """`policy_has_object_type` is read from the policy routes (the lines a request of the type
     walks), never from role or template names: a template has asset rules exactly when it carries a
-    constraint on the asset object type. Of the shipped templates only the global Compliance Admin
-    and the Database Tag Admin have none; the database-scoped Compliance Admin and Read-only grant
+    constraint on the asset object type. Of the shipped templates only the global Compliance Admin,
+    the Database Tag Admin and the EDH Workstations add-on's two templates (workstation, image and
+    route constraints only) have none; the database-scoped Compliance Admin and Read-only grant
     the asset GET on their database."""
     constraints = _template(template, "r-main", DB1)
     enforcer = role_enforcer(["r-main"], constraints)
     expected = any(constraint.get("objectType") == "asset" for constraint in constraints)
     assert enforcer.policy_has_object_type("asset") is expected, template
     assert expected is (template not in ("compliance-global-admin.json",
-                                         "database-tag-admin.json")), template
+                                         "database-tag-admin.json",
+                                         "edh-admin.json",
+                                         "edh-user.json")), template
 
 
 @pytest.mark.unit
