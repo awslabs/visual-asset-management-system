@@ -1086,7 +1086,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Default model provider. Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help: "Default model provider. Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
@@ -1294,7 +1294,7 @@ const CORE_FIELDS: FieldMeta[] = [
         help:
             "Required when enabled outside the commercial partition, where VAMS supplies no default: " +
             "model availability differs by partition and account entitlement. Commercial defaults to " +
-            "global.anthropic.claude-sonnet-4-5-20250929-v1:0. Accepts a model id or an inference-profile ARN.",
+            "global.anthropic.claude-sonnet-5-5. Accepts a model id or an inference-profile ARN.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {
