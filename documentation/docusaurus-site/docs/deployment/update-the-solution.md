@@ -888,14 +888,25 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 
     The migration runs three independent steps in the order below. `--steps` selects a single step; the default (`all`) runs every one.
 
-    | Step                              | `--steps` value            | What it does                                                                                                                                                                                                                                                                    |
-    | --------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Orphaned trigger cleanup          | `orphanedTriggers`         | Enumerates every `fileUpload` trigger row through `TriggersByBaseTypeGSI`, joins it to the workflow table, and deletes rows whose workflow is archived or missing — including the retired built-ins' triggers. Idempotent; **deletes rows**.                                    |
-    | Vector index backfill             | `vectorBackfill`           | Invokes the deployed `vectorReindexer` with `{"operation": "enqueue"}` (or `"both"` with `--clear-vectors`), which enumerates the latest live version of every file and enqueues one system-workflow execution per file. Skipped under `all` when vector search is not enabled. |
-    | System-pipeline retirement report | `systemPipelineRetirement` | Lists retired-workflow executions still in flight and your workflows that reference a retired pipeline id, with guidance. Writes nothing.                                                                                                                                       |
+    | Step                              | `--steps` value            | What it does                                                                                                                                                                                                                                                                          |
+    | --------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Orphaned trigger cleanup          | `orphanedTriggers`         | Enumerates every `fileUpload` trigger row through `TriggersByBaseTypeGSI`, joins it to the workflow table, and deletes rows whose workflow is archived or missing — including the retired built-ins' triggers. Idempotent; **deletes rows**.                                          |
+    | Vector index backfill             | `vectorBackfill`           | Invokes the deployed `vectorReindexer` with `{"operation": "enqueue"}` (or `"both"` with `--clear-vectors`), which enumerates the latest live version of every file and enqueues one system-workflow execution per file. Skipped when vector search is not enabled on the deployment. |
+    | System-pipeline retirement report | `systemPipelineRetirement` | Lists retired-workflow executions still in flight and your workflows that reference a retired pipeline id, with guidance. Writes nothing.                                                                                                                                             |
 
 :::note[Every step is safe to repeat]
 `orphanedTriggers` deletes only rows whose workflow is archived or missing, so a second run finds nothing. `vectorBackfill` re-embeds files in place — each vector item is keyed on the file path and S3 version, so a repeat overwrites the same items — and the system workflow's `perInputFileVersion` lock drops a duplicate launch for a version that is still running. `systemPipelineRetirement` only reads.
+:::
+
+:::note[`vectorBackfill` follows the deployment's vector search switch]
+The step reads the deployment's `VECTORSEARCH` feature switch before it does anything. Without it, vector search is off: the step logs `Vector search is not enabled on this deployment, so there is nothing to re-index; vectorBackfill skipped.`, the closing summary prints `vectorBackfill: skipped: vector search is not enabled`, and the run exits `0`, under `--steps all` and `--steps vectorBackfill` alike. The switch set with no reindexer to invoke, or a state the script cannot read, fails the step instead; it is never skipped on an error.
+
+-   **Upgrading with vector search on:** run the migration after the deploy, and `vectorBackfill` embeds the files that existed before the upgrade.
+-   **Upgrading with vector search off:** the migration skips `vectorBackfill`, and nothing else is needed.
+-   **Turning vector search on later on a 2.7 deployment:** deploy with `app.vectorSearch.enabled: true`, then run the migration again with `--steps vectorBackfill` (or set `app.vectorSearch.reindexOnCdkDeploy` to `true` for one deploy, or invoke the reindexer directly). The run launches one execution per file in scope and bills one analysis and one embedding for each, as on an upgrade; `--limit 25` shows the per-file cost first.
+-   **Turning vector search off and on again:** the vectors written before survive, and the same `--steps vectorBackfill` run embeds the files whose pipeline runs completed while it was off.
+
+The reindexer's operations are described under [Reindexing](../concepts/vector-search.md#reindexing).
 :::
 
 :::warning[`vectorBackfill` launches one execution per file and bills Amazon Bedrock for each]
