@@ -30,6 +30,7 @@ from . import dependencies
 from . import geometry_budget
 from . import renderer
 from . import resources
+from . import scene_parts
 from .utils.timing import PhaseTimer
 
 logger = get_logger()
@@ -645,6 +646,7 @@ def _rotate_z_up_to_y_up(pv_data):
     new_points[:, 1] = points[:, 2]    # Y = old Z (up axis)
     new_points[:, 2] = -points[:, 1]   # Z = -old Y
     pv_data.points = new_points
+    scene_parts.rotate_z_up_to_y_up(pv_data)
     logger.info("Applied Z-up → Y-up rotation")
     return pv_data
 
