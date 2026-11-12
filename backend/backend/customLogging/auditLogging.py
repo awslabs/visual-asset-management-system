@@ -42,6 +42,9 @@ from common.auditActions import (
     GROUP_FILE_DOWNLOAD_STREAMED,
     GROUP_FILE_UPLOAD,
     AUDIT_ACTION_NAME_PATTERN,
+    KIND_DOWNLOAD,
+    KIND_READ,
+    KIND_SEARCH,
     audit_spec_for_action,
     audit_spec_for_route,
     resolve_route_template,
@@ -1241,6 +1244,16 @@ _ENTITY_ID_FIELDS = {
     "workstation": "sessionId",
 }
 
+# Actions of these kinds record the request only: log_action drops the write sections (changes,
+# previous) a call passes for one, whatever the call site, and logs an error naming the action.
+_REQUEST_ONLY_KINDS = frozenset({KIND_READ, KIND_SEARCH, KIND_DOWNLOAD})
+_WRITE_ONLY_SECTIONS = ("changes", "previous")
+
+# Whether a read or search record carries itemCount, the number of items or hits it returned (a
+# count, never the items). Held in this one switch while the maintainers confirm it; set it False
+# to drop the field from read and search records.
+AUDIT_READ_ITEM_COUNT = True
+
 # The record sections whose values are what a write wrote or a read asked for.
 _VALUE_SECTIONS = ("changes", "previous", "requestParameters", "details")
 
@@ -1902,6 +1915,15 @@ def log_action(
             logger.error(f"Audit action {action_name!r} is not registered in common/auditActions.py")
         group = audit_spec.group if audit_spec else GROUP_ACTIONS
         prefix_type = (audit_spec.legacy_type or audit_spec.action) if audit_spec else action_name
+        kind = audit_spec.kind if audit_spec else None
+        if kind in _REQUEST_ONLY_KINDS:
+            # A read, search or download records what was asked, never what was written or returned.
+            passed = [name for name, value in (("changes", changes), ("previous", previous)) if value]
+            if passed:
+                logger.error(f"Audit action {action_name!r} is a {kind}; dropped {', '.join(passed)}")
+            changes = previous = None
+            if kind != KIND_DOWNLOAD and not AUDIT_READ_ITEM_COUNT:
+                item_count = None
 
         if ctx is not None:
             user_context, actor, request = dict(ctx.user_context), ctx.actor, ctx.request

@@ -781,3 +781,53 @@ class TestLegacyRecordsInAContext:
             "[ACTIONS][type: workflowUpdate]", {"user": "alice", "roles": ["admin"], "mfaEnabled": True},
             {"workflowId": "w1"}) + auditLogging._event_suffix(event))
         assert message == expected
+
+
+# ---------------------------------------------------------------------------------------------------
+# Owner rule enforced by the core: reads, searches and downloads record the request only
+# ---------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRegistryKindIsEnforced:
+    @pytest.mark.parametrize("action,path,method", [
+        ("assetGet", "/database/db1/assets/a1", "GET"),
+        ("search", "/search", "POST"),
+        ("assetExport", "/database/db1/assets/a1/export", "POST"),
+    ])
+    def test_request_only_kinds_drop_the_write_sections(self, clients, action, path, method):
+        assert REGISTRY.AUDIT_ACTIONS[action].kind in ("read", "search", "download")
+        auditLogging.log_action(api_event(path=path, method=method), action, asset_id="a1",
+                                changes={"assetName": "RETURNED-NAME"}, previous={"assetName": "OLD-NAME"},
+                                request_parameters={"maxItems": 10})
+        message = clients.module.messages()[0]
+        _, payload, _ = parse(message)
+        assert "changes" not in payload and "previous" not in payload
+        assert "RETURNED-NAME" not in message and "OLD-NAME" not in message
+        assert payload["requestParameters"] == {"maxItems": 10}
+
+    def test_a_write_kind_keeps_the_write_sections(self, clients):
+        # Control: the same call on a write action records both sections.
+        auditLogging.log_action(api_event(), "assetUpdate", asset_id="a1",
+                                changes={"assetName": "NEW"}, previous={"assetName": "OLD"})
+        _, payload, _ = parse(clients.module.messages()[0])
+        assert payload["changes"] == {"assetName": "NEW"} and payload["previous"] == {"assetName": "OLD"}
+
+    def test_the_route_action_is_enforced_too(self, clients):
+        event = api_event(path="/database/db1/assets/a1", method="GET")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_action(event, asset_id="a1", changes={"assetName": "RETURNED"})
+        _, payload, _ = parse(clients.flush.messages()[0])
+        assert payload["action"] == "assetGet" and "changes" not in payload
+
+    def test_read_item_count_is_one_switch(self, clients, monkeypatch):
+        auditLogging.log_action(api_event(method="GET"), "assetList", item_count=25)
+        _, payload, _ = parse(clients.module.messages()[0])
+        assert payload["itemCount"] == 25
+        monkeypatch.setattr(auditLogging, "AUDIT_READ_ITEM_COUNT", False)
+        clients.module.calls.clear()
+        auditLogging.log_action(api_event(method="GET"), "assetList", item_count=25)
+        auditLogging.log_action(api_event(), "metadataUpdate", item_count=4)
+        read_payload = parse(clients.module.messages()[0])[1]
+        write_payload = parse(clients.module.messages()[1])[1]
+        assert "itemCount" not in read_payload
+        assert write_payload["itemCount"] == 4, "the switch covers reads and searches only"

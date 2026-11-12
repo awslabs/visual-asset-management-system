@@ -133,7 +133,7 @@ The keys of the earlier orchestration and authorization records stay alongside t
 ### What Reads and Writes Record
 
 -   **A write** records what it wrote or changed: each changed field with its new value in `changes`, and the prior values in `previous` where the handler already held the record.
--   **A read, search or download** records the request: the route, the IDs, the filters and page size in `requestParameters`, and the outcome. The content returned is never recorded; a search records the number of hits in `itemCount`, not the hits.
+-   **A read, search or download** records the request: the route, the IDs, the filters and page size in `requestParameters`, and the outcome. The content returned is never recorded. The registry gives each action its kind, and `log_action` drops `changes` and `previous` from a read, search or download record, whatever the caller passes. A read or search record may carry `itemCount`, the number of items or hits returned (a count, never the items); that one field is controlled by `AUDIT_READ_ITEM_COUNT` in `auditLogging.py`.
 -   **A bulk operation** records one record per item, all delivered together at the end of the request.
 -   **File content** is never recorded.
 
