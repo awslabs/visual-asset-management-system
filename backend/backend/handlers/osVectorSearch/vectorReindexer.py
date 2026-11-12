@@ -17,6 +17,12 @@ resolution, archived assets excluded), keeps the files the system workflow's inp
 one launch message per file to the system-workflow launch queue in batches of ten; the launcher paces the
 executions. `both` runs `clear` to completion across every continuation and only then starts `enqueue`.
 
+The function exists whenever the system GenAI metadata pipeline is on and registered, with vector search
+on or off; `VECTOR_SEARCH_ENABLED` says which. With vector search off there is no vector index and nothing
+to clear: the function reads no vector index environment, builds no vector store, and refuses `clear` and
+`both` with a 400. `enqueue` works the same way in both cases, so the system workflow analyzes the
+existing files; its runs skip the embedding step while vector search is off.
+
 Work is bounded by the 15-minute Lambda window: when fewer than MIN_REMAINING_MS remain the function
 re-invokes itself asynchronously with a `continuation` token (the reserved sixth payload key, written and
 read only by this function) carrying the scan cursor or the enumeration marker, the run id, and the
@@ -82,7 +88,7 @@ SCAN_PAGE_SIZE = 1000
 MAX_RUN_INVOCATIONS = 200
 
 try:
-    vector_table_name = get_table_name(ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE)
+    vector_search_enabled = os.environ.get("VECTOR_SEARCH_ENABLED", "true").strip().lower() == "true"
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     workflow_storage_table_v2_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
@@ -90,9 +96,11 @@ try:
     launch_queue_url = os.environ["WORKFLOW_LAUNCH_QUEUE_URL"]
     system_workflow_id = os.environ["GENAI_METADATA_WORKFLOW_ID"]
     system_workflow_database_id = os.environ["GENAI_METADATA_WORKFLOW_DATABASE_ID"]
-    vector_index_name = os.environ["VECTOR_INDEX_NAME"]
-    embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
-    embedding_dimensions = int(os.environ["EMBEDDING_DIMENSIONS"])
+    if vector_search_enabled:
+        vector_table_name = get_table_name(ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE)
+        vector_index_name = os.environ["VECTOR_INDEX_NAME"]
+        embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
+        embedding_dimensions = int(os.environ["EMBEDDING_DIMENSIONS"])
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -101,8 +109,14 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 workflow_storage_table_v2 = dynamodb.Table(workflow_storage_table_v2_name)
 pipeline_storage_table_v2 = dynamodb.Table(pipeline_storage_table_v2_name)
+# Only `clear` addresses the vector table, and it needs vector search.
 vector_store = DynamoDbVectorStore(
-    vector_table_name, vector_index_name, embedding_model_id, embedding_dimensions, dynamodb_client)
+    vector_table_name, vector_index_name, embedding_model_id, embedding_dimensions, dynamodb_client
+) if vector_search_enabled else None
+
+# The 400 a `clear` or `both` gets while vector search is off.
+CLEAR_NEEDS_VECTOR_SEARCH = ("vector search is not enabled on this deployment, so there are no vectors to "
+                             "clear; use operation 'enqueue' to analyze the existing files")
 
 
 class SystemWorkflowNotFound(Exception):
@@ -131,6 +145,8 @@ def validate_payload(event: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str
     operation = event.get('operation')
     if operation not in OPERATIONS:
         return None, f"operation must be one of {list(OPERATIONS)}"
+    if operation in ('clear', 'both') and not vector_search_enabled:
+        return None, CLEAR_NEEDS_VECTOR_SEARCH
     dry_run = event.get('dryRun', False)
     if not isinstance(dry_run, bool):
         return None, "dryRun must be a boolean"

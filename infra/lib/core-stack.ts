@@ -314,8 +314,10 @@ export class CoreVAMSStack extends cdk.Stack {
             // The vector reindexer enqueues launches of the system GenAI metadata workflow, which the
             // pipeline stack's vamsSchema registration writes; with reindexOnCdkDeploy the search stack's
             // custom resource reads that row during the deploy, so the pipeline stack must land first.
-            // Neither stack consumes the other's outputs, so the ordering introduces no cycle.
-            if (props.config.app.vectorSearch.enabled) {
+            // The reindexer exists whenever the system pipeline is on and registered, vector search on
+            // or off, so the same ordering holds for both. Neither stack consumes the other's outputs,
+            // so the ordering introduces no cycle.
+            if (Config.systemWorkflowReindexerEnabled(props.config)) {
                 searchBuilderNestedStack.addStackDependency(pipelineBuilderNestedStack);
             }
 

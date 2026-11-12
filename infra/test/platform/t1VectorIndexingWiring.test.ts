@@ -4,9 +4,10 @@
  */
 
 /**
- * T1 tier: the vector indexing construct is emitted in the search stack exactly when
- * `app.vectorSearch.enabled`, its reindexer name is published to SSM, and its Lambdas address the index
- * the storage stack declares.
+ * T1 tier: the vector indexing construct's indexer half is emitted in the search stack exactly when
+ * `app.vectorSearch.enabled`, its reindexer half (the reindexer, the launch queue and its launcher)
+ * whenever the system GenAI metadata pipeline is on and registered; the reindexer name is published to
+ * SSM with it, and the vector Lambdas address the index the storage stack declares.
  *
  * The commercial template enables the feature; the two restricted templates disable it, and their
  * absence assertions are controlled by the commercial counts. `VECTOR_INDEX_NAME` is compared with the
@@ -337,6 +338,17 @@ describe("the vector and OpenSearch indexer families are independent", () => {
         );
     });
 
+    // With vector search off and the system pipeline on, the reindexer half stays: the launch queue, the
+    // reindexer and its launcher. The vector indexer, its queue and the search Lambda are vector-only.
+    const vectorOnlyLambdas = (s: SynthResult) =>
+        vectorLambdas(s).filter((f) =>
+            /^handlers\.osVectorSearch\.(vectorIndexer|vectorSearchService)\./.test(
+                SynthResult.flatten(f.properties.Handler)
+            )
+        );
+    const vectorIndexerQueues = (s: SynthResult) =>
+        vectorQueues(s).filter((q) => q.logicalId.startsWith("VectorIndexingVectorIndexerQueue"));
+
     test("vector off + OpenSearch on: the OpenSearch family is complete and no vector indexer exists", () => {
         const s = synthMode(false, true);
         const control = synthMode(true, true);
@@ -359,21 +371,39 @@ describe("the vector and OpenSearch indexer families are independent", () => {
                 .sort()
         );
         expectAbsent(
-            "vector indexing Lambdas with vectorSearch disabled",
-            vectorLambdas(s).map((f) => f.logicalId),
+            "vector indexer and search Lambdas with vectorSearch disabled",
+            vectorOnlyLambdas(s).map((f) => f.logicalId),
             {
-                description: "the enabled-enabled synth emits the vectorsearch Lambdas",
-                count: vectorLambdas(control).length,
+                description:
+                    "the enabled-enabled synth emits the vector indexer and search Lambdas",
+                count: vectorOnlyLambdas(control).length,
             }
         );
         expectAbsent(
-            "vector source queues with vectorSearch disabled",
-            vectorQueues(s).map((q) => q.logicalId),
+            "vector indexer queues with vectorSearch disabled",
+            vectorIndexerQueues(s).map((q) => q.logicalId),
             {
-                description: "the enabled-enabled synth emits the vector source queues",
-                count: vectorQueues(control).length,
+                description: "the enabled-enabled synth emits the vector indexer queue",
+                count: vectorIndexerQueues(control).length,
             }
         );
+        // The reindexer half is kept, with the logical ids the vector-on synth gives it.
+        expect(
+            vectorLambdas(s)
+                .map((f) => SynthResult.flatten(f.properties.Handler))
+                .sort()
+        ).toEqual([
+            "handlers.osVectorSearch.systemWorkflowLauncher.lambda_handler",
+            "handlers.osVectorSearch.vectorReindexer.lambda_handler",
+        ]);
+        const kept = (r: SynthResult) =>
+            [
+                ...vectorLambdas(r).filter((f) => !vectorOnlyLambdas(r).includes(f)),
+                ...vectorQueues(r).filter((q) => !vectorIndexerQueues(r).includes(q)),
+            ]
+                .map((x) => x.logicalId)
+                .sort();
+        expect(kept(s)).toEqual(kept(control));
     });
 
     test("the two SNS fan-out topics are emitted by storage in every mode, so each family subscribes independently", () => {
@@ -480,7 +510,7 @@ describe("vector reindex on deploy", () => {
         expect(openSearchReindexTrigger(s)).toHaveLength(0);
     });
 
-    test("the search stack builds after the pipeline stack whenever vector search is enabled", () => {
+    test("the search stack builds after the pipeline stack whenever the reindexer exists (vector search on)", () => {
         const s = synthTemplate("commercial");
         const search = nestedStack(s, "SearchBuilderNestedStack");
         const pipeline = nestedStack(s, "PipelineBuilderNestedStack");
@@ -489,12 +519,26 @@ describe("vector reindex on deploy", () => {
         expect(pipeline.raw.DependsOn ?? []).not.toContain(search.logicalId);
     });
 
-    test("with vector search off the search stack does not wait on the pipeline stack", () => {
+    test("with vector search off and the system pipeline on the search stack still builds after the pipeline stack", () => {
         const s = synthTemplate("commercial", {
             mutate: (c) => {
                 c.app.vectorSearch.enabled = false;
             },
             mutateKey: "vector-off-stack-order",
+        });
+        const search = nestedStack(s, "SearchBuilderNestedStack");
+        const pipeline = nestedStack(s, "PipelineBuilderNestedStack");
+        expect(search.raw.DependsOn ?? []).toContain(pipeline.logicalId);
+        expect(pipeline.raw.DependsOn ?? []).not.toContain(search.logicalId);
+    });
+
+    test("with the system pipeline off (no reindexer) the search stack does not wait on the pipeline stack", () => {
+        const s = synthTemplate("commercial", {
+            mutate: (c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            },
+            mutateKey: "pipeline-off-stack-order",
         });
         const search = nestedStack(s, "SearchBuilderNestedStack");
         const pipeline = nestedStack(s, "PipelineBuilderNestedStack");

@@ -4301,8 +4301,12 @@ export function getConfig(app: cdk.App): Config {
                     `produce. Supported widths: ${family.dimensions.join(", ")}.`
             );
         }
-        //CDK validates the event-source MaximumConcurrency at synth too, but misses 0 and non-integers
-        //and names the CDK property rather than this field.
+    }
+    //The launcher's event-source MaximumConcurrency paces every reindex run, so the value is checked
+    //whenever the reindexer is built: with vector search on, and with it off while the system pipeline
+    //is on and registered. CDK validates MaximumConcurrency at synth too, but misses 0 and non-integers
+    //and names the CDK property rather than this field.
+    if (systemWorkflowReindexerEnabled(config)) {
         const concurrency = config.app.vectorSearch.indexingConcurrency;
         if (
             typeof concurrency !== "number" ||
@@ -4313,7 +4317,8 @@ export function getConfig(app: cdk.App): Config {
             throw new Error(
                 "Configuration Error: vectorSearch.indexingConcurrency must be an integer between " +
                     `${VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY} and ${VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY} ` +
-                    "(Lambda SQS event-source MaximumConcurrency bound). " +
+                    "(Lambda SQS event-source MaximumConcurrency bound); it paces every reindex run " +
+                    "of the system GenAI metadata workflow. " +
                     `Received: ${JSON.stringify(concurrency)}`
             );
         }
@@ -5366,6 +5371,20 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
         config.app.assetBuckets.externalAssetBuckets,
         config.env.region
     );
+}
+
+/**
+ * Whether the deployment builds the system-workflow reindexer: the `vectorReindexer` Lambda, the
+ * system-workflow launch queue and its launcher, their dead-letter queues and alarms, and the
+ * `lambdaFunctions/vectorReindexer` parameter. True whenever the system GenAI metadata pipeline is
+ * enabled and registers its workflow, which the reindexer launches, with vector search on or off. With
+ * vector search off a reindex run (`enqueue`) is the bulk way to analyze files that predate the
+ * pipeline. Vector search on implies it (getConfig() requires the pipeline and its registration).
+ * Read after getConfig() has resolved `autoRegisterWithVAMS`.
+ */
+export function systemWorkflowReindexerEnabled(config: ConfigPublic): boolean {
+    const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+    return pipeline?.enabled === true && pipeline.autoRegisterWithVAMS === true;
 }
 
 /**

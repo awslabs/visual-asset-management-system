@@ -533,11 +533,13 @@ export class SearchBuilderNestedStack extends NestedStack {
         }
 
         /////////////////////////////////////////////////////////////////////////////
-        // Vector indexing (independent of the OpenSearch flavour: its topics exist regardless)
+        // Vector indexing and the system-workflow reindexer (independent of the OpenSearch flavour:
+        // its topics exist regardless). The reindexer and its launcher exist whenever the system
+        // pipeline is on and registered, vector search on or off; the indexer only with vector search.
         /////////////////////////////////////////////////////////////////////////////
 
         let vectorIndexing: VectorIndexingConstruct | undefined = undefined;
-        if (config.app.vectorSearch.enabled) {
+        if (Config.systemWorkflowReindexerEnabled(config)) {
             vectorIndexing = new VectorIndexingConstruct(scope, "VectorIndexing", {
                 config: config,
                 storageResources: storageResources,
@@ -601,7 +603,11 @@ export class SearchBuilderNestedStack extends NestedStack {
         // asynchronously past one Lambda window), so the deploy does not wait on the re-analysis. The
         // system workflow the handler enqueues against is registered by the pipeline stack, which
         // core-stack.ts orders ahead of this stack whenever vector search is enabled.
-        if (vectorIndexing && config.app.vectorSearch.reindexOnCdkDeploy) {
+        if (
+            vectorIndexing &&
+            config.app.vectorSearch.enabled &&
+            config.app.vectorSearch.reindexOnCdkDeploy
+        ) {
             const vectorReindexProvider = new cr.Provider(scope, "VectorReindexProvider", {
                 onEventHandler: vectorIndexing.vectorReindexerFunction,
             });

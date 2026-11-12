@@ -136,7 +136,10 @@ export function buildVectorIndexerFunction(
 
 /**
  * Operator-invoked clear / enqueue / both. Continuation is an asynchronous self-invoke; `extraEnv`
- * carries the launch queue URL and the system workflow identity.
+ * carries the launch queue URL and the system workflow identity. Built whenever the system GenAI
+ * metadata pipeline is on and registered; `VECTOR_SEARCH_ENABLED` tells it whether vector search is on.
+ * With it off the function carries no vector index environment and no grant on the vector table, and
+ * refuses `clear` and `both`: `enqueue` alone launches the system workflow over the existing files.
  */
 export function buildVectorReindexerFunction(
     scope: Construct,
@@ -158,11 +161,15 @@ export function buildVectorReindexerFunction(
         recursiveLoop: vectorSelfContinuationRecursiveLoop(config),
         ...vectorLambdaPlacement(config, vpc, subnets),
         environment: {
-            ...vectorIndexEnvironment(config),
+            ...(config.app.vectorSearch.enabled ? vectorIndexEnvironment(config) : {}),
+            VECTOR_SEARCH_ENABLED: config.app.vectorSearch.enabled ? "true" : "false",
             ...(extraEnv ?? {}),
         },
     });
-    storageResources.dynamo.vectorEmbeddingsStorageTable.grantReadWriteData(fun);
+    // The table is read and written only by `clear` and `both`, which need vector search.
+    if (config.app.vectorSearch.enabled) {
+        storageResources.dynamo.vectorEmbeddingsStorageTable.grantReadWriteData(fun);
+    }
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);

@@ -686,15 +686,35 @@ describe("vector search validation", () => {
         ).not.toThrow(/indexingConcurrency/);
     });
 
-    test("the value checks are skipped while vector search is disabled", () => {
+    test("the embedding checks are skipped while vector search is disabled", () => {
         expect(
             resolve((c) => {
                 c.app.vectorSearch.enabled = false;
                 c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
                 c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 0;
-                c.app.vectorSearch.indexingConcurrency = 0;
             })
         ).not.toThrow();
+    });
+
+    // indexingConcurrency paces the system-workflow reindexer, which exists whenever the system
+    // pipeline is on and registered, so it is checked with vector search off too.
+    test("indexingConcurrency is checked with vector search off while the system pipeline is on", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.vectorSearch.indexingConcurrency = 0;
+            })
+        ).toThrow(/vectorSearch\.indexingConcurrency must be an integer between 2 and 1000/);
+    });
+
+    test("indexingConcurrency is not checked when the system pipeline is off (no reindexer)", () => {
+        expect(
+            resolve((c) => {
+                c.app.vectorSearch.enabled = false;
+                c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+                c.app.vectorSearch.indexingConcurrency = 0;
+            })
+        ).not.toThrow(/indexingConcurrency/);
     });
 });
 
