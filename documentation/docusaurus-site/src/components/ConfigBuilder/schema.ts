@@ -1011,7 +1011,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help: "Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {

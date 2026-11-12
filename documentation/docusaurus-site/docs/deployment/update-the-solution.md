@@ -785,6 +785,43 @@ Before v2.6.7, AWS Lambda recursive loop detection could stop the bucket-sync La
 
 Earlier releases, from v2.6.0, added an account-level Amazon CloudWatch Logs resource policy per deployment (its name contains `EventsLogGroupPolicy`) so Amazon EventBridge could write to the `/aws/vendedlogs/VAMSOrchestrationBusAudit-<hash>` log group. An account holds at most 10 such policies per Region, so a Region could hold at most 10 deployments. The update attaches the grant to the log group itself, then deletes the deployment's old account-level policy. Audit events keep arriving during the update, and other deployments' policies are untouched. No action is needed. The AWS CloudFormation execution role needs `logs:PutResourcePolicy`, `logs:DescribeResourcePolicies` and `logs:DeleteResourcePolicy`, which the default CDK bootstrap role has. A deployment with a provisioned Amazon OpenSearch Service domain still adds one account-level policy for the domain's logs.
 
+### v2.6.7 and later: let read-only roles open files in the viewers
+
+From v2.6.7 the `database-readonly` and `global-readonly` permission templates and the seeded `basicReadOnly` role grant `POST` on `/database/{databaseId}/assets/{assetId}/download`, the request the file viewers and the download action make. Without it, a read-only user can open only the streaming Three.js viewer, and every other viewer reports that the file failed to download.
+
+-   **`basicReadOnly` needs no action.** The update rewrites the default constraints and adds the grant.
+-   **A role imported from `database-readonly.json` or `global-readonly.json` before v2.6.7 keeps the constraints it was imported with**, so it does not get the grant. The same applies to a role you built by hand whose users should view files. Add the one constraint by importing a template that holds only it. Save the following as `download-grant.json`, set `ROLE_NAME` to the role's name, and import it:
+
+    ```json
+    {
+        "variableValues": { "ROLE_NAME": "<role name>" },
+        "constraints": [
+            {
+                "name": "{{ROLE_NAME}}-api-routes-download",
+                "description": "Allow requesting a file download, which the file viewers and the download action use; the request is a POST because its body names the file and version",
+                "objectType": "api",
+                "criteriaAnd": [
+                    {
+                        "field": "route__path",
+                        "operator": "equals",
+                        "value": "/database/[^/]+/assets/[^/]+/download"
+                    }
+                ],
+                "criteriaOr": [],
+                "groupPermissions": [{ "action": "POST", "type": "allow" }]
+            }
+        ]
+    }
+    ```
+
+    ```bash
+    vamscli role constraint template import -j download-grant.json
+    ```
+
+    Repeat for each role, changing `ROLE_NAME`. The constraint grants only the download route. Which files a user can download still follows the role's asset constraints: a `database-readonly` role downloads only from its own database.
+
+-   **Do not re-import the whole template into an existing role.** Each import creates new constraint identifiers, so every constraint the role already holds would be added a second time.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.

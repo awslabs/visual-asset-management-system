@@ -109,6 +109,13 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// The Amazon Bedrock model the commercial partition uses when the GenAI 3D Metadata Labeling pipeline
+// names none. It is a commercial cross-Region inference profile, so the restricted-partition templates
+// ship the model id empty instead. Bedrock refuses a model whose lifecycle status is LEGACY to an
+// account that has not called it for 30 days, so this names an ACTIVE model; the config templates and
+// the ConfigBuilder presets carry the same id.
+export const GENAI_DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-sonnet-5-5";
+
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
 // smaller g6e.12xlarge carries four, so the mapping is explicit. An instance type absent from this

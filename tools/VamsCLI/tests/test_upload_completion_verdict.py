@@ -239,3 +239,47 @@ def test_preview_sequences_complete_only_after_every_regular_sequence():
     # gather they would finish FIRST. That is what makes the assertion above discriminating rather
     # than accidentally satisfied by timing.
     assert completion_order[:2] == [1, 3] or completion_order[:2] == [3, 1], completion_order
+
+
+# A deployment from before #1140 answers a completion whose every file is over the 1 GiB async
+# threshold with `overallSuccess: false` and "No files were successfully uploaded", although each file's
+# own entry says it was accepted and queued, and the file lands a minute later. The response below has
+# the live shape (one 1,269,109,728-byte file, test deployment, 2026-11-11).
+QUEUED_ONLY_OLD_SERVER = {
+    "message": "No files were successfully uploaded",
+    "uploadId": "upload-1",
+    "assetId": "asset1",
+    "fileResults": [
+        {"relativeKey": "/archive.zip", "uploadIdS3": "s3-1", "success": True, "error": None,
+         "largeFileAsynchronousHandling": True},
+    ],
+    "overallSuccess": False,
+    "largeFileAsynchronousHandling": True,
+}
+
+
+def test_a_file_the_server_queued_is_not_failed_by_overall_success_false():
+    """#1140: the CLI exited 1 for a file the server accepted and queued, so a script that trusts the
+    exit code uploaded it a second time."""
+    result = _run(QUEUED_ONLY_OLD_SERVER, keys=("/archive.zip",))
+
+    assert result["successful_files"] == ["/archive.zip"]
+    assert result["failed_files"] == []
+
+
+def test_overall_success_false_still_fails_files_the_server_did_not_queue():
+    """Paired arm: the backstop still fires when the per-file entries do not account for every file
+    as queued, so a large-only exemption cannot hide a completion that stored nothing."""
+    body = {
+        "message": "No files were successfully uploaded",
+        "fileResults": [
+            {"relativeKey": "/archive.zip", "success": True, "largeFileAsynchronousHandling": True},
+            {"relativeKey": "/model.glb", "success": True, "largeFileAsynchronousHandling": False},
+        ],
+        "overallSuccess": False,
+    }
+
+    result = _run(body, keys=("/archive.zip", "/model.glb"))
+
+    assert result["successful_files"] == []
+    assert sorted(result["failed_files"]) == ["/archive.zip", "/model.glb"]
