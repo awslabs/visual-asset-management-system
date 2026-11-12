@@ -585,5 +585,46 @@ class TestSpatialCommandIntegration:
         assert 'glbassetcombine' in result.output
 
 
+class TestGLBAssetCombineDeleteTemporaryFiles:
+    """--delete-temporary-files is an on/off switch with --asset-create-name (#1350)."""
+
+    def _run(self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, *extra):
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   return_value=(str(tmp_path / 'root__COMBINED.glb'), {'total_assets_processed': 2})), \
+             patch('vamscli.commands.industry.spatial.glb.create_command', return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command', return_value={'success': True}), \
+             patch('builtins.open', create=True), \
+             patch('os.path.getsize', return_value=1024000), \
+             patch('tempfile.mkdtemp', return_value=str(tmp_path)), \
+             patch('shutil.rmtree') as rmtree:
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output', *extra
+            ])
+        return result, rmtree
+
+    def test_no_delete_temporary_files_keeps_the_folder(self, cli_runner, spatial_command_mocks,
+                                                        mock_export_result, tmp_path):
+        result, rmtree = self._run(cli_runner, spatial_command_mocks, mock_export_result, tmp_path,
+                                   '--no-delete-temporary-files')
+
+        assert result.exit_code == 0, result.output
+        temp_dir = json.loads(result.stdout)['temporary_directory']
+        assert os.path.dirname(temp_dir) == str(tmp_path)
+        assert os.path.isdir(temp_dir)
+        rmtree.assert_not_called()
+
+    def test_delete_temporary_files_is_still_accepted(self, cli_runner, spatial_command_mocks,
+                                                      mock_export_result, tmp_path):
+        result, rmtree = self._run(cli_runner, spatial_command_mocks, mock_export_result, tmp_path,
+                                   '--delete-temporary-files')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['temporary_directory'] == 'deleted'
+        rmtree.assert_called_once()
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

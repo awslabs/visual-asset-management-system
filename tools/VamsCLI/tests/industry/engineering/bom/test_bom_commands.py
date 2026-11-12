@@ -843,6 +843,39 @@ class TestBOMAssembleTempFiles:
         assert os.listdir(dirs['work']) == []
         assert os.listdir(dirs['systmp']) == []
 
+    def test_local_path_reports_the_kept_folder(self, cli_runner, dirs, assembly, tmp_path):
+        out = tmp_path / 'out'
+        result = self._assemble(cli_runner, dirs, '--local-path', str(out), '--json-output')
+
+        assert result.exit_code == 0, result.output
+        temp_dir = json.loads(result.stdout)['temporary_directory']
+        assert os.path.dirname(temp_dir) == str(out)
+        assert os.path.isdir(temp_dir)
+
+    def test_local_path_prints_the_kept_folder(self, cli_runner, dirs, assembly, tmp_path):
+        out = tmp_path / 'out'
+        result = self._assemble(cli_runner, dirs, '--local-path', str(out))
+
+        assert result.exit_code == 0, result.output
+        assert f"Temporary Directory: {out}{os.sep}bomassemble_" in result.stdout
+
+    def test_no_delete_temporary_files_keeps_the_files_after_upload(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs, '--asset-create-name', 'Engine Assembly',
+                                '--no-delete-temporary-files', '--json-output')
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['new_asset']['asset_id'] == 'new-asset-1'
+        assert os.path.isdir(data['temporary_directory'])
+
+    def test_delete_temporary_files_is_still_accepted(self, cli_runner, dirs, assembly):
+        result = self._assemble(cli_runner, dirs, '--asset-create-name', 'Engine Assembly',
+                                '--delete-temporary-files', '--json-output')
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)['temporary_directory'] == 'deleted'
+        assert os.listdir(dirs['systmp']) == []
+
     def test_cleanup_failure_still_prints_the_result(self, cli_runner, dirs, assembly):
         with patch('shutil.rmtree', side_effect=PermissionError('file in use')):
             result = self._assemble(cli_runner, dirs, '--json-output')
