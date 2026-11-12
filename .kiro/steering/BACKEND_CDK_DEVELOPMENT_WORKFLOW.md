@@ -2559,6 +2559,13 @@ if resource:
         return authorization_error()
 ```
 
+### **Audit Logging Pattern**
+
+Write audit records only through the `log_*` functions in `customLogging/auditLogging.py`; never build a record string in a handler. A record is one line: the bracketed prefix (`[ACTIONS][type: <secondary type>] [user: <id>] [roles: [...]] [mfaEnabled: <bool>]`), the JSON payload, then the ` --- [event: <masked request echo>]` suffix.
+
+-   **Prefix values are encoded.** Every value placed inside a `[...]` segment passes through `_encode_prefix_value` (the roles list through `_encode_roles`, the leading segments through `_event_type`): `[`, `]`, `\`, CR, LF, every other C0/C1 control and the bidirectional and zero-width characters are written as `\uXXXX`. A value made of the characters `userid_pattern` admits is written unchanged. A record that needs an extra segment (the permission-check probe marker) gets a formatter in `auditLogging.py` (`format_authorization_denial_record`) rather than an f-string at the call site.
+-   **Payload and echo are single-line ASCII JSON** (`json.dumps(..., ensure_ascii=True, default=str)`), so a value JSON cannot encode is written as its string form instead of dropping the record.
+
 ### **Response Model Conversion Pattern**
 
 ```python

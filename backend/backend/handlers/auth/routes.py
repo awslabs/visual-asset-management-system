@@ -130,14 +130,8 @@ class _DenialAuditBatch:
 
     def _denial_record(self, obj, act):
         """One denial record, in the format ``log_authorization`` writes plus the probe marker."""
-        return " ".join([
-            "[AUTHORIZATION][authorized: False]",
-            f"[probe: {self._probe_endpoint}]",
-            f"[user: {self._user}]",
-            f"[roles: {json.dumps(self._claims.get('roles', []))}]",
-            f"[mfaEnabled: {self._claims.get('mfaEnabled', False)}]",
-            json.dumps({"action": act, "obj": obj}),
-        ])
+        return auditLogging.format_authorization_denial_record(
+            self._claims, self._probe_endpoint, {"action": act, "obj": obj})
 
     def flush(self):
         """Write every kept denial, chunked to stay inside the PutLogEvents batch limits."""

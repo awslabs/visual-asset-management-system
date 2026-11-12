@@ -327,6 +327,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
 -   **Uploads of files over 1 GiB** — An upload whose every file is over 1 GiB reports success with the files marked for asynchronous processing, instead of "No files were successfully uploaded" while the files land; `vamscli file upload` exits 0 and a workflow whose asset-file outputs are all over 1 GiB no longer fails at the write-back. (issue #1140)
 -   **Validation errors logged at WARNING** — The shared validation-error response logs a request refused with a 4xx at WARNING instead of ERROR, so it no longer adds an ERROR line for a request the caller got wrong; a 5xx stays at ERROR, and the audit entry and the response are unchanged. (issue #1304)
+-   **Audit record prefix values encoded** — Brackets, backslashes, line breaks and other control, bidirectional and zero-width characters in the user ID, role names, secondary type and probe endpoint of an audit record are written as `\uXXXX`, so every record is one line with its fields in place; a user ID of the usual characters is unchanged. The payload and event echo are ASCII-only JSON, and a request value JSON cannot encode no longer drops the record. (PR #TBD)
 
 **Other changes:**
 

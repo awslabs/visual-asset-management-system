@@ -36,6 +36,8 @@ VAMS creates nine dedicated log groups for different event types. Each log group
 
 All audit events follow a structured format with bracketed metadata fields followed by a JSON payload. Each entry ends with a `--- [event: {...}]` suffix carrying the masked echo of the triggering API event.
 
+Each record is one line. A value inside a bracketed field (the user ID, the role names, the event's secondary type, the probe endpoint) never carries a raw `[`, `]`, `\`, line break, other control character, or bidirectional or zero-width character: each is written as a `\uXXXX` escape, so a bracket-delimited parse such as `/\[user: (?<user>[^\]]+)\]/` reads the whole value. A user ID made only of the characters VAMS allows in user IDs (letters, digits, `_`, `-`, `.`, `+`, `@`) is written unchanged. The JSON payload and the event echo are ASCII-only JSON, with non-ASCII characters written as JSON `\uXXXX` escapes.
+
 ### Authentication Events
 
 ```text

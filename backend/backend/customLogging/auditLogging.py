@@ -12,6 +12,7 @@ locally but the lambda execution continues without disruption.
 import contextlib
 import contextvars
 import json
+import re
 import boto3
 from botocore.config import Config
 from common.timestamps import utc_now
@@ -51,6 +52,14 @@ AUDIT_EVENT_TRUNCATION_MARKER = " ...[truncated]"
 # the rest carry a reference to it, which keeps a write proportional to the number of entries.
 AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES = AUDIT_BATCH_MAX_BYTES
 AUDIT_EVENT_ECHO_REFERENCE = " --- [event: <shared with the first entry written at this timestamp>]"
+
+# Characters a bracketed prefix value never carries raw: the segment delimiters, the backslash that
+# starts an escape, the C0 and C1 controls (CR and LF included), and the bidirectional, zero-width
+# and line/paragraph separator characters that change how a record reads without being visible.
+_PREFIX_UNSAFE_CHARS = re.compile(
+    "[\\[\\]\\\\\x00-\x1f\x7f-\x9f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e"
+    "\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]"
+)
 
 # The log stream this container has created in each audit log group. The stream name is the current
 # date, so an entry ages out at the day boundary and CreateLogStream -- an account-wide 50 TPS
@@ -133,15 +142,70 @@ def _extract_user_context(event: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def _encode_prefix_value(value: Any) -> str:
+    """
+    Encode a value for a bracketed prefix segment of an audit record.
+
+    The segment delimiters ([ and ]), the backslash, CR, LF and every other C0/C1 control,
+    bidirectional or zero-width character are written as \\uXXXX, so each record stays one line
+    whose segments are delimited only by the formatter. A value made of the characters a user id
+    may contain (common/validators.py userid_pattern) is returned unchanged.
+
+    Args:
+        value: The value to place inside a [...] segment
+
+    Returns:
+        The encoded text
+    """
+    text = value if isinstance(value, str) else str(value)
+    return _PREFIX_UNSAFE_CHARS.sub(_escape_char, text)
+
+
+def _escape_char(match: "re.Match") -> str:
+    return "\\u%04x" % ord(match.group(0))
+
+
+def _encode_json_string(value: Any) -> str:
+    """
+    Serialize a value as a JSON string literal whose text carries no raw bracket.
+
+    json.dumps escapes the controls and, with ensure_ascii, every non-ASCII character; the
+    brackets are written as the JSON escapes \\u005b and \\u005d, so the literal still decodes
+    to the original value.
+    """
+    text = value if isinstance(value, str) else str(value)
+    return json.dumps(text, ensure_ascii=True).replace("[", "\\u005b").replace("]", "\\u005d")
+
+
+def _encode_roles(roles: Any) -> str:
+    """
+    Render the roles segment value: a JSON array of the role names, each name encoded with
+    _encode_json_string, so the only raw brackets are the array's own.
+    """
+    if not isinstance(roles, (list, tuple)):
+        roles = [] if roles is None else [roles]
+    return "[" + ", ".join(_encode_json_string(role) for role in roles) + "]"
+
+
+def _serialize_json(value: Any) -> str:
+    """Serialize an audit payload or event echo as single-line, ASCII-only JSON."""
+    return json.dumps(value, ensure_ascii=True, default=str)
+
+
 def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_data: Any) -> str:
     """
     Format the audit log message with event type, user context, and custom data.
-    
+
+    Every value placed inside a bracketed segment is encoded with _encode_prefix_value (the
+    roles list with _encode_roles), and the custom data is serialized with _serialize_json, so
+    no caller-influenced value can add a segment, a line break or a hidden character to the
+    record.
+
     Args:
-        event_type: The type of event (e.g., "[AUTHENTICATION]")
+        event_type: The type of event (e.g., "[AUTHENTICATION]"), built with _event_type
         user_context: Dictionary with user, roles, and mfaEnabled
         custom_data: Additional data to include in the log
-        
+
     Returns:
         Formatted log message string
     """
@@ -150,29 +214,42 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
         user = user_context.get("user", "UNKNOWN")
         roles = user_context.get("roles", [])
         mfa_enabled = user_context.get("mfaEnabled", False)
-        
+
         # Build the message
         message_parts = [
             event_type,
-            f"[user: {user}]",
-            f"[roles: {json.dumps(roles)}]",
-            f"[mfaEnabled: {mfa_enabled}]"
+            f"[user: {_encode_prefix_value(user)}]",
+            f"[roles: {_encode_roles(roles)}]",
+            f"[mfaEnabled: {_encode_prefix_value(mfa_enabled)}]"
         ]
-        
+
         # Add custom data if provided
         if custom_data is not None:
-            if isinstance(custom_data, dict):
-                try:
-                    message_parts.append(json.dumps(custom_data))
-                except Exception as e:
-                    message_parts.append(str(custom_data))
-            else:
-                message_parts.append(str(custom_data))
-        
+            message_parts.append(_serialize_json(custom_data))
+
         return " ".join(message_parts)
     except Exception as e:
         logger.exception(f"Failed to format log message: {e}")
         return f"{event_type} [ERROR: Failed to format message]"
+
+
+def _event_type(*segments: Tuple[str, Any]) -> str:
+    """
+    Build the leading segments of an audit record, e.g. [ACTIONS][type: assetCreate].
+
+    Args:
+        segments: (label, value) pairs; a value of None renders the label alone
+
+    Returns:
+        The segments joined, each value encoded with _encode_prefix_value
+    """
+    parts = []
+    for label, value in segments:
+        if value is None:
+            parts.append(f"[{label}]")
+        else:
+            parts.append(f"[{label}: {_encode_prefix_value(value)}]")
+    return "".join(parts)
 
 
 def _message_byte_length(message: str) -> int:
@@ -326,7 +403,7 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
             _created_log_streams[log_group_name] = log_stream_name
 
         #Add event at the end of each message.
-        event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
+        event_suffix = f" --- [event: {_serialize_json(masked_event)}]" if masked_event else ""
 
         # What the entries after the first carry: the echo itself while replicating it stays inside
         # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
@@ -381,7 +458,7 @@ def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: 
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[AUTHENTICATION][authenticated: {authenticated}]"
+        event_type = _event_type(("AUTHENTICATION", None), ("authenticated", authenticated))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -468,7 +545,7 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
             "mfaEnabled": claims_and_roles.get("mfaEnabled", False)
         }
         
-        event_type = f"[AUTHORIZATION][authorized: {authorized}]"
+        event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
         message = _format_log_message(event_type, user_context, custom_data)
         
         # Create a minimal mock event for CloudWatch logging
@@ -496,6 +573,31 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         logger.exception(f"Failed to log authorization audit event: {e}")
 
 
+def format_authorization_denial_record(claims_and_roles: Dict[str, Any], probe_endpoint: str,
+                                       custom_data: Any) -> str:
+    """
+    Format the record of a denial found by a permission-check endpoint: the record
+    log_authorization writes for a denial, with a [probe: <endpoint>] segment after the event type.
+
+    Args:
+        claims_and_roles: The claims and roles dictionary of the caller
+        probe_endpoint: The permission-check endpoint that made the check, e.g. "GET /auth/routes"
+        custom_data: The denied check
+
+    Returns:
+        The formatted record
+    """
+    tokens = claims_and_roles.get("tokens") or []
+    user_context = {
+        "user": tokens[0] if tokens else "UNKNOWN",
+        "roles": claims_and_roles.get("roles", []),
+        "mfaEnabled": claims_and_roles.get("mfaEnabled", False)
+    }
+    event_type = (_event_type(("AUTHORIZATION", None), ("authorized", False)) + " "
+                  + _event_type(("probe", probe_endpoint)))
+    return _format_log_message(event_type, user_context, custom_data)
+
+
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log API authorization events with silent failure using full API Gateway event.
@@ -512,7 +614,7 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[AUTHORIZATION][authorized: {authorized}]"
+        event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -728,7 +830,7 @@ def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Opti
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[AUTHOTHER][type: {secondary_type}]"
+        event_type = _event_type(("AUTHOTHER", None), ("type", secondary_type))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -754,7 +856,7 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[AUTHCHANGES][type: {secondary_type}]"
+        event_type = _event_type(("AUTHCHANGES", None), ("type", secondary_type))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -780,7 +882,7 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[ACTIONS][type: {secondary_type}]"
+        event_type = _event_type(("ACTIONS", None), ("type", secondary_type))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -806,7 +908,7 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
             return
         
         user_context = _extract_user_context(event)
-        event_type = f"[ERRORS][type: {secondary_type}]"
+        event_type = _event_type(("ERRORS", None), ("type", secondary_type))
         message = _format_log_message(event_type, user_context, custom_data)
         
         _write_to_cloudwatch(log_group_name, message, event)
@@ -869,7 +971,7 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         source_ip = event.get('requestContext', {}).get('http', {}).get('sourceIp', 'unknown')
         
         # Create safe log message
-        event_type = f"[AUTHORIZATION][authorized: {authorized}]"
+        event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
         custom_data = {
             "sourceIp": source_ip,
             "failureReason": failure_reason if not authorized else None

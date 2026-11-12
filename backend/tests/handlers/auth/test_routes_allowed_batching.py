@@ -219,6 +219,9 @@ def probe_env():
         stack.enter_context(patch.object(
             routes_module.auditLogging, "_write_batch_to_cloudwatch",
             real_audit._write_batch_to_cloudwatch, create=True))
+        stack.enter_context(patch.object(
+            routes_module.auditLogging, "format_authorization_denial_record",
+            real_audit.format_authorization_denial_record, create=True))
         stack.enter_context(patch.object(real_audit, "cloudwatch_logs", recorder))
         stack.enter_context(patch.object(real_audit, "mask_sensitive_data", mask_sensitive_data))
         # The Tier-2 audit write of an ordinary enforce() must reach the recorder; the Tier-1
