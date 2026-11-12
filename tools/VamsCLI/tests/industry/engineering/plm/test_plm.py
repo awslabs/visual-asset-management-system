@@ -148,6 +148,118 @@ class TestIndustryPLMImportCommand:
         assert result.exit_code != 2  # Not a parameter error
 
 
+PLMXML_ASSEMBLY = """<?xml version="1.0" encoding="utf-8"?>
+<PLMXML xmlns="http://www.plmxml.org/Schemas/PLMXMLSchema">
+  <Product id="p1" productId="ASSY" name="Top Assembly"/>
+  <Product id="p2" productId="PART" name="Child Part"/>
+  <ProductRevision id="r1" masterRef="#p1" revision="A" name="Top Assembly"/>
+  <ProductRevision id="r2" masterRef="#p2" revision="B" name="Child Part"/>
+  <Occurrence id="o1" instancedRef="#r1"/>
+  <Occurrence id="o2" instancedRef="#r2" parentRef="#o1">
+    <Transform>1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</Transform>
+    <UserData><UserValue title="SequenceNumber" value="10"/></UserData>
+  </Occurrence>
+</PLMXML>
+"""
+
+
+class TestIndustryPLMImportJsonOutput:
+    """`plmxml import --json-output` writes only its JSON result to stdout."""
+
+    # The import drives these commands through ctx.invoke; their own text output is what leaked.
+    INVOKED_MODULES = ('assets', 'asset_links', 'search')
+
+    @pytest.fixture
+    def plm_mocks(self, generic_command_mocks):
+        from contextlib import ExitStack
+        from itertools import count
+
+        with generic_command_mocks('industry.engineering.plm.plm') as mocks, ExitStack() as stack:
+            for module in self.INVOKED_MODULES:
+                stack.enter_context(patch(f'vamscli.commands.{module}.APIClient',
+                                          return_value=mocks['api_client']))
+                stack.enter_context(patch(
+                    f'vamscli.commands.{module}.get_profile_manager_from_context',
+                    return_value=mocks['profile_manager']))
+            # Search is on in the deployment (the NOOPENSEARCH switch is off).
+            mocks['profile_manager'].has_feature_switch.return_value = False
+            asset_ids = count(1)
+            api = mocks['api_client']
+            api.search_simple.return_value = {'hits': {'hits': [], 'total': {'value': 0}}}
+            api.create_asset.side_effect = lambda data: {'assetId': f'asset-{next(asset_ids)}',
+                                                         'message': 'Asset created'}
+            api.create_asset_link.return_value = {'assetLinkId': 'link-1',
+                                                  'message': 'Link created'}
+            yield mocks
+
+    @pytest.fixture
+    def plm_dir(self, tmp_path):
+        plm_dir = tmp_path / 'plm_data'
+        plm_dir.mkdir()
+        (plm_dir / 'assembly.xml').write_text(PLMXML_ASSEMBLY)
+        return plm_dir
+
+    def _import(self, cli_runner, plm_dir, *extra):
+        return cli_runner.invoke(cli, [
+            'industry', 'engineering', 'plm', 'plmxml', 'import',
+            '-d', 'test-database', '--plmxml-dir', str(plm_dir), '--max-workers', '4', *extra
+        ])
+
+    def test_json_output_stdout_is_only_json(self, cli_runner, plm_mocks, plm_dir):
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['success'] is True
+        assert data['statistics']['assets_created'] == 2
+        assert data['statistics']['asset_links_created'] == 1
+
+    def test_text_mode_still_shows_per_item_messages(self, cli_runner, plm_mocks, plm_dir):
+        """Control: the inner commands do print, so the JSON test above is not passing vacuously."""
+        result = self._import(cli_runner, plm_dir)
+
+        assert result.exit_code == 0, result.output
+        assert 'Asset created successfully' in result.stdout
+        assert 'Asset link created successfully' in result.stdout
+
+    def test_json_output_search_off_writes_one_json_error(self, cli_runner, plm_mocks, plm_dir):
+        """With search turned off the import stops before any API call, with one JSON error."""
+        from vamscli.constants import FEATURE_NOOPENSEARCH
+        plm_mocks['profile_manager'].has_feature_switch.side_effect = (
+            lambda name: name == FEATURE_NOOPENSEARCH)
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 1
+        data = json.loads(result.stdout)
+        assert data['error_type'] == 'SearchDisabledError'
+        assert 'Search functionality is disabled' in data['error']
+        plm_mocks['api_client'].search_simple.assert_not_called()
+        plm_mocks['api_client'].create_asset.assert_not_called()
+
+    def test_json_output_nested_exit_reason_goes_to_stderr(self, cli_runner, plm_mocks, plm_dir):
+        """A nested exit inside a pool keeps its text off stdout and its reason on stderr."""
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        api = plm_mocks['api_client']
+        api.search_simple.side_effect = InvalidSearchParametersError('bad query')
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 1
+        assert 'Creating asset' not in result.stdout
+        assert 'InvalidSearchParametersError' in result.stderr
+
+    def test_json_output_interrupt_replays_nothing(self, cli_runner, plm_mocks, plm_dir):
+        """Ctrl+C during a pool does not dump the pool's captured output to stderr."""
+        plm_mocks['api_client'].create_asset.side_effect = KeyboardInterrupt
+
+        result = self._import(cli_runner, plm_dir, '--json-output')
+
+        assert result.exit_code == 1
+        assert '"hits"' not in result.stderr
+        assert '"hits"' not in result.stdout
+
+
 class TestIndustryCommandHierarchy:
     """Test industry command hierarchy."""
     

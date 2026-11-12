@@ -27,27 +27,17 @@ typed errors, and automatic token refresh.
 
 -   Python 3.12+
 -   [`vamscli`](../VamsCLI) installed and configured (see below)
--   `mcp` 1.2+ or 2.x — both SDK generations are supported
+-   `mcp` 1.10.0+ or 2.x and `pydantic` 2.11+, installed with the server. `mcp` 1.10.0 to 1.21.1
+    need `pydantic` below 2.12.
+
+The full installation, client registration, configuration, upgrade and troubleshooting guide is the
+documentation site's **MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/mcp-server.md`). The steps below are the short form.
 
 ## Setup
 
-**1. Install and configure vamscli** (if you haven't already):
-
-```bash
-pip install ./tools/VamsCLI
-vamscli setup https://<your-api-id>.execute-api.<region>.amazonaws.com
-vamscli auth login -u you@example.com
-```
-
-> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
-> stores the API Gateway invoke URL, which the MCP server reads.
-
-> If the deployment authenticates through an external identity provider, or through an Amazon
-> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
-> token instead — `vamscli auth login --user-id you@example.com --token-override "<token>"` — and
-> the MCP server picks it up from the profile like any other login.
-
-**2. Install the MCP server:**
+**1. Create a virtual environment and install vamscli, then the server** (vamscli is not on PyPI,
+so it goes first):
 
 ```bash
 # from tools/VamsMCP
@@ -56,11 +46,44 @@ pip install -e ../VamsCLI     # provides the reused APIClient + ProfileManager
 pip install -e .
 ```
 
+**2. Point vamscli at your deployment and sign in:**
+
+```bash
+vamscli setup https://<your-vams-web-or-api-url>
+vamscli auth login -u you@example.com
+# or with a VAMS API key, read from stdin:
+echo "$VAMS_API_KEY" | vamscli auth login --user-id you@example.com --token-override-stdin
+```
+
+> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
+> stores the API Gateway invoke URL, which the MCP server reads.
+
+> If the deployment authenticates through an external identity provider, or through an Amazon
+> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
+> token on stdin the same way, and the MCP server picks it up from the profile like any other login.
+
+**Upgrading from 2.6.x:** `git pull`, then `pip install -e ../VamsCLI` and
+`pip install --upgrade -e .` in the server's virtual environment, and restart the server in the
+client. A client that caches the tool list needs it refreshed.
+
 ## Run
 
 ```bash
 vams-mcp        # stdio transport; uses your active vamscli profile
 ```
+
+The server sends the client a short usage guide (MCP `instructions`): how VAMS identifies assets and
+files, where to start, what a bounded result means, and that the agent should use these tools rather
+than a shell, the CLI or the source code. The most-used reads also publish an `outputSchema` and
+return the same JSON as structured content.
+
+**Without a sign-in the server still starts.** When the profile is not set up, nobody is signed in,
+or the sign-in expires during a session, every tool returns
+`{"error": ..., "error_type": "NotAuthenticated", "user_action": ...}`. The error asks the agent to
+have you sign in; `user_action` names the command you run (`vamscli auth login -u <user>`, with
+`--profile` when `VAMS_PROFILE` is set). The next call after you sign in works without a restart;
+add-on tools appear after a restart. `vams_status` always answers: profile, API URL, signed-in user,
+feature switches, which tool tiers are on, and the MCP and CLI versions.
 
 ## Configure (optional)
 
@@ -89,15 +112,45 @@ secrets** — just the command:
             "env": {},
             "disabled": false,
             "autoApprove": [
+                "vams_status",
                 "list_allowed_api_routes",
                 "list_api_routes",
                 "list_constraint_permission_objects",
                 "list_databases",
                 "get_database",
+                "list_buckets",
                 "list_assets",
                 "get_asset",
+                "list_asset_files",
+                "get_asset_metadata",
+                "get_database_metadata",
+                "list_asset_versions",
+                "get_asset_version",
+                "get_asset_history",
+                "get_asset_links",
                 "search_assets",
+                "search_files",
+                "get_search_fields",
+                "list_workflows",
+                "list_workflow_executions",
+                "list_tags",
+                "list_tag_types",
+                "list_metadata_schemas",
                 "find_and_summarize",
+                "list_pipelines",
+                "get_pipeline",
+                "list_pipeline_templates",
+                "get_pipeline_template",
+                "get_pipeline_template_tag_schema",
+                "get_workflow",
+                "list_workflow_triggers",
+                "get_workflow_trigger",
+                "list_executions",
+                "get_execution_details",
+                "page_execution_detail_metadata",
+                "page_execution_detail_files",
+                "get_execution_results",
+                "get_execution_logs",
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
@@ -124,7 +177,7 @@ in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
 
 ### Read / search (always available)
 
-`list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
+`vams_status`, `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
 `list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
 `list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
 `list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
@@ -488,6 +541,13 @@ and is the better first move.
     caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
+-   Every tool carries MCP annotations matching its gate: reads are `readOnlyHint: true`, writes
+    `readOnlyHint: false` with `destructiveHint: false`, destructive tools `destructiveHint: true`,
+    and the tools that start, stop or extend billed compute `openWorldHint: true`. The hints are
+    advice to the client, not a control. The presigned-URL tools above are reads, so they carry
+    `readOnlyHint: true`: a client set to approve every read-only tool automatically approves them
+    too, so keep that setting off where a URL in the transcript matters, and rely on the
+    `autoApprove` list instead.
 
 ## Add-on tools
 
