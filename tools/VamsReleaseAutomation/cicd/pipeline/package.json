@@ -1,6 +1,6 @@
 {
     "name": "vra-pipeline",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "private": true,
     "description": "Optional CodePipeline / CodeBuild lane for vams-release-automation (wraps the vra CLI)",
     "license": "Apache-2.0",

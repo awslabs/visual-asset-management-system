@@ -6,4 +6,4 @@ Deterministic, idempotent, checkpointed release steps for customer forks of
 VAMS. Agents orchestrate; this engine performs every state-changing step.
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
