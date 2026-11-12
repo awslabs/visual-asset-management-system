@@ -41,6 +41,12 @@ def test_kiro_names_and_a_plain_list_are_read():
     assert check_transcript.check(names, "S4", bare_names_are_mcp=True) == (True, [])
 
 
+def test_the_file_and_feature_scenarios_expect_their_tools():
+    assert check_transcript.check(["mcp__vams__list_asset_files", "mcp__vams__move_file"], "S6") == (True, [])
+    assert check_transcript.check(["mcp__vams__list_features"], "S7") == (True, [])
+    assert check_transcript.check(["mcp__vams__copy_file"], "S6")[0] is False
+
+
 def test_every_scenario_in_the_document_has_expected_tools():
     text = (EVALS / "agent-scenarios.md").read_text(encoding="utf-8")
     for scenario in check_transcript.EXPECTED:

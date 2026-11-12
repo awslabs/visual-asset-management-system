@@ -67,6 +67,10 @@ tools/VamsMCP/
                              # annotations per gate (core + add-on), outputSchema and structured
                              # content, NotAuthenticated and vams_status, the README autoApprove sample
     test_agent_scenarios.py  # evals/check_transcript.py
+    api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
+                             # it, an exclusion with its reason, or a not-yet-exposed gap (Rule 15)
+    test_api_coverage.py     # the manifest against APIClient and the tools' client.api calls
+    test_coverage_tools.py   # the file, export, feature-switch, asset-link and tag tools' requests
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
@@ -351,7 +355,23 @@ asymmetry other callers rely on):
     `TokenExpiredError`, `OverrideTokenError`) raised mid-session map to the same error. Each call
     retries building the client, so a later sign-in needs no restart (add-on tools do). Keep
     `SERVER_INSTRUCTIONS` (the MCP `instructions`, at most 2,000 characters) current when a tool
-    family is added or a start point changes; a test checks that every tool it names exists.
+    family is added or a start point changes; a test checks that every tool it names exists. The
+    instructions also say what has no tool (uploads, sync, user, role and constraint
+    administration) so the agent tells the user instead of looking for a way round.
+15. **Every public `APIClient` method has an MCP decision, in the coverage manifest.**
+    `tests/api_coverage.py` lists each public method of the CLI's `APIClient`, its add-on mixins
+    and its fork mixin in exactly one table: `TOOLS` (method -> the tools that call it, core and
+    add-on), `EXCLUDED` (no tool by decision, with a one-line reason: HTTP verb helpers, setup and
+    sign-in, which the USER does, upload, user/role/constraint administration, the EDH desktop
+    sign-in) or `NOT_YET_EXPOSED` (an agent-usable operation without a tool yet, recorded so the
+    gap stays visible). `tests/test_api_coverage.py` fails on a public method in no table, an
+    entry for a method that no longer exists, a method in two tables, a `TOOLS` tool that is not
+    registered with every gate and add-on on, and any difference between `TOOLS` and the
+    `client.api.<method>` calls the tools make. So a new CLI method fails CI until its MCP side is
+    decided, and a new tool fails until the manifest names what it calls. A fork's own
+    `CustomAPIClientMixin` method counts as covered when `custom_tools.py` calls it; a fork that
+    keeps one CLI-only lists it in `EXCLUDED`. Upload and administration stay CLI-only unless
+    planning decides otherwise: moving one to `TOOLS` changes the server instructions too.
 
 ---
 
@@ -386,6 +406,11 @@ asymmetry other callers rely on):
 8. Add a unit test in `tests/` mocking `CLIENT`. Assert the params that reach the
    `APIClient`, not just that the call happened: a dropped optional parameter is a
    silent server-default, which no assertion on the return value catches.
+   Then record the method in `tests/api_coverage.py` (Mandatory Rule 15): move it from
+   `NOT_YET_EXPOSED` to `TOOLS` with the new tool's name, or add it there. Write and
+   destructive tools also go in the `WRITE_TOOLS` / `DESTRUCTIVE_TOOLS` tuples of
+   `tests/test_gated_tools.py`, and a safe read in the README's `autoApprove` sample and
+   the docs-site MCP page's auto-approval list.
 9. When the server's contract with the CLI changes, roll the version in **both**
    `pyproject.toml` and `vams_mcp/__init__.py`, alongside
    `tools/VamsCLI/vamscli/version.py` (root `CLAUDE.md` Pattern 7 rule 6).
@@ -517,7 +542,8 @@ directly rather than the REST API. Any change to a `vamscli` `APIClient` method
 signature or response handling can break a tool here without an error at import
 time. Root `CLAUDE.md` Pattern 7 defines the propagation chain; when a CLI change
 reveals a missing or wrong `APIClient` method, fix it in the CLI instead of
-hand-rolling raw requests here.
+hand-rolling raw requests here. A new `APIClient` method also needs its entry in
+`tests/api_coverage.py` (Mandatory Rule 15), or this suite fails.
 
 ---
 

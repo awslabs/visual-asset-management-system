@@ -188,6 +188,17 @@ class VamsClient:
         """False on a deployment without OpenSearch (the profile's NOOPENSEARCH feature switch)."""
         return not is_feature_enabled(FEATURE_NOOPENSEARCH, self._profile)
 
+    def feature_switches(self) -> Dict[str, Any]:
+        """The profile's feature-switch snapshot as ``vamscli features list`` reports it: ``enabled``
+        (sorted), ``total`` and ``fetched_at``, plus ``has_feature_switches``. Read from disk only."""
+        info = self._profile.get_feature_switches_info()
+        return {
+            "has_feature_switches": bool(info.get("has_feature_switches")),
+            "enabled": sorted(info.get("enabled") or []),
+            "total": info.get("count", 0),
+            "fetched_at": info.get("fetched_at"),
+        }
+
     # --- Raw request escape hatch ----------------------------------------
 
     def get_json(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

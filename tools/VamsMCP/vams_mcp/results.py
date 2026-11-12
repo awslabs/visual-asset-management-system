@@ -138,6 +138,47 @@ class AssetVersion(ToolResult):
     versionedMetadata: Optional[List[Any]] = None
 
 
+class FileInfo(ToolResult):
+    fileName: Optional[str] = None
+    key: Optional[str] = None
+    relativePath: Optional[str] = Field(None, description="The file_key other tools take.")
+    isFolder: Optional[bool] = None
+    size: Optional[Any] = None
+    contentType: Optional[Any] = None
+    lastModified: Optional[Any] = None
+    etag: Optional[Any] = None
+    storageClass: Optional[Any] = None
+    isArchived: Optional[Any] = None
+    primaryType: Optional[Any] = None
+    previewFile: Optional[Any] = None
+    changeSource: Optional[Any] = Field(None, description="How the current version was created.")
+    changeUserId: Optional[Any] = None
+    versions: Optional[List[Any]] = Field(
+        None, description="With include_versions: versionId, lastModified, size, isLatest, isArchived."
+    )
+
+
+class AssetExport(ToolResult):
+    assets: Optional[List[Any]] = Field(
+        None,
+        description="This page's assets with their metadata and files. files_truncated: the asset's "
+        "remaining files are on the next page.",
+    )
+    relationships: Optional[List[Any]] = Field(None, description="Parent/child links of the tree (first page).")
+    totalAssetsInTree: Optional[Any] = None
+    assetsInThisPage: Optional[Any] = None
+    NextToken: Optional[str] = Field(None, description="Pass back as starting_token to read the next page.")
+    truncated: Optional[bool] = Field(None, description="True: more pages exist; this is not the whole tree.")
+    note: Optional[str] = None
+
+
+class Features(ToolResult):
+    enabled: Optional[List[Any]] = Field(None, description="The deployment's enabled feature switches.")
+    total: Optional[int] = None
+    fetched_at: Optional[Any] = Field(None, description="When the switches were read: the profile's last sign-in.")
+    note: Optional[str] = None
+
+
 class MetadataPage(Page):
     Items: Optional[List[Any]] = Field(
         None, description="Metadata rows: metadataKey, metadataValue, metadataValueType."
