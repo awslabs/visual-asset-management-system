@@ -157,11 +157,12 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
             f"[mfaEnabled: {mfa_enabled}]"
         ]
         
-        # Add custom data if provided
+        # Add custom data if provided. default=str writes a value JSON cannot encode (a
+        # DynamoDB Decimal, a set) as its string form instead of falling back to str().
         if custom_data is not None:
             if isinstance(custom_data, dict):
                 try:
-                    message_parts.append(json.dumps(custom_data))
+                    message_parts.append(json.dumps(custom_data, default=str))
                 except Exception as e:
                     message_parts.append(str(custom_data))
             else:
@@ -323,8 +324,9 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 return
             _created_log_streams[log_group_name] = log_stream_name
 
-        #Add event at the end of each message.
-        event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
+        # Add event at the end of each message. default=str writes a value JSON cannot encode
+        # (a DynamoDB Decimal, a set) as its string form, so such a value cannot drop the entry.
+        event_suffix = f" --- [event: {json.dumps(masked_event, default=str)}]" if masked_event else ""
 
         # What the entries after the first carry: the echo itself while replicating it stays inside
         # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
