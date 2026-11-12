@@ -590,3 +590,32 @@ class TestOpenPipelineInstance:
         assert stages == [None, "PipelineEndTask", "SummarizeAssetTask"]
         assert [log["label"] for log in detail["logs"] if log["sourceType"] == "stateMachine"] == [
             "GenAI asset summary state machine"]
+
+
+# A model with extended thinking (Claude Sonnet 5.5 among them) opens its answer with a reasoning block
+# before the tool use or the text. Converse returns it as ``reasoningContent``; the native Messages shape is
+# a ``thinking`` block. Neither carries a top-level ``text`` key, and the reply is read from the blocks after
+# it, so the answer is never lost to the first block.
+_REASONING_BLOCKS = {
+    "converse-reasoningContent": {"reasoningContent": {"reasoningText": {
+        "text": "The views show a gear housing; the answer follows.", "signature": "sig-1"}}},
+    "native-thinking": {"type": "thinking", "thinking": "The views show a gear housing.", "signature": "sig-1"},
+}
+
+
+def _reasoning_first(response, block):
+    content = response["output"]["message"]["content"]
+    response["output"]["message"]["content"] = [dict(block)] + content
+    return response
+
+
+@pytest.mark.unit
+class TestReasoningBlockBeforeTheSummary:
+    @pytest.mark.parametrize("shape", sorted(_REASONING_BLOCKS))
+    @pytest.mark.parametrize("tool", [True, False])
+    def test_the_asset_summary_reads_the_answer_after_a_reasoning_block(self, tool, shape):
+        response = (h.converse_tool_response(dict(SUMMARY_REPLY)) if tool
+                    else h.converse_response(json.dumps(SUMMARY_REPLY)))
+        _mod, s3, _bedrock, state = _summarize(script=[_reasoning_first(response, _REASONING_BLOCKS[shape])])
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert _rows(s3)["genai_asset_title"] == ("Gear pump assembly", "string")

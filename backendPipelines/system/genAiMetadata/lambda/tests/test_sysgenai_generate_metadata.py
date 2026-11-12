@@ -1719,3 +1719,32 @@ class TestDependencyReport:
         _run(_state(), s3, bedrock)
         assert "sys_dependencies" not in _rows(s3, ATTRIBUTE_KEY)
         assert "dependencies:" not in _user_text(bedrock)
+
+
+# A model with extended thinking (Claude Sonnet 5.5 among them) opens its answer with a reasoning block
+# before the tool use or the text. Converse returns it as ``reasoningContent``; the native Messages shape is
+# a ``thinking`` block. Neither carries a top-level ``text`` key, and the reply is read from the blocks after
+# it, so the answer is never lost to the first block.
+_REASONING_BLOCKS = {
+    "converse-reasoningContent": {"reasoningContent": {"reasoningText": {
+        "text": "The views show a gear housing; the answer follows.", "signature": "sig-1"}}},
+    "native-thinking": {"type": "thinking", "thinking": "The views show a gear housing.", "signature": "sig-1"},
+}
+
+
+def _reasoning_first(response, block):
+    content = response["output"]["message"]["content"]
+    response["output"]["message"]["content"] = [dict(block)] + content
+    return response
+
+
+@pytest.mark.unit
+class TestReasoningBlockBeforeTheAnswer:
+    @pytest.mark.parametrize("shape", sorted(_REASONING_BLOCKS))
+    @pytest.mark.parametrize("tool", [True, False])
+    def test_the_file_analysis_reads_the_answer_after_a_reasoning_block(self, tool, shape):
+        s3 = _seed(h.FakeS3())
+        response = h.converse_tool_response(dict(MODEL_REPLY)) if tool else h.converse_response(json.dumps(MODEL_REPLY))
+        _mod, state = _run(_state(), s3, h.FakeBedrock([_reasoning_first(response, _REASONING_BLOCKS[shape])]))
+        assert state["analysisStatus"] == "SUCCEEDED"
+        assert _rows(s3, METADATA_FILE_KEY)["genai_description"]["metadataValue"] == MODEL_REPLY["description"]
