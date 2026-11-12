@@ -383,6 +383,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Chores
 
+-   **CDK** The EDH Workstations AMI build upload-exclusion tests synthesize their own app instead of taking a shared cached synth, so they no longer fail when another test file synthesized the same configuration first in the same run. ([#1371](https://github.com/awslabs/visual-asset-management-system/issues/1371))
 -   **CLI** `.vamsignore` matching uses `pathspec.GitIgnoreSpec` instead of the deprecated `gitwildmatch` factory, so a directory re-include such as `!tmp/a/` no longer re-includes files `tmp/**` matches; patterns use gitignore-style syntax; `pathspec` is bounded below 2. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
 -   **Backend** Two validator test literals use raw strings instead of invalid escape sequences. ([#1006](https://github.com/awslabs/visual-asset-management-system/pull/1006))
 -   **Web** Updated core end-to-end tag and viewer specs to skip with a reason when tags or required viewer features are unavailable. ([#765](https://github.com/awslabs/visual-asset-management-system/issues/765))
