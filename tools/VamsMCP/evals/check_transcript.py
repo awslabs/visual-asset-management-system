@@ -24,6 +24,8 @@ EXPECTED = {
     "S3": {"generate_download_url"},
     "S4": {"get_execution_details"},
     "S5": {"vams_status", "list_databases"},
+    "S6": {"move_file"},
+    "S7": {"list_features"},
 }
 
 # Client tools that touch neither the shell nor the file system, so they break no rule. ToolSearch is
