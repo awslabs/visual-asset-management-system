@@ -831,13 +831,18 @@ class TestUsdClipsAndNonLayerTargets:
         assert _entries(incomplete.geometry_layers) == {"parts/part.usda": "missing from the asset"}
         assert incomplete.data_files == [] and incomplete.other_files == []
 
-    def test_any_other_metadata_asset_path_is_reported(self, tmp_path):
-        """Only the assetInfo identifier is left out; an asset path in other metadata is reported."""
+    @pytest.mark.parametrize("layer", [
+        '#usda 1.0\n(\n    customLayerData = {\n        asset sourceFile = @./source/root.ma@\n    }\n)\n',
+        '#usda 1.0\ndef Xform "World" (\n    customData = {\n'
+        '        asset sourceFile = @./source/root.ma@\n    }\n)\n{\n}\n',
+    ], ids=["customLayerData", "customData"])
+    def test_a_metadata_asset_path_is_looked_up_but_not_reported(self, tmp_path, layer):
+        """Exporters record source files in layer and prim metadata; those load nothing."""
         bucket = FakeBucket(tmp_path / "bucket")
-        bucket.put("xid/root.usda", '#usda 1.0\n(\n    customLayerData = {\n'
-                                    '        asset sourceFile = @./source/root.ma@\n    }\n)\n')
-        incomplete = dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/root.usda", ".usda"))
-        assert _entries(incomplete.other_files) == {"source/root.ma": "missing from the asset"}
+        bucket.put("xid/root.usda", layer)
+        report = _fetch(tmp_path, bucket, "xid/root.usda", ".usda")
+        assert "source/root.ma" in report.missing
+        assert dependencies.incomplete_preview(report) is None
 
     def test_a_complete_clipped_stage_is_not_incomplete(self, tmp_path):
         assert self._incomplete(tmp_path, present=(

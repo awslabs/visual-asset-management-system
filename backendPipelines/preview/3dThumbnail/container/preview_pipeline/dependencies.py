@@ -60,8 +60,9 @@ class FetchLimits:
 KIND_GEOMETRY_LAYER = "geometryLayer"   # a USD sublayer, reference or payload: geometry is missing
 KIND_DATA_FILE = "dataFile"  # a glTF buffer, LCC data or chunk file, a USD value clip: geometry/points missing
 KIND_TEXTURE_OR_OTHER = "textureOrOther"  # a texture, material or other asset-valued attribute
-# A USD ``assetInfo`` identifier, which names the asset and loads nothing: still fetched as before, but
-# a missing one removes nothing from the preview, so it is not reported.
+# An asset path in USD layer or prim metadata (an ``assetInfo`` identifier, ``customLayerData``,
+# ``customData``; exporters often record a source file there), which loads nothing: still fetched as
+# before, but a missing one removes nothing from the preview, so it is not reported.
 KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
 # file of the asset: still looked up as before, not reported.
@@ -356,8 +357,9 @@ def _usd_reference_kinds(path: str) -> Optional[dict]:
 def _usd_reference_kind(value: str, kinds: Optional[dict]) -> str:
     """The kind of one reference a USD layer names. A composition arc to a USD layer is a geometry
     layer, and to any other file (a ``.mtlx`` material, say) a texture or other file; a value clip is a
-    data file (a missing clip drops animated geometry); an ``assetInfo`` identifier is metadata; and
-    any other asset path (an attribute such as a texture) is a texture or other file."""
+    data file (a missing clip drops animated geometry); an ``asset``-typed attribute (a texture) is a
+    texture or other file; and any other asset path is layer or prim metadata (an ``assetInfo``
+    identifier, ``customLayerData``, ``customData``), which loads nothing and is not reported."""
     if kinds is None:
         return ""
     if value in kinds["composition"]:
@@ -366,9 +368,7 @@ def _usd_reference_kind(value: str, kinds: Optional[dict]) -> str:
         return KIND_DATA_FILE
     if value in kinds["attributes"]:
         return KIND_TEXTURE_OR_OTHER
-    if value in kinds["identifiers"]:
-        return KIND_METADATA
-    return KIND_TEXTURE_OR_OTHER
+    return KIND_METADATA
 
 
 def _usd_references(path: str) -> List[tuple]:
