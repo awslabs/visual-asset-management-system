@@ -365,6 +365,8 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 -   `authorization` headers
 -   `idJwtToken` fields
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
+-   `apiKey`, `apiKeySecret`, `rawKey` fields (the API key identifier fields `apiKeyId`, `apiKeyName` and `apiKeyHash` stay readable, so a record still names the key a call used)
+-   The credential-carrying request and response headers `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token`. A header is redacted in both `headers` and `multiValueHeaders`, whatever its letter case.
 
 **Content keys** -- caller-authored payloads. Every field that can deliver a template body belongs here, whichever request carries it:
 
@@ -376,7 +378,7 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 
 The field name is preserved when the value is redacted, so the audit trail still records that a template body, form definition, or tag value was submitted with the request. A request `body` is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.
 
-The two families are declared as `SENSITIVE_KEYS` and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`.
+The two families are declared as `SENSITIVE_KEYS` and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`, and a new header or field that carries a credential only when its name is added to `SENSITIVE_KEYS`.
 
 ## Integration with SIEM Systems
 

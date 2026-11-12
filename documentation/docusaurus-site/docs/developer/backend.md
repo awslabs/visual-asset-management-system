@@ -537,6 +537,8 @@ The logger automatically redacts sensitive fields at all nesting levels, in both
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `apiKey`, `apiKeySecret`, `rawKey`
+-   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` headers, in any letter case
 -   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
 
 Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
