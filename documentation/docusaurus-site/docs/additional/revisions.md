@@ -324,6 +324,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Metadata table value column** — The File Attributes and File Metadata tables in the file details panel keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. (issue #1307)
 -   **Reindex utility exit code** — `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, when the Lambda function raises or reaches its own time limit, and when the reindexer answers with an error status, and `2` when a synchronous invocation times out and the outcome is unverified, instead of exiting `0` in each case. (issue #1296)
 -   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
+-   **Uploads of files over 1 GiB** — An upload whose every file is over 1 GiB reports success with the files marked for asynchronous processing, instead of "No files were successfully uploaded" while the files land; `vamscli file upload` exits 0 and a workflow whose asset-file outputs are all over 1 GiB no longer fails at the write-back. (issue #1140)
 
 **Other changes:**
 

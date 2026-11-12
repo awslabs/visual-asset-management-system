@@ -361,10 +361,13 @@ class UploadManager:
 
             file_results = body.get("fileResults")
             demoted = set()
+            queued = set()
             for entry in (file_results or []):
                 if not isinstance(entry, dict):
                     continue
                 key = entry.get("relativeKey")
+                if entry.get("success") is True and entry.get("largeFileAsynchronousHandling") is True:
+                    queued.add(key)
                 # Only demote on an EXPLICIT false. A result omitting `success` is not evidence of
                 # failure, and treating a missing key as failure would fail every upload against a
                 # deployment whose response predates this field.
@@ -381,8 +384,12 @@ class UploadManager:
             # server saying plainly that this completion stored nothing, and it must not be possible
             # for the caller to see success anyway because the per-file list was missing, renamed, or
             # keyed differently than `successful_files` is. Only fires when the per-file pass demoted
-            # NOTHING, so a partial rejection is still attributed to the exact files it names.
-            if body.get("overallSuccess") is False and not demoted and successful_files:
+            # NOTHING, so a partial rejection is still attributed to the exact files it names. It does
+            # not fire when the server names every file as accepted and queued for asynchronous
+            # processing: some server versions answer such a completion `overallSuccess: False`
+            # although the queued files land.
+            if (body.get("overallSuccess") is False and not demoted and successful_files
+                    and not successful_files <= queued):
                 unstored = sorted(successful_files)
                 failed_files.update(unstored)
                 successful_files.clear()
