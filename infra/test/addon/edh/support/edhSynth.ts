@@ -65,6 +65,16 @@ export function enableEdhAmiBuilds(c: any): void {
     edh.predefinedImages.amiRecipes = [];
 }
 
+/**
+ * EDH Workstations hybrid with `lambdaSubnets` "private": the Lambdas that call EDH run in the private
+ * subnets, and the VPC that VAMS creates gains its public and private subnets and NAT gateways. No
+ * pipeline that needs private subnets is on in the shipped templates, so the add-on is what adds them.
+ */
+export function enableEdhPrivateSubnets(c: any): void {
+    enableEdh(c);
+    c.app.addons.useEdhWorkstations.lambdaSubnets = "private";
+}
+
 /** Construct id of the EDH Workstations nested stack; the add-on's template keys contain it. */
 export const EDH_STACK = "EdhWorkstationsBuilderNestedStack";
 
