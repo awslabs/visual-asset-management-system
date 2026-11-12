@@ -6,6 +6,7 @@
 import React from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { MemoryRouter } from "react-router-dom";
 import ZipDownloadsTable from "./ZipDownloadsTable";
 import { ZIP_POLL_INTERVAL_MS, ZipDownloadJob } from "./zipDownloads";
@@ -388,9 +389,10 @@ describe("ZipDownloadsTable", () => {
         await screen.findByText("archive-1.zip");
         const search = screen.getByRole("searchbox", { name: "Search download jobs" });
         const refresh = screen.getByRole("button", { name: "Refresh download queue" });
-        // Both sit in one filter row: the same wrapper holds the search box and the refresh button.
-        const filterRow = refresh.parentElement as HTMLElement;
-        expect(filterRow).toContainElement(search);
+        // Both sit in the table's filter slot (left side of the filter row).
+        const filterSlot = createWrapper(document.body).findTable()!.findFilterSlot()!.getElement();
+        expect(filterSlot).toContainElement(search);
+        expect(filterSlot).toContainElement(refresh);
         const heading = screen.getByRole("heading", { level: 2, name: /Download jobs/ });
         expect(heading.closest("header") ?? heading.parentElement).not.toContainElement(refresh);
 
@@ -484,6 +486,33 @@ describe("ZipDownloadsTable — Show all users (asset tab)", () => {
         renderTable();
         await screen.findByText("archive-1.zip");
         expect(screen.queryByText("Show all users")).toBeNull();
+        expect(mockAllUsersList).not.toHaveBeenCalled();
+        // Nothing is rendered in the right-aligned tools group either.
+        expect(createWrapper(document.body).findTable()!.findPagination()).toBeNull();
+    });
+
+    it("places the toggle right-aligned in the filter row, away from search and refresh", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        const table = createWrapper(document.body).findTable()!;
+        // The tools slot sits inside Cloudscape's right-aligned group of the filter row.
+        const toolsSlot = table.findPagination()!.getElement();
+        expect(toolsSlot.parentElement!.className).toMatch(/tools-align-right/);
+        const control = createWrapper(toolsSlot).findSegmentedControl()!;
+        expect(control).not.toBeNull();
+        // Default: My jobs.
+        expect(control.findSelectedSegment()!.getElement()).toHaveTextContent("My jobs");
+        // Search and refresh stay on the left, in the filter slot; the toggle is not there.
+        const filterSlot = table.findFilterSlot()!.getElement();
+        expect(filterSlot).not.toContainElement(control.getElement());
+        expect(filterSlot).toContainElement(
+            screen.getByRole("searchbox", { name: "Search download jobs" })
+        );
+        expect(filterSlot).toContainElement(
+            screen.getByRole("button", { name: "Refresh download queue" })
+        );
         expect(mockAllUsersList).not.toHaveBeenCalled();
     });
 

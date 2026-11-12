@@ -6,7 +6,7 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { FileDetailsPanel } from "./FileDetailsPanel";
 import { FileManagerContext } from "./FileTreeView";
 import { AssetDetailContext } from "../../../context/AssetDetailContext";
@@ -35,9 +35,12 @@ jest.mock("../../../features/orchestration/permissions/useAllowedRoutes", () => 
 // The create modal is checked on its own; here it only shows the selection it was opened with.
 jest.mock("../../zipDownloads/CreateZipDownloadModal", () => ({
     __esModule: true,
-    default: ({ visible, selection, initialAssetVersionId }: any) =>
+    default: ({ visible, selection, initialAssetVersionId, onCreated }: any) =>
         visible ? (
             <div data-testid="zip-modal">
+                <button onClick={() => onCreated({ requestId: "r1", archiveFileName: "x.zip" })}>
+                    Mock create
+                </button>
                 <span data-testid="zip-entries">{JSON.stringify(selection.entries)}</span>
                 <span data-testid="zip-pin">{initialAssetVersionId ?? ""}</span>
                 <span data-testid="zip-refused">{JSON.stringify(selection.refused)}</span>
@@ -145,9 +148,19 @@ function stateFor(selected: FileTree[], over: Partial<FileManagerState> = {}): F
     };
 }
 
-function renderPanel(selected: FileTree[], over: Partial<FileManagerState> = {}) {
+/** Shows the router location, so a test can read where a link went. */
+const LocationProbe = () => {
+    const location = useLocation();
+    return <span data-testid="location">{`${location.pathname}${location.search}`}</span>;
+};
+
+function renderPanel(
+    selected: FileTree[],
+    over: Partial<FileManagerState> = {},
+    entry = "/databases/db1/assets/a1"
+) {
     return render(
-        <MemoryRouter initialEntries={["/databases/db1/assets/a1"]}>
+        <MemoryRouter initialEntries={[entry]}>
             <Routes>
                 <Route
                     path="/databases/:databaseId/assets/:assetId"
@@ -163,6 +176,7 @@ function renderPanel(selected: FileTree[], over: Partial<FileManagerState> = {})
                                 }}
                             >
                                 <FileDetailsPanel />
+                                <LocationProbe />
                             </FileManagerContext.Provider>
                         </AssetDetailContext.Provider>
                     }
@@ -297,5 +311,42 @@ describe("FileDetailsPanel — Download as Zip", () => {
         renderPanel([file, folder]);
         await waitFor(() => expect(mockFetchAsset).toHaveBeenCalled());
         await waitFor(() => expect(screen.queryByRole("button", { name: "Export" })).toBeNull());
+    });
+});
+
+describe("FileDetailsPanel — a created zip job links to the asset's Download Queue tab", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+        mockCan.mockReturnValue(true);
+        mockFetchAsset.mockResolvedValue({ assetId: "a1", assetName: "A", isDistributable: true });
+        setFeatures(["ZIPDOWNLOADS"]);
+    });
+
+    afterEach(() => {
+        localStorage.clear();
+        jest.restoreAllMocks();
+    });
+
+    // Every way into the dialog: one file (the file details view), a folder, the asset root, and
+    // a multi-selection (the selection view).
+    it.each([
+        ["one file", [file]],
+        ["a folder", [folder]],
+        ["the asset root", [root]],
+        ["several files and a folder", [file, file2, folder]],
+    ])("from %s, switches this asset page to its Download Queue tab", async (_label, selected) => {
+        renderPanel(selected as FileTree[], {}, "/databases/db1/assets/a1?filePath=%2Fa.glb");
+        await chooseZip();
+        await userEvent.click(screen.getByRole("button", { name: "Mock create" }));
+        expect(screen.getByText("x.zip is being prepared.")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /My Download Queue/ })).toBeNull();
+        await userEvent.click(screen.getByRole("button", { name: "View Download Queue" }));
+        // Same asset page (no route change), with ?tab= set and the file selection kept.
+        const target = new URL(`http://x${screen.getByTestId("location").textContent}`);
+        expect(target.pathname).toBe("/databases/db1/assets/a1");
+        expect(target.searchParams.get("tab")).toBe("zipDownloads");
+        expect(target.searchParams.get("filePath")).toBe("/a.glb");
+        expect(target.pathname).not.toBe("/zipdownloads");
     });
 });

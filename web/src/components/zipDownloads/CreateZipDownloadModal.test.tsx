@@ -79,7 +79,11 @@ describe("CreateZipDownloadModal", () => {
         expect(screen.getByText("1 file and 1 folder")).toBeInTheDocument();
         expect(screen.getByText("/a.glb")).toBeInTheDocument();
         expect(screen.getByText("/textures/")).toBeInTheDocument();
-        expect(screen.getByText(/Only you can see and download it for 7 days/)).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                /Download Queue tab and in My Download Queue\. You can download it for 7 days/
+            )
+        ).toBeInTheDocument();
     });
 
     it("creates a zip of the current files with the default name and no version pin", async () => {

@@ -11,7 +11,7 @@ import {
     ButtonDropdown,
 } from "@cloudscape-design/components";
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
 import {
     ARCHIVED_TRANSFER_REASON,
@@ -60,9 +60,10 @@ import AutomationActions from "./AutomationActions";
 import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
 import CreateZipDownloadModal from "../../zipDownloads/CreateZipDownloadModal";
 import {
+    assetDownloadQueueLink,
     buildZipSelection,
+    DOWNLOAD_QUEUE_TAB_LABEL,
     isZipDownloadsEnabled,
-    ZIP_DOWNLOADS_PAGE_PATH,
     ZIP_ROUTES,
     ZipSelectableItem,
     ZipSelectionResult,
@@ -75,6 +76,7 @@ import { FileManagerContext } from "./FileTreeView";
 export function FileDetailsPanel({}: FileInfoPanelProps) {
     const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
     const navigate = useNavigate();
+    const location = useLocation();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
     const [asset, setAsset] = useState<any>(null);
@@ -159,8 +161,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             onDismiss={() => setZipCreatedName(null)}
             statusIconAriaLabel="Success"
             action={
-                <Button onClick={() => navigate(ZIP_DOWNLOADS_PAGE_PATH)}>
-                    View My Download Queue
+                // The asset's own Download Queue tab. The panel sits on that asset's page, so the
+                // link only changes `?tab=` (keeping the file selection and version) and the page
+                // switches tabs without remounting. My Download Queue stays in the profile menu.
+                <Button
+                    onClick={() =>
+                        navigate(
+                            assetDownloadQueueLink(
+                                databaseId || "",
+                                assetId || "",
+                                location.search
+                            ),
+                            { state: location.state }
+                        )
+                    }
+                >
+                    {`View ${DOWNLOAD_QUEUE_TAB_LABEL}`}
                 </Button>
             }
         >

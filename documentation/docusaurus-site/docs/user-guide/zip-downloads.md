@@ -22,7 +22,7 @@ VAMS refuses the whole archive, rather than leaving files out, when a selected f
     - **Format** -- **ZIP (.zip)** (default), **TAR (.tar)**, or **Compressed TAR (.tar.gz)**.
     - **Compression** -- for ZIP, **No compression** (default) or **Compress (deflate)**. Most 3D formats are already compressed, so no compression is usually as small and faster.
     - **Archive name** -- optional. VAMS adds the extension for the format and replaces characters that are not allowed in file names.
-5. Choose **Create zip download**. The archive job appears in **My Download Queue** with the status **Queued**.
+5. Choose **Create zip download**. The archive job appears with the status **Queued** in the asset's **Download Queue** tab and in **My Download Queue**. The confirmation message's **View Download Queue** switches this asset page to its **Download Queue** tab (the page address gains `?tab=zipDownloads`, so the link can be bookmarked or shared).
 
 **Download as Zip** is hidden for an asset that is not distributable or is archived.
 
@@ -34,7 +34,7 @@ The Download Queue lists your download jobs. Archive jobs from Download as Zip a
 
 ### Your jobs and every user's jobs
 
-The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **Show all users** choice beside the search box lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown.
+The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **My jobs** / **Show all users** toggle at the right end of the row above the table lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown.
 
 -   You can download another user's finished archive when your role lets you download files from that asset. VAMS checks the archive's files again when you choose **Download**: if a file in it has since been archived, deleted, or blocked, the download is refused with the same message a new zip download would get.
 -   Only the user who requested a job can cancel or delete it, so another user's job shows no **Cancel** or **Delete**.

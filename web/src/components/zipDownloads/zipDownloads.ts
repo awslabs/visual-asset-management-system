@@ -61,6 +61,30 @@ export const ZIP_ROUTES = {
 /** Web route of the global "My Download Queue" page (the route keeps its original name). */
 export const ZIP_DOWNLOADS_PAGE_PATH = "/zipdownloads";
 
+/** Tab id of the asset page's "Download Queue" tab (the id keeps its original name). */
+export const ZIP_DOWNLOADS_TAB_ID = "zipDownloads";
+
+/** Query parameter of the asset page that selects a tab (`#/databases/{db}/assets/{id}?tab=`). */
+export const ASSET_TAB_QUERY_PARAM = "tab";
+
+/**
+ * Link to an asset's Download Queue tab. `currentSearch` (the asset page's own query string) keeps
+ * its other parameters, such as the file selection and the asset version, so following the link
+ * from the asset page only switches the tab.
+ */
+export const assetDownloadQueueLink = (
+    databaseId: string,
+    assetId: string,
+    currentSearch = ""
+): { pathname: string; search: string } => {
+    const params = new URLSearchParams(currentSearch);
+    params.set(ASSET_TAB_QUERY_PARAM, ZIP_DOWNLOADS_TAB_ID);
+    return {
+        pathname: `/databases/${databaseId}/assets/${assetId}`,
+        search: `?${params.toString()}`,
+    };
+};
+
 /**
  * User-facing names of the queue. The queue lists download jobs; archive (zip) jobs are the only
  * kind today, so the names do not say "zip".

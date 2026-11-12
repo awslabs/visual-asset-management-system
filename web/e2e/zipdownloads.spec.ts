@@ -19,7 +19,8 @@ import {
  * Export > Download as Zip entry, for a deployment with the ZIPDOWNLOADS switch on or off (the spec
  * reads which one it is from the app and asserts that side).
  *
- * Mutates nothing by default: the create dialog is opened and dismissed. The ownership check
+ * Mutates nothing by default: the create dialog is opened and dismissed. With E2E_ZIP_CREATE=1 the
+ * success-link check creates one job in the file manager and deletes it again. The ownership check
  * needs a job of the admin user. It uses the newest one the admin already has, or, only when
  * E2E_ZIP_CREATE=1, creates one on the first distributable asset with a file and deletes it again.
  * The second user signs in with E2E_SECOND_USERNAME / E2E_SECOND_PASSWORD; the test skips without
@@ -42,9 +43,10 @@ async function openDeepLink(page: Page, hashRoute: string): Promise<void> {
     await page.goto("about:blank");
     await page.goto(`/#${hashRoute}`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => undefined);
-    await expect(page).toHaveURL(new RegExp(`#${hashRoute.replace(/\//g, "\\/")}`), {
-        timeout: 45_000,
-    });
+    await expect(page).toHaveURL(
+        new RegExp(`#${hashRoute.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`),
+        { timeout: 45_000 }
+    );
 }
 
 interface ApiCaller {
@@ -266,10 +268,23 @@ test.describe("Download as Zip", () => {
                 .first() // the empty state sits inside a table row (D15)
         ).toBeVisible({ timeout: 45_000 });
         // Show all users is offered only when the API's route listing allows the all-users route;
-        // when it is, the view lists every user's jobs with a Requested by column.
-        const showAll = page.getByText("Show all users", { exact: true });
-        if ((await showAll.count()) > 0) {
-            await showAll.click();
+        // when it is, the toggle sits right-aligned in the filter row (right of the search box),
+        // defaults to My jobs, and the all-users view lists every user's jobs with a Requested by
+        // column.
+        const scopeToggle = page.getByRole("toolbar", { name: "Whose download jobs to show" });
+        if ((await scopeToggle.count()) > 0) {
+            await expect(scopeToggle.getByRole("button", { name: "My jobs" })).toHaveAttribute(
+                "aria-pressed",
+                "true"
+            );
+            const searchBox = await page
+                .getByRole("searchbox", { name: "Search download jobs" })
+                .boundingBox();
+            const toggleBox = await scopeToggle.boundingBox();
+            expect(searchBox && toggleBox && toggleBox.x > searchBox.x + searchBox.width).toBe(
+                true
+            );
+            await scopeToggle.getByRole("button", { name: "Show all users" }).click();
             await expect(
                 page
                     .getByRole("columnheader", { name: "Requested by" })
@@ -278,6 +293,97 @@ test.describe("Download as Zip", () => {
             ).toBeVisible({ timeout: 45_000 });
         }
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("the asset page opens on its Download Queue tab from a ?tab=zipDownloads link", async ({
+        page,
+    }) => {
+        // The link a new zip job's success message follows (Mutates nothing).
+        test.skip(!(await zipEnabled(page)), "The deployment has Download as Zip off");
+        const found = await findAssetsWithFiles(page, 1);
+        test.skip(!found || found.length === 0, "No distributable asset with a file here");
+        const ref = found![0];
+        const errors = collectPageErrors(page);
+        await openDeepLink(
+            page,
+            `/databases/${ref.databaseId}/assets/${ref.assetId}?tab=zipDownloads`
+        );
+        await expect(page.getByRole("tab", { name: "Download Queue" })).toHaveAttribute(
+            "aria-selected",
+            "true",
+            { timeout: 45_000 }
+        );
+        await expect(
+            page
+                .getByRole("searchbox", { name: "Search download jobs" })
+                .or(page.getByText("Your role does not allow listing download jobs."))
+                .first()
+        ).toBeVisible({ timeout: 45_000 });
+        // Picking another tab drops ?tab= back to the File Manager default and keeps the page.
+        await page.getByRole("tab", { name: /^File Manager/ }).click();
+        await expect(page).not.toHaveURL(/[?&]tab=/);
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("a created zip job links to this asset's Download Queue tab, not My Download Queue", async ({
+        page,
+    }) => {
+        test.skip(!(await zipEnabled(page)), "The deployment has Download as Zip off");
+        test.skip(process.env.E2E_ZIP_CREATE !== "1", "Set E2E_ZIP_CREATE=1 to create a zip job");
+        const found = await findAssetsWithFiles(page, 1);
+        test.skip(!found || found.length === 0, "No distributable asset with a file here");
+        const ref = found![0];
+        const admin = await apiCaller(page);
+        test.skip(!admin, "No API context for the user");
+        const errors = collectPageErrors(page);
+
+        await openFileManager(page, ref.databaseId, ref.assetId);
+        await selectTreePath(page, ref.key);
+        await page.getByRole("button", { name: "Export" }).first().click();
+        const zipItem = page.getByRole("menuitem", { name: /Download as Zip/ });
+        test.skip(
+            (await zipItem.getAttribute("aria-disabled")) === "true",
+            "The role may not create zip downloads"
+        );
+        await zipItem.click();
+        const dialog = page.getByRole("dialog").filter({ hasText: "Download as Zip" });
+        const archiveName = await dialog.getByLabel("Archive name").inputValue();
+        await dialog.getByRole("button", { name: "Create zip download" }).click();
+        await expect(page.getByText(`${archiveName} is being prepared.`)).toBeVisible({
+            timeout: 30_000,
+        });
+        try {
+            await expect(page.getByRole("button", { name: /My Download Queue/ })).toHaveCount(0);
+            await page.getByRole("button", { name: "View Download Queue" }).click();
+            // Same asset page, now on its Download Queue tab, with the new job listed.
+            await expect(page).toHaveURL(
+                new RegExp(
+                    `#/databases/${ref.databaseId}/assets/${ref.assetId}\\?.*tab=zipDownloads`
+                )
+            );
+            await expect(page).not.toHaveURL(/#\/zipdownloads/);
+            await expect(page.getByRole("tab", { name: "Download Queue" })).toHaveAttribute(
+                "aria-selected",
+                "true"
+            );
+            await expect(page.getByText(archiveName, { exact: true })).toBeVisible({
+                timeout: 45_000,
+            });
+            expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+        } finally {
+            // Remove the job again (cancel while it runs, delete once it has finished).
+            const list = await admin!.get(
+                `/database/${ref.databaseId}/assets/${ref.assetId}/download/zip?maxItems=20`
+            );
+            const job = (list.body?.Items ?? []).find(
+                (j: any) => j.archiveFileName === archiveName
+            );
+            if (job) {
+                const jobPath = `/database/${ref.databaseId}/assets/${ref.assetId}/download/zip/${job.requestId}`;
+                await admin!.del(jobPath);
+                await admin!.del(jobPath);
+            }
+        }
     });
 
     test("a selection with an archived file is refused in the dialog, as the API refuses it", async ({

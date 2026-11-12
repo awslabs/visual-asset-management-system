@@ -344,9 +344,10 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
                 </FormField>
 
                 <Alert type="info" statusIconAriaLabel="Info">
-                    The archive is prepared in the background and appears in My Download Queue. Only
-                    you can see and download it for 7 days; it is then removed from the list and the
-                    archive file is removed automatically.
+                    The archive is prepared in the background and appears in this {Synonyms.asset}
+                    &apos;s Download Queue tab and in My Download Queue. You can download it for 7
+                    days; it is then removed from the list and the archive file is removed
+                    automatically.
                 </Alert>
 
                 {submitError && (

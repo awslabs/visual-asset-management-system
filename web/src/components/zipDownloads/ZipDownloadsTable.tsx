@@ -527,31 +527,11 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 loadingText="Loading download jobs"
                 wrapLines
                 variant={assetScoped ? "embedded" : "container"}
+                // Filter row layout (web/CLAUDE.md "Table filter row"): search and refresh on the
+                // left in the filter slot, view toggles right-aligned in the tools slot, as the
+                // Versions tab (AssetVersionList) does.
                 filter={
-                    <div
-                        style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            flexWrap: "wrap",
-                        }}
-                    >
-                        {canListAllUsers && (
-                            <SegmentedControl
-                                selectedId={scope}
-                                label="Whose download jobs to show"
-                                onChange={({ detail }) => {
-                                    setScope(detail.selectedId === "all" ? "all" : "mine");
-                                    setLoaded(false);
-                                    setJobs([]);
-                                    setNextToken(null);
-                                }}
-                                options={[
-                                    { id: "mine", text: "My jobs" },
-                                    { id: "all", text: "Show all users" },
-                                ]}
-                            />
-                        )}
+                    <SpaceBetween direction="horizontal" size="xs">
                         <TextFilter
                             filteringText={filterText}
                             filteringPlaceholder="Find by asset ID, request ID or archive name"
@@ -573,7 +553,25 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                             onClick={() => load(false)}
                             loading={loading}
                         />
-                    </div>
+                    </SpaceBetween>
+                }
+                pagination={
+                    canListAllUsers ? (
+                        <SegmentedControl
+                            selectedId={scope}
+                            label="Whose download jobs to show"
+                            onChange={({ detail }) => {
+                                setScope(detail.selectedId === "all" ? "all" : "mine");
+                                setLoaded(false);
+                                setJobs([]);
+                                setNextToken(null);
+                            }}
+                            options={[
+                                { id: "mine", text: "My jobs" },
+                                { id: "all", text: "Show all users" },
+                            ]}
+                        />
+                    ) : undefined
                 }
                 header={
                     <Header

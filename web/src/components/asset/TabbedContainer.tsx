@@ -3,12 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { Container, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
 import Synonyms from "../../synonyms";
-import { DOWNLOAD_QUEUE_TAB_LABEL, isZipDownloadsEnabled } from "../zipDownloads/zipDownloads";
+import {
+    DOWNLOAD_QUEUE_TAB_LABEL,
+    isZipDownloadsEnabled,
+    ZIP_DOWNLOADS_TAB_ID,
+} from "../zipDownloads/zipDownloads";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
@@ -18,8 +22,10 @@ const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 const ZipDownloadsTab = React.lazy(() => import("./tabs/ZipDownloadsTab"));
 
-/** Tab id of the asset page's "Download Queue" tab (the id keeps its original name). */
-export const ZIP_DOWNLOADS_TAB_ID = "zipDownloads";
+export { ZIP_DOWNLOADS_TAB_ID };
+
+const DEFAULT_TAB_ID = "file-manager";
+const BASE_TAB_IDS = [DEFAULT_TAB_ID, "relationships", "workflows", "comments", "versions"];
 
 interface TabbedContainerProps {
     assetName: string;
@@ -29,6 +35,13 @@ interface TabbedContainerProps {
     assetVersionId?: string; // Optional version ID to filter files and metadata
     /** Bubbled-up notification when the user changes the file/folder selection. */
     onSelectedPathChange?: (path: string | null) => void;
+    /**
+     * Tab named by the page's `?tab=` query parameter. A change selects that tab without
+     * remounting the page; an unknown id (or a tab the deployment does not show) is ignored.
+     */
+    requestedTabId?: string | null;
+    /** Called when the user picks a tab, so the page can keep `?tab=` in step. */
+    onTabChange?: (tabId: string) => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -38,11 +51,24 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     filePathToNavigate,
     assetVersionId,
     onSelectedPathChange,
+    requestedTabId,
+    onTabChange,
 }) => {
-    // Set File Manager tab as active by default, especially if we have a file path to navigate to
-    const [activeTabId, setActiveTabId] = useState("file-manager");
     // The feature switches are applied before the app renders, so one reading per mount is enough.
     const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
+    const isKnownTab = (id?: string | null): id is string =>
+        !!id && (BASE_TAB_IDS.includes(id) || (zipDownloadsEnabled && id === ZIP_DOWNLOADS_TAB_ID));
+    // File Manager is active by default (a file path to navigate to opens there); `?tab=` picks
+    // another tab, such as the Download Queue a newly created zip job links to.
+    const [activeTabId, setActiveTabId] = useState(() =>
+        isKnownTab(requestedTabId) ? requestedTabId : DEFAULT_TAB_ID
+    );
+    useEffect(() => {
+        if (isKnownTab(requestedTabId)) setActiveTabId(requestedTabId);
+        else if (!requestedTabId) setActiveTabId(DEFAULT_TAB_ID);
+        // isKnownTab only reads the mount-time feature switch.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [requestedTabId]);
 
     return (
         <ErrorBoundary componentName="Tabbed Container">
@@ -50,7 +76,10 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                 <div style={{ marginBottom: "-20px" }}>
                     <Tabs
                         activeTabId={activeTabId}
-                        onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                        onChange={({ detail }) => {
+                            setActiveTabId(detail.activeTabId);
+                            onTabChange?.(detail.activeTabId);
+                        }}
                         tabs={[
                             {
                                 id: "file-manager",

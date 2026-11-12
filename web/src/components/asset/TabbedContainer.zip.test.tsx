@@ -44,3 +44,57 @@ describe("TabbedContainer — Download Queue tab", () => {
         expect(screen.queryByRole("tab", { name: "Download Queue" })).toBeNull();
     });
 });
+
+describe("TabbedContainer — tab selected by the page's ?tab= query", () => {
+    afterEach(() => localStorage.clear());
+
+    const props = { assetName: "A", assetId: "a1", databaseId: "db1" };
+
+    it("opens on the Download Queue tab when the page is opened with tab=zipDownloads", async () => {
+        appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+        render(<TabbedContainer {...props} requestedTabId="zipDownloads" />);
+        expect(screen.getByRole("tab", { name: "Download Queue" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        expect(await screen.findByTestId("zip-tab")).toHaveTextContent("db1/a1/true");
+    });
+
+    it("switches to the tab when the query changes, without remounting the container", async () => {
+        appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+        const { rerender } = render(<TabbedContainer {...props} />);
+        const fileManagerTab = screen.getByRole("tab", { name: "File Manager" });
+        expect(fileManagerTab).toHaveAttribute("aria-selected", "true");
+        rerender(<TabbedContainer {...props} requestedTabId="zipDownloads" />);
+        // Same tab element: the container was re-rendered in place, not mounted again.
+        expect(screen.getByRole("tab", { name: "File Manager" })).toBe(fileManagerTab);
+        expect(screen.getByRole("tab", { name: "Download Queue" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        expect(await screen.findByTestId("zip-tab")).toHaveTextContent("db1/a1/true");
+        // The query going away (Back) returns to the File Manager.
+        rerender(<TabbedContainer {...props} requestedTabId={null} />);
+        expect(screen.getByRole("tab", { name: "File Manager" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+    });
+
+    it("ignores an unknown tab, and the Download Queue tab when the feature is off", () => {
+        appCache.setItem("config", { featuresEnabled: [] });
+        render(<TabbedContainer {...props} requestedTabId="zipDownloads" />);
+        expect(screen.getByRole("tab", { name: "File Manager" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+    });
+
+    it("reports a tab the user picks, so the page can keep ?tab= in step", async () => {
+        appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+        const onTabChange = jest.fn();
+        render(<TabbedContainer {...props} onTabChange={onTabChange} />);
+        await userEvent.click(screen.getByRole("tab", { name: "Versions" }));
+        expect(onTabChange).toHaveBeenCalledWith("versions");
+    });
+});
