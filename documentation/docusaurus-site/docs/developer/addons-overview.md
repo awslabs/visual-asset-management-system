@@ -28,7 +28,7 @@ These are not add-ons, even when they call an AWS service outside the tier-1 set
 
 Every add-on has an on/off setting in the deployment configuration and is off by default.
 
-Three core features run on AWS services outside the tier-1 set and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), the maps on Amazon Location Service (`app.useLocationService`), and the AWS Deadline Cloud pipeline execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`, off by default). Other new functionality that needs one of these services is an add-on.
+Three core features run on AWS services outside the tier-1 set and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), the maps on Amazon Location Service (`app.useLocationService`), and the AWS Deadline Cloud pipeline execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`, off by default). Other new functionality that needs one of these services is an add-on, unless an exemption above covers it: a new pipeline that runs on the Deadline Cloud execution type is a pipeline, not an add-on.
 
 ## Current add-ons
 
