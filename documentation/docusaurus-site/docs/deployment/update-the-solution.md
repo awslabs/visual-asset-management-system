@@ -971,6 +971,36 @@ v2.7 moves add-on code out of the core list files into add-on files beside them,
 
     The API takes the permission as `groupId`, `permission` and `permissionType`, not the template's `action` and `type`. The **Constraints** page creates the same constraint. The grant takes effect within about a minute, when the role's cached policy expires. Re-importing the whole template instead adds a second copy of every constraint. A role imported before the template carried `<role>-api-routes-download` is fixed the same way, with `download` in place of `export` in the command. See [Permissions](../developer/permissions.md#database-read-only).
 
+-   **Staged asset export payloads move to `vams.assetExports/` and expire.** An export response over 100KB is staged in the auxiliary bucket under `vams.assetExports/`, where a lifecycle rule deletes it after 8 days (see [Staged asset exports](../architecture/aws-resources.md#staged-asset-exports-vamsassetexports)). Earlier releases staged these payloads under `assetExports/` and never deleted them. The update adds no rule for that old prefix, because a database can be named `assetExports` and its preview and viewer data would sit under the same prefix. The old payloads are not used after the update. Removing them is optional and only frees storage. To remove them, use credentials for the deployment's account and Region, and take the auxiliary bucket name from the core stack output `AssetAuxiliaryS3BucketNameOutput`:
+
+    ```bash
+    AUX=<AUXILIARY_BUCKET>
+
+    # 1. Check that no database is named assetExports, live or deleted. Run these as a user whose
+    #    role can read every database (for example the admin role), because the list shows only the
+    #    databases the caller may read. Both must print 0. If either prints anything else, stop:
+    #    that database's preview data is under the same prefix.
+    #    Live databases (the list leaves deleted ones out):
+    vamscli database list --auto-paginate --json-output \
+        | grep -cF '"databaseId": "assetExports"'
+    #    Deleted databases (--show-deleted lists only those, with the ID stored as <id>#deleted):
+    vamscli database list --show-deleted --auto-paginate --json-output \
+        | grep -cF '"databaseId": "assetExports#deleted"'
+
+    # 2. List every version of the old staged payloads (read-only). Only keys shaped
+    #    assetExports/<databaseId>/<assetId>/<32 hex characters>.json are kept.
+    aws s3api list-object-versions --bucket "$AUX" --prefix assetExports/ \
+        --query 'Versions[].[Key,VersionId]' --output text \
+        | grep -E '^assetExports/[^/]+/[^/]+/[0-9a-f]{32}\.json[[:space:]]' > old-staged-exports.txt
+    wc -l old-staged-exports.txt
+
+    # 3. Review old-staged-exports.txt. Once it lists only staged payloads, delete each version
+    #    permanently. The bucket is versioned, so deleting by version ID frees the storage.
+    while read -r key version; do
+        aws s3api delete-object --bucket "$AUX" --key "$key" --version-id "$version"
+    done < old-staged-exports.txt
+    ```
+
 #### GPU compute environments are replaced
 
 Every AWS Batch compute environment behind a GPU pipeline — the four NVIDIA Cosmos pipelines, GR00T
