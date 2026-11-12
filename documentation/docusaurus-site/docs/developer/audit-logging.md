@@ -470,6 +470,7 @@ The values of the redacted keys listed under [Automatic Data Masking](#automatic
 
 -   JWT tokens and bearer tokens in the `Authorization` header, and the raw token in `idJwtToken` fields
 -   API keys (`X-Api-Key` header, `apiKey`, `apiKeySecret` and `rawKey` fields) and cookies (`Cookie`, `Set-Cookie`)
+-   Passwords, secrets, client secrets, access and refresh tokens and private keys in fields with those names
 -   Proxy credentials (`Proxy-Authorization`) and AWS credentials (access keys, secret keys, session tokens, `X-Amz-Security-Token`)
 -   Token signatures or detailed token validation errors (the authorizer records a generic failure category)
 -   Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them
@@ -499,6 +500,7 @@ Every audit entry carries an echo of the triggering API event, and the `mask_sen
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
 -   `apiKey`, `apiKeySecret`, `rawKey` fields (the API key identifier fields `apiKeyId`, `apiKeyName` and `apiKeyHash` stay readable, so a record still names the key a call used)
 -   The credential-carrying request and response headers `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token`, and the origin verification header `x-vams-origin-verify` that Amazon CloudFront adds to the API requests it forwards. A header is redacted in both `headers` and `multiValueHeaders`, whatever its letter case.
+-   The credential field names `password`, `secret`, `clientSecret`, `client_secret`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key`. The whole name is matched, in any letter case, so a field that only contains the word, such as `passwordPolicy` or `secretArn`, stays readable.
 -   The keys an add-on or a fork registers (`ADDON_LOG_SENSITIVE_KEYS`, `CUSTOM_LOG_SENSITIVE_KEYS`)
 
 **Content keys** -- caller-authored payloads. Every field that can deliver a template body belongs here, whichever request carries it:

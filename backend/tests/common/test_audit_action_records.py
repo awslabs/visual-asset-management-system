@@ -877,3 +877,31 @@ class TestWholeRecordCap:
         auditLogging.log_action(api_event(), "assetUpdate", changes={"assetName": "x"})
         _, payload, echo = parse(clients.module.messages()[0])
         assert "truncated" not in payload and echo.startswith(' --- [event: {"requestContext"')
+
+
+# ---------------------------------------------------------------------------------------------------
+# Credential field names are redacted in every value section, by whole name in any letter case
+# ---------------------------------------------------------------------------------------------------
+
+CREDENTIAL_FIELDS = ("password", "secret", "clientSecret", "client_secret", "accessToken", "access_token",
+                     "refreshToken", "refresh_token", "privateKey", "private_key")
+
+
+@pytest.mark.unit
+class TestCredentialFieldRedaction:
+    @pytest.mark.parametrize("field", CREDENTIAL_FIELDS + ("ClientSecret", "PASSWORD", "Refresh_Token"))
+    def test_a_credential_field_is_redacted(self, clients, field):
+        value = f"SENTINEL-{field}-VALUE"
+        auditLogging.log_action(api_event(), "assetUpdate", changes={field: value}, previous={field: value})
+        message = clients.module.messages()[0]
+        assert value not in message
+        _, payload, _ = parse(message)
+        assert payload["changes"][field] == "<redacted>" and payload["previous"][field] == "<redacted>"
+
+    def test_fields_that_only_contain_the_word_stay_readable(self, clients):
+        # Control: whole-name matching, so ordinary fields are not hidden.
+        ordinary = {"passwordPolicy": "strong", "secretArn": "arn:aws:secretsmanager:x", "accessTokenExpiry": 3600,
+                    "clientSecretRotatedOn": "2026-11-12", "privateKeyFingerprint": "ab:cd"}
+        auditLogging.log_action(api_event(), "assetUpdate", changes=ordinary)
+        _, payload, _ = parse(clients.module.messages()[0])
+        assert payload["changes"] == ordinary
