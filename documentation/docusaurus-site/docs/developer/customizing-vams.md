@@ -8,11 +8,11 @@ The extension points cover **additions**. Changing the behavior of an existing p
 
 Each aggregated list has three parts, merged in the order core, add-on, custom:
 
-| Part   | Owner    | Holds                                                                                                                                                                               |
-| ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core   | upstream | the core entries, edited every release                                                                                                                                              |
-| Add-on | upstream | optional, upstream-maintained parts that integrate VAMS with an external solution or add a stand-alone component, enabled by configuration ([Add-ons Overview](addons-overview.md)) |
-| Custom | the fork | the fork's entries; shipped empty                                                                                                                                                   |
+| Part   | Owner    | Holds                                                                                                                                                                                                                                                                                                         |
+| ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core   | upstream | the core entries, edited every release                                                                                                                                                                                                                                                                        |
+| Add-on | upstream | optional, upstream-maintained parts that integrate VAMS with an external solution or add a stand-alone component, enabled by configuration ([Add-ons Overview](addons-overview.md)); [When functionality is an add-on](addons-overview.md#when-functionality-is-an-add-on) says which functionality goes here |
+| Custom | the fork | the fork's entries; shipped empty                                                                                                                                                                                                                                                                             |
 
 The files, list by list:
 
