@@ -342,6 +342,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Credential headers redacted in audit records** — The `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` header values are redacted from the request echo of audit records and from structured logs, like `Authorization`, whatever their letter case. (issue #1417)
 -   **What audit records contain** — The audit logging and security pages describe the request echo an audit record carries (the headers that are not redacted, the verified token claims and the submitted request body after redaction), so personal data a user enters can appear, instead of stating that no personal data beyond user IDs is logged. (issue #1418)
 -   **Execution menu names the view it opens** — The first item of an execution row's actions menu reads **View details** instead of **View results**, since it opens the execution's details view, not its results. (issue #1431)
+-   **GenAI 3D metadata labeling with a geographic inference profile** — With a `us.`, `eu.`, `apac.` or `us-gov.` `bedrockModelId`, the metadata generation Lambda function's Amazon Bedrock grant names the configured foundation model in every Region the profile can route to; it named the deployment Region only, so a request routed elsewhere could be refused. (issue #1390)
 
 **Other changes:**
 
