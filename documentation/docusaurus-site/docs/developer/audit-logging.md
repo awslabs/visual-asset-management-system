@@ -137,6 +137,17 @@ The keys of the earlier orchestration and authorization records stay alongside t
 -   **A bulk operation** records one record per item, all delivered together at the end of the request.
 -   **File content** is never recorded.
 
+### Reads Switch
+
+Read records are on by default. `app.auditLogging.recordReads` in `config.json` turns them off ([Configuration reference](../deployment/configuration-reference.md#audit-logging-appauditlogging)):
+
+-   **`true`, or the setting absent** -- every successful get, list and search writes an action record. A deployment upgraded with a `config.json` that has no `auditLogging` block records reads.
+-   **`false`** -- successful gets, lists and searches write no action record. Writes, denials, failed reads, downloads and exports are recorded as before, and so are the records the earlier functions write (for example the `userProfileGet` record of a login profile read and the add-on's `edhProxy` records).
+
+CDK passes the value to every VAMS Lambda function as the `AUDIT_RECORD_READS` environment variable. Only the value `false` turns reads off, so a function deployed without the variable records them.
+
+Reads are the most frequent API calls, so they make up most of the action records of a read-heavy deployment such as the web app: expect several times the record count and ingestion of writes alone. Use the [Amazon CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/) or the AWS Pricing Calculator to estimate the cost in your Region, and measure your own volume with a Logs Insights query such as `stats count(*) by action` over the actions log group.
+
 ### Redaction and Size Caps
 
 -   Every value section (`changes`, `previous`, `requestParameters`, `details`) passes through the same key-name redaction as the request echo (see [Automatic Data Masking](#automatic-data-masking)), so a credential or template body is written as `<redacted>`.

@@ -457,6 +457,9 @@ export interface ConfigPublic {
         // as the executionService log-read resources (trailing * = prefix); default
         // DEFAULT_EXECUTION_LOG_READ_PREFIXES; validateExecutionLogReadPrefixes() rejects *, / and
         // anything outside /aws/
+        // auditLogging.recordReads: boolean; absent block or key -> true (resolveAuditLoggingConfig),
+        // a non-boolean throws a Configuration Error; globalLambdaEnvironmentsAndPermissions passes it
+        // to every Lambda as AUDIT_RECORD_READS, and the backend records reads unless it is "false"
     };
 }
 
