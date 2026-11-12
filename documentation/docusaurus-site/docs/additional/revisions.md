@@ -303,6 +303,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Versions table action labels** — The Actions column on the asset page's Versions tab carries a minimum width, so its button labels no longer wrap inside their words. (issue #1229)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
 -   **Uninstall log group list** — The uninstall guide no longer lists the REST API stage access log group among the named `/aws/vendedlogs/` groups to delete before redeploying; CDK names that group and deletes it with the stack. (PR #1225)
+-   **Physna credentials from an existing secret** — The Physna integration page documents `credentialsSecretArn`, the recommended way to supply the Physna credentials from an existing Secrets Manager secret. (issue #1335)
 -   **Route listings follow the enabled add-ons** — The API route listing and the allowed-route check leave out the routes of an add-on the deployment has not enabled, such as the Physna viewer route without Physna Sync, so the constraint editor no longer offers them and no denial is recorded for them. (issue #1243)
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
@@ -310,7 +311,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Isaac Lab training time limit** — AWS Batch no longer stops an Isaac Lab training job after 6 hours of running; the job limit matches the workflow's 8 hours. (issue #1324)
 -   **Isaac Lab pipeline page** — The page states that its timeouts include the wait for a GPU instance, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
 -   **API key expiration date picker** — The calendar button of the expiration date picker on the Create API Key and Update API Key pages says which date it chooses and which date is selected, instead of being announced only as "button". (issue #1278)
--   **Physna credentials from an existing secret** — The Physna integration page documents `credentialsSecretArn`, the recommended way to supply the Physna credentials from an existing Secrets Manager secret. (issue #1335)
+-   **Metadata table value column** — The File Attributes and File Metadata tables in the file details panel keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. (issue #1307)
 
 **Other changes:**
 
