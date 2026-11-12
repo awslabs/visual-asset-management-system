@@ -7474,7 +7474,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /unsubscribe:
         delete:
             summary: "Unsubscribe."
-            description: "eventName (object regex), entityName (object regex), entityId (ID regex), and the list of subscribers (email array regex) are required fields"
+            description: "eventName (object regex), entityName (object regex), entityId (asset ID regex), and the list of subscribers (email array regex) are required fields"
             responses:
                 "200":
                     description: OK
@@ -9888,7 +9888,7 @@ components:
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
         entityId:
-            $ref: '#/components/schemas/id_regex'
+            $ref: '#/components/schemas/asset_id_regex'
         entityName:
             $ref: "#/components/schemas/object_name_pattern_regex"
         error:
