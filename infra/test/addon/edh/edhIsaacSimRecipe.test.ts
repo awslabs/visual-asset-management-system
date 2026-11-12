@@ -3048,9 +3048,10 @@ const STAND_IN_AWS_INSTALLER = [
 function installAwsCli(host: { existing?: string; linkedFrom?: string; leftover?: boolean } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-awscli-"));
     const where = dir.split(path.sep).join("/");
-    // Only the paths the step names move: a shebang's /usr/bin/env stays where it is.
+    // Only the paths the step names move: a shebang's /usr/bin/env stays where it is. One pass, so a
+    // scratch directory that is itself under /tmp (as on CI runners) is not rewritten a second time.
     const localize = (text: string) =>
-        text.split("/usr/local/").join(`${where}/usr/local/`).split("/tmp/").join(`${where}/tmp/`);
+        text.replace(/\/usr\/local\/|\/tmp\//g, (prefix) => `${where}${prefix}`);
     try {
         fs.mkdirSync(path.join(dir, "tmp"));
         fs.writeFileSync(path.join(dir, "installer"), localize(STAND_IN_AWS_INSTALLER), {
