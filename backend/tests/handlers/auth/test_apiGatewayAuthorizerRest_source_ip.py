@@ -81,7 +81,7 @@ class _AuditRecorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, event, authorized, failure_reason=None):
+    def __call__(self, event, authorized, failure_reason=None, token_audience=None):
         self.calls.append(
             {
                 "event": copy.deepcopy(event),

@@ -559,7 +559,7 @@ const newFeatureArn = ServiceHelper.getNewFeatureArn();
 
 #### **IAM Role Aspects (Role Names and Permissions Boundary)**
 
-`IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
+`IamRoleTransform` (`infra/lib/aspects/iam-role-transform.aspect.ts`, configured from `cdk.json` `environments.aws`) overrides `RoleName` on every core-stack role, nested stacks included; changing the name formula replaces every role. The REST API Deployment's logical id includes the authorizer invoke role's name (`addAuthorizerInvokeRoleToDeployment` in `rest-api-gateway-construct.ts`), so a rename also moves the stage to a new deployment that names the new role (#1210; tests: `infra/test/api/deploymentAuthorizerInvokeRole.test.ts`, `infra/test/api/t1RestApiDeploymentLogicalId.test.ts`). When `PermissionBoundaryArn` is non-empty, `IamRoleTransform.applyPermissionsBoundary(app, arn)` sets `PermissionsBoundary` on every role in the app without touching names, and a validation hook also bounds the roles CDK adds during prepare (cross-Region export reader/writer providers). An unbounded role left in a nested stack fails synth. An empty ARN leaves `PermissionsBoundary` untouched; never set it to `NO_VALUE`. `getConfig()` validates the ARN shape and partition (`validatePermissionBoundaryArn`). Tests: `infra/test/security/iamPermissionsBoundary.test.ts`.
 
 #### **CloudWatch Logs Resource Policies: Log-Group Scoped Only**
 
@@ -2537,6 +2537,12 @@ export function buildApiGatewayAuthorizerRestFunction(
     if (config.app.authProvider.useCognito.enabled) {
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Replaced at runtime
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Replaced at runtime
+        // Extra accepted app clients (#1328): emitted ONLY when listed, so a deployment without
+        // the option synthesizes the same authorizer
+        const extraClients = config.app.authProvider.useCognito.additionalTokenAudiences;
+        if (extraClients && extraClients.length > 0) {
+            environment.ADDITIONAL_APP_CLIENT_IDS = JSON.stringify(extraClients);
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled) {
@@ -2544,6 +2550,11 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
         environment.JWT_AUDIENCE =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+        // Extra accepted audiences (#1328), same rule
+        const extraAudiences = config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences;
+        if (extraAudiences && extraAudiences.length > 0) {
+            environment.JWT_ADDITIONAL_AUDIENCES = JSON.stringify(extraAudiences);
+        }
     }
 
     const authorizerFunc = new lambda.Function(scope, name, {

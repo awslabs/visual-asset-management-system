@@ -140,7 +140,8 @@ def lambda_handler(event, context):
         res = authenticate_request(event)
         # After authenticate_request so nothing the auth decision reads is touched first.
         _set_audit_client_ip(event)
-        log_authorization_gateway(event, res["authorized"], res.get("reason"))
+        log_authorization_gateway(event, res["authorized"], res.get("reason"),
+                                  token_audience=res.get("tokenAudience"))
         if not res["authorized"]:
             if res.get("failure") != FAILURE_UNAUTHENTICATED:
                 return _policy("user", "Deny", resource)
