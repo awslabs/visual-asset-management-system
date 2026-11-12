@@ -144,6 +144,15 @@ The pipeline produces file-level attribute files in the following JSON structure
 
 The attribute file is uploaded to the metadata output path with the naming pattern `<asset_relative_path>.attribute.json`, so a file in a subdirectory of the asset keeps that subdirectory in its attribute file's path. The VAMS workflow's process-output step reads this file and writes the values as file attributes, making them searchable and visible in the web interface.
 
+Each value is at most 400,000 characters, the longest metadata value VAMS stores. A value that would be longer, such as the scene hierarchy of a model with thousands of placed parts, is written shortened and marked with a `_truncated` entry, and every other value is written unchanged:
+
+| Value                             | Written as                                                                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| An object with list members       | The object with its longest lists cut to their first items, plus `"_truncated": {"limit": 400000, "fields": {"nodes": {"shown": 812, "total": 1043}}}` |
+| A list                            | The first items of the list, followed by `{"_truncated": {"limit": 400000, "shown": 812, "total": 1043}}`                                              |
+| An object that still does not fit | `{"_truncated": {"limit": 400000, "originalLength": 1234567}}`                                                                                         |
+| Text                              | The first characters of the text, followed by `[truncated: <length> characters, limit 400000]`                                                         |
+
 ## Prerequisites
 
 ### No VPC Required
@@ -177,6 +186,7 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 | Execution timeout    | 15 minutes (Lambda maximum)                                                                                                 |
 | Read-only extraction | The pipeline reads metadata but does not modify the source file                                                             |
 | Format fidelity      | Metadata depth varies by format; some formats embed richer metadata than others                                             |
+| Value length         | Each value is at most 400,000 characters; a longer one is shortened and marked -- see [Output Format](#output-format)       |
 | Text encoding        | OBJ, ASCII STL, XYZ, and GLTF text, and the JSON inside a GLB, must be UTF-8 -- see [Supported Formats](#supported-formats) |
 
 Two AWS Lambda quotas bound the largest file the pipeline can read:

@@ -64,7 +64,11 @@ All three use the same body. `updateType` is `update` (upsert, the default) or `
 ```
 
 `type` is `metadata` or `attribute` and is auto-corrected to match the file name, so the file name is
-what actually decides. A missing or non-list `metadata` array fails the write-back.
+what actually decides. A missing or non-list `metadata` array fails the write-back. So does one
+`metadataValue` longer than 400,000 characters (`MAX_METADATA_VALUE_LENGTH` in
+`backend/backend/models/metadata.py`): the whole file's update is refused, so a pipeline that
+serializes an extracted structure into a value shortens it first (`fit_metadata_value` in the CAD/mesh
+metadata extraction `lambda.py`).
 
 **A pipeline may annotate a file it produces in the same run.** The process-output step ingests
 `outputS3AssetFilesPath` **before** it lists `outputS3AssetMetadataPath` — the file write is
