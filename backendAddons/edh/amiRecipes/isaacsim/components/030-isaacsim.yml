@@ -1,5 +1,5 @@
 name: vams-isaacsim-install
-description: NVIDIA Isaac Sim unpacked under /opt with post_install.sh run, its first-run licence prompt pre-answered, and NVIDIA data collection declined unless the recipe's isaacSimDataCollectionConsent is Y.
+description: NVIDIA Isaac Sim unpacked under /opt with post_install.sh run, its first-run licence prompt pre-answered, NVIDIA data collection declined unless the recipe's isaacSimDataCollectionConsent is Y, and vams-isaacsim-python, which runs headless Isaac Sim scripts with Kit's data, cache and logs in each desktop user's own directory.
 schemaVersion: 1.0
 phases:
     - name: build
@@ -135,6 +135,46 @@ phases:
                     - find "/opt/isaacsim-${PARAM_isaacSimVersion}" -maxdepth 1 -name '*.sh' -exec chmod a+rx {} +
                     - printf 'recipe=isaacsim\nisaacSimVersion=%s\nbuiltOn=%s\n' "${PARAM_isaacSimVersion}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /etc/vams-image-release
                     - chmod 0644 /etc/vams-image-release
+          - name: InstallHeadlessScriptRunner
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-isaacsim-python <<'ISAACSIM_PYTHON'
+                        #!/usr/bin/env bash
+                        # Runs a Python script with Isaac Sim's interpreter, as /opt/isaacsim/python.sh does, with
+                        # Kit's data, cache and logs in a portable root of the desktop user's own. SimulationApp
+                        # starts Kit in portable mode unless the script's arguments hold --portable-root followed
+                        # by a directory, and its default portable root lies inside the install, which desktop
+                        # users can read but not write.
+                        set -euo pipefail
+                        if [ "$#" -eq 0 ]; then
+                            echo "usage: vams-isaacsim-python <script.py> [arguments]" >&2
+                            exit 2
+                        fi
+                        for arg in "$@"; do
+                            case "${arg}" in
+                                --portable-root)
+                                    # The caller names a portable root of its own.
+                                    exec /opt/isaacsim/python.sh "$@"
+                                    ;;
+                                --portable-root=*)
+                                    echo "vams-isaacsim-python: pass --portable-root and its directory as two arguments; SimulationApp does not recognize --portable-root=<directory>" >&2
+                                    exit 2
+                                    ;;
+                            esac
+                        done
+                        ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/ov/isaacsim-portable"
+                        # Kit loads the Python modules and shader binaries it caches here, so the root is
+                        # created private to the user and used only when it is the user's own directory.
+                        if ! (umask 077 && mkdir -p -- "${ROOT}") || [ -L "${ROOT}" ] || [ ! -d "${ROOT}" ] || [ ! -O "${ROOT}" ]; then
+                            echo "vams-isaacsim-python: ${ROOT} is not a directory you own; pass --portable-root <directory> to use another" >&2
+                            exit 1
+                        fi
+                        exec /opt/isaacsim/python.sh "$@" --portable-root "${ROOT}"
+                        ISAACSIM_PYTHON
+                    - chmod 0755 /usr/local/bin/vams-isaacsim-python
     - name: validate
       steps:
           - name: PackagePresent
@@ -146,6 +186,22 @@ phases:
                     - test -f /opt/isaacsim/post_install.sh
                     - test -x "/opt/isaacsim/${PARAM_isaacSimLauncher}"
                     - grep -q '^recipe=isaacsim$' /etc/vams-image-release
+          - name: HeadlessScriptRunnerWorks
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - test -x /usr/local/bin/vams-isaacsim-python
+                    - |
+                        # The runner hands a script Isaac Sim's interpreter and, as its last two arguments, a
+                        # portable root in the user's own data directory, created private to that user.
+                        home="$(mktemp -d)"
+                        root="${home}/.local/share/ov/isaacsim-portable"
+                        env -u XDG_DATA_HOME HOME="${home}" /usr/local/bin/vams-isaacsim-python \
+                            -c 'import sys; print("argv:", *sys.argv[1:])' > "${home}/argv"
+                        grep -qx -- "argv: --portable-root ${root}" "${home}/argv"
+                        test "$(stat -c %a "${root}")" = 700
+                        rm -rf "${home}"
           - name: DataCollectionChoiceApplied
             action: ExecuteBash
             inputs:
