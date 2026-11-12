@@ -210,9 +210,10 @@ and files, the parent/child `relationships` and `totalAssetsInTree`. It takes th
 route's own filters (`fetch_relationships`, `fetch_entire_subtrees`,
 `include_parent_relationships`, `include_archived_files`, `include_folder_files`,
 `include_only_primary_type_files`, `file_extensions`, and the three `include_*_metadata`
-switches) and reads ONE page per call: `max_assets` (default 25, at most 1000) and
-`max_files` (default 500 across the page's assets, at most 10000), smaller defaults than the
-CLI's because the whole page lands in the agent's context. A result with `NextToken` is
+switches) and reads ONE page per call: `max_assets` (default 25) and `max_files` (default
+500 across the page's assets). The tool lowers a larger request to 100 assets and 1000
+files, well under the route's own maxima, because the whole page lands in the agent's
+context; a larger tree is read page by page. A result with `NextToken` is
 marked `truncated` with a `note`; pass the token back as `starting_token`. An asset holding
 more files than the page allows reports `files_truncated` and continues on the next page.
 It never requests presigned URLs; use `generate_download_urls_bulk` for downloads.
@@ -409,7 +410,8 @@ paginated request per hit, so its `size` is clamped to 25; use
 
 Files and links: `move_file`, `copy_file`, `create_asset_link`.
 
-`move_file` moves or renames a file inside its asset; `copy_file` copies one within
+`move_file` moves or renames a file inside its asset (the source path then stays
+listed as an archived entry, which `unarchive_file` can restore); `copy_file` copies one within
 the asset, or into `destination_asset_id` (in `destination_database_id`, which defaults
 to the source database). Both take relative paths and return `affectedFiles`.
 `create_asset_link` links two assets: `relationship_type` is `related` or
@@ -424,7 +426,9 @@ Each takes `database_id` to address a tag or tag type scoped to one database; wi
 it the tool acts on the global one. A tag needs an existing tag type. `update_tag`
 replaces both the description and the tag type, and `update_tag_type` both the
 description and `required`, so send the current value of the field you keep (from
-`list_tags` / `list_tag_types`). A tag type with `required` true makes asset creation and
+`list_tags` / `list_tag_types`). `list_tags` shows a required tag type as
+`<name> [R]`; every tag and tag-type tool drops that marker before sending the name,
+as the CLI does, because the API refuses a name with brackets. A tag type with `required` true makes asset creation and
 updates in its scope require one of its tags, once the type has any. A successful tag save can carry `warnings` (for example, a
 name that now exists both globally and in a database); relay them.
 

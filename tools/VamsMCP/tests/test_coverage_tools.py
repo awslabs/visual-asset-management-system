@@ -282,3 +282,79 @@ def test_the_readme_documents_the_new_tools():
                  "create_tag", "update_tag", "create_tag_type", "update_tag_type", "archive_file",
                  "unarchive_file", "delete_file", "delete_asset_link", "delete_tag", "delete_tag_type"):
         assert f"`{name}`" in readme, name
+
+
+# --- One export answer stays bounded ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "asked, sent",
+    [
+        ((1000, 10000), (100, 1000)),  # the route's own maxima are lowered to the tool's caps
+        ((101, 1001), (100, 1000)),
+        ((100, 1000), (100, 1000)),
+        ((0, -5), (1, 1)),  # the route refuses values below 1
+    ],
+)
+def test_export_asset_caps_the_page_it_asks_for(mock_client, asked, sent):
+    mock_client.api.export_asset.return_value = {"assets": []}
+    server_module.export_asset("db1", "root", max_assets=asked[0], max_files=asked[1])
+    params = mock_client.api.export_asset.call_args.args[2]
+    assert (params["maxAssets"], params["maxFiles"]) == sent
+    assert (server_module.EXPORT_MAX_ASSETS, server_module.EXPORT_MAX_FILES) == (100, 1000)
+
+
+def test_export_asset_description_states_the_cap_and_the_token():
+    doc = " ".join(server_module.export_asset.__doc__.split())
+    assert "100 assets and 1000 files" in doc
+    assert "starting_token" in doc and "NextToken" in doc
+
+
+# --- A tag type copied from list_tags ----------------------------------------
+#
+# list_tags returns the tag type of a REQUIRED type as "<name> [R]". The write routes reject a name with
+# brackets (400), so the tools drop the marker, as the CLI's `tag update` does.
+
+
+@pytest.mark.parametrize("tool, method", [("create_tag", "create_tags"), ("update_tag", "update_tags")])
+def test_tag_writes_drop_the_required_marker_list_tags_adds(gated, tool, method):
+    server, client = gated
+    getattr(server, tool)("urgent", "Needs action", "priority [R]")
+    assert getattr(client.api, method).call_args.args[0]["tagTypeName"] == "priority"
+
+
+@pytest.mark.parametrize(
+    "tool, method", [("create_tag_type", "create_tag_types"), ("update_tag_type", "update_tag_types")]
+)
+def test_tag_type_writes_drop_the_required_marker(gated, tool, method):
+    server, client = gated
+    getattr(server, tool)("priority [R]", "How urgent", required=True)
+    assert getattr(client.api, method).call_args.args[0]["tagTypeName"] == "priority"
+
+
+def test_delete_tag_type_drops_the_required_marker(gated):
+    server, client = gated
+    server.delete_tag_type("priority [R]", database_id="db1")
+    client.api.delete_tag_type.assert_called_once_with("priority", database_id="db1")
+
+
+def test_a_tag_type_name_without_the_marker_is_sent_unchanged(gated):
+    server, client = gated
+    server.update_tag("urgent", "Needs action", "Priority R")
+    assert client.api.update_tags.call_args.args[0]["tagTypeName"] == "Priority R"
+
+
+def test_the_marker_matches_the_one_the_cli_strips():
+    """The CLI's tag update removes the same literal from the type it reads back from the tag list."""
+    from pathlib import Path
+
+    import vamscli
+
+    cli_tag = (Path(vamscli.__file__).parent / "commands" / "tag.py").read_text(encoding="utf-8")
+    assert f".replace('{server_module.REQUIRED_TAG_TYPE_SUFFIX}', '')" in cli_tag
+
+
+def test_move_and_unarchive_file_descriptions_say_where_the_archived_entry_is(gated):
+    server, _ = gated
+    assert "the source stays as an archived entry" in " ".join(server.move_file.__doc__.split())
+    assert "list_asset_files(include_archived)" in server.unarchive_file.__doc__

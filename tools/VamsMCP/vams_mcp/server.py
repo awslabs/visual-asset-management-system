@@ -356,9 +356,24 @@ def _paginate_with_page_metadata(
     return result
 
 
+# list_tags marks the tag type of a required type with this suffix (tagService), and an agent copies it
+# back. The write routes reject it (a name cannot contain brackets), so it is removed as the CLI's
+# `tag update` does.
+REQUIRED_TAG_TYPE_SUFFIX = " [R]"
+
+
+def _tag_type_name(name: str) -> str:
+    """A tag type name as the write routes take it: the list_tags required marker removed."""
+    return name.replace(REQUIRED_TAG_TYPE_SUFFIX, "")
+
+
 def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, Any]:
-    """The flat object the tag and tag-type write routes take: a database_id scopes it, none is global."""
-    return {**names, **({"databaseId": database_id} if database_id else {})}
+    """The flat object the tag and tag-type write routes take: a database_id scopes it, none is global.
+    A tagTypeName copied from list_tags loses its required marker."""
+    body = dict(names)
+    if isinstance(body.get("tagTypeName"), str):
+        body["tagTypeName"] = _tag_type_name(body["tagTypeName"])
+    return {**body, **({"databaseId": database_id} if database_id else {})}
 
 
 # =========================================================================
@@ -688,6 +703,10 @@ def get_asset_links(
 # asset's metadata, and the whole page lands in the agent's context.
 EXPORT_DEFAULT_MAX_ASSETS = 25
 EXPORT_DEFAULT_MAX_FILES = 500
+# The most one call asks for, whatever the agent passes (the route itself allows 1000 / 10000).
+# Larger trees are read page by page with starting_token.
+EXPORT_MAX_ASSETS = 100
+EXPORT_MAX_FILES = 1000
 
 
 @mcp.tool(title="Export asset tree", annotations=READ)
@@ -709,11 +728,10 @@ def export_asset(
     include_file_metadata: bool = True,
     include_asset_link_metadata: bool = True,
 ) -> results.AssetExport:
-    """Use to read an asset and its child assets in one call: `assets` (metadata, files),
-    `relationships`, `totalAssetsInTree`. One child level unless fetch_entire_subtrees;
-    fetch_relationships=False: the asset alone.
-    ONE PAGE per call: `truncated` + `NextToken` mean more; pass it as `starting_token` (an asset with
-    files_truncated continues there)."""
+    """Use to read an asset and its children in one call: `assets` (metadata, files), `relationships`,
+    `totalAssetsInTree`. One child level unless fetch_entire_subtrees; fetch_relationships=False: the
+    asset alone. ONE PAGE per call, capped at 100 assets and 1000 files: `truncated` + `NextToken` mean
+    more; pass it as `starting_token` (files_truncated assets continue there)."""
     params: Dict[str, Any] = {
         "generatePresignedUrls": False,
         "includeFolderFiles": include_folder_files,
@@ -725,8 +743,8 @@ def export_asset(
         "fetchEntireChildrenSubtrees": fetch_entire_subtrees,
         "includeParentRelationships": include_parent_relationships,
         "includeArchivedFiles": include_archived_files,
-        "maxAssets": max_assets,
-        "maxFiles": max_files,
+        "maxAssets": max(1, min(max_assets, EXPORT_MAX_ASSETS)),
+        "maxFiles": max(1, min(max_files, EXPORT_MAX_FILES)),
     }
     if file_extensions:
         # The handler matches extensions with their leading dot, lower-cased, as the CLI sends them.
@@ -1740,7 +1758,8 @@ if CONFIG.enable_writes:
     @mcp.tool(title="Move file", annotations=WRITE)
     @tool_result
     def move_file(database_id: str, asset_id: str, source_path: str, destination_path: str) -> Dict[str, Any]:
-        """Use to move or rename a file inside its asset (relativePaths). Returns affectedFiles."""
+        """Use to move or rename a file inside its asset (relativePaths). Returns affectedFiles; the
+        source stays as an archived entry."""
         return CLIENT.api.move_file(
             database_id, asset_id, {"sourcePath": source_path, "destinationPath": destination_path}
         )
@@ -2181,7 +2200,7 @@ if CONFIG.enable_destructive:
     @mcp.tool(title="Unarchive file", annotations=DESTRUCTIVE)
     @tool_result
     def unarchive_file(database_id: str, asset_id: str, file_key: str) -> Dict[str, Any]:
-        """Use to restore an archived file."""
+        """Use to restore an archived file; file_key from list_asset_files(include_archived)."""
         return CLIENT.api.unarchive_file(database_id, asset_id, {"filePath": file_key})
 
     @mcp.tool(title="Delete file permanently", annotations=DESTRUCTIVE)
@@ -2213,7 +2232,7 @@ if CONFIG.enable_destructive:
     @tool_result
     def delete_tag_type(tag_type_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
         """Use only when asked to delete a tag type; refused while tags use it. Not reversible."""
-        return CLIENT.api.delete_tag_type(tag_type_name, database_id=database_id)
+        return CLIENT.api.delete_tag_type(_tag_type_name(tag_type_name), database_id=database_id)
 
     # ---------------------------------------------------------------------
     # Pipeline / workflow / execution deletes
