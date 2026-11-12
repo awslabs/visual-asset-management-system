@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { matchPath } from "react-router-dom";
 import Input from "@cloudscape-design/components/input";
 import Select from "@cloudscape-design/components/select";
 import Synonyms from "../../synonyms";
@@ -27,6 +28,17 @@ const hashQuery = (): URLSearchParams => {
     const index = hash.indexOf("?");
     return new URLSearchParams(index >= 0 ? hash.slice(index + 1) : "");
 };
+
+/** The path of the hash route: "/compliance/cascades/" for "#/compliance/cascades/?state=x". */
+const hashRoutePath = (): string =>
+    (window.location.hash || "").replace(/^#/, "").split("?")[0] || "/";
+
+/**
+ * Whether the URL's hash route is the page route `route`, a route path as `routes.tsx` declares it
+ * ("/compliance/cascades", "/databases/:databaseId/compliance"). A trailing slash matches too.
+ */
+export const isOnRoute = (route: string): boolean =>
+    matchPath({ path: route, end: true }, hashRoutePath()) !== null;
 
 /** The filter values the URL (the query part of the hash route) carries for `keys`. */
 export const readUrlFilters = <K extends string>(keys: readonly K[]): Record<K, string> => {
@@ -60,28 +72,42 @@ export const writeUrlFilters = (values: Record<string, string>): void => {
 };
 
 /**
- * Filter state initialised from, and written back to, the URL. A filter changed on the page
- * replaces the history entry (Back leaves the page rather than stepping through filters). When the
- * URL itself changes while the page is open — an in-app link or a URL pasted into the tab, which
- * change the hash, or Back / Forward between two entries of the page — the values follow it, so
- * the page reloads for the filters the URL now names.
+ * Filter state initialised from, and written back to, the URL of the page's own route `route` (as
+ * `routes.tsx` declares it). A filter changed on the page replaces the history entry (Back leaves
+ * the page rather than stepping through filters). When the URL itself changes while the page is
+ * open — an in-app link or a URL pasted into the tab, which change the hash, or Back / Forward
+ * between two entries of the page — the values follow it, so the page reloads for the filters the
+ * URL now names.
+ *
+ * Only the page's own route is followed. A hash change to another page's route (a link, Back or
+ * Forward away from this page) fires while this page is still mounted, and its query names that
+ * page's filters (`state=completed` of the cascades page is no state of the database overview's),
+ * so it is ignored. A filter committed after the route changed (a debounced search) is kept in the
+ * page's state but never written into the other page's URL.
  */
 export const useUrlFilters = <K extends string>(
-    keys: readonly K[]
+    keys: readonly K[],
+    route: string
 ): [Record<K, string>, (patch: Partial<Record<K, string>>) => void] => {
     const [values, setValues] = useState<Record<K, string>>(() => readUrlFilters(keys));
-    const update = useCallback((patch: Partial<Record<K, string>>) => {
-        setValues((previous) => {
-            const next = { ...previous, ...patch } as Record<K, string>;
-            writeUrlFilters(next);
-            return next;
-        });
-    }, []);
+    const update = useCallback(
+        (patch: Partial<Record<K, string>>) => {
+            setValues((previous) => {
+                const next = { ...previous, ...patch } as Record<K, string>;
+                if (isOnRoute(route)) {
+                    writeUrlFilters(next);
+                }
+                return next;
+            });
+        },
+        [route]
+    );
     useEffect(() => {
         const follow = () => {
+            if (!isOnRoute(route)) return;
             const fromUrl = readUrlFilters(keys);
             // Unchanged values keep their object, so a hash change that names the same filters
-            // (or another page's hash, as this one unmounts) starts no reload.
+            // starts no reload.
             setValues((previous) =>
                 keys.every((key) => previous[key] === fromUrl[key]) ? previous : fromUrl
             );
@@ -92,7 +118,7 @@ export const useUrlFilters = <K extends string>(
             window.removeEventListener("hashchange", follow);
             window.removeEventListener("popstate", follow);
         };
-    }, [keys]);
+    }, [keys, route]);
     return [values, update];
 };
 

@@ -50,6 +50,9 @@ import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components
 /** The listing's server-side filters, kept in the URL. */
 export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
 
+/** The page's route (routes.tsx); its filters are read from and written to this route's URL only. */
+export const QUARANTINE_PAGE_ROUTE = "/compliance/quarantine";
+
 /**
  * Width (px) of the Actions column: the Release and Exception inline links side by side (about
  * 140 px of labels and gap) with the cell padding. See ROW_ACTIONS_STICKY_COLUMNS.
@@ -87,7 +90,7 @@ const ComplianceQuarantine: React.FC = () => {
     const [granting, setGranting] = useState(false);
     const [releaseTarget, setReleaseTarget] = useState<QuarantinedAsset | null>(null);
     const [releasing, setReleasing] = useState(false);
-    const [filters, setFilters] = useUrlFilters(QUARANTINE_FILTER_KEYS);
+    const [filters, setFilters] = useUrlFilters(QUARANTINE_FILTER_KEYS, QUARANTINE_PAGE_ROUTE);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
     // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a

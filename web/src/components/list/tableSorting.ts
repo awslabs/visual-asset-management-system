@@ -11,6 +11,7 @@
  * label it shows.
  */
 
+import { useCallback } from "react";
 import { useCollection } from "@cloudscape-design/collection-hooks";
 import type { PaginationProps } from "@cloudscape-design/components/pagination";
 import type { TableProps } from "@cloudscape-design/components/table";
@@ -85,12 +86,17 @@ export type TableSortingProps<T> = Pick<
 
 /**
  * The rows sorted by the column header the reader chose, for a listing whose rows are the page
- * the server returned. The order holds while the reader pages or the rows are read again.
+ * the server returned. The order holds while the reader pages or the rows are read again, until
+ * `clearSorting` drops it (when the reader chooses an order the server applies to the whole list).
  */
 export const useSortedItems = <T>(
     items: readonly T[]
-): { items: readonly T[]; sortingProps: TableSortingProps<T> } => {
-    const { items: sorted, collectionProps } = useCollection(items, { sorting: {} });
+): { items: readonly T[]; sortingProps: TableSortingProps<T>; clearSorting: () => void } => {
+    const { items: sorted, collectionProps, actions } = useCollection(items, { sorting: {} });
+    const { setMultiSorting } = actions;
+    // An empty sort list is no column sorted: the rows keep the server's order and no header
+    // shows a sort arrow.
+    const clearSorting = useCallback(() => setMultiSorting([]), [setMultiSorting]);
     return {
         items: sorted,
         sortingProps: {
@@ -98,6 +104,7 @@ export const useSortedItems = <T>(
             sortingDescending: collectionProps.sortingDescending,
             onSortingChange: collectionProps.onSortingChange,
         },
+        clearSorting,
     };
 };
 

@@ -97,6 +97,12 @@ export const OVERVIEW_FILTER_KEYS = [
     "sort",
 ] as const;
 
+/**
+ * The page's route (routes.tsx); its filters are read from and written to this route's URL only,
+ * for whichever database it names.
+ */
+export const OVERVIEW_PAGE_ROUTE = "/databases/:databaseId/compliance";
+
 export const OVERVIEW_STATE_OPTIONS: SelectProps.Option[] = [
     { value: "", label: "All states" },
     { value: "compliant", label: "Compliant" },
@@ -289,7 +295,7 @@ const DatabaseCompliancePage: React.FC = () => {
     const [bindingApply, setBindingApply] = useState<ComplianceBindingApply | null>(null);
     const [applyPolls, setApplyPolls] = useState(0);
     const followedApply = useRef<string | null>(null);
-    const [filters, setFilters] = useUrlFilters(OVERVIEW_FILTER_KEYS);
+    const [filters, setFilters] = useUrlFilters(OVERVIEW_FILTER_KEYS, OVERVIEW_PAGE_ROUTE);
     const filtersActive = OVERVIEW_FILTER_KEYS.some((key) => key !== "sort" && !!filters[key]);
 
     // Server-side token paging of the asset-state table: tokens[i] is the startingToken that
@@ -668,7 +674,15 @@ const DatabaseCompliancePage: React.FC = () => {
     const isPaging = hasMore || currentPageIndex > 1;
     // The rows of the page shown, in the order of the column header chosen; the Sort by filter
     // orders the whole database on the server.
-    const { items: sortedAssets, sortingProps } = useSortedItems<any>(pageAssets);
+    const { items: sortedAssets, sortingProps, clearSorting } = useSortedItems<any>(pageAssets);
+    // Choosing a Sort by order (on the page, or through the URL) drops a column-header sort, so
+    // the rows follow the whole-database order just chosen.
+    const appliedSort = useRef(filters.sort);
+    useEffect(() => {
+        if (appliedSort.current === filters.sort) return;
+        appliedSort.current = filters.sort;
+        clearSorting();
+    }, [filters.sort, clearSorting]);
     // The binding as the last read answered it; nothing is said about it before that.
     const bindingKnown = bindingStatus === "loaded";
     // While a change is under way the page offers no other change and no Evaluate All (the API

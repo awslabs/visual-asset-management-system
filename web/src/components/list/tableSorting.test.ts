@@ -107,6 +107,27 @@ describe("useSortedItems", () => {
         expect(ids(result.current.items)).toEqual(["c", "b", "a"]);
         expect(result.current.sortingProps.sortingDescending).toBe(true);
     });
+
+    it("clearSorting returns the rows to their own order and leaves no column sorted", () => {
+        const rows: Row[] = [
+            { id: "b", name: "bravo" },
+            { id: "a", name: "Alpha" },
+            { id: "c", name: "Charlie" },
+        ];
+        const { result } = renderHook(() => useSortedItems(rows));
+        act(() =>
+            result.current.sortingProps.onSortingChange!(
+                new CustomEvent("sort", {
+                    detail: { sortingColumn: nameColumn, isDescending: true },
+                }) as any
+            )
+        );
+        expect(ids(result.current.items)).toEqual(["c", "b", "a"]);
+
+        act(() => result.current.clearSorting());
+        expect(ids(result.current.items)).toEqual(["b", "a", "c"]);
+        expect(result.current.sortingProps.sortingColumn).toBeUndefined();
+    });
 });
 
 describe("useBrowserPagedItems", () => {

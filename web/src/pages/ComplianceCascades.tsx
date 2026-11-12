@@ -50,6 +50,9 @@ import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components
 /** The listing's server-side filters, kept in the URL; an empty state is pending approval. */
 export const CASCADE_FILTER_KEYS = ["state", "databaseId", "text"] as const;
 
+/** The page's route (routes.tsx); its filters are read from and written to this route's URL only. */
+export const CASCADE_PAGE_ROUTE = "/compliance/cascades";
+
 export const CASCADE_STATE_FILTER_OPTIONS = [
     { value: "pending_approval", label: "Pending approval" },
     { value: "executing", label: "Executing" },
@@ -134,7 +137,7 @@ const ComplianceCascades: React.FC = () => {
     // The cascade whose nodes the "View nodes" dialog shows; read from the followed cascade while
     // it is tracked (so the dialog follows its polling), else from the listing row.
     const [nodesCascadeId, setNodesCascadeId] = useState<string | null>(null);
-    const [filters, setFilters] = useUrlFilters(CASCADE_FILTER_KEYS);
+    const [filters, setFilters] = useUrlFilters(CASCADE_FILTER_KEYS, CASCADE_PAGE_ROUTE);
     const stateFilter = filters.state || "pending_approval";
     // Server-side token paging: tokens[i] fetches page i + 1 (tokens[0] is undefined).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});

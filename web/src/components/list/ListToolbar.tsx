@@ -27,9 +27,21 @@ const ROW_STYLE: React.CSSProperties = {
 };
 
 /**
+ * The filters group: at the right of the search row, and at the right of a line of its own when the
+ * filters do not fit beside the search (the left margin takes the free space). Filters that wrap
+ * inside the group stay right-aligned too.
+ */
+const FILTERS_STYLE: React.CSSProperties = {
+    ...ROW_STYLE,
+    justifyContent: "flex-end",
+    marginLeft: "auto",
+};
+
+/**
  * The toolbar of a list page, passed as a Cloudscape Table's `filter`: the search field on the
  * left with the refresh button right next to it, and the filter drop-downs aligned to the right.
- * On a narrow screen the groups wrap. The layout is `TableList`'s filter slot
+ * On a narrow screen, or when the filters do not fit beside the search, the filters wrap onto a
+ * line of their own and stay aligned to the right. The row layout is `TableList`'s filter slot
  * (`components/list/TableList.tsx`); the search group grows, which pushes the filters to the right.
  */
 const ListToolbar: React.FC<ListToolbarProps> = ({
@@ -62,7 +74,7 @@ const ListToolbar: React.FC<ListToolbarProps> = ({
             )}
         </div>
         {filters && (
-            <div data-list-toolbar-group="filters" style={ROW_STYLE}>
+            <div data-list-toolbar-group="filters" style={FILTERS_STYLE}>
                 {filters}
             </div>
         )}

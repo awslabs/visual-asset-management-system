@@ -119,6 +119,9 @@ export const AUDIT_FILTER_KEYS = [
     "to",
 ] as const;
 
+/** The page's route (routes.tsx); its filters are read from and written to this route's URL only. */
+export const AUDIT_PAGE_ROUTE = "/compliance/audit";
+
 /** A day filter as the inclusive timestamp bound the route takes. */
 export const dayBound = (day: string, end: boolean): string | undefined =>
     day ? `${day}T${end ? "23:59:59" : "00:00:00"}Z` : undefined;
@@ -142,7 +145,7 @@ const ComplianceAuditLog: React.FC = () => {
     // Whether the last load failed: the table then says the log could not be loaded, not that it
     // is empty.
     const [loadFailed, setLoadFailed] = useState(false);
-    const [filters, setFilters] = useUrlFilters(AUDIT_FILTER_KEYS);
+    const [filters, setFilters] = useUrlFilters(AUDIT_FILTER_KEYS, AUDIT_PAGE_ROUTE);
     const selectedEventType =
         eventTypeOptions.find((option) => option.value === filters.eventType) ||
         eventTypeOptions[0];

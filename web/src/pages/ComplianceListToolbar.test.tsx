@@ -126,6 +126,10 @@ describe("compliance list toolbars", () => {
         ]);
         // The event type filter keeps its visible label in the toolbar.
         expect(group("filters")!.textContent).toContain("Event type");
+        // Its five filters do not fit beside the search at 1440 px; on their own line they stay
+        // at the right (D190).
+        expect(group("filters")!.style.marginLeft).toBe("auto");
+        expect(group("filters")!.style.justifyContent).toBe("flex-end");
     });
 
     it(`${Synonyms.Database} overview: search and refresh, then the filters and Sort by`, async () => {

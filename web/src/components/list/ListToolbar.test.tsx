@@ -53,6 +53,21 @@ describe("ListToolbar", () => {
         expect(search.style.flex).toBe("1 1 250px");
     });
 
+    // The Audit Log's five filters do not fit beside the search at 1440 px (D190).
+    it("keeps the filters at the right when they wrap onto a line of their own", () => {
+        const { container } = render(
+            <ListToolbar search={<input aria-label="Search" />} filters={<span>filters</span>} />
+        );
+        const filters = container.querySelector<HTMLElement>(
+            "[data-list-toolbar-group='filters']"
+        )!;
+        // The left margin takes the free space of a line the group has to itself, and filters
+        // that wrap inside the group line up at its right edge.
+        expect(filters.style.marginLeft).toBe("auto");
+        expect(filters.style.justifyContent).toBe("flex-end");
+        expect(filters.style.flexWrap).toBe("wrap");
+    });
+
     it("keeps the refresh at the left of a toolbar without a search", () => {
         const { container } = render(
             <ListToolbar onRefresh={jest.fn()} filters={<span>filters</span>} />

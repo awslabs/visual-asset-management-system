@@ -12,6 +12,7 @@
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import Synonyms from "../synonyms";
@@ -351,6 +352,54 @@ describe(`${Synonyms.Database} compliance overview`, () => {
                 )
             )
         ).toBeInTheDocument();
+    });
+
+    // D191: the order the reader just chose for the whole database is the one the rows follow.
+    it("drops a column-header sort when a Sort by order is chosen", async () => {
+        window.history.replaceState(null, "", "/#/databases/db1/compliance");
+        // The server answers in asset ID order (bravo, Alpha, Charlie), or by name when asked.
+        service().fetchDatabaseComplianceOverview.mockImplementation(
+            async (_databaseId: string, _paging: any, filters: any) => {
+                const page = overview();
+                if (filters?.sort === "name") {
+                    page.assets = [page.assets[1], page.assets[0], page.assets[2]];
+                }
+                return [true, page];
+            }
+        );
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("Charlie");
+        expect(rowOrder(Synonyms.Asset, NAMES)).toEqual(["bravo", "Alpha", "Charlie"]);
+
+        // A header sort first: descending by name on the page shown.
+        sortBy(Synonyms.Asset);
+        sortBy(Synonyms.Asset);
+        expect(rowOrder(Synonyms.Asset, NAMES)).toEqual(["Charlie", "bravo", "Alpha"]);
+        expect(headerCell(Synonyms.Asset).getAttribute("aria-sort")).toBe("descending");
+
+        await userEvent.click(
+            screen.getByRole("button", { name: new RegExp(`Sort ${Synonyms.assets}`) })
+        );
+        await userEvent.click(await screen.findByText(`Sort by ${Synonyms.asset} name`));
+
+        await waitFor(() =>
+            expect(
+                service().fetchDatabaseComplianceOverview.mock.calls.some(
+                    (call: any[]) => call[2]?.sort === "name"
+                )
+            ).toBe(true)
+        );
+        // The rows follow the server's name order, and no header shows a sort.
+        await waitFor(() =>
+            expect(rowOrder(Synonyms.Asset, NAMES)).toEqual(["Alpha", "bravo", "Charlie"])
+        );
+        expect(headerCell(Synonyms.Asset).getAttribute("aria-sort")).not.toBe("descending");
+        expect(headerCell(Synonyms.Asset).getAttribute("aria-sort")).not.toBe("ascending");
+
+        // A header chosen after Sort by still sorts the page shown.
+        sortBy(Synonyms.Asset);
+        sortBy(Synonyms.Asset);
+        expect(rowOrder(Synonyms.Asset, NAMES)).toEqual(["Charlie", "bravo", "Alpha"]);
     });
 });
 
