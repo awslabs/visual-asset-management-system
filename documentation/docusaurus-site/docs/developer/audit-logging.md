@@ -8,6 +8,8 @@ The audit logging system focuses on authorization decisions, file operations, an
 
 :::info[Coverage Note]
 Authorization decisions are recorded for every handler, because the entries are emitted from shared Casbin enforcement rather than from each handler. The remaining event types are emitted by the individual handlers, so a handler that does not call the matching function contributes no entry of that type.
+
+Every API route and method is listed in the audit action registry (`backend/backend/common/auditActions.py`) with the action it records, or with the reason it records none, and a unit test fails for a route that is in neither list. Action records ([Action Records](#action-records)) are being added handler by handler; the registry's `AUDIT_PENDING_ACTIONS` lists the actions whose handlers do not write one yet.
 :::
 
 ## Amazon CloudWatch Log Groups
@@ -83,6 +85,79 @@ Uploads and downloads use the `[FILEUPLOAD]`, `[FILEDOWNLOAD]`, and `[FILEDOWNLO
 ```
 
 The `[AUTHOTHER]`, `[AUTHCHANGES]`, and `[ACTIONS]` types follow the same shape as `[ERRORS]`, with the caller-supplied `secondary_type` in the `[type: ...]` field.
+
+## Action Records
+
+An action record says who did what, to which data, with what outcome, and what a write changed. It is written by `log_action()` and follows the record contract below, version 1 (`auditVersion: 1`). Within a version keys are only added; renaming or removing a key needs a new version.
+
+### Format
+
+An action record keeps the prefix of the existing records, so the patterns above still match it:
+
+```text
+[ACTIONS][type: assetUpdate] [user: john.doe] [roles: ["editor"]] [mfaEnabled: True] {"auditVersion": 1, "recordId": "2f0c...", "action": "assetUpdate", "outcome": "success", "eventTime": "2026-11-12T19:12:03.417Z", "actor": {"userId": "john.doe", "authMethod": "cognito"}, "request": {"requestId": "c3a1...", "method": "PUT", "route": "/database/{databaseId}/assets/{assetId}", "sourceIp": "198.51.100.7", "lambdaRequestId": "9b2e..."}, "entity": {"type": "asset", "id": "asset-456"}, "databaseId": "db-123", "assetId": "asset-456", "changes": {"description": "New text"}, "previous": {"description": "Old text"}} --- [event: {"requestContext": {"requestId": "c3a1...", "http": {"method": "PUT", "path": "/database/db-123/assets/asset-456"}}}]
+```
+
+-   The `[type: ...]` value is the action name, or for an action that existed before the contract its earlier type (for example `constraintCreateUpdate` for `constraintCreate` and `constraintUpdate`), so existing queries keep matching.
+-   Records in the file upload and download groups carry no `[type: ...]` segment, as their earlier records do not; the action is in the payload.
+-   A denial is written to the authorization group with the `[AUTHORIZATION][authorized: False]` prefix and `"outcome": "denied"`.
+-   The request echo of an action record is compact: the request ID, method, path and route key, with no headers, query string or body. What a write changed is in the payload instead.
+
+To parse a record, take the payload from the first `{` after `[mfaEnabled: True] ` or `[mfaEnabled: False] ` and decode it with a raw JSON decoder from that index; do not split on `--- [event:`. A record over the per-event size limit ends in ` ...[truncated]` and its JSON does not decode; treat it as partial.
+
+### Payload Keys
+
+A key that does not apply is left out, never written as `null`.
+
+| Key                                                                            | Type    | Meaning                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auditVersion`                                                                 | integer | `1`                                                                                                                                                                                                        |
+| `recordId`                                                                     | string  | A unique ID. Delivery is at least once, so a repeated `recordId` is a duplicate.                                                                                                                           |
+| `action`                                                                       | string  | The action name from the registry, lower camelCase (`assetCreate`, `fileDownload`, `search`).                                                                                                              |
+| `outcome`                                                                      | string  | `success`, `failed` (authorized, attempted, failed) or `denied`.                                                                                                                                           |
+| `reason`                                                                       | string  | On `failed` and `denied` only: a generic category such as `notFound`, `validation`, `conflict`, `internal` or `forbidden`, never error text.                                                               |
+| `eventTime`                                                                    | string  | UTC time the action completed, ISO 8601 with milliseconds and `Z`.                                                                                                                                         |
+| `actor`                                                                        | object  | `userId` (the same value as the prefix user); `authMethod` (`cognito`, `externalIdp`, `jwt` when the token's issuer is not known, `apiKey` or `system`); `apiKeyId`; `crossCall`; `onBehalfOf`.            |
+| `request`                                                                      | object  | `requestId`; `method`; `route` (the route template, never the concrete path; `unmatched` for a path no route matches); `sourceIp` (the address API Gateway reports for the connection); `lambdaRequestId`. |
+| `entity`                                                                       | object  | `type` (for example `asset`, `file`, `metadata`, `workflow`) and `id`.                                                                                                                                     |
+| `databaseId`, `assetId`, `filePath`, `versionId`, `assetVersionId`, and others | string  | The IDs of the data the action touched, including `pipelineId`, `workflowId`, `executionId`, `commentId`, `tagId`, `subscriptionId`, `roleName`, `constraintId` and the `target*` IDs of a copy or move.   |
+| `bytes`, `fileCount`, `itemCount`, `durationMs`                                | integer | Sizes and counts the handler already knows. No AWS call is made to fill them.                                                                                                                              |
+| `changes`                                                                      | object  | For a write: each field it set, with its new value.                                                                                                                                                        |
+| `previous`                                                                     | object  | For a write: the prior values of those fields, when the handler had already loaded the record. No extra read is made to fill it.                                                                           |
+| `requestParameters`                                                            | object  | For a read, search or download: what was asked (IDs, filters, page size). What was returned is never recorded.                                                                                             |
+| `details`                                                                      | object  | Other facts about the action (flags, trigger type, index name).                                                                                                                                            |
+| `truncated`                                                                    | boolean | `true` when a value or the record was cut to the size caps.                                                                                                                                                |
+
+The keys of the earlier orchestration and authorization records stay alongside these.
+
+### What Reads and Writes Record
+
+-   **A write** records what it wrote or changed: each changed field with its new value in `changes`, and the prior values in `previous` where the handler already held the record.
+-   **A read, search or download** records the request: the route, the IDs, the filters and page size in `requestParameters`, and the outcome. The content returned is never recorded; a search records the number of hits in `itemCount`, not the hits.
+-   **A bulk operation** records one record per item, all delivered together at the end of the request.
+-   **File content** is never recorded.
+
+### Redaction and Size Caps
+
+-   Every value section (`changes`, `previous`, `requestParameters`, `details`) passes through the same key-name redaction as the request echo (see [Automatic Data Masking](#automatic-data-masking)), so a credential or template body is written as `<redacted>`.
+-   A value whose JSON text is over 2 KB is replaced by `{"truncated": true, "sha256": "<hex>", "bytes": <size>, "preview": "<first characters>"}`. The SHA-256 is of the value's UTF-8 bytes for a string, and of its canonical JSON text (sorted keys, no spaces, ASCII) otherwise, so you can confirm a copy of the value you hold matches what was written.
+-   A record is bounded to 32 KB: past it, the largest values lose their preview and keep their hash, then whole sections are replaced by `{"truncated": true, "sha256", "fieldCount"}`.
+
+### Delivery
+
+A handler entrypoint opens the request's audit context with `audit_request(event, context)`. Inside it:
+
+-   The caller's identity is resolved once per request instead of once per record.
+-   Successful action records are held and written when the handler returns, in one write per audit log group, all groups in parallel, bounded by a 1.5-second deadline. A request that touches three groups costs about one write's time, not three.
+-   A timer writes the held records 750 milliseconds before the function times out, so a timing-out request still delivers them.
+-   Denials, failures and error records are written at once.
+-   A record not confirmed by the deadline is kept in the function log as an [undelivered entry](#monitoring-audit-logging-health) with reason `flushDeadlineExceeded`. Its write may still complete, so a record can appear twice; `recordId` identifies the copy.
+
+If a function stops without returning (out of memory, a crash), records held for it are lost; the API-level authorization record of the call is written before the handler runs and is not affected.
+
+### Action Registry
+
+`backend/backend/common/auditActions.py` maps every route and method of the API (core, add-on and fork routes) to the action it records: its name, audit log group, entity type and kind (`write`, `read`, `search` or `download`). Routes that record nothing are listed with a reason, for example the unauthenticated configuration routes and the permission probes, whose denials are recorded by the probe itself. Handlers that serve no API route (bucket sync, the workflow state machine steps, the search reindexer) are listed with their actions as system actions. The add-on actions are in `common/addonAuditActions.py`, and a fork adds its own in `custom/customAuditActions.py` (see [Customizing VAMS](customizing-vams.md)).
 
 ## How Audit Logging Works
 
@@ -238,6 +313,34 @@ log_errors(
     custom_data={"error": "Invalid asset ID format", "assetId": "invalid-id"}
 )
 ```
+
+### log_action and audit_request
+
+Record an action in the [record contract](#action-records), after the write succeeded:
+
+```python
+from customLogging.auditLogging import audit_request, log_action
+
+def lambda_handler(event, context):
+    with audit_request(event, context):
+        ...
+        update_asset(asset, body)
+        log_action(event, "assetUpdate", database_id=database_id, asset_id=asset_id,
+                   changes={"description": body["description"]},
+                   previous={"description": asset.get("description")})
+```
+
+| Parameter                                              | Description                                                                                        |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `event`                                                | The Lambda event of the request                                                                    |
+| `action`                                               | A registered action name; `None` takes the action registered for the request's route               |
+| `outcome`                                              | `success` (default), `failed` or `denied`                                                          |
+| `reason`                                               | A generic category on `failed` or `denied`                                                         |
+| `database_id`, `asset_id`, `file_path`, `**ids`        | The IDs of the data the action touched (`versionId=`, `workflowId=` and the other payload ID keys) |
+| `bytes`, `file_count`, `item_count`, `duration_ms`     | Sizes and counts the handler already knows                                                         |
+| `changes`, `previous`, `request_parameters`, `details` | The value sections                                                                                 |
+
+`audit_request(event, context, on_behalf_of=None)` is a context manager; `@audited_handler` applies it to an entrypoint. Outside it, `log_action` writes each record at once and every other function writes exactly as before. Inside it, the `log_actions`, `log_file_*` and `log_errors` records keep their payload keys and gain the contract keys; the authorization and authentication functions are unchanged.
 
 ## Handler Integration Example
 
@@ -423,7 +526,7 @@ VAMS audit logs can be forwarded to Security Information and Event Management (S
 -   Logs are stored in the same AWS Region as the VAMS deployment
 -   AWS KMS keys are Region-specific
 -   No cross-Region log replication is configured by default
--   Amazon CloudWatch logs are immutable once written
+-   An audit entry cannot be edited once written. Log groups and streams can be deleted by a principal that holds those permissions; no VAMS application role does
 -   Log stream names use date-based format (YYYY/MM/DD)
 
 ## Monitoring Audit Logging Health
@@ -447,6 +550,7 @@ An entry that cannot be written to its audit log group is not dropped. The AWS L
 | `createLogStreamFailed` | The day's log stream could not be created.                                                                                        |
 | `clientUnavailable`     | The Amazon CloudWatch Logs client could not be created when the function started.                                                 |
 | `logGroupUnresolved`    | The audit log group name could not be read from AWS Systems Manager Parameter Store.                                              |
+| `flushDeadlineExceeded` | The request's held action records were not confirmed within the 1.5-second deadline. The write may still complete.                |
 | `formatFailed`          | The entry could not be formatted; a `[ERROR: Failed to format message]` entry was written in its place.                           |
 | `unexpectedError`       | Any other failure. `record` is `null` when the entry was never formatted.                                                         |
 
@@ -516,6 +620,8 @@ The following table provides guidance on which logging function to call in diffe
 | `log_auth_changes()`           | Role and user-role changes, permission constraint and constraint-template changes, API key lifecycle events, Amazon Cognito user management, and any other change to the authorization model.                                                                                         |
 | `log_actions()`                | Orchestration write operations: launching, aborting, re-running, and permanently deleting an execution, and creating, updating, archiving, or deleting a workflow, pipeline, pipeline template, or workflow trigger. See [Orchestration action events](#orchestration-action-events). |
 | `log_errors()`                 | Application errors, input validation failures, system exceptions, and any unhandled error conditions.                                                                                                                                                                                 |
+| `log_action()`                 | Any action in the audit action registry, in the record contract: after a write succeeds, when an authorized attempt fails, or when a data-level check denies it. See [Action Records](#action-records).                                                                               |
+| `audit_request()`              | Around the work of every Lambda entrypoint, so a request's identity is resolved once and its action records are written together.                                                                                                                                                     |
 
 :::note[Function signature differences]
 `log_authorization()` accepts `claims_and_roles` as its first parameter (the claims dictionary from `request_to_claims()`), not the full API Gateway event. Use `log_authorization_api()` when you have the full event object, and `log_authorization_gateway()` in the API Gateway authorizer Lambda.
@@ -617,7 +723,8 @@ The API Gateway authorizer runs before normal request processing and handles raw
 
 ### Audit Trail Integrity
 
--   Amazon CloudWatch logs are immutable once written and cannot be modified after creation.
+-   An audit entry cannot be edited once written. VAMS application roles may only create log streams and write entries (`logs:CreateLogStream`, `logs:PutLogEvents`); none may delete a log group or stream or change its retention. A principal outside VAMS that holds those permissions can, so restrict them, and record them with AWS CloudTrail.
+-   Records are kept for the retention period. A request to erase personal data is met by that retention, not by deleting entries.
 -   Log stream names use a date-based format (`YYYY/MM/DD`) for chronological organization.
 -   Each log entry includes a millisecond-precision timestamp for chronological ordering.
 -   The silent failure design ensures no API disruption due to logging errors; an entry that cannot be written to its audit log group is kept in the function log and counted in the `AuditWriteFailures` metric, which should be alarmed on.
@@ -626,6 +733,7 @@ The API Gateway authorizer runs before normal request processing and handles raw
 
 -   User IDs are logged for audit purposes (legitimate interest for security monitoring).
 -   Records can contain personal data beyond the user ID: the request echo carries the claims the authorizer verified (which can include an email address), the source IP address and user agent, and the submitted request body after redaction, so names, descriptions, metadata values, comments and file names a user enters are logged as entered (see [What Is Logged](#what-is-logged)). Treat the audit log groups, and the function log groups that hold [undelivered entries](#monitoring-audit-logging-health), as containing personal data when you set their access, retention and export.
+-   Action records carry what a write changed, in full up to the size caps, so a comment, a metadata value or a user's email address that a write set is recorded as written.
 -   Logs can be exported for data subject access requests.
 -   The retention period is configurable; regulated environments that require multi-year audit records can extend it (see [Configuring Log Retention](#configuring-log-retention)).
 -   Automatic data masking removes the values of the credential and content keys listed under [Automatic Data Masking](#automatic-data-masking) before writing; it does not inspect the text of other fields.
@@ -660,7 +768,7 @@ If audit events are not appearing in the expected log groups:
 
 ### Performance Impact
 
--   Audit logging is synchronous but lightweight, with minimal latency impact (under 50 milliseconds per log entry).
+-   Outside a request audit context each entry is one synchronous write (tens of milliseconds). Inside one, a request's successful action records are written together at the end, one parallel write per log group, so the time is that of one write however many groups the request touched.
 -   The silent failure pattern prevents any cascading impact on API response times.
 -   Reporting an entry that could not be written adds two lines to the function log and nothing to a successful write.
 -   Amazon CloudWatch Logs uses batched writes internally, optimizing throughput for high-volume scenarios.
