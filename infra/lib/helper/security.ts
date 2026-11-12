@@ -702,7 +702,10 @@ export const NAG_REASON_LAMBDA_BASIC_EXECUTION =
  * `AWSLambdaVPCAccessExecutionRole` — acceptable because its content is ENI management only.
  *
  * Adds `ec2:CreateNetworkInterface`, `DescribeNetworkInterfaces` and `DeleteNetworkInterface`. A Lambda
- * attached to the VAMS VPC cannot start without them, and they act on the function's own ENIs.
+ * attached to the VAMS VPC cannot start without them, and they act on the function's own ENIs. While the
+ * VPC is enabled, the role of a function outside the VPC keeps the policy too, so Lambda can delete the
+ * function's ENIs after it leaves the VPC; that function's code is denied the ENI changes
+ * (`LambdaVpcEniPermissionsAspect`).
  */
 export const NAG_REASON_LAMBDA_VPC_ACCESS =
     "Grants only the ENI create/describe/delete a VPC-attached Lambda needs.";

@@ -25,8 +25,17 @@ import {
 } from "../../lib/lambdaBuilder/workflowFunctions";
 import { ALL_TEMPLATES, SynthResult, synthTemplate } from "../support/templateSynth";
 import { inlinePolicies, managedPolicies, nestedTemplateKeyFor } from "../support/iamPolicySize";
+import { LAMBDA_ENI_DENY_POLICY_ID } from "../../lib/aspects/lambda-vpc-eni-permissions.aspect";
 
 jest.setTimeout(900_000);
+
+/**
+ * The customer managed policies on a role that grant something. With the VPC enabled (the GovCloud and EU
+ * Sovereign templates), a function outside the VPC also carries the #1347 network interface Deny, which
+ * grants nothing.
+ */
+const grantingManagedPolicies = (...args: Parameters<typeof managedPolicies>) =>
+    managedPolicies(...args).filter(([id]) => !id.startsWith(LAMBDA_ENI_DENY_POLICY_ID));
 
 /** Construct id of each table, keyed by the logical name the backend tests use. */
 const TABLES: Record<string, string> = {
@@ -254,7 +263,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
             "states:DescribeExecution",
         ]);
         expect(actions.filter((a) => /^(lambda|batch|sagemaker|deadline):/.test(a))).toEqual([]);
-        expect(managedPolicies(synth, role, stack)).toEqual([]);
+        expect(grantingManagedPolicies(synth, role, stack)).toEqual([]);
     });
 
     test("the execute handler holds exactly the calls its launch makes", () => {
@@ -267,7 +276,7 @@ describe.each(ALL_TEMPLATES)("execution service route split (%s template)", (nam
 
     test("the execution service's table reads are in its managed policy, which its function waits for", () => {
         const role = roleId(synth, stack, "executionService");
-        const managed = managedPolicies(synth, role, stack);
+        const managed = grantingManagedPolicies(synth, role, stack);
         expect(managed.map(([id]) => id)).toEqual([
             expect.stringMatching(
                 new RegExp(`^executionService${EXECUTION_SERVICE_TABLE_READ_POLICY_ID}`)
