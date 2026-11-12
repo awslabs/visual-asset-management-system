@@ -188,6 +188,28 @@ export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
 // pipelineEnd deletes the copy; the bucket's lifecycle rule for the prefix expires what a crashed
 // run leaves.
 export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
+
+// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
+// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
+// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
+// getConfig() warns about it at synthesis. The export staging expiry below is derived from it.
+export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
+// The auxiliary-bucket prefix where the asset export service stages an over-size export payload
+// before returning a presigned URL for it (EXPORT_STAGING_PREFIX in
+// backend/backend/handlers/assets/assetExportService.py). The export function's S3 grant and the
+// bucket's lifecycle rules for staged payloads are both scoped to it, so the values move together.
+// The bucket's preview and viewer data is keyed under {databaseId}/, so the prefix carries a dot, a
+// character no database ID can contain: the expiry on it never reaches a database's data.
+export const ASSET_EXPORT_STAGING_PREFIX = "vams.assetExports/";
+// Days after which the auxiliary bucket expires a staged export payload. The payload is read through
+// its presigned URL, possibly more than once, until that URL expires, so nothing deletes it on read.
+// Derived from the longest lifetime any presigned URL can have rather than the configured
+// presignedUrlTimeoutSeconds, so no setting of that value can make a payload expire while a URL
+// signed for it still works: whole days rounded up, plus one day of margin. Amazon S3 adds the days to
+// the object's creation time and rounds up to the next midnight UTC, so a payload lives at least that
+// long.
+export const ASSET_EXPORT_STAGING_EXPIRATION_DAYS =
+    Math.ceil(PRESIGNED_URL_MAX_TIMEOUT_SECONDS / 86400) + 1;
 // The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
 // pod's own failure rather than a poll timeout.
 export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
@@ -286,12 +308,6 @@ export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
-
-// The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
-// answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
-// app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
-// getConfig() warns about it at synthesis. Compared against, never assigned.
-export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 
 // The taskTimeout the Video SOP/BOM Extraction pipeline's vamsSchema declares
 // (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json). The parent workflow waits this long

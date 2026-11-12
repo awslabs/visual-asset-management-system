@@ -261,6 +261,12 @@ export function buildMetadataGenerationPipelineFunction(
     // also strip the same text from the middle of a model name. The inference-profile ARN names the
     // configured id as-is: with a cross-Region prefix it is the profile the handler invokes.
     const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+    // A cross-Region inference profile routes each request to the foundation model in one of several
+    // Regions, and Amazon Bedrock authorizes the foundation-model ARN of the Region it routed to. So a
+    // prefixed id grants the configured model in any Region of the partition, as the CAD STEP agent
+    // and Video SOP/BOM grants do; a plain model id is invoked in the deployment Region only.
+    const usesCrossRegionProfile = bedrockModelPermissions !== bedrockModelId;
+    const foundationModelRegion = usesCrossRegionProfile ? "*" : config.env.region;
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
@@ -304,7 +310,7 @@ export function buildMetadataGenerationPipelineFunction(
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         resources: [
             `arn:${ServiceHelper.Partition()}:bedrock:` +
-                config.env.region +
+                foundationModelRegion +
                 "::foundation-model/" +
                 bedrockModelPermissions,
             `arn:${ServiceHelper.Partition()}:bedrock:` +
@@ -349,7 +355,9 @@ export function buildMetadataGenerationPipelineFunction(
 
     // The one resource wildcard this handler genuinely needs, named rather than covered by a blanket.
     // Amazon Rekognition's detection APIs analyse bytes supplied in the request and publish no
-    // resource to scope to (see the link above the policy). The Bedrock ARNs beside it are exact.
+    // resource to scope to (see the link above the policy). The Bedrock ARNs beside it name the
+    // configured model; with a cross-Region inference profile the foundation-model ARN carries a
+    // Region wildcard, which the second entry covers by shape.
     NagSuppressions.addResourceSuppressions(
         fun,
         [
@@ -360,6 +368,14 @@ export function buildMetadataGenerationPipelineFunction(
                     "request and support no resource-level permissions, so Resource must be '*'. " +
                     "https://docs.aws.amazon.com/rekognition/latest/dg/security_iam_id-based-policy-examples.html",
                 appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "A cross-Region inference profile routes each request to the configured foundation " +
+                    "model in one of several Regions, so the foundation-model ARN names that model in " +
+                    "any Region. The model id is deployment configuration; no other model is granted.",
+                appliesTo: [{ regex: "/^Resource::arn:[^:]+:bedrock:\\*::foundation-model/.*$/g" }],
             },
         ],
         true
