@@ -138,6 +138,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Search paging reaches every readable record** — Following search pages no longer skips records a caller can open when some of their permission rules are checked after the query, also when searching assets and files together, and such searches stay within about 10 seconds. (issue #1029)
 -   **Workflow validation messages** — An unknown workflow `concurrencyRestriction`, `inputFileArity` or `outputTarget.locationType` is refused with the allowed values as a plain list instead of a Python tuple. (issue #997)
 -   **CLI pagination limits** — `--auto-paginate --max-items` truncates oversized pages to the requested limit and still notes when more items may be available. (issue #822)
+-   **GLB combine with asset creation reports success** — `vamscli industry spatial glbassetcombine --asset-create-name` exits 0 and reports the new asset after a successful upload; it exited 1 with a file-not-found error, so a retry created a second asset. (issue #1356)
 -   **List-valued role constraints** — Constraints with valid list elements are accepted instead of failing validation of the list representation. (issue #838)
 -   **Search map pagination** — Map-view page controls rerun the search with the selected page and use the configured page size. (issue #769)
 -   **Asset-link recreation** — Recreating a deleted asset link no longer fails because of stale index results. (issue #840)
