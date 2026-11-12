@@ -7,16 +7,16 @@ import React, { useEffect, useState, useCallback } from "react";
 import { VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import BreakableIdentifier from "../components/compliance/BreakableIdentifier";
 import Box from "@cloudscape-design/components/box";
-import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
-import FormField from "@cloudscape-design/components/form-field";
 import DatePicker from "@cloudscape-design/components/date-picker";
 import Input from "@cloudscape-design/components/input";
+import ListToolbar from "../components/list/ListToolbar";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
 import {
     DatabaseFilter,
     TextFilterInput,
@@ -159,6 +159,9 @@ const ComplianceAuditLog: React.FC = () => {
     // listed any (listingStates.listedBefore).
     const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
     const filtered = AUDIT_FILTER_KEYS.some((key) => filters[key]);
+    // The entries of the page shown, in the order of the column header chosen.
+    const { items: sortedItems, sortingProps } = useSortedItems(items);
+    const isPaging = hasMore || currentPageIndex > 1;
 
     // A load is dropped when a later one has begun (other filters, another page), so the rows
     // shown are always the latest request's.
@@ -249,79 +252,81 @@ const ComplianceAuditLog: React.FC = () => {
                             counter={
                                 loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
                             }
-                            actions={
-                                <SpaceBetween direction="horizontal" size="xs">
-                                    <FormField label="Event type">
-                                        <Select
-                                            selectedOption={selectedEventType}
-                                            onChange={({ detail }) =>
-                                                setFilters({
-                                                    eventType: detail.selectedOption.value || "",
-                                                })
-                                            }
-                                            options={eventTypeOptions}
-                                            filteringType="auto"
-                                            ariaLabel="Filter audit entries by event type"
-                                        />
-                                    </FormField>
-                                    <Button
-                                        iconName="refresh"
-                                        ariaLabel="Refresh audit log"
-                                        onClick={loadData}
-                                        loading={loading}
-                                    />
-                                </SpaceBetween>
-                            }
+                            description={isPaging ? PAGE_SORTING_NOTE : undefined}
                         >
                             Compliance Audit Log
                         </Header>
                     }
                     filter={
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <DatabaseFilter
-                                value={filters.databaseId}
-                                onChange={(databaseId) =>
-                                    setFilters({
-                                        databaseId,
-                                        assetId: databaseId ? filters.assetId : "",
-                                    })
-                                }
-                            />
-                            <Input
-                                value={assetDraft}
-                                disabled={!filters.databaseId}
-                                placeholder={`${Synonyms.Asset} ID (in the ${Synonyms.database})`}
-                                ariaLabel={`Filter by ${Synonyms.asset} ID`}
-                                onChange={({ detail }) => setAssetDraft(detail.value)}
-                                onBlur={() => setFilters({ assetId: assetDraft.trim() })}
-                                onKeyDown={({ detail }) => {
-                                    if (detail.key === "Enter") {
-                                        setFilters({ assetId: assetDraft.trim() });
-                                    }
-                                }}
-                            />
-                            <TextFilterInput
-                                value={filters.text}
-                                onCommit={(text) => setFilters({ text })}
-                                placeholder={`Search ${Synonyms.asset} name, ID or actor`}
-                                ariaLabel="Search audit entries"
-                            />
-                            <DatePicker
-                                value={filters.from}
-                                placeholder="From (YYYY/MM/DD)"
-                                ariaLabel="Entries from"
-                                onChange={({ detail }) => setFilters({ from: detail.value })}
-                            />
-                            <DatePicker
-                                value={filters.to}
-                                placeholder="To (YYYY/MM/DD)"
-                                ariaLabel="Entries to"
-                                onChange={({ detail }) => setFilters({ to: detail.value })}
-                            />
-                        </SpaceBetween>
+                        <ListToolbar
+                            search={
+                                <TextFilterInput
+                                    value={filters.text}
+                                    onCommit={(text) => setFilters({ text })}
+                                    placeholder={`Search ${Synonyms.asset} name, ID or actor`}
+                                    ariaLabel="Search audit entries"
+                                />
+                            }
+                            onRefresh={loadData}
+                            refreshing={loading}
+                            refreshLabel="Refresh audit log"
+                            filters={
+                                <>
+                                    <Select
+                                        selectedOption={selectedEventType}
+                                        onChange={({ detail }) =>
+                                            setFilters({
+                                                eventType: detail.selectedOption.value || "",
+                                            })
+                                        }
+                                        options={eventTypeOptions}
+                                        filteringType="auto"
+                                        inlineLabelText="Event type"
+                                        ariaLabel="Filter audit entries by event type"
+                                    />
+                                    <DatabaseFilter
+                                        value={filters.databaseId}
+                                        onChange={(databaseId) =>
+                                            setFilters({
+                                                databaseId,
+                                                assetId: databaseId ? filters.assetId : "",
+                                            })
+                                        }
+                                    />
+                                    <Input
+                                        value={assetDraft}
+                                        disabled={!filters.databaseId}
+                                        placeholder={`${Synonyms.Asset} ID (in the ${Synonyms.database})`}
+                                        ariaLabel={`Filter by ${Synonyms.asset} ID`}
+                                        onChange={({ detail }) => setAssetDraft(detail.value)}
+                                        onBlur={() => setFilters({ assetId: assetDraft.trim() })}
+                                        onKeyDown={({ detail }) => {
+                                            if (detail.key === "Enter") {
+                                                setFilters({ assetId: assetDraft.trim() });
+                                            }
+                                        }}
+                                    />
+                                    <DatePicker
+                                        value={filters.from}
+                                        placeholder="From (YYYY/MM/DD)"
+                                        ariaLabel="Entries from"
+                                        onChange={({ detail }) =>
+                                            setFilters({ from: detail.value })
+                                        }
+                                    />
+                                    <DatePicker
+                                        value={filters.to}
+                                        placeholder="To (YYYY/MM/DD)"
+                                        ariaLabel="Entries to"
+                                        onChange={({ detail }) => setFilters({ to: detail.value })}
+                                    />
+                                </>
+                            }
+                        />
                     }
                     loading={loading}
-                    items={items}
+                    items={sortedItems}
+                    {...sortingProps}
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
@@ -367,6 +372,7 @@ const ComplianceAuditLog: React.FC = () => {
                             cell: (item) =>
                                 item.timestamp ? new Date(item.timestamp).toLocaleString() : "-",
                             sortingField: "timestamp",
+                            sortingComparator: byDate((item) => item.timestamp),
                         },
                         {
                             id: "eventType",
@@ -390,12 +396,14 @@ const ComplianceAuditLog: React.FC = () => {
                                 </SpaceBetween>
                             ),
                             sortingField: "eventType",
+                            sortingComparator: byText((item) => item.eventType),
                         },
                         {
                             id: "databaseId",
                             header: Synonyms.Database,
                             cell: (item) => item.databaseId || "-",
                             sortingField: "databaseId",
+                            sortingComparator: byText((item) => item.databaseId),
                         },
                         {
                             id: "assetId",
@@ -424,6 +432,7 @@ const ComplianceAuditLog: React.FC = () => {
                                 );
                             },
                             sortingField: "assetId",
+                            sortingComparator: byText((item) => item.assetName || item.assetId),
                         },
                         {
                             id: "actor",
@@ -434,6 +443,7 @@ const ComplianceAuditLog: React.FC = () => {
                             cell: (item) =>
                                 item.actor ? <BreakableIdentifier text={item.actor} userId /> : "-",
                             sortingField: "actor",
+                            sortingComparator: byText((item) => item.actor),
                         },
                         {
                             id: "details",

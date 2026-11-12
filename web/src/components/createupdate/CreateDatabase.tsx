@@ -28,6 +28,11 @@ import {
 } from "../../services/ComplianceService";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import Synonyms from "../../synonyms";
+import {
+    REMOVE_BINDING_CONFIRM_LABEL,
+    REMOVE_BINDING_HEADER,
+    removeBindingConfirmation,
+} from "../compliance/bindingConfirmations";
 
 // Compliance routes behind the schema-binding field; the field is shown only when the caller
 // may list schemas and bind one to the database.
@@ -369,7 +374,7 @@ export default function CreateDatabase({
     // the schema selection changed, in that order. A refused save sends no binding; any refusal
     // keeps the modal open with the message, and the modal closes only when every request sent
     // succeeded. With nothing changed it closes without sending anything. Removing a bound schema
-    // (choosing None) deletes the compliance state of every asset that inherits it, so it first
+    // (choosing None) removes the compliance state of every asset that inherits it, so it first
     // asks for the same confirmation as Remove on the database compliance overview, and sends
     // nothing (not even the save) until it is confirmed.
     const submit = async (unbindConfirmed = false) => {
@@ -441,7 +446,7 @@ export default function CreateDatabase({
                 <Modal
                     visible={confirmUnbind}
                     onDismiss={() => setConfirmUnbind(false)}
-                    header="Remove the compliance schema binding"
+                    header={REMOVE_BINDING_HEADER}
                     closeAriaLabel="Close dialog"
                     footer={
                         <Box float="right">
@@ -456,15 +461,13 @@ export default function CreateDatabase({
                                         submit(true);
                                     }}
                                 >
-                                    Remove binding
+                                    {REMOVE_BINDING_CONFIRM_LABEL}
                                 </Button>
                             </SpaceBetween>
                         </Box>
                     }
                 >
-                    Remove {initialSchemaValue} from the {Synonyms.database} {formState.databaseId}?
-                    The compliance state of every {Synonyms.asset} that inherits it is deleted;{" "}
-                    {Synonyms.assets} that bind their own schema keep theirs.
+                    {removeBindingConfirmation(initialSchemaValue || "", formState.databaseId)}
                 </Modal>
             )}
             <Modal

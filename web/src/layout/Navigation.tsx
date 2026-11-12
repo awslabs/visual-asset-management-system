@@ -163,7 +163,7 @@ export function Navigation({
         },
         {
             type: "section",
-            text: "Compliance",
+            text: "Admin - Compliance",
             items: [
                 { type: "link", text: "Compliance Schemas", href: "#/compliance/schemas/" },
                 { type: "link", text: "Quarantine", href: "#/compliance/quarantine/" },

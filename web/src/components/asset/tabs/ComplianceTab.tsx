@@ -45,7 +45,10 @@ import {
 import ReasonModal from "../../compliance/ReasonModal";
 import RevokeExceptionModal from "../../compliance/RevokeExceptionModal";
 import ExecutionFailureReasons from "../../compliance/ExecutionFailureReasons";
-import { evaluationRuleResults } from "../../compliance/EvaluationHistoryModal";
+import {
+    evaluationResultLabel,
+    evaluationRuleResults,
+} from "../../compliance/EvaluationHistoryModal";
 import {
     ComplianceStateBadge,
     EvaluationErrorIndicator,
@@ -55,6 +58,7 @@ import {
 import Synonyms from "../../../synonyms";
 import { useLatestRequest } from "../../compliance/listingFilters";
 import { ListingLoadFailed, loadFailureMessage } from "../../compliance/listingStates";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../../list/tableSorting";
 
 interface ComplianceTabProps {
     databaseId: string;
@@ -205,6 +209,9 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
         }
     }, [isActive, canViewCompliance, databaseId, assetId, loadComplianceData]);
 
+    // The evaluations of the history page shown, in the order of the column header chosen.
+    const { items: sortedEvaluations, sortingProps } = useSortedItems(evaluations);
+
     const handlePageChange = async ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
         setCurrentPageIndex(newIndex);
@@ -302,6 +309,74 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
     const lastEvaluated = complianceState?.lastEvaluatedAt || complianceState?.lastEvaluationAt;
     // An archived asset is not evaluated while it is archived; its record keeps the state it had.
     const archived = complianceState?.complianceState === "archived";
+    const historyPaging = hasMore || currentPageIndex > 1;
+
+    // The status fields side by side, as the asset details spread theirs; each keeps its own small
+    // line beneath. They stack on a narrow screen.
+    const statusFields: { id: string; node: React.ReactNode }[] = [
+        {
+            id: "current",
+            node: (
+                <div>
+                    <Box variant="awsui-key-label">Current State</Box>
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <ComplianceStateBadge state={complianceState?.complianceState} />
+                        <EvaluationErrorIndicator
+                            lastEvaluationStatus={complianceState?.lastEvaluationStatus}
+                        />
+                    </SpaceBetween>
+                </div>
+            ),
+        },
+    ];
+    if (archived && complianceState?.recordedComplianceState) {
+        statusFields.push({
+            id: "recorded",
+            node: (
+                <div>
+                    <Box variant="awsui-key-label">Recorded State</Box>
+                    <ComplianceStateBadge state={complianceState.recordedComplianceState} />
+                </div>
+            ),
+        });
+    }
+    if (complianceState?.schemaName) {
+        statusFields.push({
+            id: "schema",
+            node: (
+                <div>
+                    <Box variant="awsui-key-label">Assigned Schema</Box>
+                    <div>{complianceState.schemaName}</div>
+                    {complianceState.schemaSource && (
+                        <Box variant="small" color="text-body-secondary">
+                            {schemaSourceLabel(complianceState.schemaSource)}
+                        </Box>
+                    )}
+                </div>
+            ),
+        });
+    }
+    if (lastEvaluated) {
+        statusFields.push({
+            id: "evaluated",
+            node: (
+                <div>
+                    <Box variant="awsui-key-label">Last Evaluated</Box>
+                    <div>{formatTimestamp(lastEvaluated)}</div>
+                </div>
+            ),
+        });
+    }
+    // The longer notes about the state, in a full-width row under the fields, so a long note does
+    // not stretch one column.
+    const evaluationErrored = complianceState?.lastEvaluationStatus === "error";
+    const quarantined = complianceState?.complianceState === "quarantined";
+    const awaitingText = awaitingReevaluationText(complianceState);
+    const hasStateNotes =
+        evaluationErrored ||
+        (quarantined &&
+            executionFailureReasons(complianceState?.quarantineExecutionFailures).length > 0) ||
+        !!awaitingText;
 
     return (
         <SpaceBetween size="l">
@@ -387,55 +462,36 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                         </Alert>
                     )}
                     {!stateFailure && (
-                        <div>
-                            <Box variant="awsui-key-label">Current State</Box>
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <ComplianceStateBadge state={complianceState?.complianceState} />
-                                <EvaluationErrorIndicator
-                                    lastEvaluationStatus={complianceState?.lastEvaluationStatus}
-                                />
-                            </SpaceBetween>
-                            {complianceState?.lastEvaluationStatus === "error" && (
+                        <ColumnLayout
+                            columns={Math.min(4, statusFields.length) as 1 | 2 | 3 | 4}
+                            variant="text-grid"
+                            data-testid="compliance-status-fields"
+                        >
+                            {statusFields.map((field) => (
+                                <React.Fragment key={field.id}>{field.node}</React.Fragment>
+                            ))}
+                        </ColumnLayout>
+                    )}
+                    {!stateFailure && hasStateNotes && (
+                        <SpaceBetween size="xxs" data-testid="compliance-status-notes">
+                            {evaluationErrored && (
                                 <Box variant="small" color="text-status-error">
                                     The last evaluation produced no verdict, so the state is the one
                                     the {Synonyms.asset} held before it. The evaluation history
                                     shows the cause.
                                 </Box>
                             )}
-                            {complianceState?.complianceState === "quarantined" && (
+                            {quarantined && (
                                 <ExecutionFailureReasons
-                                    entries={complianceState.quarantineExecutionFailures}
+                                    entries={complianceState?.quarantineExecutionFailures}
                                 />
                             )}
-                            {awaitingReevaluationText(complianceState) && (
+                            {awaitingText && (
                                 <Box variant="small" color="text-status-warning">
-                                    {awaitingReevaluationText(complianceState)}
+                                    {awaitingText}
                                 </Box>
                             )}
-                        </div>
-                    )}
-                    {archived && complianceState?.recordedComplianceState && (
-                        <div>
-                            <Box variant="awsui-key-label">Recorded State</Box>
-                            <ComplianceStateBadge state={complianceState.recordedComplianceState} />
-                        </div>
-                    )}
-                    {complianceState?.schemaName && (
-                        <div>
-                            <Box variant="awsui-key-label">Assigned Schema</Box>
-                            <div>{complianceState.schemaName}</div>
-                            {complianceState.schemaSource && (
-                                <Box variant="small" color="text-body-secondary">
-                                    {schemaSourceLabel(complianceState.schemaSource)}
-                                </Box>
-                            )}
-                        </div>
-                    )}
-                    {lastEvaluated && (
-                        <div>
-                            <Box variant="awsui-key-label">Last Evaluated</Box>
-                            <div>{formatTimestamp(lastEvaluated)}</div>
-                        </div>
+                        </SpaceBetween>
                     )}
                     {exceptionActive && (
                         <Container
@@ -488,6 +544,7 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                                 ? undefined
                                 : `(${evaluations.length}${hasMore ? "+" : ""})`
                         }
+                        description={historyPaging ? PAGE_SORTING_NOTE : undefined}
                     >
                         Evaluation History
                     </Header>
@@ -498,7 +555,8 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                     // instead of scrolling sideways and cutting off the Execution column.
                     wrapLines
                     loading={loading}
-                    items={evaluations}
+                    items={sortedEvaluations}
+                    {...sortingProps}
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
@@ -531,15 +589,20 @@ const ComplianceTabForAsset: React.FC<ComplianceTabProps> = ({ databaseId, asset
                             header: "Date",
                             cell: (item) => new Date(item.evaluatedAt).toLocaleString(),
                             sortingField: "evaluatedAt",
+                            sortingComparator: byDate((item) => item.evaluatedAt),
                         },
                         {
                             id: "schemaName",
                             header: "Schema",
                             cell: (item) => item.schemaName,
+                            sortingField: "schemaName",
+                            sortingComparator: byText((item) => item.schemaName),
                         },
                         {
                             id: "result",
                             header: "Result",
+                            sortingField: "result",
+                            sortingComparator: byText(evaluationResultLabel),
                             cell: (item) => {
                                 // Closed without a verdict (superseded, or its asset or database
                                 // gone): no verdict, rule-error or waiting label applies.

@@ -94,6 +94,10 @@ const mount = async () => {
     await screen.findByText("asset-a");
 };
 
+// Bind and Change open a confirmation; its primary action sends the request.
+const confirmBinding = (label: "Bind schema" | "Change schema") =>
+    fireEvent.click(screen.getByRole("button", { name: label }));
+
 beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(console, "log").mockImplementation(() => undefined);
@@ -142,6 +146,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         choose("std");
         expect(bind).toBeEnabled();
         fireEvent.click(bind);
+        confirmBinding("Bind schema");
 
         expect(
             await screen.findByText(`Compliance schema std bound to this ${Synonyms.database}.`)
@@ -165,11 +170,97 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(change).toBeDisabled();
         choose("strict");
         fireEvent.click(change);
+        confirmBinding("Change schema");
 
         await waitFor(() =>
             expect(service().bindSchemaToDatabase).toHaveBeenCalledWith("db1", "strict")
         );
         expect(service().unbindSchemaFromDatabase).not.toHaveBeenCalled();
+    });
+
+    describe("asks before a binding changes (D182)", () => {
+        // The confirmation open now (the page also holds the other, hidden one).
+        const openDialog = () =>
+            createWrapper()
+                .findAllModals()
+                .find((modal) => modal.isVisible());
+        const dialogText = () => openDialog()?.findContent().getElement().textContent || "";
+
+        it("opens a confirmation for Bind that names the database and the schema, and sends nothing until it is confirmed", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            service().bindSchemaToDatabase.mockResolvedValue([true, "Schema bound"]);
+            await mount();
+            await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
+
+            choose("std");
+            fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+            expect(screen.getByText("Bind a compliance schema")).toBeInTheDocument();
+            expect(dialogText()).toContain(`Bind std to the ${Synonyms.database} db1?`);
+            expect(dialogText()).toContain(
+                `reaches every ${Synonyms.asset} of the ${Synonyms.database} without a schema of its own and is applied in the background`
+            );
+            expect(dialogText()).toContain(
+                `Quarantined ${Synonyms.assets} stay quarantined until an evaluation under the new binding decides them`
+            );
+            expect(dialogText()).toContain("with automatic evaluation on");
+            expect(service().bindSchemaToDatabase).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+            expect(service().bindSchemaToDatabase).not.toHaveBeenCalled();
+            expect(openDialog()).toBeUndefined();
+
+            fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+            confirmBinding("Bind schema");
+            await waitFor(() => expect(service().bindSchemaToDatabase).toHaveBeenCalledTimes(1));
+            expect(service().bindSchemaToDatabase).toHaveBeenCalledWith("db1", "std");
+            expect(
+                await screen.findByText(`Compliance schema std bound to this ${Synonyms.database}.`)
+            ).toBeInTheDocument();
+            expect(service().bindSchemaToDatabase).toHaveBeenCalledTimes(1);
+        });
+
+        it("opens a confirmation for Change that names the schema bound now and the one chosen", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            service().getDatabaseBindings.mockResolvedValue(bindings("std"));
+            service().bindSchemaToDatabase.mockResolvedValue([true, "Schema bound"]);
+            await mount();
+            await screen.findByText("Schema: std");
+
+            choose("strict");
+            fireEvent.click(screen.getByRole("button", { name: "Change" }));
+            expect(screen.getByText("Change the compliance schema")).toBeInTheDocument();
+            expect(dialogText()).toContain(
+                `Change the compliance schema of the ${Synonyms.database} db1 from std to strict?`
+            );
+            expect(service().bindSchemaToDatabase).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+            expect(service().bindSchemaToDatabase).not.toHaveBeenCalled();
+
+            fireEvent.click(screen.getByRole("button", { name: "Change" }));
+            confirmBinding("Change schema");
+            await waitFor(() =>
+                expect(service().bindSchemaToDatabase).toHaveBeenCalledWith("db1", "strict")
+            );
+            expect(service().bindSchemaToDatabase).toHaveBeenCalledTimes(1);
+        });
+
+        it("says in the Remove confirmation that a quarantined asset stays quarantined, marked", async () => {
+            mockAllowed = COMPLIANCE_ADMIN;
+            service().getDatabaseBindings.mockResolvedValue(bindings("std"));
+            await mount();
+            await screen.findByText("Schema: std");
+
+            fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+            const text = dialogText();
+            expect(text).toContain(`Remove std from the ${Synonyms.database} db1?`);
+            expect(text).toContain("The removal is applied in the background.");
+            expect(text).toContain(
+                `a quarantined ${Synonyms.asset} stays quarantined, with any download block, and is marked as awaiting re-evaluation`
+            );
+            expect(text).toContain(`${Synonyms.Assets} that bind their own schema keep it.`);
+            expect(text).not.toContain("is deleted");
+        });
     });
 
     it("removes the binding only after confirmation", async () => {
@@ -203,6 +294,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
 
         choose("std");
         fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        confirmBinding("Bind schema");
 
         expect(
             await screen.findByText("The compliance schema binding failed: Not Authorized")
@@ -225,6 +317,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         choose("std");
         service().getDatabaseBindings.mockResolvedValue(bindings("strict"));
         fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        confirmBinding("Bind schema");
 
         expect(
             await screen.findByText(
@@ -275,6 +368,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
         choose("std");
         fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        confirmBinding("Bind schema");
         expect(await screen.findByText(nothing)).toBeInTheDocument();
     });
 
@@ -417,6 +511,7 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
         choose("std");
         fireEvent.click(screen.getByRole("button", { name: "Bind" }));
+        confirmBinding("Bind schema");
         expect(
             await screen.findByText(
                 `Compliance schema std bound to this ${Synonyms.database}. 2 quarantined assets stay quarantined until re-evaluated. 5 evaluations were queued.`

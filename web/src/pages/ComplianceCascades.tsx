@@ -44,6 +44,8 @@ import {
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import ListToolbar from "../components/list/ListToolbar";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
 
 /** The listing's server-side filters, kept in the URL; an empty state is pending approval. */
 export const CASCADE_FILTER_KEYS = ["state", "databaseId", "text"] as const;
@@ -62,6 +64,10 @@ const statusIndicatorMap: Record<string, { type: string; label: string }> = {
     aborted: { type: "error", label: "Aborted" },
     rejected: { type: "stopped", label: "Rejected" },
 };
+
+/** The status label a cascade row shows, which its Cascade column sorts by. */
+const cascadeStateIndicator = (record: CascadeRecord): { type: string; label: string } =>
+    statusIndicatorMap[record.state] || { type: "stopped", label: record.state || "Unknown" };
 
 /** How often, and how many times, an approved cascade is re-read while it is executing. */
 export const CASCADE_POLL_INTERVAL_MS = 3000;
@@ -139,6 +145,9 @@ const ComplianceCascades: React.FC = () => {
     const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
     // The default view (pending approval, every database, no text) is not a filter.
     const filtered = stateFilter !== "pending_approval" || !!filters.databaseId || !!filters.text;
+    // The rows of the page shown, in the order of the column header chosen.
+    const { items: sortedItems, sortingProps } = useSortedItems(items);
+    const isPaging = hasMore || currentPageIndex > 1;
 
     const mountedRef = useRef(true);
     const pollTimersRef = useRef<Record<string, number>>({});
@@ -410,48 +419,51 @@ const ComplianceCascades: React.FC = () => {
                             counter={
                                 loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
                             }
-                            actions={
-                                <Button
-                                    iconName="refresh"
-                                    ariaLabel="Refresh cascades"
-                                    onClick={loadData}
-                                    loading={loading}
-                                />
-                            }
+                            description={isPaging ? PAGE_SORTING_NOTE : undefined}
                         >
                             Cascade Approval Queue
                         </Header>
                     }
                     filter={
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Select
-                                selectedOption={
-                                    CASCADE_STATE_FILTER_OPTIONS.find(
-                                        (option) => option.value === stateFilter
-                                    ) || CASCADE_STATE_FILTER_OPTIONS[0]
-                                }
-                                options={CASCADE_STATE_FILTER_OPTIONS}
-                                ariaLabel="Filter by cascade state"
-                                onChange={({ detail }) =>
-                                    setFilters({
-                                        state:
-                                            detail.selectedOption.value === "pending_approval"
-                                                ? ""
-                                                : detail.selectedOption.value || "",
-                                    })
-                                }
-                            />
-                            <DatabaseFilter
-                                value={filters.databaseId}
-                                onChange={(databaseId) => setFilters({ databaseId })}
-                            />
-                            <TextFilterInput
-                                value={filters.text}
-                                onCommit={(text) => setFilters({ text })}
-                                placeholder={`Search trigger ${Synonyms.asset} name or ID`}
-                                ariaLabel="Search cascades"
-                            />
-                        </SpaceBetween>
+                        <ListToolbar
+                            search={
+                                <TextFilterInput
+                                    value={filters.text}
+                                    onCommit={(text) => setFilters({ text })}
+                                    placeholder={`Search trigger ${Synonyms.asset} name or ID`}
+                                    ariaLabel="Search cascades"
+                                />
+                            }
+                            onRefresh={loadData}
+                            refreshing={loading}
+                            refreshLabel="Refresh cascades"
+                            filters={
+                                <>
+                                    <Select
+                                        selectedOption={
+                                            CASCADE_STATE_FILTER_OPTIONS.find(
+                                                (option) => option.value === stateFilter
+                                            ) || CASCADE_STATE_FILTER_OPTIONS[0]
+                                        }
+                                        options={CASCADE_STATE_FILTER_OPTIONS}
+                                        ariaLabel="Filter by cascade state"
+                                        onChange={({ detail }) =>
+                                            setFilters({
+                                                state:
+                                                    detail.selectedOption.value ===
+                                                    "pending_approval"
+                                                        ? ""
+                                                        : detail.selectedOption.value || "",
+                                            })
+                                        }
+                                    />
+                                    <DatabaseFilter
+                                        value={filters.databaseId}
+                                        onChange={(databaseId) => setFilters({ databaseId })}
+                                    />
+                                </>
+                            }
+                        />
                     }
                     pagination={
                         <Pagination
@@ -468,7 +480,8 @@ const ComplianceCascades: React.FC = () => {
                         />
                     }
                     loading={loading}
-                    items={items}
+                    items={sortedItems}
+                    {...sortingProps}
                     empty={
                         loadFailed ? (
                             <ListingLoadFailed what="The cascades" />
@@ -501,10 +514,7 @@ const ComplianceCascades: React.FC = () => {
                             id: "state",
                             header: "Cascade",
                             cell: (item) => {
-                                const indicator = statusIndicatorMap[item.state] || {
-                                    type: "stopped",
-                                    label: item.state || "Unknown",
-                                };
+                                const indicator = cascadeStateIndicator(item);
                                 const progress =
                                     item.state === "pending_approval"
                                         ? null
@@ -533,6 +543,7 @@ const ComplianceCascades: React.FC = () => {
                                 );
                             },
                             sortingField: "state",
+                            sortingComparator: byText((item) => cascadeStateIndicator(item).label),
                         },
                         {
                             // The trigger asset with its database and ID beneath, in one column
@@ -555,6 +566,9 @@ const ComplianceCascades: React.FC = () => {
                                 </SpaceBetween>
                             ),
                             sortingField: "triggeredByAssetId",
+                            sortingComparator: byText(
+                                (item) => item.assetName || cascadeTriggerAssetId(item)
+                            ),
                         },
                         {
                             id: "triggerReason",
@@ -580,6 +594,7 @@ const ComplianceCascades: React.FC = () => {
                                 </SpaceBetween>
                             ),
                             sortingField: "createdAt",
+                            sortingComparator: byDate((item) => item.createdAt),
                         },
                         {
                             id: "approvalTimeoutAt",
@@ -589,6 +604,7 @@ const ComplianceCascades: React.FC = () => {
                                     ? new Date(item.approvalTimeoutAt).toLocaleString()
                                     : "-",
                             sortingField: "approvalTimeoutAt",
+                            sortingComparator: byDate((item) => item.approvalTimeoutAt),
                         },
                         ...(canApprove || canReject
                             ? [

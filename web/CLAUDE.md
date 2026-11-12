@@ -146,10 +146,14 @@ web/
                               #   reason, under the rule result, the asset tab's state and the quarantine
                               #   reason; the API returns it only to a caller who may read the execution);
                               #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
-                              #   and the database overview); cascadeNodes.tsx (a cascade's node outcomes:
+                              #   and the database overview); bindingConfirmations.ts (what the
+                              #   confirmations of a database binding's Bind, Change and Remove say,
+                              #   shared by the database overview and the database editor);
+                              #   cascadeNodes.tsx (a cascade's node outcomes:
                               #   cascadeProgress counts only verdict nodes as evaluated and the skipped ones
                               #   by reason, CascadeNodeList / CascadeNodesModal list each node's outcome, the
-                              #   nodes the API returns only; cascadeUnauthorizedNodes reads the API's
+                              #   nodes the API returns only, paged and sorted in the browser;
+                              #   cascadeUnauthorizedNodes reads the API's
                               #   unauthorizedNodes count, shown as "N nodes you cannot access", never named);
                               #   rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
                               #   compliance tables pin their inline-link Actions column last and wrap the rest);
@@ -173,7 +177,12 @@ web/
                                 #   one file / many) to workflow input files
                                 #   executionLinks.ts — workflow-execution provenance → execution
                                 #   detail route + the Tier-1 route the link is gated on
-      list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
+      list/                   # TableList.tsx (the standard list page: search + refresh left, filters
+                              #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
+                              #   toolbar for a page with its own Table, 7.6); tableSorting.ts (column
+                              #   comparators byText/byDate/byNumber, useSortedItems for a page the server
+                              #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
+      loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -198,6 +207,9 @@ web/
       # Evaluate All while it is applying or stalled, and offers Resume (the same request) to a
       # caller with the route for a stalled one; the API decides each request. Its evaluations
       # phase (`evaluationStatus` queueing/stalled) shows its own line and holds no control.
+      # Bind, Change and Remove each open a confirmation first (bindingConfirmations.ts). Each
+      # page's toolbar is ListToolbar (7.6); every sortable column sorts, the server-paged lists
+      # the page shown (useSortedItems), the schemas page its whole list (useBrowserPagedItems).
       ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
       ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
@@ -923,6 +935,33 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 
 A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
+### 7.6 List Toolbar: Search, Refresh and Filters
+
+Every list page lays out the toolbar it passes as the Cloudscape Table's `filter` the same way: **the search field on the left with the refresh button right next to it, and the filter drop-downs aligned to the right of the table.** On a narrow screen the groups wrap. The refresh is an icon button whose `ariaLabel` names what it reloads; it sits in the toolbar, not in the header actions, and a list without a search keeps it at the toolbar's left.
+
+`components/list/TableList.tsx` lays out its own filter slot this way. A page with its own `Table` uses `components/list/ListToolbar.tsx`, which has the same layout:
+
+```tsx
+<Table
+    filter={
+        <ListToolbar
+            search={<TextFilterInput value={filters.text} onCommit={...} ariaLabel="Search ..." />}
+            onRefresh={loadData}
+            refreshing={loading}
+            refreshLabel={`Refresh quarantined ${Synonyms.assets}`}
+            filters={<DatabaseFilter value={filters.databaseId} onChange={...} />}
+        />
+    }
+    items={sortedItems}
+    {...sortingProps}
+/>
+```
+
+**Column sorting.** A column that offers sorting must sort. Wire `sortingColumn`, `sortingDescending` and `onSortingChange` with `components/list/tableSorting.ts`, or remove the column's `sortingField`. Keep the `sortingField` (the table matches the sorted column by it) and give the column a `sortingComparator` from the same module, so a date sorts by its value (`byDate`), a status by the label it shows (`byText` over the label) and text with case ignored and its numbers by value (`byText`).
+
+-   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header.
+-   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -1356,6 +1395,9 @@ When in doubt about patterns, reference these well-structured files:
 | Synonyms config      | `src/synonyms.tsx`                                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
+| List page and table  | `src/components/list/TableList.tsx`               |
+| List toolbar         | `src/components/list/ListToolbar.tsx`             |
+| Column sorting       | `src/components/list/tableSorting.ts`             |
 
 ---
 
@@ -1399,9 +1441,10 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per section 7.6
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add navigation item in `src/layout/Navigation.tsx`
 
 ### Adding a new API call
 

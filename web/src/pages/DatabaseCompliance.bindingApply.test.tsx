@@ -179,6 +179,7 @@ describe("a binding change applied in the background", () => {
         await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
         choose("strict");
         fireEvent.click(screen.getByRole("button", { name: "Change" }));
+        fireEvent.click(screen.getByRole("button", { name: "Change schema" }));
 
         expect(await screen.findByText("Applying the binding")).toBeInTheDocument();
         expect(screen.getAllByText(/Applying the binding to 2,500 assets/).length).toBeGreaterThan(
@@ -385,6 +386,7 @@ describe("the evaluations a binding change queues (D161 follow-up)", () => {
         await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalled());
         choose("strict");
         fireEvent.click(screen.getByRole("button", { name: "Change" }));
+        fireEvent.click(screen.getByRole("button", { name: "Change schema" }));
         expect(
             await screen.findByText(
                 "The binding was applied to 2,500 assets: 2,497 pending evaluation. 3 quarantined assets stay quarantined until re-evaluated. The evaluations of 2,500 assets are being queued."

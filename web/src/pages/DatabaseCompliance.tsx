@@ -52,6 +52,7 @@ import {
     COMPLIANCE_STATE_INDICATORS,
     ComplianceStateBadge,
     EvaluationErrorIndicator,
+    complianceStateIndicator,
 } from "../components/compliance/complianceStateBadge";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
@@ -75,6 +76,16 @@ import {
     loadFailureMessage,
 } from "../components/compliance/listingStates";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
+import {
+    REMOVE_BINDING_CONFIRM_LABEL,
+    REMOVE_BINDING_HEADER,
+    bindingChangeConfirmLabel,
+    bindingChangeConfirmation,
+    bindingChangeHeader,
+    removeBindingConfirmation,
+} from "../components/compliance/bindingConfirmations";
+import ListToolbar from "../components/list/ListToolbar";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
 
 /** The overview's server-side filters and sort, kept in the URL. */
 export const OVERVIEW_FILTER_KEYS = [
@@ -270,6 +281,8 @@ const DatabaseCompliancePage: React.FC = () => {
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [bindingInProgress, setBindingInProgress] = useState(false);
     const [confirmRemove, setConfirmRemove] = useState(false);
+    // Bind and Change reach every asset of the database, so each is confirmed first, like Remove.
+    const [confirmBind, setConfirmBind] = useState(false);
     // The database's last binding change applied in the background, as the binding read reports it
     // (D161). While it runs, the binding is read again with backoff (`applyPolls` counts the reads)
     // until it ends; `followedApply` is the change this page saw running, whose end it reports.
@@ -504,8 +517,9 @@ const DatabaseCompliancePage: React.FC = () => {
     };
 
     // Binds the selected schema, or replaces the bound one, then re-reads the binding and the
-    // overview.
+    // overview. Sent from the confirmation dialog.
     const handleBind = async () => {
+        setConfirmBind(false);
         const schemaName = selectedSchema?.value;
         if (!databaseId || !schemaName) return;
         setBindingInProgress(true);
@@ -652,6 +666,9 @@ const DatabaseCompliancePage: React.FC = () => {
     // A failed load shows no rows: those of an earlier load belong to another page or filter.
     const pageAssets = loadFailed ? [] : overview?.assets || [];
     const isPaging = hasMore || currentPageIndex > 1;
+    // The rows of the page shown, in the order of the column header chosen; the Sort by filter
+    // orders the whole database on the server.
+    const { items: sortedAssets, sortingProps } = useSortedItems<any>(pageAssets);
     // The binding as the last read answered it; nothing is said about it before that.
     const bindingKnown = bindingStatus === "loaded";
     // While a change is under way the page offers no other change and no Evaluate All (the API
@@ -826,7 +843,7 @@ const DatabaseCompliancePage: React.FC = () => {
                             )}
                             {canBind && (
                                 <Button
-                                    onClick={handleBind}
+                                    onClick={() => setConfirmBind(true)}
                                     loading={bindingInProgress}
                                     disabled={
                                         !bindingKnown ||
@@ -850,27 +867,54 @@ const DatabaseCompliancePage: React.FC = () => {
                     </Container>
                 )}
 
-                <Modal
-                    visible={confirmRemove}
-                    onDismiss={() => setConfirmRemove(false)}
-                    header="Remove the compliance schema binding"
-                    footer={
-                        <Box float="right">
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button variant="link" onClick={() => setConfirmRemove(false)}>
-                                    Cancel
-                                </Button>
-                                <Button variant="primary" onClick={handleRemove}>
-                                    Remove binding
-                                </Button>
-                            </SpaceBetween>
-                        </Box>
-                    }
-                >
-                    Remove {databaseSchema} from the {Synonyms.database} {databaseId}? The
-                    compliance state of every {Synonyms.asset} that inherits it is deleted;{" "}
-                    {Synonyms.assets} that bind their own schema keep theirs.
-                </Modal>
+                {/* Each confirmation is mounted while it is open, so the page holds one at a time. */}
+                {confirmBind && (
+                    <Modal
+                        visible={confirmBind}
+                        onDismiss={() => setConfirmBind(false)}
+                        header={bindingChangeHeader(databaseSchema)}
+                        footer={
+                            <Box float="right">
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button variant="link" onClick={() => setConfirmBind(false)}>
+                                        Cancel
+                                    </Button>
+                                    <Button variant="primary" onClick={handleBind}>
+                                        {bindingChangeConfirmLabel(databaseSchema)}
+                                    </Button>
+                                </SpaceBetween>
+                            </Box>
+                        }
+                    >
+                        {bindingChangeConfirmation(
+                            databaseId || "",
+                            databaseSchema,
+                            selectedSchema?.value || ""
+                        )}
+                    </Modal>
+                )}
+
+                {confirmRemove && (
+                    <Modal
+                        visible={confirmRemove}
+                        onDismiss={() => setConfirmRemove(false)}
+                        header={REMOVE_BINDING_HEADER}
+                        footer={
+                            <Box float="right">
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button variant="link" onClick={() => setConfirmRemove(false)}>
+                                        Cancel
+                                    </Button>
+                                    <Button variant="primary" onClick={handleRemove}>
+                                        {REMOVE_BINDING_CONFIRM_LABEL}
+                                    </Button>
+                                </SpaceBetween>
+                            </Box>
+                        }
+                    >
+                        {removeBindingConfirmation(databaseSchema || "", databaseId || "")}
+                    </Modal>
+                )}
 
                 <Container
                     header={
@@ -988,19 +1032,26 @@ const DatabaseCompliancePage: React.FC = () => {
                             description={
                                 loadFailed
                                     ? undefined
-                                    : filtersActive
-                                    ? `${
-                                          Synonyms.Assets
-                                      } matching the filters; the summary above covers all ${formatCount(
-                                          totalTracked
-                                      )} tracked ${Synonyms.assets}.`
-                                    : isPaging
-                                    ? `Showing ${formatCount(pageAssets.length)} of ${formatCount(
-                                          totalTracked
-                                      )} tracked ${
-                                          Synonyms.assets
-                                      }; the summary above covers all of them.`
-                                    : undefined
+                                    : [
+                                          filtersActive
+                                              ? `${
+                                                    Synonyms.Assets
+                                                } matching the filters; the summary above covers all ${formatCount(
+                                                    totalTracked
+                                                )} tracked ${Synonyms.assets}.`
+                                              : isPaging
+                                              ? `Showing ${formatCount(
+                                                    pageAssets.length
+                                                )} of ${formatCount(totalTracked)} tracked ${
+                                                    Synonyms.assets
+                                                }; the summary above covers all of them.`
+                                              : null,
+                                          isPaging
+                                              ? `${PAGE_SORTING_NOTE} Sort by orders every ${Synonyms.asset} of the ${Synonyms.database}.`
+                                              : null,
+                                      ]
+                                          .filter(Boolean)
+                                          .join(" ") || undefined
                             }
                         >
                             {Synonyms.Asset} Compliance States
@@ -1018,88 +1069,108 @@ const DatabaseCompliancePage: React.FC = () => {
                         wrapLines
                         stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                         filter={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <TextFilterInput
-                                    value={filters.text}
-                                    onCommit={(text) => setFilters({ text })}
-                                    placeholder={`Search ${Synonyms.asset} name or ID`}
-                                    ariaLabel={`Search ${Synonyms.assets}`}
-                                />
-                                <Select
-                                    selectedOption={optionFor(
-                                        OVERVIEW_STATE_OPTIONS,
-                                        filters.state
-                                    )}
-                                    options={OVERVIEW_STATE_OPTIONS}
-                                    ariaLabel="Filter by compliance state"
-                                    onChange={({ detail }) =>
-                                        setFilters({ state: detail.selectedOption.value || "" })
-                                    }
-                                />
-                                <Select
-                                    selectedOption={{
-                                        value: filters.schemaName,
-                                        label: filters.schemaName || "Any schema",
-                                    }}
-                                    options={[
-                                        { value: "", label: "Any schema" },
-                                        ...Array.from(
-                                            new Set(
-                                                [
-                                                    ...schemaOptions.map((o) => o.value || ""),
-                                                    databaseSchema || "",
-                                                    filters.schemaName,
-                                                ].filter(Boolean)
-                                            )
-                                        )
-                                            .sort()
-                                            .map((name) => ({ value: name, label: name })),
-                                    ]}
-                                    ariaLabel="Filter by bound schema"
-                                    onChange={({ detail }) =>
-                                        setFilters({
-                                            schemaName: detail.selectedOption.value || "",
-                                        })
-                                    }
-                                />
-                                <Select
-                                    selectedOption={optionFor(
-                                        OVERVIEW_SOURCE_OPTIONS,
-                                        filters.schemaSource
-                                    )}
-                                    options={OVERVIEW_SOURCE_OPTIONS}
-                                    ariaLabel="Filter by binding source"
-                                    onChange={({ detail }) =>
-                                        setFilters({
-                                            schemaSource: detail.selectedOption.value || "",
-                                        })
-                                    }
-                                />
-                                <Select
-                                    selectedOption={optionFor(
-                                        OVERVIEW_ERROR_OPTIONS,
-                                        filters.evaluationError
-                                    )}
-                                    options={OVERVIEW_ERROR_OPTIONS}
-                                    ariaLabel="Filter by last evaluation"
-                                    onChange={({ detail }) =>
-                                        setFilters({
-                                            evaluationError: detail.selectedOption.value || "",
-                                        })
-                                    }
-                                />
-                                <Select
-                                    selectedOption={optionFor(OVERVIEW_SORT_OPTIONS, filters.sort)}
-                                    options={OVERVIEW_SORT_OPTIONS}
-                                    ariaLabel={`Sort ${Synonyms.assets}`}
-                                    onChange={({ detail }) =>
-                                        setFilters({ sort: detail.selectedOption.value || "" })
-                                    }
-                                />
-                            </SpaceBetween>
+                            <ListToolbar
+                                search={
+                                    <TextFilterInput
+                                        value={filters.text}
+                                        onCommit={(text) => setFilters({ text })}
+                                        placeholder={`Search ${Synonyms.asset} name or ID`}
+                                        ariaLabel={`Search ${Synonyms.assets}`}
+                                    />
+                                }
+                                onRefresh={loadData}
+                                refreshing={loading}
+                                refreshLabel={`Refresh the ${Synonyms.database} compliance overview`}
+                                filters={
+                                    <>
+                                        <Select
+                                            selectedOption={optionFor(
+                                                OVERVIEW_STATE_OPTIONS,
+                                                filters.state
+                                            )}
+                                            options={OVERVIEW_STATE_OPTIONS}
+                                            ariaLabel="Filter by compliance state"
+                                            onChange={({ detail }) =>
+                                                setFilters({
+                                                    state: detail.selectedOption.value || "",
+                                                })
+                                            }
+                                        />
+                                        <Select
+                                            selectedOption={{
+                                                value: filters.schemaName,
+                                                label: filters.schemaName || "Any schema",
+                                            }}
+                                            options={[
+                                                { value: "", label: "Any schema" },
+                                                ...Array.from(
+                                                    new Set(
+                                                        [
+                                                            ...schemaOptions.map(
+                                                                (o) => o.value || ""
+                                                            ),
+                                                            databaseSchema || "",
+                                                            filters.schemaName,
+                                                        ].filter(Boolean)
+                                                    )
+                                                )
+                                                    .sort()
+                                                    .map((name) => ({ value: name, label: name })),
+                                            ]}
+                                            ariaLabel="Filter by bound schema"
+                                            onChange={({ detail }) =>
+                                                setFilters({
+                                                    schemaName: detail.selectedOption.value || "",
+                                                })
+                                            }
+                                        />
+                                        <Select
+                                            selectedOption={optionFor(
+                                                OVERVIEW_SOURCE_OPTIONS,
+                                                filters.schemaSource
+                                            )}
+                                            options={OVERVIEW_SOURCE_OPTIONS}
+                                            ariaLabel="Filter by binding source"
+                                            onChange={({ detail }) =>
+                                                setFilters({
+                                                    schemaSource: detail.selectedOption.value || "",
+                                                })
+                                            }
+                                        />
+                                        <Select
+                                            selectedOption={optionFor(
+                                                OVERVIEW_ERROR_OPTIONS,
+                                                filters.evaluationError
+                                            )}
+                                            options={OVERVIEW_ERROR_OPTIONS}
+                                            ariaLabel="Filter by last evaluation"
+                                            onChange={({ detail }) =>
+                                                setFilters({
+                                                    evaluationError:
+                                                        detail.selectedOption.value || "",
+                                                })
+                                            }
+                                        />
+                                        <Select
+                                            selectedOption={optionFor(
+                                                OVERVIEW_SORT_OPTIONS,
+                                                filters.sort
+                                            )}
+                                            options={OVERVIEW_SORT_OPTIONS}
+                                            ariaLabel={`Sort ${Synonyms.assets}`}
+                                            onChange={({ detail }) =>
+                                                setFilters({
+                                                    sort: detail.selectedOption.value || "",
+                                                })
+                                            }
+                                        />
+                                    </>
+                                }
+                            />
                         }
                         loading={loading}
-                        items={pageAssets}
+                        items={sortedAssets}
+                        {...sortingProps}
                         pagination={
                             <Pagination
                                 currentPageIndex={currentPageIndex}
@@ -1154,6 +1225,9 @@ const DatabaseCompliancePage: React.FC = () => {
                                     />
                                 ),
                                 sortingField: "assetName",
+                                sortingComparator: byText(
+                                    (item: any) => item.assetName || item.assetId
+                                ),
                             },
                             {
                                 id: "complianceState",
@@ -1169,6 +1243,10 @@ const DatabaseCompliancePage: React.FC = () => {
                                     </SpaceBetween>
                                 ),
                                 sortingField: "complianceState",
+                                sortingComparator: byText(
+                                    (item: any) =>
+                                        complianceStateIndicator(item.complianceState).label
+                                ),
                             },
                             {
                                 // The bound schema with where its binding comes from beneath (the
@@ -1187,6 +1265,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                     </SpaceBetween>
                                 ),
                                 sortingField: "schemaName",
+                                sortingComparator: byText((item: any) => item.schemaName),
                             },
                             {
                                 id: "updatedAt",
@@ -1196,6 +1275,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                         ? new Date(item.updatedAt).toLocaleString()
                                         : "-",
                                 sortingField: "updatedAt",
+                                sortingComparator: byDate((item: any) => item.updatedAt),
                             },
                             ...(canViewHistory || canRevokeException
                                 ? [

@@ -44,6 +44,8 @@ import {
     listingEmptyText,
     loadFailureMessage,
 } from "../components/compliance/listingStates";
+import ListToolbar from "../components/list/ListToolbar";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../components/list/tableSorting";
 
 /** The listing's server-side filters, kept in the URL. */
 export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
@@ -97,6 +99,9 @@ const ComplianceQuarantine: React.FC = () => {
     // Which loaded pages (0-based) listed an asset (listingStates.listedBefore).
     const [listedPages, setListedPages] = useState<Record<number, boolean>>({});
     const filtered = QUARANTINE_FILTER_KEYS.some((key) => filters[key]);
+    // The rows of the page shown, in the order of the column header chosen.
+    const { items: sortedItems, sortingProps } = useSortedItems(items);
+    const isPaging = hasMore || currentPageIndex > 1;
 
     // A load is dropped when a later one has begun (other filters, another page), so the rows
     // shown are always the latest request's.
@@ -243,36 +248,35 @@ const ComplianceQuarantine: React.FC = () => {
                             counter={
                                 loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
                             }
-                            actions={
-                                <SpaceBetween direction="horizontal" size="xs">
-                                    <Button
-                                        iconName="refresh"
-                                        ariaLabel={`Refresh quarantined ${Synonyms.assets}`}
-                                        onClick={loadData}
-                                        loading={loading}
-                                    />
-                                </SpaceBetween>
-                            }
+                            description={isPaging ? PAGE_SORTING_NOTE : undefined}
                         >
                             Quarantined {Synonyms.Assets}
                         </Header>
                     }
                     filter={
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <DatabaseFilter
-                                value={filters.databaseId}
-                                onChange={(databaseId) => setFilters({ databaseId })}
-                            />
-                            <TextFilterInput
-                                value={filters.text}
-                                onCommit={(text) => setFilters({ text })}
-                                placeholder={`Search ${Synonyms.asset} name or ID`}
-                                ariaLabel={`Search quarantined ${Synonyms.assets}`}
-                            />
-                        </SpaceBetween>
+                        <ListToolbar
+                            search={
+                                <TextFilterInput
+                                    value={filters.text}
+                                    onCommit={(text) => setFilters({ text })}
+                                    placeholder={`Search ${Synonyms.asset} name or ID`}
+                                    ariaLabel={`Search quarantined ${Synonyms.assets}`}
+                                />
+                            }
+                            onRefresh={loadData}
+                            refreshing={loading}
+                            refreshLabel={`Refresh quarantined ${Synonyms.assets}`}
+                            filters={
+                                <DatabaseFilter
+                                    value={filters.databaseId}
+                                    onChange={(databaseId) => setFilters({ databaseId })}
+                                />
+                            }
+                        />
                     }
                     loading={loading}
-                    items={items}
+                    items={sortedItems}
+                    {...sortingProps}
                     selectedItems={selectedItems}
                     onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
                     selectionType="single"
@@ -328,18 +332,21 @@ const ComplianceQuarantine: React.FC = () => {
                                 />
                             ),
                             sortingField: "assetName",
+                            sortingComparator: byText(assetLabel),
                         },
                         {
                             id: "databaseId",
                             header: Synonyms.Database,
                             cell: (item) => item.databaseId,
                             sortingField: "databaseId",
+                            sortingComparator: byText((item) => item.databaseId),
                         },
                         {
                             id: "schemaName",
                             header: "Bound schema",
                             cell: (item) => item.schemaName || "-",
                             sortingField: "schemaName",
+                            sortingComparator: byText((item) => item.schemaName),
                         },
                         {
                             id: "quarantineReason",
@@ -376,6 +383,7 @@ const ComplianceQuarantine: React.FC = () => {
                                     ? new Date(item.quarantinedAt).toLocaleString()
                                     : "-",
                             sortingField: "quarantinedAt",
+                            sortingComparator: byDate((item) => item.quarantinedAt),
                         },
                         ...(canRelease || canGrantException
                             ? [

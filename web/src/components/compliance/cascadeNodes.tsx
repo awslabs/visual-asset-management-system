@@ -7,12 +7,14 @@ import React from "react";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Modal from "@cloudscape-design/components/modal";
+import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 import { CascadeRecord } from "../../services/ComplianceService";
 import { COMPLIANCE_STATE_INDICATORS, StatusLabel } from "./complianceStateBadge";
 import Synonyms from "../../synonyms";
+import { byText, useBrowserPagedItems } from "../list/tableSorting";
 
 /**
  * What happened to one downstream node of a cascade, read from its state in the row's `nodes` map:
@@ -254,54 +256,78 @@ interface CascadeNodeListProps {
     unauthorizedNodes?: number;
 }
 
-/** Each node of a cascade with its outcome: the node's name, its database and ID beneath. */
+/**
+ * Each node of a cascade with its outcome: the node's name, its database and ID beneath. A cascade
+ * can reach many nodes, so the list is paged in the browser; it shows the evaluation order until a
+ * column header sorts it.
+ */
 export const CascadeNodeList: React.FC<CascadeNodeListProps> = ({
     entries,
     unauthorizedNodes = 0,
-}) => (
-    <Table
-        variant="embedded"
-        wrapLines
-        items={entries}
-        trackBy="key"
-        ariaLabels={{ tableLabel: "Cascade nodes" }}
-        empty={
-            <Box textAlign="center">
-                {unauthorizedNodes > 0
-                    ? `The cascade has no downstream ${Synonyms.assets} you can access.`
-                    : `The cascade has no downstream ${Synonyms.assets}.`}
-            </Box>
-        }
-        columnDefinitions={[
-            {
-                id: "node",
-                header: Synonyms.Asset,
-                cell: (entry) => (
-                    <SpaceBetween size="xxxs">
-                        <span>{entry.name || entry.assetId}</span>
-                        <Box variant="small" color="text-body-secondary">
-                            {[entry.databaseId, entry.name ? entry.assetId : ""]
-                                .filter(Boolean)
-                                .join(" / ")}
-                        </Box>
-                    </SpaceBetween>
-                ),
-            },
-            {
-                id: "outcome",
-                header: "Outcome",
-                cell: (entry) => (
-                    <SpaceBetween size="xxxs">
-                        <StatusLabel type={entry.outcome.type}>{entry.outcome.label}</StatusLabel>
-                        <Box variant="small" color="text-body-secondary">
-                            {entry.outcome.description}
-                        </Box>
-                    </SpaceBetween>
-                ),
-            },
-        ]}
-    />
-);
+}) => {
+    const { items, sortingProps, paginationProps } = useBrowserPagedItems(entries);
+    return (
+        <Table
+            variant="embedded"
+            wrapLines
+            items={items}
+            {...sortingProps}
+            trackBy="key"
+            ariaLabels={{ tableLabel: "Cascade nodes" }}
+            pagination={
+                <Pagination
+                    {...paginationProps}
+                    ariaLabels={{
+                        nextPageLabel: "Next page of cascade nodes",
+                        previousPageLabel: "Previous page of cascade nodes",
+                        pageLabel: (pageNumber) => `Page ${pageNumber} of cascade nodes`,
+                    }}
+                />
+            }
+            empty={
+                <Box textAlign="center">
+                    {unauthorizedNodes > 0
+                        ? `The cascade has no downstream ${Synonyms.assets} you can access.`
+                        : `The cascade has no downstream ${Synonyms.assets}.`}
+                </Box>
+            }
+            columnDefinitions={[
+                {
+                    id: "node",
+                    header: Synonyms.Asset,
+                    cell: (entry) => (
+                        <SpaceBetween size="xxxs">
+                            <span>{entry.name || entry.assetId}</span>
+                            <Box variant="small" color="text-body-secondary">
+                                {[entry.databaseId, entry.name ? entry.assetId : ""]
+                                    .filter(Boolean)
+                                    .join(" / ")}
+                            </Box>
+                        </SpaceBetween>
+                    ),
+                    sortingField: "name",
+                    sortingComparator: byText((entry) => entry.name || entry.assetId),
+                },
+                {
+                    id: "outcome",
+                    header: "Outcome",
+                    cell: (entry) => (
+                        <SpaceBetween size="xxxs">
+                            <StatusLabel type={entry.outcome.type}>
+                                {entry.outcome.label}
+                            </StatusLabel>
+                            <Box variant="small" color="text-body-secondary">
+                                {entry.outcome.description}
+                            </Box>
+                        </SpaceBetween>
+                    ),
+                    sortingField: "state",
+                    sortingComparator: byText((entry) => entry.outcome.label),
+                },
+            ]}
+        />
+    );
+};
 
 interface CascadeNodesModalProps {
     /** The cascade whose nodes are shown; the dialog is open while it is set. */

@@ -101,11 +101,15 @@ web/
                             #   (shared state -> StatusIndicator map, `exception` = info);
                             #   EvaluationHistoryModal.tsx; ExecutionFailureReasons.tsx (a failed
                             #   pipeline rule's execution failure reason, when the API returns it);
-                            #   RevokeExceptionModal.tsx; rowActions.ts
+                            #   RevokeExceptionModal.tsx; rowActions.ts; bindingConfirmations.ts
+                            #   (the Bind/Change/Remove confirmation text); cascadeNodes.tsx (node
+                            #   outcomes, paged and sorted in the browser)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
-      list/
+      list/                 # TableList.tsx (standard list page); ListToolbar.tsx (search + refresh
+                            #   left, filters right, for a page with its own Table); tableSorting.ts
+                            #   (column comparators, useSortedItems, useBrowserPagedItems)
       loading/
       metadata/
       metadataSchema/
@@ -194,6 +198,7 @@ web/
 -   [ ] **Import from service layer**: Never import `apiClient` directly
 -   [ ] **Use Context for shared state**: Follow `AssetDetailContext.ts` patterns
 -   [ ] **Handle API responses**: Check boolean flag before using data
+-   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.6)
 
 #### **Step 3: Page and Route Setup**
 
@@ -885,6 +890,7 @@ npm run prettier-fix
 -   [ ] npm used (no yarn)
 -   [ ] Relative imports used (no path aliases)
 -   [ ] Theme-aware styles (Cloudscape design tokens or theme.css custom properties)
+-   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.6)
 
 ### **Documentation Checks**
 
@@ -900,9 +906,10 @@ npm run prettier-fix
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add navigation item in `src/layout/Navigation.tsx`
 
 ### **Adding a new API call**
 

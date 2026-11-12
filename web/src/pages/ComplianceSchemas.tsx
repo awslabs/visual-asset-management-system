@@ -22,6 +22,7 @@ import {
     SelectProps,
 } from "@cloudscape-design/components";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import Pagination from "@cloudscape-design/components/pagination";
 import { usePageTitle } from "../hooks/usePageTitle";
 import Synonyms from "../synonyms";
 import {
@@ -41,6 +42,8 @@ import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/com
 import { ListingLoadFailed, loadFailureMessage } from "../components/compliance/listingStates";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
+import ListToolbar from "../components/list/ListToolbar";
+import { byNumber, byText, useBrowserPagedItems } from "../components/list/tableSorting";
 
 // The routes behind the page's write actions (backend/backend/common/apiRoutes.py). Each action is
 // offered only to a caller who may call its route; while the routes load, none is offered.
@@ -65,6 +68,12 @@ export const SCHEMA_ACTIONS_COLUMN_WIDTH = 150;
 
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
+
+/** What a schema row's Format column shows, which the column sorts by. */
+const schemaFormatLabel = (schema: ComplianceSchema): string => {
+    const format = complianceSchemaFormat(schema);
+    return format === "legacy" ? LEGACY_SCHEMA_LABEL : format;
+};
 
 export const SCHEMA_TEMPLATES: Record<
     string,
@@ -713,6 +722,14 @@ export default function ComplianceSchemas() {
                 (s.description || "").toLowerCase().includes(filterText.toLowerCase())) &&
             (scopeFilter.value === ALL_SCOPES_OPTION.value || schemaScope(s) === scopeFilter.value)
     );
+    // The API returns every schema the caller may read: the filters apply to the whole list, then
+    // it is sorted and paged here.
+    const {
+        items: pageSchemas,
+        sortingProps,
+        paginationProps,
+        toFirstPage,
+    } = useBrowserPagedItems(filteredSchemas);
     // The filter offers GLOBAL and every database a listed schema is available to.
     const scopeFilterOptions: SelectProps.Option[] = [
         ALL_SCOPES_OPTION,
@@ -745,7 +762,19 @@ export default function ComplianceSchemas() {
                         wrapLines
                         stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                         loading={loading}
-                        items={filteredSchemas}
+                        items={pageSchemas}
+                        {...sortingProps}
+                        pagination={
+                            <Pagination
+                                {...paginationProps}
+                                ariaLabels={{
+                                    nextPageLabel: "Next page of compliance schemas",
+                                    previousPageLabel: "Previous page of compliance schemas",
+                                    pageLabel: (pageNumber) =>
+                                        `Page ${pageNumber} of compliance schemas`,
+                                }}
+                            />
+                        }
                         empty={
                             loadFailed ? (
                                 <ListingLoadFailed
@@ -761,19 +790,42 @@ export default function ComplianceSchemas() {
                             )
                         }
                         filter={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <TextFilter
-                                    filteringText={filterText}
-                                    filteringPlaceholder="Find schemas"
-                                    onChange={({ detail }) => setFilterText(detail.filteringText)}
-                                />
-                                <Select
-                                    ariaLabel="Filter by availability"
-                                    selectedOption={scopeFilter}
-                                    options={scopeFilterOptions}
-                                    onChange={({ detail }) => setScopeFilter(detail.selectedOption)}
-                                />
-                            </SpaceBetween>
+                            <ListToolbar
+                                search={
+                                    <TextFilter
+                                        filteringText={filterText}
+                                        filteringPlaceholder="Find schemas"
+                                        filteringAriaLabel="Find schemas"
+                                        countText={
+                                            filterText
+                                                ? `${filteredSchemas.length} ${
+                                                      filteredSchemas.length === 1
+                                                          ? "match"
+                                                          : "matches"
+                                                  }`
+                                                : undefined
+                                        }
+                                        onChange={({ detail }) => {
+                                            setFilterText(detail.filteringText);
+                                            toFirstPage();
+                                        }}
+                                    />
+                                }
+                                onRefresh={loadSchemas}
+                                refreshing={loading}
+                                refreshLabel="Refresh compliance schemas"
+                                filters={
+                                    <Select
+                                        ariaLabel="Filter by availability"
+                                        selectedOption={scopeFilter}
+                                        options={scopeFilterOptions}
+                                        onChange={({ detail }) => {
+                                            setScopeFilter(detail.selectedOption);
+                                            toFirstPage();
+                                        }}
+                                    />
+                                }
+                            />
                         }
                         columnDefinitions={[
                             {
@@ -785,6 +837,7 @@ export default function ComplianceSchemas() {
                                     </Button>
                                 ),
                                 sortingField: "schemaName",
+                                sortingComparator: byText((item) => item.schemaName),
                                 width: 200,
                             },
                             {
@@ -792,11 +845,14 @@ export default function ComplianceSchemas() {
                                 header: "Available to",
                                 cell: (item) => <ScopeBadge databaseId={schemaScope(item)} />,
                                 sortingField: "databaseId",
+                                sortingComparator: byText(schemaScope),
                             },
                             {
                                 id: "description",
                                 header: "Description",
                                 cell: (item) => item.description || "-",
+                                sortingField: "description",
+                                sortingComparator: byText((item) => item.description),
                                 maxWidth: 300,
                             },
                             {
@@ -813,12 +869,16 @@ export default function ComplianceSchemas() {
                                     }
                                     return format;
                                 },
+                                sortingField: "schemaFormat",
+                                sortingComparator: byText(schemaFormatLabel),
                                 width: 180,
                             },
                             {
                                 id: "version",
                                 header: "Version",
                                 cell: (item) => item.version || 1,
+                                sortingField: "version",
+                                sortingComparator: byNumber((item) => item.version || 1),
                                 width: 80,
                             },
                             ...(canUpdate || canSweep

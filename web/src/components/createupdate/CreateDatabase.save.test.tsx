@@ -228,7 +228,7 @@ describe(`${Synonyms.Database} editor save and compliance schema binding`, () =>
         const dialog = confirm.closest('[role="dialog"]') as HTMLElement;
         expect(dialog).not.toBeNull();
         expect(dialog.textContent).toContain(
-            `Remove std from the ${Synonyms.database} db-one? The compliance state of every ${Synonyms.asset} that inherits it is deleted;`
+            `Remove std from the ${Synonyms.database} db-one? The removal is applied in the background. Each ${Synonyms.asset} that inherits the binding loses its compliance state; a quarantined ${Synonyms.asset} stays quarantined, with any download block, and is marked as awaiting re-evaluation`
         );
         expect(compliance.unbindSchemaFromDatabase).not.toHaveBeenCalled();
         fireEvent.click(within(dialog).getByRole("button", { name: "Remove binding" }));

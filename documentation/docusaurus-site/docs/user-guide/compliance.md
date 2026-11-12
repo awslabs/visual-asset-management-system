@@ -37,8 +37,10 @@ Each part has its own section below:
 To get a first verdict on a new deployment, follow [First steps](../concepts/compliance.md#first-steps): bind the seeded `default-compliance-schema` (or your own) to a database, let the binding evaluate its assets, and read the result on the database's compliance overview. This page walks through each page of the web interface and the API calls behind it; the rule format, states and behavior in full are described in [Compliance (Concepts)](../concepts/compliance.md), and the [Behaviors to know about](../concepts/compliance.md#behaviors-to-know-about) list the ones that most often surprise new users.
 
 :::info[Navigation]
-The **Compliance** section of the left sidebar — **Compliance Schemas**, **Quarantine**, **Cascade Approvals** and **Audit Log** — and the database compliance overview appear to users whose role grants the `/compliance` and `/databases` web routes. If you do not see them, ask your administrator to apply one of the compliance [permission templates](#permissions).
+The **Admin - Compliance** section of the left sidebar — **Compliance Schemas**, **Quarantine**, **Cascade Approvals** and **Audit Log** — and the database compliance overview appear to users whose role grants the `/compliance` and `/databases` web routes. If you do not see them, ask your administrator to apply one of the compliance [permission templates](#permissions).
 :::
+
+Each compliance list has the search box on the left with the refresh button next to it, and its filters on the right. Choosing a column header sorts the list, and choosing it again reverses the order. The quarantine, cascade and audit lists, the database compliance overview and an asset's evaluation history are paged by the server: a column header sorts the page shown, and the table header says so when there is more than one page. The **Compliance Schemas** list is sorted, filtered and paged as a whole.
 
 ---
 
@@ -75,7 +77,7 @@ A pipeline rule whose workflow execution failed is listed as **Pipeline executio
 
 Only assets with a compliance record are counted; an asset that has never been bound does not appear.
 
-The table filters and sorts on the server, across every tracked asset of the database rather than only the page shown: search by asset name or ID, and filter by state, bound schema, binding source (the database binding or an asset override) and whether the last evaluation errored; sort by asset ID or name. Choosing a state tile in the summary row shows only the assets in that state (choose it again to clear it), **Evaluation errors** shows only the assets whose last evaluation errored, and **Tracked Assets** clears both. The summary always counts the whole database. The filters are kept in the page URL, so a filtered view can be reloaded or shared, and a link or pasted URL to another filtered view of the same overview reloads the table for it. A filtered page can hold fewer assets than a full page while more follow; use the pagination control to continue.
+The table filters and sorts on the server, across every tracked asset of the database rather than only the page shown: search by asset name or ID, and filter by state, bound schema, binding source (the database binding or an asset override) and whether the last evaluation errored; sort by asset ID or name with **Sort by**. A column header sorts the page shown. Choosing a state tile in the summary row shows only the assets in that state (choose it again to clear it), **Evaluation errors** shows only the assets whose last evaluation errored, and **Tracked Assets** clears both. The summary always counts the whole database. The filters are kept in the page URL, so a filtered view can be reloaded or shared, and a link or pasted URL to another filtered view of the same overview reloads the table for it. A filtered page can hold fewer assets than a full page while more follow; use the pagination control to continue.
 
 ---
 
@@ -88,6 +90,7 @@ On the database's compliance overview:
 1. Navigate to **Databases** and choose the **Compliance** link of the database.
 2. In the **Schema Binding** panel, select the schema in **Bound schema**. `GLOBAL` schemas and schemas scoped to this database are offered.
 3. Choose **Bind**, or **Change** when the database already has a schema.
+4. Confirm with **Bind schema** or **Change schema**. The confirmation names the database, the schema bound now and the one you chose, and says what the change does. Until you confirm, nothing is sent; **Cancel** keeps the binding as it is.
 
 The binding is saved at once and then applied to the database's assets in the background: the overview shows **Applying the binding** with a progress bar ("Applying the binding to 2,500 assets", "1,000 of 2,500 done") until every asset record is updated, then the counts (assets pending evaluation, quarantined assets kept, evaluations queued). **Bind**, **Change**, **Remove** and **Evaluate All** are unavailable meanwhile. With automatic evaluation on, the overview then shows **Queueing evaluations** ("300 of 2,500 evaluations queued") while the evaluations are queued, a share at a time; the controls are available meanwhile. A change that really stopped (its last step failed on every delivery, could not be queued, or ran more steps than a change of its size needs) shows **Stopped** (or **Evaluations stopped**) with the reason and a **Resume** button, which repeats the change and continues it from where it stopped; a change that only waits its turn on a busy queue keeps showing its progress. In the database editor:
 
@@ -123,7 +126,7 @@ On the database's compliance overview, choose **Remove** in the **Schema Binding
 The compliance records of every asset that inherited the database schema are removed, except a quarantined asset's: it stays quarantined, marked as awaiting re-evaluation because the binding was removed, until you release it or bind a schema that evaluates it. The overview shows **No compliance schema bound** until a schema is assigned again.
 
 :::warning[Irreversible action]
-Removing a database's compliance schema deletes the compliance state of every asset that inherited it. Assets with an asset-level schema override keep their state.
+Removing a database's compliance schema deletes the compliance state of every asset that inherited it, except a quarantined asset, which stays quarantined until it is released or a newly bound schema evaluates it. Assets with an asset-level schema override keep their state.
 :::
 
 ### Overriding the schema of one asset
@@ -146,7 +149,7 @@ Removing the override (`DELETE /compliance/bind/{databaseId}/{assetId}`) returns
 
 Compliance schemas define the rules assets are evaluated against. Write schemas in the `vams-rules-v1` format: named rules of the `pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage` and `assetAttributes` types, each with a `quarantine`, `warn` or `inform` enforcement level. Only `vams-rules-v1` bodies are accepted; any other body (including a legacy JSON Schema document) is rejected at registration. A pipeline rule's **Input files** selection decides which of the asset's files its workflow execution receives: **Matching files** (the default) applies the workflow's and pipeline's own file filters plus the rule's glob filters and must leave exactly one file for a single-input workflow; **Whole asset** sends the asset root where the workflow allows it; **Explicit files** names asset-relative paths. The pipeline's `compliance-output.json` is optional — without it the rule's checks can read only `execution_success` and `processing_duration_seconds`. The four templates in `documentation/complianceSchemaTemplates/` are ready-to-register `vams-rules-v1` schemas; see [Compliance concepts](../concepts/compliance.md#schema-templates).
 
-The **Compliance Schemas** page lists every schema you may read with its name, where it is **Available to**, description, format and version, and filters by name, description and availability. A schema is available to **All databases (GLOBAL)** — offered and bindable in every database — or to **One database** only, which **Create Schema** asks for (GLOBAL by default); a schema for one database is offered, and can be bound, only in that database, and the API refuses binding it elsewhere. The binding control on the database compliance overview, the database editor and the asset editor offer the GLOBAL schemas and those of the database they bind in. **Create Schema** opens the schema editor, which builds a `vams-rules-v1` body rule by rule; **Edit** opens an existing schema in the same editor and writes its next version; **Sweep** evaluates every asset bound to the schema.
+The **Compliance Schemas** page lists every schema you may read with its name, where it is **Available to**, description, format and version, 15 to a page, and filters by name, description and availability. The filters and the column sorting apply to the whole list before it is paged. A schema is available to **All databases (GLOBAL)** — offered and bindable in every database — or to **One database** only, which **Create Schema** asks for (GLOBAL by default); a schema for one database is offered, and can be bound, only in that database, and the API refuses binding it elsewhere. The binding control on the database compliance overview, the database editor and the asset editor offer the GLOBAL schemas and those of the database they bind in. **Create Schema** opens the schema editor, which builds a `vams-rules-v1` body rule by rule; **Edit** opens an existing schema in the same editor and writes its next version; **Sweep** evaluates every asset bound to the schema.
 
 ### Where a metadata rule's schema is looked up
 
@@ -661,7 +664,7 @@ POST /compliance/evaluate/{databaseId}
 
 A sweep evaluates every asset bound to a schema — for example after registering or updating the schema.
 
-1. Navigate to **Compliance > Compliance Schemas** in the left sidebar.
+1. Navigate to **Admin - Compliance > Compliance Schemas** in the left sidebar.
 2. Locate the schema and choose **Sweep** in the Actions column.
 
 A sweep evaluates up to 200 assets per request and reports how many remain; choose **Sweep** again to continue with the assets not evaluated yet, until none remain (`vamscli compliance sweep` continues on its own).
@@ -680,7 +683,7 @@ A quarantined asset stays quarantined while it is re-evaluated. When an edit, **
 
 ### Viewing quarantined assets
 
-1. Navigate to **Compliance > Quarantine** in the left sidebar.
+1. Navigate to **Admin - Compliance > Quarantine** in the left sidebar.
 2. The page lists every quarantined asset you may read with its name (its ID beneath), Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) the quarantine reason and when it was quarantined. A pipeline rule's failure shows its execution's reason beneath the quarantine reason to users who may open that execution. The list is paged: use the pagination control to move through the pages.
 3. Narrow the list with the **database** filter and the search box, which matches the asset name or ID. The filters are applied by the server across every quarantined asset, not only the page shown, and are kept in the page URL, so a filtered view can be reloaded or shared.
 
@@ -727,7 +730,7 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 
 ### Reviewing pending cascades
 
-1. Navigate to **Compliance > Cascade Approvals** in the left sidebar.
+1. Navigate to **Admin - Compliance > Cascade Approvals** in the left sidebar.
 2. The page lists cascades in `pending_approval` with their status (the cascade's short ID beneath), the asset that triggered them (its name, with its database and ID beneath), the reason, when and by whom each was created, and the **Approval timeout**: 24 hours after creation.
 3. Use the state filter to list executing, completed or aborted cascades instead, and the database filter and search box (trigger asset name or ID) to narrow the list. The list is paged, and the filters are kept in the page URL.
 
@@ -761,7 +764,7 @@ The compliance audit log records every compliance action across the deployment.
 
 ### Viewing the audit log
 
-1. Navigate to **Compliance > Audit Log** in the left sidebar.
+1. Navigate to **Admin - Compliance > Audit Log** in the left sidebar.
 2. Use the **Event Type** filter to narrow the list (for example, only `quarantine_released` events), and the database, asset ID (within the chosen database), search box (the asset name recorded with the entry, the asset ID or the actor) and the from / to days to narrow it further. The filters are applied by the server and kept in the page URL.
 3. Entries are ordered newest first and the list is paged: use the pagination control to move through the pages. A filtered page can hold fewer entries than a full page while more follow.
 

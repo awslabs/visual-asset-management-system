@@ -30,6 +30,7 @@ import BreakableIdentifier from "./BreakableIdentifier";
 import ExecutionFailureReasons from "./ExecutionFailureReasons";
 import { useLatestRequest } from "./listingFilters";
 import { ListingLoadFailed, loadFailureMessage } from "./listingStates";
+import { PAGE_SORTING_NOTE, byDate, byText, useSortedItems } from "../list/tableSorting";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
@@ -57,6 +58,15 @@ export const schemaWithVersion = (evaluation: EvaluationRecord): string =>
     evaluation.schemaVersion !== undefined && evaluation.schemaVersion !== null
         ? `${evaluation.schemaName} (version ${evaluation.schemaVersion})`
         : evaluation.schemaName || "-";
+
+/**
+ * The result label an evaluation row leads with, which its Result column sorts by: the verdict,
+ * or "not completed" for an evaluation closed without one.
+ */
+export const evaluationResultLabel = (evaluation: EvaluationRecord): string =>
+    evaluationClosedMessage(evaluation)
+        ? EVALUATION_NOT_COMPLETED_LABEL
+        : (VERDICTS[evaluation.verdict || evaluation.result] || VERDICTS.error).label;
 
 /**
  * One rule's result: the rule name, its outcome as a one-line status label, and the rule's message
@@ -170,6 +180,10 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
         loadPage(0, undefined);
     }, [visible, loadPage]);
 
+    // The evaluations of the page shown, in the order of the column header chosen.
+    const { items: sortedEvaluations, sortingProps } = useSortedItems(evaluations);
+    const isPaging = hasMore || currentPageIndex > 1;
+
     return (
         <Modal
             visible={visible}
@@ -185,11 +199,17 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
         >
             <SpaceBetween size="m">
                 {error && <Alert type="error">{error}</Alert>}
+                {isPaging && (
+                    <Box variant="small" color="text-body-secondary">
+                        {PAGE_SORTING_NOTE}
+                    </Box>
+                )}
                 <Table
                     // Columns wrap, so long rule messages stay within the dialog.
                     wrapLines
                     loading={loading}
-                    items={evaluations}
+                    items={sortedEvaluations}
+                    {...sortingProps}
                     variant="embedded"
                     pagination={
                         <Pagination
@@ -233,15 +253,21 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                                 item.evaluatedAt
                                     ? new Date(item.evaluatedAt).toLocaleString()
                                     : "-",
+                            sortingField: "evaluatedAt",
+                            sortingComparator: byDate((item) => item.evaluatedAt),
                         },
                         {
                             id: "schema",
                             header: "Schema",
                             cell: (item) => schemaWithVersion(item),
+                            sortingField: "schemaName",
+                            sortingComparator: byText(schemaWithVersion),
                         },
                         {
                             id: "verdict",
                             header: "Result",
+                            sortingField: "result",
+                            sortingComparator: byText(evaluationResultLabel),
                             cell: (item) => {
                                 // Closed without a verdict: the reason replaces the verdict.
                                 const closed = evaluationClosedMessage(item);
