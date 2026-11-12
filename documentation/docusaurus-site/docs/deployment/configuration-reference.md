@@ -755,6 +755,8 @@ aws bedrock get-foundation-model --region <region> \
 -   **AWS GovCloud (US) (`aws-us-gov`):** use a `us-gov.` inference profile or a foundation-model id offered in the deployment Region. Configuration validation rejects the commercial `global.` and `us.` prefixes.
 -   **AWS European Sovereign Cloud (`aws-eusc`):** use an inference profile or a foundation-model id that `list-inference-profiles` or `list-foundation-models` returns in `eusc-de-east-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. Of the three pipelines, only the GenAI CAD STEP agent on its `fargate` runtime runs in this partition.
 
+For GenAI 3D Metadata Labeling, choose a `global.` profile or a foundation-model id offered on demand in the deployment Region. Its IAM grant covers the model in the deployment Region and the global profile's model only, so a geographic profile (`us.`, `eu.`, `apac.`, `us-gov.`) can be refused when a request is routed to another Region ([#1390](https://github.com/awslabs/visual-asset-management-system/issues/1390)).
+
 The model also has to accept image input for the GenAI metadata labeling and Video SOP/BOM extraction pipelines, and tool use for the GenAI CAD STEP agent and Video SOP/BOM extraction pipelines.
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
