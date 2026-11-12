@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Audit Logging | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/developer/audit-logging"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Audit Logging | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="VAMS provides a comprehensive audit logging system that captures security-sensitive operations across all API handlers. All audit events are written to dedicated Amazon CloudWatch Log Groups with a configurable retention period (1 year by default) and optional AWS KMS encryption."><meta data-rh="true" property="og:description" content="VAMS provides a comprehensive audit logging system that captures security-sensitive operations across all API handlers. All audit events are written to dedicated Amazon CloudWatch Log Groups with a configurable retention period (1 year by default) and optional AWS KMS encryption."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.7/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/developer/audit-logging"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/developer/audit-logging" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.7/developer/audit-logging" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Audit Logging","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.7/developer/audit-logging"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.7/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.7/assets/js/runtime~main.7ad3cb3e.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.7/assets/js/runtime~main.190f20a9.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.7/assets/js/main.541dcab3.js" defer="defer"></script>
 </head>
 <body>
@@ -214,28 +214,23 @@ raising it globally. The audit groups are created in <code>storageBuilder-nested
 <div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">fields @timestamp, @message</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">| filter @message like /\[AUTHCHANGES\]/</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">| parse @message /\[type: (?&lt;changeType&gt;[^\]]+)\]/</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">| sort @timestamp desc</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">| limit 50</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="data-protection">Data Protection<a href="#data-protection" class="hash-link" aria-label="Direct link to Data Protection" title="Direct link to Data Protection" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="what-is-never-logged">What Is Never Logged<a href="#what-is-never-logged" class="hash-link" aria-label="Direct link to What Is Never Logged" title="Direct link to What Is Never Logged" translate="no">​</a></h3>
-<p>The audit logging system is designed with security-first principles and never logs:</p>
+<p>The values of the redacted keys listed under <a href="#automatic-data-masking" class="">Automatic Data Masking</a> never reach an audit record. That covers:</p>
 <ul>
-<li class="">JWT tokens (raw or decoded)</li>
-<li class="">Authorization headers or bearer tokens</li>
-<li class="">Passwords or secrets</li>
-<li class="">API keys or access tokens</li>
-<li class="">AWS credentials (access keys, secret keys, session tokens)</li>
-<li class="">Token signatures or detailed token validation errors</li>
+<li class="">JWT tokens and bearer tokens in the <code>Authorization</code> header, and the raw token in <code>idJwtToken</code> fields</li>
+<li class="">API keys (<code>X-Api-Key</code> header, <code>apiKey</code>, <code>apiKeySecret</code> and <code>rawKey</code> fields) and cookies (<code>Cookie</code>, <code>Set-Cookie</code>)</li>
+<li class="">Proxy credentials (<code>Proxy-Authorization</code>) and AWS credentials (access keys, secret keys, session tokens, <code>X-Amz-Security-Token</code>)</li>
+<li class="">Token signatures or detailed token validation errors (the authorizer records a generic failure category)</li>
 <li class="">Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them</li>
 </ul>
+<p>Redaction is by key name. A secret typed into a free-form field that is not on the list, such as a description, a metadata value or a file name, is written as submitted.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="what-is-logged">What Is Logged<a href="#what-is-logged" class="hash-link" aria-label="Direct link to What Is Logged" title="Direct link to What Is Logged" translate="no">​</a></h3>
-<p>The system logs only non-sensitive operational data:</p>
+<p>Each record holds the bracketed prefix, a payload, and an echo of the triggering request:</p>
 <ul>
-<li class="">User IDs (from verified JWT claims only)</li>
-<li class="">Authorization results (boolean success/failure)</li>
-<li class="">Generic failure reasons (safe categories)</li>
-<li class="">Resource identifiers (database IDs, asset IDs, file paths)</li>
-<li class="">Operation types (GET, POST, DELETE)</li>
-<li class="">Source IP addresses (API Gateway authorizer only)</li>
-<li class="">Timestamps</li>
-<li class="">MFA status</li>
+<li class=""><strong>Prefix</strong> -- the event type, the user ID (from verified token claims), the user&#x27;s roles and MFA status, and for the authorization log the allow or deny result.</li>
+<li class=""><strong>Payload</strong> -- what the calling handler records for the event: resource identifiers (database, asset, file path, pipeline, workflow and execution IDs), the action and the object checked, counts and flags, and for the authorizer the source IP address and a generic failure reason.</li>
+<li class=""><strong>Request echo</strong> (<code>--- [event: ...]</code>) -- the API Gateway event the handler received, after redaction: the method, path, path and query string parameters, the request headers other than the redacted ones (for example <code>User-Agent</code>, <code>Host</code>, <code>X-Forwarded-For</code>), the request context (source IP address, user agent, request ID and the claims the authorizer verified, which can include the user&#x27;s email address and any other claim the identity provider puts in the token), and the request <code>body</code> with only the redacted keys removed. Data-level authorization records echo only the user ID.</li>
 </ul>
+<p>Because the body is echoed, whatever the caller submitted reaches the audit log: asset and database names and descriptions, metadata keys and values, tag names, comments, file names and paths, and any personal data a user types into them.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="automatic-data-masking">Automatic Data Masking<a href="#automatic-data-masking" class="hash-link" aria-label="Direct link to Automatic Data Masking" title="Direct link to Automatic Data Masking" translate="no">​</a></h3>
 <p>Every audit entry carries an echo of the triggering API event, and the <code>mask_sensitive_data()</code> function filters that echo before it is written to Amazon CloudWatch. Matching is case-insensitive on the key name and applies at every nesting level, walking both objects and arrays. Two key families are replaced with <code>&lt;redacted&gt;</code>, and the distinction between them is why the second family exists at all: a credential key holds a value that is never safe to log, while a content key holds a document the caller authored, whose free-form text can contain a prompt, a file path, or a credential-shaped string that no key-name rule could find once it is inside the body.</p>
 <p><strong>Credential keys</strong> -- the value is never safe to log</p>
@@ -243,6 +238,8 @@ raising it globally. The audit groups are created in <code>storageBuilder-nested
 <li class=""><code>authorization</code> headers</li>
 <li class=""><code>idJwtToken</code> fields</li>
 <li class=""><code>Credentials</code>, <code>AccessKeyId</code>, <code>SecretAccessKey</code>, <code>SessionToken</code> objects</li>
+<li class=""><code>apiKey</code>, <code>apiKeySecret</code>, <code>rawKey</code> fields (the API key identifier fields <code>apiKeyId</code>, <code>apiKeyName</code> and <code>apiKeyHash</code> stay readable, so a record still names the key a call used)</li>
+<li class="">The credential-carrying request and response headers <code>Cookie</code>, <code>Set-Cookie</code>, <code>X-Api-Key</code>, <code>Proxy-Authorization</code> and <code>X-Amz-Security-Token</code>. A header is redacted in both <code>headers</code> and <code>multiValueHeaders</code>, whatever its letter case.</li>
 </ul>
 <p><strong>Content keys</strong> -- caller-authored payloads. Every field that can deliver a template body belongs here, whichever request carries it:</p>
 <ul>
@@ -253,7 +250,7 @@ raising it globally. The audit groups are created in <code>storageBuilder-nested
 <li class=""><code>templateTags</code> and <code>tagValues</code> -- the caller-supplied values substituted into a template body</li>
 </ul>
 <p>The field name is preserved when the value is redacted, so the audit trail still records that a template body, form definition, or tag value was submitted with the request. A request <code>body</code> is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.</p>
-<p>The two families are declared as <code>SENSITIVE_KEYS</code> and <code>CONTENT_KEYS</code> in <code>backend/backend/customLogging/logger.py</code>. A new request field that carries a caller-authored body is protected only when its key is added to <code>CONTENT_KEYS</code>.</p>
+<p>The two families are declared as <code>SENSITIVE_KEYS</code> and <code>CONTENT_KEYS</code> in <code>backend/backend/customLogging/logger.py</code>. A new request field that carries a caller-authored body is protected only when its key is added to <code>CONTENT_KEYS</code>, and a new header or field that carries a credential only when its name is added to <code>SENSITIVE_KEYS</code>.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="integration-with-siem-systems">Integration with SIEM Systems<a href="#integration-with-siem-systems" class="hash-link" aria-label="Direct link to Integration with SIEM Systems" title="Direct link to Integration with SIEM Systems" translate="no">​</a></h2>
 <p>VAMS audit logs can be forwarded to Security Information and Event Management (SIEM) systems using standard AWS patterns:</p>
 <ol>
@@ -450,7 +447,7 @@ identity by design; the <code>triggerType</code> field records that the run was 
 </ul>
 </li>
 <li class=""><strong>User context after verification only</strong> -- User IDs are only extracted and logged after successful JWT verification. For failed authorization attempts, the user field is set to <code>&quot;unknown&quot;</code>.</li>
-<li class=""><strong>Source IP only</strong> -- The authorizer logs only the requesting IP address, not request headers or other potentially sensitive fields.</li>
+<li class=""><strong>Source IP and the masked request</strong> -- The payload carries the requesting IP address and the generic failure reason. The record&#x27;s request echo is the authorizer event after redaction: the method, path and query string, and the request headers other than the redacted ones (see <a href="#automatic-data-masking" class="">Automatic Data Masking</a>).</li>
 </ol>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="why-a-separate-function">Why a Separate Function<a href="#why-a-separate-function" class="hash-link" aria-label="Direct link to Why a Separate Function" title="Direct link to Why a Separate Function" translate="no">​</a></h3>
 <p>The API Gateway authorizer runs before normal request processing and handles raw JWT tokens. A separate <code>log_authorization_gateway()</code> function ensures that:</p>
@@ -476,10 +473,10 @@ identity by design; the <code>triggerType</code> field records that the run was 
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="privacy-and-data-protection">Privacy and Data Protection<a href="#privacy-and-data-protection" class="hash-link" aria-label="Direct link to Privacy and Data Protection" title="Direct link to Privacy and Data Protection" translate="no">​</a></h3>
 <ul>
 <li class="">User IDs are logged for audit purposes (legitimate interest for security monitoring).</li>
-<li class="">No personally identifiable information (PII) beyond user IDs is logged.</li>
+<li class="">Records can contain personal data beyond the user ID: the request echo carries the claims the authorizer verified (which can include an email address), the source IP address and user agent, and the submitted request body after redaction, so names, descriptions, metadata values, comments and file names a user enters are logged as entered (see <a href="#what-is-logged" class="">What Is Logged</a>). Treat the audit log groups as containing personal data when you set their access, retention and export.</li>
 <li class="">Logs can be exported for data subject access requests.</li>
 <li class="">The retention period is configurable; regulated environments that require multi-year audit records can extend it (see <a href="#configuring-log-retention" class="">Configuring Log Retention</a>).</li>
-<li class="">Automatic data masking removes all authorization tokens, credentials, and secrets before writing.</li>
+<li class="">Automatic data masking removes the values of the credential and content keys listed under <a href="#automatic-data-masking" class="">Automatic Data Masking</a> before writing; it does not inspect the text of other fields.</li>
 </ul>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="maintenance-and-troubleshooting">Maintenance and Troubleshooting<a href="#maintenance-and-troubleshooting" class="hash-link" aria-label="Direct link to Maintenance and Troubleshooting" title="Direct link to Maintenance and Troubleshooting" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="log-group-management">Log Group Management<a href="#log-group-management" class="hash-link" aria-label="Direct link to Log Group Management" title="Direct link to Log Group Management" translate="no">​</a></h3>
