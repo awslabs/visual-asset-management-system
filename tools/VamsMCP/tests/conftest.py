@@ -37,6 +37,13 @@ GATE_AND_TUNING_ENV_VARS = (
     "VAMS_PROFILE",
     "VAMS_MAX_PAGES",
     "VAMS_PAGE_SIZE",
+    # Remote mode and tool sets: a stray VAMS_MCP_TRANSPORT would make every reload a remote server.
+    "VAMS_MCP_TRANSPORT",
+    "VAMS_MCP_TOOLSETS",
+    "VAMS_MCP_HOST",
+    "VAMS_MCP_PORT",
+    "VAMS_MCP_AUTH_CONFIG",
+    "VAMS_MCP_TOOL_TIMEOUT",
 )
 
 for _name in GATE_AND_TUNING_ENV_VARS:
