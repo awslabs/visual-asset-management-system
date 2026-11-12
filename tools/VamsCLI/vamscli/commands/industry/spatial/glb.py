@@ -12,7 +12,9 @@ from typing import Dict, List, Any, Optional, Tuple
 from ....utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
 # Import JSON output utilities (Rule 16)
-from ....utils.json_output import output_status, output_result, output_error, output_info, output_warning
+from ....utils.json_output import (
+    output_status, output_result, output_error, output_info, invoke_nested_command
+)
 
 # Import API client
 from ....utils.api_client import APIClient
@@ -20,7 +22,7 @@ from ....utils.api_client import APIClient
 # Import exceptions (only business logic exceptions)
 from ....utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, APIError
+    FileDownloadError, FileUploadError, APIError, GlobalInfrastructureError
 )
 
 # Import GLB combining utilities
@@ -49,6 +51,19 @@ from ...file import upload as upload_command
 def spatial():
     """Spatial data processing commands."""
     pass
+
+
+def raise_if_upload_failed(upload_result: Dict[str, Any]) -> None:
+    """Raise FileUploadError when a nested `file upload` did not store every file.
+
+    Under another command's ctx.invoke, `file upload` returns its result instead of exiting 1
+    (invoked_from_another_command), so the calling command has to read `overall_success`.
+    """
+    if upload_result.get('overall_success'):
+        return
+    failed = [key for sequence in upload_result.get('sequence_results', [])
+              for key in sequence.get('failed_files', [])]
+    raise FileUploadError(f"Upload failed for: {', '.join(failed) or 'the file'}")
 
 
 def process_and_combine_glbs(export_result: Dict[str, Any], temp_dir: str,
@@ -254,16 +269,8 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         # Step 2: Call export command with json_output=True (internal)
         output_status(f"Exporting assets from database '{database_id}'...", json_output)
         
-        # Suppress stdout during export to prevent multiple JSON outputs
-        import sys
-        from io import StringIO
-        
-        if json_output:
-            old_stdout = sys.stdout
-            sys.stdout = StringIO()
-        
-        export_result = ctx.invoke(
-            export_command,
+        export_result = invoke_nested_command(
+            ctx, json_output, export_command,
             database_id=database_id,
             asset_id=asset_id,
             download_files=True,
@@ -274,11 +281,7 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
             no_asset_metadata=no_asset_metadata,
             fetch_entire_subtrees=fetch_entire_subtrees,
             include_parent_relationships=include_parent_relationships,
-            json_output=True  # Internal call uses JSON
         )
-        
-        if json_output:
-            sys.stdout = old_stdout
         
         # Step 3: Save export JSON
         root_asset_name = 'combined'
@@ -315,65 +318,43 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         if asset_create_name:
             output_status(f"Creating new asset '{asset_create_name}'...", json_output)
             
+            new_asset_id = None
             try:
-                # Suppress stdout during internal command calls to prevent multiple JSON outputs
-                import sys
-                from io import StringIO
-                
-                # Create asset (capture output if json_output mode)
-                if json_output:
-                    old_stdout = sys.stdout
-                    sys.stdout = StringIO()
-                
-                create_result = ctx.invoke(
-                    create_command,
+                create_result = invoke_nested_command(
+                    ctx, json_output, create_command,
                     database_id=database_id,
                     name=asset_create_name,
                     description=f"{root_asset_name} COMBINED GLB ASSET",
                     distributable=True,
-                    json_output=True  # Internal call uses JSON
                 )
                 
-                if json_output:
-                    sys.stdout = old_stdout
-                
                 new_asset_id = create_result['assetId']
+                # Name the new asset now: if an upload fails, running the command again
+                # creates another
+                output_status(f"Created asset {new_asset_id}", json_output)
+                created = {'createdAssetId': new_asset_id}
                 
-                # Upload combined GLB (capture output if json_output mode)
+                # Upload combined GLB
                 output_status("Uploading combined GLB...", json_output)
                 
-                if json_output:
-                    sys.stdout = StringIO()
-                
-                ctx.invoke(
-                    upload_command,
+                raise_if_upload_failed(invoke_nested_command(
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(combined_glb_path,),
                     database_id=database_id,
                     asset_id=new_asset_id,
-                    json_output=True,  # Internal call uses JSON
                     hide_progress=True  # Hide progress to avoid serialization issues
-                )
+                ))
                 
-                if json_output:
-                    sys.stdout = old_stdout
-                
-                # Upload export JSON (capture output if json_output mode)
+                # Upload export JSON
                 output_status("Uploading export JSON...", json_output)
                 
-                if json_output:
-                    sys.stdout = StringIO()
-                
-                ctx.invoke(
-                    upload_command,
+                raise_if_upload_failed(invoke_nested_command(
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(json_path,),
                     database_id=database_id,
                     asset_id=new_asset_id,
-                    json_output=True,  # Internal call uses JSON
                     hide_progress=True  # Hide progress to avoid serialization issues
-                )
-                
-                if json_output:
-                    sys.stdout = old_stdout
+                ))
                 
                 new_asset_info = {
                     "asset_id": new_asset_id,
@@ -392,11 +373,23 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
                     temp_dir = None
                 
             except Exception as e:
-                failed_operations.append({
-                    'operation': 'asset_creation_upload',
-                    'error': str(e)
-                })
-                output_warning(f"Failed to create/upload to new asset: {e}", json_output)
+                if new_asset_id:
+                    # Name the asset in the error document; the global handler merges it too
+                    e.json_fields = {**(getattr(e, 'json_fields', None) or {}),
+                                     'createdAssetId': new_asset_id}
+                if isinstance(e, GlobalInfrastructureError):
+                    raise
+                output_error(
+                    e,
+                    json_output,
+                    error_type="Asset Creation Error",
+                    helpful_message=(
+                        "The combined GLB was built, but creating the new asset or uploading its "
+                        "files failed." + (
+                            f" Asset {new_asset_id} was created before the failure; running this "
+                            "command again creates another asset." if new_asset_id else ""))
+                )
+                raise click.ClickException(str(e))
         
         # Step 6: Build and return results
         result = {

@@ -157,11 +157,11 @@ Use `--keep-temp-files` to retain intermediate files for inspection and avoid cl
 **Symptoms:**
 
 -   `Asset Creation Error: Failed to create asset: Asset name already exists`
--   `File Upload Error: Failed to upload file: Connection timeout`
+-   `Asset Creation Error: Upload failed for: <file>`
 
 **Cause:**
 
-When `--asset-create-name` is supplied, the target asset name already exists, or a network interruption occurred during upload of the assembled GLB.
+When `--asset-create-name` is supplied, the target asset name already exists, the role can create assets but not upload files to them, or a network interruption occurred during upload of the assembled GLB. A file that was not stored ends the command with exit 1.
 
 **Resolution:**
 
@@ -173,6 +173,8 @@ vamscli industry engineering bom bomassemble \
   --database-id db \
   --asset-create-name "Engine Assembly v2"
 ```
+
+If the new asset was created before the failure, the command names it: `Created asset <id>` in text mode, and `createdAssetId` in the `--json-output` error document. Running the command again creates a second asset, so remove that asset or upload the missing files to it instead. The same applies to `vamscli industry spatial glbassetcombine --asset-create-name`.
 
 ### Memory or Slow Processing
 
