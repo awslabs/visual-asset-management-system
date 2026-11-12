@@ -78,11 +78,18 @@ const useDocumentVisible = (): boolean => {
     return visible;
 };
 
+/**
+ * Minimum widths (px) of the Status and Actions columns, so "Ready" / "Cancelled" and the Download,
+ * Cancel and Delete buttons never break mid-word (#1125 D28); the Archive column takes the slack.
+ */
+export const ZIP_STATUS_COLUMN_MIN_WIDTH = 150;
+export const ZIP_ACTIONS_COLUMN_MIN_WIDTH = 240;
+
 const StatusCell: React.FC<{ job: ZipDownloadJob }> = ({ job }) => {
     const percent = job.status === "RUNNING" ? progressPercent(job) : null;
     return (
         <SpaceBetween size="xxs">
-            <StatusIndicator type={STATUS_INDICATOR[job.status] ?? "info"}>
+            <StatusIndicator type={STATUS_INDICATOR[job.status] ?? "info"} wrapText={false}>
                 {STATUS_LABELS[job.status] ?? job.status}
             </StatusIndicator>
             {job.status === "RUNNING" && percent !== null && (
@@ -415,6 +422,8 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             id: "status",
             header: "Status",
             cell: (job) => <StatusCell job={job} />,
+            // Room for the longest label ("Cancelled") and its icon on one line (#1125 D28).
+            minWidth: ZIP_STATUS_COLUMN_MIN_WIDTH,
         },
         {
             id: "expires",
@@ -424,6 +433,8 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         {
             id: "actions",
             header: "Actions",
+            // Room for Download and Delete side by side, each on one line (#1125 D28).
+            minWidth: ZIP_ACTIONS_COLUMN_MIN_WIDTH,
             cell: (job) => {
                 const terminal = isTerminalStatus(job.status);
                 // All-users view: each control follows the API's own decision for this row (the
@@ -442,6 +453,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 disabled={!shared && !!downloadReason}
                                 disabledReason={shared ? undefined : downloadReason}
                                 ariaLabel={`Download ${job.archiveFileName}`}
+                                wrapText={false}
                             >
                                 Download
                             </Button>
@@ -456,6 +468,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 ariaLabel={`${terminal ? "Delete" : "Cancel"} ${
                                     job.archiveFileName
                                 }`}
+                                wrapText={false}
                             >
                                 {terminal ? "Delete" : "Cancel"}
                             </Button>

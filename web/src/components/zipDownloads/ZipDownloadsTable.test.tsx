@@ -8,7 +8,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { MemoryRouter } from "react-router-dom";
-import ZipDownloadsTable from "./ZipDownloadsTable";
+import ZipDownloadsTable, {
+    ZIP_ACTIONS_COLUMN_MIN_WIDTH,
+    ZIP_STATUS_COLUMN_MIN_WIDTH,
+} from "./ZipDownloadsTable";
 import { ZIP_POLL_INTERVAL_MS, ZipDownloadJob } from "./zipDownloads";
 
 const mockAssetList = jest.fn();
@@ -111,6 +114,37 @@ describe("ZipDownloadsTable", () => {
         expect(within(done).getByRole("button", { name: "Download archive-1.zip" })).toBeEnabled();
         expect(within(done).getByRole("button", { name: "Delete archive-1.zip" })).toBeEnabled();
     });
+
+    it.each([
+        ["the asset tab", {}],
+        ["My Download Queue", { databaseId: undefined, assetId: undefined }],
+    ])(
+        "keeps Ready and the action buttons on one line in %s (#1125 D28)",
+        async (_name, props: Partial<React.ComponentProps<typeof ZipDownloadsTable>>) => {
+            mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+            mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+            const { container } = renderTable(props);
+            const done = await screen
+                .findByText("archive-1.zip")
+                .then(() => rowFor("archive-1.zip"));
+            const table = createWrapper(container).findTable()!;
+            const headerOf = (text: string) =>
+                table
+                    .findColumnHeaders()
+                    .map((h) => h.getElement())
+                    .find((h) => h.textContent === text) as HTMLElement;
+            expect(headerOf("Status").style.minWidth).toBe(`${ZIP_STATUS_COLUMN_MIN_WIDTH}px`);
+            expect(headerOf("Actions").style.minWidth).toBe(`${ZIP_ACTIONS_COLUMN_MIN_WIDTH}px`);
+            // Cloudscape's no-wrap forms: the status indicator's ellipsis container and no-wrap buttons.
+            const ready = within(done).getByText("Ready");
+            expect(ready.closest("[class*='overflow-ellipsis']")).not.toBeNull();
+            for (const name of ["Download archive-1.zip", "Delete archive-1.zip"]) {
+                expect(within(done).getByRole("button", { name }).className).toMatch(
+                    /button-no-wrap/
+                );
+            }
+        }
+    );
 
     it("shows the empty state", async () => {
         mockAssetList.mockResolvedValue(page([]));

@@ -81,8 +81,10 @@ class TestAuthorization:
             env.svc.claims_and_roles = previous
 
     def test_tier2_asset_get_denied_on_create(self, env):
+        # #1125 D29: an unreadable asset answers as a missing one (test_zip_asset_existence_not_leaked.py).
         h.AUTH.denied_assets.add("asset1")
-        assert _create(env, FILE_SELECTION)["statusCode"] == 403
+        response = _create(env, FILE_SELECTION)
+        assert (response["statusCode"], h.body_of(response)["message"]) == (404, "Asset not found")
         assert env.zip.items == {} and env.s3.puts == {}
 
     def test_disabled_answers_404_after_tier1(self):

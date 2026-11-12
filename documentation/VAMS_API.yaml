@@ -2172,7 +2172,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Asset not found, or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
+                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
                     content:
                         application/json:
                             schema:
@@ -2228,7 +2228,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Download as Zip is not enabled for this deployment."
+                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment."
                     content:
                         application/json:
                             schema:

@@ -255,8 +255,22 @@ LAUNCH_RETRY_DELAY_SECONDS = 1
 # Small helpers
 # ---------------------------------------------------------------------------
 
+# The asset-level 404 body (a missing asset and one the caller may not read answer alike).
+ASSET_NOT_FOUND_MESSAGE = "Asset not found"
+
+
 def _not_found(event):
     return general_error(status_code=404, body={"message": zd.MSG_NOT_FOUND}, event=event)
+
+
+def _asset_not_found(event, database_id, asset_id, operation):
+    """The one answer for an asset that does not exist and one the caller may not read (Tier-2 GET):
+    the same 404 "Asset not found", so a caller cannot tell the two apart (#1125 D29). Audited as a
+    denial (zipDownloadNotFound) with the operation."""
+    # AUDIT LOG: a zip download route on an asset the caller may not read, or that does not exist.
+    log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
+                                               "operation": operation})
+    return general_error(status_code=404, body={"message": ASSET_NOT_FOUND_MESSAGE}, event=event)
 
 
 def _caller_id() -> str:
@@ -876,10 +890,8 @@ def create_job(event, database_id, asset_id):
         logger.error(f"Validation error: {v}")
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     asset = _get_asset(database_id, asset_id)
-    if not asset:
-        return general_error(status_code=404, body={"message": "Asset not found"}, event=event)
     if not _can_read_asset(asset):
-        return authorization_error()
+        return _asset_not_found(event, database_id, asset_id, "create")
     user_id = _caller_id()
     try:
         asset_location = require_distributable_asset(asset)
@@ -1062,10 +1074,7 @@ def list_all_users_jobs(event, database_id, asset_id):
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     asset = _get_asset(database_id, asset_id)
     if not _can_read_asset(asset):
-        # AUDIT LOG: an all-users list of an asset the caller may not read, or that does not exist.
-        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
-                                                   "operation": "listAllUsers"})
-        return general_error(status_code=404, body={"message": "Asset not found"}, event=event)
+        return _asset_not_found(event, database_id, asset_id, "listAllUsers")
     partition = zd.asset_key(database_id, asset_id)
     kwargs = {"IndexName": ASSET_INDEX, "KeyConditionExpression": Key("assetKey").eq(partition),
               "ScanIndexForward": False, "Limit": min(query.maxItems, query.pageSize)}
@@ -1427,7 +1436,7 @@ def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponse
                 return create_job(event, database_id, asset_id)
             if method == "GET":
                 if not _can_read_asset(_get_asset(database_id, asset_id)):
-                    return authorization_error()
+                    return _asset_not_found(event, database_id, asset_id, "list")
                 return list_jobs(event, database_id, asset_id)
         elif API_ZIP_DOWNLOADS_ASSET_REQUEST.matches(path) or API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.matches(path):
             message = _validate_path(database_id, asset_id, request_id)
