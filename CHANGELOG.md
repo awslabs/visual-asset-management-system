@@ -82,6 +82,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** Fixed every API route answering `500` (`AuthorizerConfigurationException`) after an update that renames the IAM roles, such as setting or changing `environments.aws.IamRoleNamePrefix`: the REST API stage now moves to a new deployment that names the renamed authorizer role. ([#1210](https://github.com/awslabs/visual-asset-management-system/issues/1210))
     -   Note: the first update to this version creates one new API deployment and moves the stage to it; the API stays available.
 -   **Backend/CLI** Fixed an upload whose every file is over 1 GiB being reported as failed although its files are queued and land in the asset: the completion reports success with the files marked for asynchronous processing, `vamscli file upload` exits 0, and a workflow whose asset-file outputs are all over 1 GiB no longer ends FAILED at the write-back. ([#1140](https://github.com/awslabs/visual-asset-management-system/issues/1140))
+-   **Permissions** Fixed read-only users seeing nothing in every file viewer except the Three.js Viewer, and getting `403` on download: the `database-readonly` and `global-readonly` permission templates and the seeded `basicReadOnly` role grant `POST` on the file download route (`/database/{databaseId}/assets/{assetId}/download`) and on no other route. ([#537](https://github.com/awslabs/visual-asset-management-system/issues/537))
+    -   Note: `basicReadOnly` gets the grant on update. A role imported from either template before v2.6.7 does not; add it by importing a template that holds only the download constraint, not the whole template again (see the update guide).
 
 ### Chores
 
