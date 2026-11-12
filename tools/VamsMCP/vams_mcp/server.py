@@ -760,6 +760,8 @@ def export_asset(
             f"One page of the export: {result.get('assetsInThisPage', len(result.get('assets') or []))} of "
             f"{result.get('totalAssetsInTree')} asset(s). Call again with starting_token=NextToken for the rest."
         )
+        if any(isinstance(a, dict) and a.get("files_truncated") for a in result.get("assets") or []):
+            result["note"] += " Assets marked files_truncated have more files on the next page."
     return result
 
 

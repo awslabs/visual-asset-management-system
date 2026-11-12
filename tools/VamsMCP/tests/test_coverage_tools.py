@@ -120,6 +120,19 @@ def test_export_asset_marks_a_page_with_a_token_as_truncated(mock_client):
     assert result["truncated"] is True
     assert result["NextToken"] == "next"
     assert "25 of 40" in result["note"] and "starting_token" in result["note"]
+    assert "files_truncated" not in result["note"]
+
+
+def test_export_asset_note_names_assets_whose_files_continue(mock_client):
+    mock_client.api.export_asset.return_value = {
+        "assets": [{"assetid": "root", "files_truncated": True}],
+        "NextToken": "next",
+        "totalAssetsInTree": 1,
+        "assetsInThisPage": 1,
+    }
+    result = server_module.export_asset("db1", "root")
+    assert result["truncated"] is True
+    assert "files_truncated have more files on the next page" in result["note"]
 
 
 def test_list_features_reports_the_profile_snapshot(mock_client):
