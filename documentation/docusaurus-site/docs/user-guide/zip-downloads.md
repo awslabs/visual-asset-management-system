@@ -30,9 +30,19 @@ When the selection includes an archived or deleted file or folder, the dialog li
 
 ## The Download Queue
 
-The Download Queue lists your download jobs. Archive jobs from Download as Zip are the only kind today. Each asset has a **Download Queue** tab that lists your jobs for that asset. The **My Download Queue** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset. Both lists show only your own jobs.
+The Download Queue lists your download jobs. Archive jobs from Download as Zip are the only kind today. Each asset has a **Download Queue** tab that lists your jobs for that asset. The **My Download Queue** page under **User** in the side navigation (`#/zipdownloads`) lists them across every asset, and shows only your own jobs.
 
-The search box above each list finds jobs by asset ID, asset name, request ID, or archive name, and the refresh button beside it reloads the list. The search covers the jobs already loaded; when more jobs exist than one load holds, choose **Load more** to add older jobs, which the search then includes.
+### Your jobs and every user's jobs
+
+The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **Show all users** choice beside the search box lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown.
+
+-   You can download another user's finished archive when your role lets you download files from that asset. VAMS checks the archive's files again when you choose **Download**: if a file in it has since been archived, deleted, or blocked, the download is refused with the same message a new zip download would get.
+-   Only the user who requested a job can cancel or delete it, so another user's job shows no **Cancel** or **Delete**.
+-   Another user's job shows its selection summary (counts of files and folders), not the list of selected paths.
+-   Jobs created before this view was added appear only to their requester until they expire.
+-   Each download of another user's archive is recorded in the audit log with both user IDs.
+
+The search box above each list finds jobs by asset ID, asset name, request ID, archive name, or (with **Show all users**) the requester, and the refresh button beside it reloads the list. The search covers the jobs already loaded; when more jobs exist than one load holds, choose **Load more** to add older jobs, which the search then includes.
 
 | Status        | Meaning                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |

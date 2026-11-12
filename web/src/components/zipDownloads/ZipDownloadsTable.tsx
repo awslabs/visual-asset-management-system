@@ -15,11 +15,13 @@ import ProgressBar from "@cloudscape-design/components/progress-bar";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table, { TableProps } from "@cloudscape-design/components/table";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import TextFilter from "@cloudscape-design/components/text-filter";
 import { useNavigate } from "react-router-dom";
 import {
     deleteZipDownload,
     fetchAssetZipDownloads,
+    fetchAssetZipDownloadsAllUsers,
     fetchZipDownloads,
     getZipDownloadUrl,
 } from "../../services/APIService";
@@ -141,6 +143,11 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
 
     const canList = can("GET", assetScoped ? ZIP_ROUTES.asset : ZIP_ROUTES.global);
+    // "Show all users" is offered only when the API's route listing allows the all-users route; the
+    // API still checks the route and the asset on each call.
+    const canListAllUsers = assetScoped && !permissionsLoading && can("GET", ZIP_ROUTES.allUsers);
+    const [scope, setScope] = useState<"mine" | "all">("mine");
+    const showAllUsers = canListAllUsers && scope === "all";
     const canDownload = can("POST", ZIP_ROUTES.url);
     const canRemove = can("DELETE", ZIP_ROUTES.request);
     const downloadReason = routeDisabledReason(
@@ -178,7 +185,15 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
 
     const fetchPage = useCallback(
         (startingToken?: string | null) =>
-            assetScoped
+            assetScoped && showAllUsers
+                ? fetchAssetZipDownloadsAllUsers({
+                      databaseId,
+                      assetId,
+                      pageSize: ZIP_PAGE_SIZE,
+                      maxItems: ZIP_PAGE_SIZE,
+                      startingToken,
+                  })
+                : assetScoped
                 ? fetchAssetZipDownloads({
                       databaseId,
                       assetId,
@@ -191,7 +206,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                       maxItems: ZIP_PAGE_SIZE,
                       startingToken,
                   }),
-        [assetScoped, databaseId, assetId]
+        [assetScoped, showAllUsers, databaseId, assetId]
     );
 
     /** Load the first page. `quiet` (a poll) keeps the rows and their later pages on screen. */
@@ -365,6 +380,16 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 </SpaceBetween>
             ),
         },
+        ...(showAllUsers
+            ? [
+                  {
+                      id: "requestedBy",
+                      header: "Requested by",
+                      cell: (job: ZipDownloadJob) =>
+                          job.isOwn ? `${job.requestedBy || ""} (you)` : job.requestedBy || "",
+                  },
+              ]
+            : []),
         {
             id: "selection",
             header: "Selection",
@@ -401,30 +426,40 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             header: "Actions",
             cell: (job) => {
                 const terminal = isTerminalStatus(job.status);
+                // All-users view: each control follows the API's own decision for this row (the
+                // canDownload / canRemove flags it returns); another user's job is never cancelled
+                // or deleted here. The per-user views keep the route decisions above.
+                const shared = showAllUsers;
+                const offerDownload = job.status === "SUCCEEDED" && (!shared || !!job.canDownload);
+                const offerRemove = !shared || !!job.canRemove;
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
-                        {job.status === "SUCCEEDED" && (
+                        {offerDownload && (
                             <Button
                                 iconName="download"
                                 onClick={() => download(job)}
                                 loading={busyId === job.requestId}
-                                disabled={!!downloadReason}
-                                disabledReason={downloadReason}
+                                disabled={!shared && !!downloadReason}
+                                disabledReason={shared ? undefined : downloadReason}
                                 ariaLabel={`Download ${job.archiveFileName}`}
                             >
                                 Download
                             </Button>
                         )}
-                        <Button
-                            onClick={() =>
-                                setConfirm({ job, kind: terminal ? "delete" : "cancel" })
-                            }
-                            disabled={!!removeReason}
-                            disabledReason={removeReason}
-                            ariaLabel={`${terminal ? "Delete" : "Cancel"} ${job.archiveFileName}`}
-                        >
-                            {terminal ? "Delete" : "Cancel"}
-                        </Button>
+                        {offerRemove && (
+                            <Button
+                                onClick={() =>
+                                    setConfirm({ job, kind: terminal ? "delete" : "cancel" })
+                                }
+                                disabled={!shared && !!removeReason}
+                                disabledReason={shared ? undefined : removeReason}
+                                ariaLabel={`${terminal ? "Delete" : "Cancel"} ${
+                                    job.archiveFileName
+                                }`}
+                            >
+                                {terminal ? "Delete" : "Cancel"}
+                            </Button>
+                        )}
                     </SpaceBetween>
                 );
             },
@@ -493,7 +528,30 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 wrapLines
                 variant={assetScoped ? "embedded" : "container"}
                 filter={
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                    <div
+                        style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            flexWrap: "wrap",
+                        }}
+                    >
+                        {canListAllUsers && (
+                            <SegmentedControl
+                                selectedId={scope}
+                                label="Whose download jobs to show"
+                                onChange={({ detail }) => {
+                                    setScope(detail.selectedId === "all" ? "all" : "mine");
+                                    setLoaded(false);
+                                    setJobs([]);
+                                    setNextToken(null);
+                                }}
+                                options={[
+                                    { id: "mine", text: "My jobs" },
+                                    { id: "all", text: "Show all users" },
+                                ]}
+                            />
+                        )}
                         <TextFilter
                             filteringText={filterText}
                             filteringPlaceholder="Find by asset ID, request ID or archive name"
@@ -528,9 +586,11 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 : `(${jobs.length}${more})`
                         }
                         description={
-                            (assetScoped
-                                ? `Archive jobs you requested for this ${Synonyms.asset}. Only you can see them.`
-                                : `Archive jobs you requested across all ${Synonyms.assets}. Only you can see them.`) +
+                            (showAllUsers
+                                ? `Archive jobs every user requested for this ${Synonyms.asset}. Only the requester can cancel or delete a job.`
+                                : assetScoped
+                                ? `Archive jobs you requested for this ${Synonyms.asset}.`
+                                : `Archive jobs you requested across all ${Synonyms.assets}.`) +
                             (nextToken
                                 ? " The search covers the jobs loaded so far; Load more adds older jobs."
                                 : "")

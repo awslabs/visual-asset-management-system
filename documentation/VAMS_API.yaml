@@ -2346,7 +2346,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the job is the caller's, the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. For the caller's own job that is all. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route) and every file in the archive is still present, not archived and not a blocked type at the time of the request; otherwise it answers 404 (not permitted) or 400 (a file is no longer downloadable, the same message as a refused create). Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2355,7 +2355,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, or the asset is not distributable or is archived."
+                    description: "Invalid path parameters, the asset is not distributable or is archived, or (another user's job) a file in the archive is no longer downloadable."
                     content:
                         application/json:
                             schema:
@@ -2404,6 +2404,58 @@ paths:
               schema:
                   $ref: '#/components/schemas/asset_id_regex'
             - $ref: '#/components/parameters/zipRequestIdParam'
+    /database/{databaseId}/assets/{assetId}/download/zip-all-users:
+        get:
+            summary: "List every user's zip download jobs for an asset."
+            description: "Lists every user's unexpired zip download jobs for this asset, newest first (the web Download Queue's Show all users). Allowed to a caller whose role grants this route and who holds asset GET permission; a caller without asset GET, and a missing asset, get the same 404 (Asset not found). Each row adds requestedBy (the requester's user ID), isOwn, and the API's own decisions for the caller: canDownload (whether the download URL route would sign this archive) and canRemove (cancel and delete stay with the requester). Another user's row carries the selection summary, not the selection preview. Jobs created before this list existed are returned only in their requester's own lists. Answers 404 when Download as Zip is not enabled for the deployment."
+            parameters:
+                - $ref: '#/components/parameters/zipMaxItemsParam'
+                - $ref: '#/components/parameters/zipPageSizeParam'
+                - $ref: '#/components/parameters/startingTokenParam'
+            responses:
+                "200":
+                    description: "A page of every user's jobs for the asset."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadListResponse"
+                "400":
+                    description: "Invalid path or query parameters, or a startingToken that does not belong to this asset's listing."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (the role does not grant this route).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found (also when the caller may not read it), or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, 2-255 characters."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/asset_id_regex'
     /download/zip:
         get:
             summary: "List the caller's zip download jobs across assets."
@@ -19523,7 +19575,7 @@ components:
                     type: integer
         zipDownloadJob:
             type: object
-            description: "A zip download job. The job record never exposes the owner's user ID, the archive's storage location, or the run that produced it."
+            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and the flags below appear only in the all-users list."
             properties:
                 requestId:
                     type: string
@@ -19603,6 +19655,18 @@ components:
                     type: string
                     format: date-time
                     description: "When the job expires (createdAt plus 7 days, a fixed retention). From then on it is not listed and every route answers 404 for it. The archive object is removed by an S3 lifecycle rule 7 days after the archive was written, which S3 applies asynchronously, so it can remain for up to a day or two after expiresAt."
+                requestedBy:
+                    type: string
+                    description: "All-users list only: the requester's user ID."
+                isOwn:
+                    type: boolean
+                    description: "All-users list only: whether the caller requested this job."
+                canDownload:
+                    type: boolean
+                    description: "All-users list only: the API's decision whether the download URL route would sign this archive for the caller (advisory; the route checks again)."
+                canRemove:
+                    type: boolean
+                    description: "All-users list only: whether the caller may cancel or delete the job (only its requester may)."
         zipDownloadListResponse:
             type: object
             properties:

@@ -189,6 +189,12 @@ def user_asset_key(user_id: str, database_id: str, asset_id: str) -> str:
     return f"{user_id}#{database_id}#{asset_id}"
 
 
+def asset_key(database_id: str, asset_id: str) -> str:
+    """Partition key of the asset index (every user's jobs for one asset). Written on each job from
+    creation; a row without it (created before the index) is listed only to its requester."""
+    return f"{database_id}#{asset_id}"
+
+
 def request_prefix(database_id: str, asset_id: str, user_id: str, request_id: str) -> str:
     return (f"{PREPARED_DOWNLOADS_PREFIX}{database_id}/{asset_id}/{user_hash(user_id)}/"
             f"{request_id}/")
@@ -603,6 +609,22 @@ def to_job_item(row: dict) -> dict:
         "completedAt": row.get("completedAt") or None,
         "expiresAt": _iso_from_epoch(row.get("expiresAt")),
     }
+    return item
+
+
+def to_shared_job_item(row: dict, *, is_own: bool, can_download: bool, can_remove: bool) -> dict:
+    """One job in the all-users list of an asset. Another user's job carries the requester's user id,
+    the status, dates, size and the selection summary; never the selection preview, S3 keys, bucket
+    names or the run id. The flags are the API's own decisions for the caller (advisory: each call
+    is still checked): ``canDownload`` for the download URL route, ``canRemove`` for cancel and
+    delete, which stay with the requester."""
+    item = to_job_item(row)
+    if not is_own:
+        item["selectionPreview"] = []
+    item["requestedBy"] = row.get("userId", "")
+    item["isOwn"] = bool(is_own)
+    item["canDownload"] = bool(can_download)
+    item["canRemove"] = bool(can_remove and is_own)
     return item
 
 

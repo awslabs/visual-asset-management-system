@@ -396,7 +396,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             subnets
         );
 
-        // Download as Zip: one function, the zip download service, serves the six routes and the
+        // Download as Zip: one function, the zip download service, serves the seven routes and the
         // delayed sweep's passes. It deploys whatever app.zipDownloads.enabled says, so turning the
         // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
         // it given the sweep state machine and granted its launch and abort cross-calls (below, once

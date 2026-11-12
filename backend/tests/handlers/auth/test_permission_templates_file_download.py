@@ -191,13 +191,15 @@ ZIP_DOWNLOAD_ROUTES = tuple(route for route in ALL_API_ROUTES if route.category 
 class TestTemplatesGrantDownloadAsZip:
     """Every template whose role views files reaches every zip download route and method.
 
-    The jobs are owned by their requester (the handler scopes every read and change to the caller), so
-    the read-only templates get the whole set like the user and admin templates.
+    The handler scopes create, get, cancel and delete to the requester, and checks the asset (and, for
+    another user's archive, the file download route) on the shared list and the URL route, so the
+    read-only templates get the whole set like the user and admin templates. The all-users list sits
+    under `/download/zip-all-users`, which the templates' `/download/zip` criteria already reach.
     """
 
-    def test_the_route_list_holds_the_six_zip_operations(self):
+    def test_the_route_list_holds_the_seven_zip_operations(self):
         operations = sorted((route.path, method) for route in ZIP_DOWNLOAD_ROUTES for method in route.methods)
-        assert len(operations) == 6, operations
+        assert len(operations) == 7, operations
 
     @pytest.mark.parametrize("template_name", VIEWING_TEMPLATES)
     def test_a_viewing_template_role_reaches_every_zip_route(self, template_enforcer, template_name):
@@ -210,3 +212,42 @@ class TestTemplatesGrantDownloadAsZip:
                 _api_request(_concrete_path(route.path.replace("{databaseId}", DATABASE_ID))), method)
         ]
         assert missing == [], f"{template_name}: zip routes not granted {missing}"
+
+
+def _seeded_as_role(role):
+    """The seeded constraints of ``role`` re-pointed at the fixture's role name."""
+    from backend.tests.handlers.authz import shipped_constraints
+
+    constraints = shipped_constraints.seeded_constraints(role)
+    for constraint in constraints:
+        for permission in constraint.get("groupPermissions", []):
+            permission["groupId"] = ROLE_NAME
+    return constraints
+
+
+SHARED_LIST_PATH = "/database/template-db/assets/probe-id/download/zip-all-users"
+SHARED_URL_PATH = "/database/template-db/assets/probe-id/download/zip/probe-id/url"
+FILE_DOWNLOAD_PATH = "/database/template-db/assets/probe-id/download"
+
+
+@pytest.mark.unit
+class TestDownloadQueueSharedView:
+    """The Download Queue's shared view needs the all-users list route, and downloading another
+    user's archive needs the URL route plus the asset's file download route. Every viewing template
+    and both seeded roles grant all three; the handler then checks the asset itself."""
+
+    @pytest.mark.parametrize("template_name", VIEWING_TEMPLATES)
+    def test_a_viewing_template_role_reaches_the_shared_view(self, template_enforcer, template_name):
+        enforcer = template_enforcer(_stored_constraints(template_name))
+        assert enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")
+        assert enforcer.enforce(_api_request(SHARED_URL_PATH), "POST")
+        assert enforcer.enforce(_api_request(FILE_DOWNLOAD_PATH), "POST")
+
+    @pytest.mark.parametrize("role", ("admin", "basicReadOnly"))
+    def test_a_seeded_role_reaches_the_shared_list(self, template_enforcer, role):
+        enforcer = template_enforcer(_seeded_as_role(role))
+        assert enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")
+
+    def test_a_role_without_api_grants_does_not(self, template_enforcer):
+        enforcer = template_enforcer(_stored_constraints("database-tag-admin.json"))
+        assert not enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")

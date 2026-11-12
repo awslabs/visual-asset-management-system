@@ -63,6 +63,7 @@ export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex"
  * backend/backend/handlers/assets/zipDownloadService.py.
  */
 export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
+export const ZIP_DOWNLOAD_ASSET_INDEX = "AssetIndex";
 
 /**
  * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
@@ -171,7 +172,7 @@ export interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
-        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSI UserAssetIndex; TTL expiresAt; Download as Zip jobs
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSIs UserAssetIndex, AssetIndex; TTL expiresAt; Download as Zip jobs
     };
 }
 
@@ -1673,7 +1674,8 @@ export function storageResourcesBuilder(
     // Zip Download Requests — Download as Zip jobs, one row per job, owned by the user who asked for it
     // (PK userId = the authenticated caller, SK requestId = time-sortable id, so a reverse query lists
     // newest first). UserAssetIndex (PK userAssetKey = `userId#databaseId#assetId`) lists one user's
-    // jobs for one asset. expiresAt (epoch seconds) is the TTL: createdAt + ZIP_DOWNLOAD_RETENTION_DAYS (7),
+    // jobs for one asset; AssetIndex (PK assetKey = `databaseId#assetId`) lists every user's jobs for one
+    // asset (the Download Queue's shared view; written on each job from creation). expiresAt (epoch seconds) is the TTL: createdAt + ZIP_DOWNLOAD_RETENTION_DAYS (7),
     // the same retention as the vams.preparedDownloads/ lifecycle rule. Deployed whether or not the feature
     // is enabled, so turning it off leaves existing jobs readable until they expire.
     const zipDownloadRequestsStorageTable = new dynamodb.Table(
@@ -1689,6 +1691,14 @@ export function storageResourcesBuilder(
     zipDownloadRequestsStorageTable.addGlobalSecondaryIndex({
         indexName: ZIP_DOWNLOAD_USER_ASSET_INDEX,
         partitionKey: { name: "userAssetKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // Added to an existing table in place (one GSI per table update; never add a second index in the
+    // same release as this one).
+    zipDownloadRequestsStorageTable.addGlobalSecondaryIndex({
+        indexName: ZIP_DOWNLOAD_ASSET_INDEX,
+        partitionKey: { name: "assetKey", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });

@@ -258,17 +258,22 @@ def create(ctx: click.Context, database_id: str, asset_id: str, files: Tuple[str
 @click.option('--page-size', type=click.IntRange(1, 1000), default=None,
               help='Jobs per page (1-1000)')
 @click.option('--starting-token', default=None, help='Token for pagination')
+@click.option('--all-users', is_flag=True,
+              help="List every user's jobs for the asset (needs -d and -a, and a role allowed "
+                   "that list and reading the asset)")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str],
          max_items: Optional[int], page_size: Optional[int], starting_token: Optional[str],
-         json_output: bool):
-    """List your zip downloads, newest first: for one asset, or across assets.
+         all_users: bool, json_output: bool):
+    """List zip downloads, newest first: yours for one asset or across assets, or (--all-users)
+    every user's for one asset.
 
     Examples:
         vamscli zip-download list
         vamscli zip-download list -d my-db -a my-asset
+        vamscli zip-download list -d my-db -a my-asset --all-users
         vamscli zip-download list --max-items 20 --starting-token <token>
         vamscli zip-download list --json-output
     """
@@ -279,7 +284,7 @@ def list(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str]
     try:
         result = api_client.list_zip_downloads(
             database_id=database_id, asset_id=asset_id, max_items=max_items,
-            page_size=page_size, starting_token=starting_token)
+            page_size=page_size, starting_token=starting_token, all_users=all_users)
         items = builtin_list(result.get('Items') or []) if isinstance(result, dict) else []
         output_result(result, json_output,
                       success_message=f"Found {len(items)} zip download(s)",

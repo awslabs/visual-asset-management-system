@@ -42,6 +42,11 @@ export interface ZipDownloadJob {
     startedAt?: string | null;
     completedAt?: string | null;
     expiresAt?: string;
+    /** All-users list only: the requester's user id and the API's decisions for the caller. */
+    requestedBy?: string;
+    isOwn?: boolean;
+    canDownload?: boolean;
+    canRemove?: boolean;
 }
 
 /** API route templates the controls are gated on through useAllowedRoutes().can(). */
@@ -50,6 +55,7 @@ export const ZIP_ROUTES = {
     request: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
     url: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url",
     global: "/download/zip",
+    allUsers: "/database/{databaseId}/assets/{assetId}/download/zip-all-users",
 } as const;
 
 /** Web route of the global "My Download Queue" page (the route keeps its original name). */
@@ -106,14 +112,15 @@ export function mergeZipJobs(current: ZipDownloadJob[], fresh: ZipDownloadJob[])
 }
 
 /**
- * The Download Queue search: the jobs whose asset ID, asset name, request ID or archive name
- * contains the text, ignoring case. It filters the rows already loaded; blank text keeps them all.
+ * The Download Queue search: the jobs whose asset ID, asset name, request ID, archive name or
+ * requester (all-users view) contains the text, ignoring case. It filters the rows already loaded;
+ * blank text keeps them all.
  */
 export function filterZipJobs(jobs: ZipDownloadJob[], text: string): ZipDownloadJob[] {
     const needle = text.trim().toLowerCase();
     if (!needle) return jobs;
     return jobs.filter((job) =>
-        [job.assetId, job.assetName, job.requestId, job.archiveFileName].some(
+        [job.assetId, job.assetName, job.requestId, job.archiveFileName, job.requestedBy].some(
             (value) => !!value && value.toLowerCase().includes(needle)
         )
     );

@@ -238,3 +238,13 @@ describe("filterZipJobs", () => {
         expect(filterZipJobs(jobs, "db1")).toEqual([]);
     });
 });
+
+describe("filterZipJobs in the all-users view", () => {
+    it("also matches the requester", () => {
+        const jobs = [
+            job("req-1", "SUCCEEDED", { requestedBy: "bob@example.com" }),
+            job("req-2", "SUCCEEDED", { requestedBy: "carol" }),
+        ];
+        expect(filterZipJobs(jobs, "BOB").map((j) => j.requestId)).toEqual(["req-1"]);
+    });
+});

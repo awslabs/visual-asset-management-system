@@ -626,7 +626,7 @@ global page `#/zipdownloads` (**My Download Queue**) list the caller's jobs and 
 The user-facing names come from `DOWNLOAD_QUEUE_PAGE_TITLE` / `DOWNLOAD_QUEUE_TAB_LABEL` and do not say "zip", so other kinds of
 download job can join the queue; the route, the tab id, the API routes and the CLI/MCP names keep `zip`. Both lists search the
 rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the
-search; the API pages the list, so **Load more** adds older jobs, which the search then covers.
+search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` beside the search, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client.
 
 Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
 `ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in

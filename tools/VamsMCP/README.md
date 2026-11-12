@@ -104,6 +104,7 @@ secrets** — just the command:
                 "get_comment",
                 "check_subscription",
                 "list_zip_downloads",
+                "list_asset_zip_downloads_all_users",
                 "get_zip_download"
             ]
         }
@@ -151,11 +152,19 @@ Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
 
-Zip downloads: `list_zip_downloads`, `get_zip_download`. A zip download is a
-server-side job that archives part or all of one asset; jobs are private to the
-user who created them and expire 7 days after they were created.
-`list_zip_downloads` takes `database_id` and `asset_id` together for one asset, or
-neither for every asset, and is paginated like every other list.
+Zip downloads: `list_zip_downloads`, `list_asset_zip_downloads_all_users`,
+`get_zip_download`. A zip download is a server-side job that archives part or
+all of one asset; jobs expire 7 days after they were created. Only the user who
+created a job can get, cancel or delete it.
+`list_zip_downloads` lists the caller's own jobs: it takes `database_id` and
+`asset_id` together for one asset, or neither for every asset, and is paginated
+like every other list. `list_asset_zip_downloads_all_users` lists every user's
+jobs for one asset (the web Download Queue's "Show all users"); the API allows it
+only to a role granted that list route that may also read the asset, and each row
+adds `requestedBy`, `isOwn` and the API's `canDownload` / `canRemove` decisions.
+`get_zip_download_url` (a write-tier tool) also signs another user's archive
+when the caller may download from the asset and every archived file is still
+downloadable.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
 CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the

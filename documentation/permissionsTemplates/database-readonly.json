@@ -201,7 +201,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-zip-downloads",
-            "description": "Allow Download as Zip on assets the role can read: create a job, list and get the caller's own jobs, request the archive's download URL (a POST), and cancel or delete the caller's own jobs. Each call also requires asset GET permission",
+            "description": "Allow Download as Zip on assets the role can read: create, list and get own jobs, list every user's jobs (/download/zip-all-users), request download URLs (a POST), cancel or delete own jobs. Each call also requires asset GET permission",
             "objectType": "api",
             "criteriaAnd": [
                 { "field": "route__path", "operator": "starts_with", "value": "/database/" },

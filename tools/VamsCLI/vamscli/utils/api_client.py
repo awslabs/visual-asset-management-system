@@ -264,7 +264,8 @@ from ..constants import (
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
     API_AUTH_API_KEYS, API_AUTH_API_KEY,
     API_ZIP_DOWNLOADS_ASSET, API_ZIP_DOWNLOADS_ASSET_REQUEST, API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
-    API_ZIP_DOWNLOADS_GLOBAL, FEATURE_ZIPDOWNLOADS, ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
+    API_ZIP_DOWNLOADS_GLOBAL, API_ZIP_DOWNLOADS_ASSET_ALL_USERS, FEATURE_ZIPDOWNLOADS,
+    ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
     ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
     ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
     ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
@@ -4402,11 +4403,15 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
     def list_zip_downloads(self, database_id: Optional[str] = None, asset_id: Optional[str] = None,
                            max_items: Optional[int] = None, page_size: Optional[int] = None,
-                           starting_token: Optional[str] = None) -> Dict[str, Any]:
+                           starting_token: Optional[str] = None,
+                           all_users: bool = False) -> Dict[str, Any]:
         """
-        List the caller's zip download jobs, newest first: for one asset
+        List zip download jobs, newest first: the caller's for one asset
         (GET /database/{databaseId}/assets/{assetId}/download/zip) when both IDs are given, else
-        across every asset (GET /download/zip).
+        the caller's across every asset (GET /download/zip). With ``all_users`` (both IDs
+        required), every user's jobs for the asset
+        (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users), each with
+        ``requestedBy``, ``isOwn`` and the API's ``canDownload`` / ``canRemove`` decisions.
 
         Args:
             database_id: Database ID (together with asset_id, or neither)
@@ -4414,6 +4419,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             max_items: Maximum jobs to return (1-1000, optional)
             page_size: Jobs per page (1-1000, optional)
             starting_token: Pagination token from a previous page's NextToken (optional)
+            all_users: List every user's jobs for the asset (needs both IDs)
 
         Returns:
             {"Items": [job, ...], "NextToken"?: "..."}. Expired jobs, and jobs on assets the caller
@@ -4422,13 +4428,16 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ZipDownloadDisabledError: When the deployment does not offer zip downloads
             InvalidZipDownloadRequestError: When the paging parameters are refused
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the asset cannot be resolved (or, for all users, read)
             APIError: When the API call fails
         """
         if bool(database_id) != bool(asset_id):
             raise InvalidZipDownloadRequestError(
                 "Give both the database ID and the asset ID to list one asset's zip downloads, "
                 "or neither to list them across assets")
+        if all_users and not database_id:
+            raise InvalidZipDownloadRequestError(
+                "Listing every user's zip downloads needs the database ID and the asset ID")
         params: Dict[str, Any] = {}
         if max_items is not None:
             params['maxItems'] = max_items
@@ -4436,7 +4445,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             params['pageSize'] = page_size
         if starting_token:
             params['startingToken'] = starting_token
-        if database_id:
+        if database_id and all_users:
+            endpoint = API_ZIP_DOWNLOADS_ASSET_ALL_USERS.format(databaseId=database_id,
+                                                                assetId=asset_id)
+        elif database_id:
             endpoint = API_ZIP_DOWNLOADS_ASSET.format(databaseId=database_id, assetId=asset_id)
         else:
             endpoint = API_ZIP_DOWNLOADS_GLOBAL

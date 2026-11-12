@@ -100,7 +100,9 @@ API_GET_ASSET_HISTORY = ApiRoute(
 )
 
 # Download as Zip (prepared downloads, handlers/assets/zipDownloadService.py). Always deployed;
-# the handler answers 404 while app.zipDownloads is disabled. Every job is owned by its requester.
+# the handler answers 404 while app.zipDownloads is disabled. Every job is owned by its requester:
+# only the requester cancels or deletes it; readers of the asset may list it, and those allowed to
+# download from the asset may download its archive.
 API_ZIP_DOWNLOADS_ASSET = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/download/zip", (GET, POST), "zipDownloads"
 )
@@ -111,12 +113,18 @@ API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url", (POST,), "zipDownloads"
 )
 API_ZIP_DOWNLOADS_GLOBAL = ApiRoute("/download/zip", (GET,), "zipDownloads")
+# Every user's jobs for one asset (the Download Queue's "Show all users"). A separate path so a role
+# can be granted or denied it on its own; it also needs asset GET (Tier 2).
+API_ZIP_DOWNLOADS_ASSET_ALL_USERS = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/download/zip-all-users", (GET,), "zipDownloads"
+)
 
 ZIP_DOWNLOAD_ROUTES: Tuple[ApiRoute, ...] = (
     API_ZIP_DOWNLOADS_ASSET,
     API_ZIP_DOWNLOADS_ASSET_REQUEST,
     API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     API_ZIP_DOWNLOADS_GLOBAL,
+    API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
 )
 
 ASSET_ROUTES: Tuple[ApiRoute, ...] = (

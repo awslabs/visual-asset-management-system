@@ -217,7 +217,7 @@ interface storageResources {
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; GSI WorkflowExecutionLocksByHolderGSI (PK workflowExecutionId, KEYS_ONLY); one row per concurrency lock (perAsset / perInputFile / perInputFileVersion) a running execution holds
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; GSI WorkflowExecutionIdIndex (PK workflowExecutionId); large object copy job rows + workflow ingestion batch rows
-        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSI UserAssetIndex (PK userAssetKey, SK requestId, ALL); Download as Zip jobs, always deployed
+        zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSIs UserAssetIndex (PK userAssetKey, SK requestId, ALL) and AssetIndex (PK assetKey = databaseId#assetId, SK requestId, ALL); Download as Zip jobs, always deployed
     };
 }
 ```

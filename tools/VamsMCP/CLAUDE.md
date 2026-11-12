@@ -162,8 +162,9 @@ asymmetry other callers rely on):
    `get_zip_download_url` (write tier) is the same kind: it returns a presigned URL to a whole
    archive, so it stays out of `autoApprove` and its docstring says where the URL ends up;
    `create_zip_download` starts a Batch job and stays out too. `cancel_zip_download` and
-   `delete_zip_download` are destructive tier; the reads `list_zip_downloads` and
-   `get_zip_download` may be auto-approved.
+   `delete_zip_download` are destructive tier; the reads `list_zip_downloads`,
+   `list_asset_zip_downloads_all_users` (every user's jobs for one asset; the API decides
+   who may call it) and `get_zip_download` may be auto-approved.
 
     **A required-true request field is not a confirmation to re-expose.**
     `delete_asset` sends `confirmPermanentDelete=True` because

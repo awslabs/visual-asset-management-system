@@ -3559,6 +3559,35 @@ export const fetchAssetZipDownloads = async ({
 };
 
 /**
+ * Lists every user's download jobs for one asset (one page, newest first): the Download Queue's
+ * "Show all users". The API decides who may call it (the route plus asset read) and returns, per row,
+ * `requestedBy`, `isOwn` and its own `canDownload` / `canRemove` decisions for the caller.
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchAssetZipDownloadsAllUsers = async ({
+    databaseId,
+    assetId,
+    maxItems,
+    pageSize,
+    startingToken,
+}: any) => {
+    try {
+        const response = await apiClient.get(
+            `database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(
+                assetId
+            )}/download/zip-all-users`,
+            { queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }) }
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load download jobs"];
+        }
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load download jobs");
+    }
+};
+
+/**
  * Lists the caller's zip downloads across every asset (one page, newest first).
  * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
  */

@@ -265,6 +265,18 @@ test.describe("Download as Zip", () => {
                 .or(page.getByText("Your role does not allow listing download jobs."))
                 .first() // the empty state sits inside a table row (D15)
         ).toBeVisible({ timeout: 45_000 });
+        // Show all users is offered only when the API's route listing allows the all-users route;
+        // when it is, the view lists every user's jobs with a Requested by column.
+        const showAll = page.getByText("Show all users", { exact: true });
+        if ((await showAll.count()) > 0) {
+            await showAll.click();
+            await expect(
+                page
+                    .getByRole("columnheader", { name: "Requested by" })
+                    .or(page.getByText("No download jobs"))
+                    .first()
+            ).toBeVisible({ timeout: 45_000 });
+        }
         expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
     });
 

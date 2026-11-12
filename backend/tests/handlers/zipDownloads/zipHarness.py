@@ -55,8 +55,19 @@ def _load(name, rel_path):
 # ---------------------------------------------------------------------------
 
 def _key_value(condition):
-    """The value of a boto3 Key(...).eq(...) condition."""
-    return condition.get_expression()["values"][1]
+    """The value of a boto3 Key(...).eq(...) condition (the partition part of an And)."""
+    expression = condition.get_expression()
+    if expression["operator"] == "AND":
+        return _key_value(expression["values"][0])
+    return expression["values"][1]
+
+
+def _sort_value(condition):
+    """The sort-key value of a ``Key(pk).eq(..) & Key(sk).eq(..)`` condition, or None."""
+    expression = condition.get_expression()
+    if expression["operator"] == "AND":
+        return expression["values"][1].get_expression()["values"][1]
+    return None
 
 
 class FakeTable:
@@ -141,7 +152,9 @@ class FakeTable:
               ExclusiveStartKey=None, FilterExpression=None, **_):
         pk_name = self.indexes.get(IndexName, self.hash_key) if IndexName else self.hash_key
         pk_value = _key_value(KeyConditionExpression)
-        rows = [r for r in self.items.values() if r.get(pk_name) == pk_value]
+        sk_value = _sort_value(KeyConditionExpression)
+        rows = [r for r in self.items.values() if r.get(pk_name) == pk_value
+                and (sk_value is None or r.get(self.range_key) == sk_value)]
         rows.sort(key=lambda r: r.get(self.range_key) or "", reverse=not ScanIndexForward)
         if ExclusiveStartKey:
             start = ExclusiveStartKey[self.range_key]
@@ -218,6 +231,12 @@ class FakeS3:
         self.add(Key, size=len(Body), version=f"p{len(self.puts)}", bucket=Bucket,
                  content_type=kwargs.get("ContentType", ""))
 
+    def get_object(self, Bucket, Key, **_):
+        if (Bucket, Key) not in self.puts or (Bucket, Key) not in self.objects:
+            raise _client_error("NoSuchKey", "GetObject")
+        body = self.puts[(Bucket, Key)]
+        return {"Body": io.BytesIO(body if isinstance(body, bytes) else body.encode("utf-8"))}
+
     def delete_object(self, Bucket, Key, **_):
         self.objects.pop((Bucket, Key), None)
 
@@ -279,6 +298,13 @@ class AuthState:
         self.user = "alice"
         self.api_allowed = True
         self.denied_assets = set()
+        # (method, path regex) pairs the Tier-1 decision of a concrete path other than the called
+        # one refuses (the file download route, a row's URL or DELETE route).
+        self.denied_routes = set()
+
+    def route_allowed(self, method, path):
+        return self.api_allowed and not any(
+            m == method and re.fullmatch(pattern, path) for m, pattern in self.denied_routes)
 
     def claims(self, event):
         if self.user is None:
@@ -289,9 +315,18 @@ class AuthState:
 AUTH = AuthState()
 
 
+class StubService:
+    """The enforcer's service object: the handler's advisory Tier-1 checks of other paths."""
+
+    def enforce(self, obj, act):
+        assert obj.get("object__type") == "api"
+        return AUTH.route_allowed(act, obj["route__path"])
+
+
 class StubEnforcer:
     def __init__(self, claims_and_roles):
         self.claims = claims_and_roles
+        self.service_object = StubService()
 
     def enforceAPI(self, event, *_):
         return AUTH.api_allowed
@@ -353,7 +388,8 @@ def load_handlers(enabled=True, env=None):
         svc = _load("zipDownloadService_under_test", "handlers/assets/zipDownloadService.py")
     env_obj = types.SimpleNamespace(
         svc=svc, s3=FakeS3(), lam=FakeLambda(),
-        zip=FakeTable("userId", "requestId", {"UserAssetIndex": "userAssetKey"}),
+        zip=FakeTable("userId", "requestId", {"UserAssetIndex": "userAssetKey",
+                                              "AssetIndex": "assetKey"}),
         assets=FakeTable("databaseId", "assetId"),
         buckets=FakeTable("bucketId", None),
         executions=FakeTable("workflowExecutionId", "workflowDatabaseId:workflowId"),

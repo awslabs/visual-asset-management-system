@@ -102,6 +102,9 @@ class TestAuthorization:
 
     def test_second_user_cannot_get_url_or_delete(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        # A second user may download another user's archive only when allowed to download from the
+        # asset (test_zip_shared_view.py); this one is not.
+        h.AUTH.denied_routes.add(("POST", r"/database/db1/assets/asset1/download"))
         for method, suffix in (("GET", ""), ("POST", "/url"), ("DELETE", "")):
             response = _job_route(env, method, request_id, user="mallory", suffix=suffix)
             assert response["statusCode"] == 404, (method, suffix)
@@ -111,15 +114,22 @@ class TestAuthorization:
     def test_every_ownership_miss_is_audited_with_its_operation(self, env):
         # #1125 L3: the 404 for another user's job is audited on get, url and delete alike.
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]
+        h.AUTH.denied_routes.add(("POST", r"/database/db1/assets/asset1/download"))
         env.audit.reset_mock()
-        for method, suffix, operation in (("GET", "", "get"), ("POST", "/url", "url"),
-                                          ("DELETE", "", "delete")):
+        for method, suffix, operation in (("GET", "", "get"), ("DELETE", "", "delete")):
             env.audit.reset_mock()
             _job_route(env, method, request_id, user="mallory", suffix=suffix)
             denials = [c for c in env.audit.call_args_list if c[0][1] == "zipDownloadNotFound"]
             assert len(denials) == 1, (method, suffix)
             assert denials[0][0][2] == {"databaseId": "db1", "assetId": "asset1",
                                         "requestId": request_id, "operation": operation}
+        # The URL route looks another user's job up through the asset index (shared view) and
+        # audits its refusal as a URL denial.
+        env.audit.reset_mock()
+        _job_route(env, "POST", request_id, user="mallory", suffix="/url")
+        denials = [c[0][2] for c in env.audit.call_args_list if c[0][1] == "zipDownloadUrlDenied"]
+        assert denials == [{"databaseId": "db1", "assetId": "asset1", "requestId": request_id,
+                            "shared": True}]
 
     def test_the_owners_own_lookup_writes_no_denial(self, env):
         request_id = h.body_of(_create(env, FILE_SELECTION))["requestId"]

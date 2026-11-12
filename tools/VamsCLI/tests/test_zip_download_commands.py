@@ -170,7 +170,20 @@ class TestListGet:
             assert json.loads(result.output)["NextToken"] == "n"
             assert mocks["api_client"].list_zip_downloads.call_args.kwargs == {
                 "database_id": "db", "asset_id": "a", "max_items": 5, "page_size": 2,
-                "starting_token": "tok"}
+                "starting_token": "tok", "all_users": False}
+
+    def test_list_all_users_forwards_the_flag_and_prints_the_requester(self, cli_runner,
+                                                                       generic_command_mocks):
+        shared = dict(JOB, requestedBy="bob", isOwn=False, canDownload=True, canRemove=False)
+        with generic_command_mocks("zip_download") as mocks:
+            mocks["api_client"].list_zip_downloads.return_value = {"Items": [shared]}
+            result = _invoke(cli_runner, "list", *SCOPE, "--all-users", "--json-output")
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)["Items"][0]["requestedBy"] == "bob"
+            assert mocks["api_client"].list_zip_downloads.call_args.kwargs["all_users"] is True
+            text = _invoke(cli_runner, "list", *SCOPE, "--all-users")
+            assert text.exit_code == 0, text.output
+            assert "Requested by: bob" in text.output
 
     def test_list_text(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("zip_download") as mocks:

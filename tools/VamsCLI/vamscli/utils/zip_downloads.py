@@ -185,6 +185,10 @@ def format_job(job: Dict[str, Any]) -> str:
         selection = f"{summary.get('files', 0)} file(s), {summary.get('folders', 0)} folder(s)"
     lines = [
         f"Request ID: {job.get('requestId', 'N/A')}",
+    ]
+    if job.get("requestedBy"):
+        lines.append(f"Requested by: {job['requestedBy']}" + (" (you)" if job.get("isOwn") else ""))
+    lines += [
         f"Asset: {job.get('databaseId', 'N/A')}/{job.get('assetId', 'N/A')}"
         + (f" ({job['assetName']})" if job.get("assetName") else ""),
         f"Status: {progress_text(job)}",

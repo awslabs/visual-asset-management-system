@@ -494,13 +494,14 @@ The holder index lets a release find every row an execution holds, including row
 
 ### Zip Download Requests Storage Table
 
-Holds one row per Download as Zip job. Every API read and write starts from the authenticated caller's user ID, so a user reaches only their own rows. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
+Holds one row per Download as Zip job. Every write and every get, cancel and delete starts from the authenticated caller's user ID, so a user changes only their own rows. The all-users list reads `AssetIndex` for one asset, for a caller allowed that route who may read the asset, and the download URL route signs another user's archive for a caller who may download from the asset. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
 
 | Attribute                                            | Type   | Key           | Notes                                                                                                  |
 | ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
 | `userId`                                             | String | Partition Key | The requesting user                                                                                    |
 | `requestId`                                          | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order |
 | `userAssetKey`                                       | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                   |
+| `assetKey`                                           | String |               | `{databaseId}#{assetId}`; partition key of `AssetIndex` (written from creation)                        |
 | `databaseId`                                         | String |               | Database of the asset                                                                                  |
 | `assetId`                                            | String |               | Asset archived                                                                                         |
 | `assetName`                                          | String |               | Asset name when the job was created                                                                    |
@@ -526,6 +527,7 @@ Holds one row per Download as Zip job. Every API read and write starts from the 
 | Index            | Partition Key  | Sort Key    | Projection |
 | ---------------- | -------------- | ----------- | ---------- |
 | `UserAssetIndex` | `userAssetKey` | `requestId` | ALL        |
+| `AssetIndex`     | `assetKey`     | `requestId` | ALL        |
 
 Reads treat a row whose `expiresAt` has passed as absent, since DynamoDB removes expired items some time after they expire. No DynamoDB Streams.
 

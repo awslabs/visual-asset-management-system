@@ -8,7 +8,7 @@
  *
  * Always deployed, whatever `enabled` says: the job table, the auxiliary-bucket expiry rules on
  * `vams.preparedDownloads/` (including the one-day abort of incomplete uploads), the table's SSM
- * name, and one zip Lambda, the zip download service, which serves the six routes and the delayed
+ * name, and one zip Lambda, the zip download service, which serves the seven routes and the delayed
  * sweep's passes. Only with `enabled`: the zipArchive system pipeline stack, the ZIPDOWNLOADS feature
  * switch, the sweep state machine that invokes the service, and its two cross-call grants (launch
  * and abort), each on an exact function ARN. In no cell is the service a terminal callback: no
@@ -153,7 +153,7 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         synth = synthOff(name);
     });
 
-    test("the job table: userId/requestId keys, UserAssetIndex, TTL, PITR, retained", () => {
+    test("the job table: userId/requestId keys, UserAssetIndex and AssetIndex, TTL, PITR, retained", () => {
         const tables = synth.where("AWS::DynamoDB::Table", (r) =>
             r.logicalId.startsWith("ZipDownloadRequestsStorageTable")
         );
@@ -174,13 +174,21 @@ describe.each(ALL_TEMPLATES)("always deployed (%s, feature off as shipped)", (na
         expect(table.raw.DeletionPolicy).toBe("Retain");
         expect(table.properties.TableName).toBeUndefined();
         const indexes = table.properties.GlobalSecondaryIndexes as any[];
-        expect(indexes).toHaveLength(1);
+        // Two indexes; the second (the shared view's AssetIndex) is added to an existing table in
+        // place, one GSI in this update.
+        expect(indexes).toHaveLength(2);
         expect(indexes[0].IndexName).toBe("UserAssetIndex");
         expect(indexes[0].KeySchema).toEqual([
             { AttributeName: "userAssetKey", KeyType: "HASH" },
             { AttributeName: "requestId", KeyType: "RANGE" },
         ]);
         expect(indexes[0].Projection).toEqual({ ProjectionType: "ALL" });
+        expect(indexes[1].IndexName).toBe("AssetIndex");
+        expect(indexes[1].KeySchema).toEqual([
+            { AttributeName: "assetKey", KeyType: "HASH" },
+            { AttributeName: "requestId", KeyType: "RANGE" },
+        ]);
+        expect(indexes[1].Projection).toEqual({ ProjectionType: "ALL" });
     });
 
     test("the table name is published to SSM for the handlers and migration tooling", () => {
@@ -716,13 +724,14 @@ describe.each(ALL_TEMPLATES)("feature on (%s)", (name) => {
     });
 });
 
-test("the six routes are registered in the CDK route list", () => {
+test("the seven routes are registered in the CDK route list", () => {
     expect(ZIP_DOWNLOAD_ROUTES.map((r) => `${r.method} ${r.routePath}`).sort()).toEqual(
         [
             "DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
             "GET /database/{databaseId}/assets/{assetId}/download/zip",
             "GET /database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
             "GET /download/zip",
+            "GET /database/{databaseId}/assets/{assetId}/download/zip-all-users",
             "POST /database/{databaseId}/assets/{assetId}/download/zip",
             "POST /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url",
         ].sort()

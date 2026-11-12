@@ -59,11 +59,11 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 
 ### Zip Download Table
 
-| Table                           | Partition Key (PK) | Sort Key (SK) | GSIs                                                    | Purpose                               |
-| ------------------------------- | ------------------ | ------------- | ------------------------------------------------------- | ------------------------------------- |
-| ZipDownloadRequestsStorageTable | `userId`           | `requestId`   | `UserAssetIndex` (PK: userAssetKey, SK: requestId; ALL) | Download as Zip jobs, one row per job |
+| Table                           | Partition Key (PK) | Sort Key (SK) | GSIs                                                                                                     | Purpose                               |
+| ------------------------------- | ------------------ | ------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| ZipDownloadRequestsStorageTable | `userId`           | `requestId`   | `UserAssetIndex` (PK: userAssetKey, SK: requestId; ALL); `AssetIndex` (PK: assetKey, SK: requestId; ALL) | Download as Zip jobs, one row per job |
 
-`ZipDownloadRequestsStorageTable` holds one row per Download as Zip job, keyed by the requesting user and a time-sortable `requestId`, so a user's jobs list newest first; `UserAssetIndex` (`userAssetKey` = `{userId}#{databaseId}#{assetId}`) serves one asset's jobs. A row records the job's status, selection summary, archive name and format, progress, and outcome. Its time-to-live attribute `expiresAt` (epoch seconds) removes a row 7 days after the job was created (a fixed retention, not configuration); list and get hide a row past its `expiresAt` before the time to live removes it. The table is deployed whether or not `app.zipDownloads.enabled` is set. Like every VAMS table it is auto-named and retained on stack deletion.
+`ZipDownloadRequestsStorageTable` holds one row per Download as Zip job, keyed by the requesting user and a time-sortable `requestId`, so a user's jobs list newest first; `UserAssetIndex` (`userAssetKey` = `{userId}#{databaseId}#{assetId}`) serves one user's jobs for one asset, and `AssetIndex` (`assetKey` = `{databaseId}#{assetId}`) every user's jobs for one asset (the Download Queue's **Show all users**). `AssetIndex` is written on each job from its creation; a job created before the index was added is listed only to its requester, until it expires (at most 7 days). Adding the index is an in-place update of the existing table. A row records the job's status, selection summary, archive name and format, progress, and outcome. Its time-to-live attribute `expiresAt` (epoch seconds) removes a row 7 days after the job was created (a fixed retention, not configuration); list and get hide a row past its `expiresAt` before the time to live removes it. The table is deployed whether or not `app.zipDownloads.enabled` is set. Like every VAMS table it is auto-named and retained on stack deletion.
 
 ### Asset Version Tables
 

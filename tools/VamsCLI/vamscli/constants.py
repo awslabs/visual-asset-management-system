@@ -53,6 +53,7 @@ API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = (
     "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url"
 )
 API_ZIP_DOWNLOADS_GLOBAL = "/download/zip"
+API_ZIP_DOWNLOADS_ASSET_ALL_USERS = "/database/{databaseId}/assets/{assetId}/download/zip-all-users"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"

@@ -7,6 +7,8 @@ Routes (common/apiRoutes.py ZIP_DOWNLOAD_ROUTES):
   POST   /database/{databaseId}/assets/{assetId}/download/zip                    create a job
   GET    /database/{databaseId}/assets/{assetId}/download/zip                    caller's jobs for the asset
   GET    /download/zip                                                           caller's jobs, all assets
+  GET    /database/{databaseId}/assets/{assetId}/download/zip-all-users          every user's jobs for
+                                                                                 the asset
   GET    /database/{databaseId}/assets/{assetId}/download/zip/{requestId}        one job
   DELETE /database/{databaseId}/assets/{assetId}/download/zip/{requestId}        cancel or delete
                                                                                  (?intent=cancel: never deletes)
@@ -14,8 +16,18 @@ Routes (common/apiRoutes.py ZIP_DOWNLOAD_ROUTES):
 
 Every call: Tier-1 route check, then the feature check (404 while app.zipDownloads is off), then
 validation, then Tier-2 asset GET (the download path's action). Jobs are keyed by the AUTHENTICATED
-user id, so a caller only ever reads, signs, cancels or deletes their own; another user's job, or a
-job named under another asset's path, answers the same 404 as a missing one.
+user id. A caller gets, cancels and deletes only their own; another user's job, or a job named under
+another asset's path, answers the same 404 as a missing one.
+
+Shared view (owner decision on #1125, the Download Queue's "Show all users"): the all-users list
+route returns every user's unexpired jobs for one asset, through the asset index, to a caller whose
+role allows that route (Tier 1) and who may read the asset (Tier 2); a caller who may not read it
+gets the same 404 as for a missing asset. Each row carries the API's own advisory flags for the caller
+(canDownload, canRemove). The download URL route also signs another user's finished archive for a
+caller who may download from the asset: the same checks as a file download (Tier 1 on the asset's
+file download route, Tier 2 asset GET), plus the URL route itself, and the archive's member files are
+rechecked against the download eligibility rules at the time of the request. Cancel and delete stay
+with the requester.
 
 A create resolves and checks the selection (refusing the whole job on any archived, delete-marker,
 archive-storage-class or blocked file, owner decision), writes the request manifest and a QUEUED row,
@@ -54,6 +66,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from common import zipDownloads as zd
 from common.apiRoutes import (
     API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
     API_ZIP_DOWNLOADS_ASSET_REQUEST,
     API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     API_ZIP_DOWNLOADS_GLOBAL,
@@ -173,6 +186,12 @@ executions_table = dynamodb.Table(executions_table_name)
 register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
+ASSET_INDEX = "AssetIndex"
+# The member recheck of another user's archive (_recheck_members): at most this many members are
+# head-checked; a larger archive is checked from one listing of the asset's prefix, within the time
+# bound. Either bound exceeded refuses the link (fails closed).
+SHARED_RECHECK_HEAD_MAX_FILES = HEAD_CHECK_MAX_FILES
+SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_MAX_SECONDS", "15"))
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
@@ -288,6 +307,27 @@ def _can_read_asset(asset) -> bool:
     obj = dict(asset)
     obj["object__type"] = "asset"
     return bool(CasbinEnforcer(claims_and_roles).enforce(obj, "GET"))
+
+
+def _route_allowed(method, path) -> bool:
+    """Tier-1 decision for a concrete API path other than the one being called (the asset's file
+    download route, a row's URL or cancel route). Fails closed on empty tokens. Not audited here: the
+    caller audits the denial of the operation it refuses, and the list's per-row flags are advisory."""
+    if len(claims_and_roles.get("tokens") or []) == 0:
+        return False
+    enforcer = CasbinEnforcer(claims_and_roles)
+    return bool(enforcer.service_object.enforce({"object__type": "api", "route__path": path}, method))
+
+
+def _concrete_path(template, database_id, asset_id, request_id=None):
+    path = template.replace("{databaseId}", database_id).replace("{assetId}", asset_id)
+    return path.replace("{requestId}", request_id) if request_id is not None else path
+
+
+def _may_download_from_asset(database_id, asset_id) -> bool:
+    """The file download path's Tier-1 check for this asset (POST
+    /database/{databaseId}/assets/{assetId}/download); the caller has already passed Tier 2."""
+    return _route_allowed("POST", f"/database/{database_id}/assets/{asset_id}/download")
 
 
 def _bucket_details(bucket_id):
@@ -866,6 +906,7 @@ def create_job(event, database_id, asset_id):
         "userId": user_id,
         "requestId": request_id,
         "userAssetKey": zd.user_asset_key(user_id, database_id, asset_id),
+        "assetKey": zd.asset_key(database_id, asset_id),
         "databaseId": database_id,
         "assetId": asset_id,
         "assetName": asset.get("assetName", ""),
@@ -1006,6 +1047,170 @@ def list_jobs(event, database_id=None, asset_id=None):
     return success(body=result)
 
 
+def list_all_users_jobs(event, database_id, asset_id):
+    """Every user's unexpired jobs for one asset, newest first, one page (the asset index).
+
+    Tier 1 on this route has passed (handle_api_request). The asset must exist and be readable by the
+    caller (Tier 2 GET); otherwise the answer is the same 404 as for a missing asset, audited. Rows
+    created before the asset index (no assetKey) are not listed here; their requester still sees them
+    in the per-user lists."""
+    query_params = event.get("queryStringParameters") or {}
+    try:
+        query = parse(query_params, model=ListZipDownloadsQueryModel)
+    except ValidationError as v:
+        logger.error(f"Validation error: {v}")
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
+    asset = _get_asset(database_id, asset_id)
+    if not _can_read_asset(asset):
+        # AUDIT LOG: an all-users list of an asset the caller may not read, or that does not exist.
+        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
+                                                   "operation": "listAllUsers"})
+        return general_error(status_code=404, body={"message": "Asset not found"}, event=event)
+    partition = zd.asset_key(database_id, asset_id)
+    kwargs = {"IndexName": ASSET_INDEX, "KeyConditionExpression": Key("assetKey").eq(partition),
+              "ScanIndexForward": False, "Limit": min(query.maxItems, query.pageSize)}
+    if query.startingToken:
+        decoded = _decode_token(query.startingToken, {"assetKey": partition},
+                                ("assetKey", "requestId", "userId"))
+        kwargs["ExclusiveStartKey"] = decoded
+    response = zip_table.query(**kwargs)
+    caller = _caller_id()
+    may_download_asset = _may_download_from_asset(database_id, asset_id)
+    items, reconciled = [], 0
+    run_check_budget = [RUN_CHECKS_PER_CALL]
+    for row in response.get("Items", []) or []:
+        if zd.is_expired(row) or row.get("databaseId") != database_id or row.get("assetId") != asset_id:
+            continue
+        if row.get("status") in zd.ACTIVE_STATUSES and reconciled < RECONCILE_MAX_PER_CALL:
+            reconciled += 1
+            row = _reconcile(row, run_check_budget)
+        is_own = row.get("userId") == caller
+        request_id = row.get("requestId", "")
+        url_allowed = _route_allowed(
+            "POST", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL.path, database_id, asset_id,
+                                   request_id))
+        can_download = (row.get("status") == zd.STATUS_SUCCEEDED and url_allowed
+                        and (is_own or may_download_asset))
+        can_remove = is_own and _route_allowed(
+            "DELETE", _concrete_path(API_ZIP_DOWNLOADS_ASSET_REQUEST.path, database_id, asset_id,
+                                     request_id))
+        items.append(zd.to_shared_job_item(row, is_own=is_own, can_download=can_download,
+                                           can_remove=can_remove))
+    result = {"Items": items}
+    if "LastEvaluatedKey" in response:
+        result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
+    return success(body=result)
+
+
+def _shared_row(event, database_id, asset_id, request_id):
+    """Another user's unexpired job under this asset (the asset index, one bounded query), or None.
+    A miss is audited like _owned_row's."""
+    response = zip_table.query(
+        IndexName=ASSET_INDEX,
+        KeyConditionExpression=(Key("assetKey").eq(zd.asset_key(database_id, asset_id))
+                                & Key("requestId").eq(request_id)),
+        Limit=1)
+    items = response.get("Items") or []
+    row = items[0] if items else None
+    if (not row or row.get("databaseId") != database_id or row.get("assetId") != asset_id
+            or zd.is_expired(row)):
+        log_actions(event, "zipDownloadNotFound", {"databaseId": database_id, "assetId": asset_id,
+                                                   "requestId": request_id, "operation": "url"})
+        return None
+    # The index projects every attribute but is eventually consistent: read the row itself.
+    fresh = zip_table.get_item(Key=zd.row_key(row["userId"], request_id),
+                               ConsistentRead=True).get("Item")
+    if not fresh or zd.is_expired(fresh):
+        return None
+    return fresh
+
+
+def _read_resolved_members(row):
+    """The archive's members as the container recorded them (resolved-manifest.jsonl), or None."""
+    key = row.get("resolvedManifestKey") or zd.resolved_manifest_key(
+        row["databaseId"], row["assetId"], row["userId"], row["requestId"])
+    try:
+        body = s3.get_object(Bucket=aux_bucket_name, Key=key)["Body"].read().decode("utf-8")
+    except ClientError as e:
+        logger.warning(f"Resolved manifest of zip download {row.get('requestId')} unreadable: {e}")
+        return None
+    members = []
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        rel = entry.get("relativePath") if isinstance(entry, dict) else None
+        if not isinstance(rel, str) or not rel:
+            return None
+        members.append(rel)
+    return members
+
+
+def _current_member_ok(bucket, key):
+    """Whether a member's current object is still downloadable: present (no delete marker), not
+    archived (vams-status or an archive storage class), and not a blocked type."""
+    try:
+        head = _head(bucket, key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound", "403"):
+            return False
+        raise
+    if is_file_archived(head):
+        return False
+    return bool(validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")))
+
+
+def _recheck_members(asset, row) -> bool:
+    """Download eligibility of another user's archive at request time: every member file must still
+    be present, not archived and not a blocked type in the asset (#1124's rules, as a file download
+    applies them). Fails closed on anything it cannot confirm, including the time bound."""
+    members = _read_resolved_members(row)
+    if not members:
+        return False
+    try:
+        location = require_distributable_asset(asset)
+        bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
+    except VAMSGeneralErrorResponse:
+        return False
+    base_key = location.get("Key")
+    try:
+        keys = [resolve_asset_file_key(base_key, rel if rel.startswith("/") else "/" + rel)
+                for rel in members]
+    except VAMSGeneralErrorResponse:
+        return False
+    if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
+        with ThreadPoolExecutor(max_workers=max(1, HEAD_CHECK_WORKERS)) as pool:
+            return all(pool.map(lambda k: _current_member_ok(bucket, k), keys))
+    # A large archive: one listing of the asset's prefix, latest state per key.
+    wanted, ok = set(keys), set()
+    deadline = time.monotonic() + SHARED_RECHECK_MAX_SECONDS
+    kwargs = {"Bucket": bucket, "Prefix": base_key, "MaxKeys": 1000}
+    while True:
+        if time.monotonic() > deadline:
+            return False
+        response = s3.list_object_versions(**kwargs)
+        for marker in response.get("DeleteMarkers", []) or []:
+            if marker.get("IsLatest") and marker.get("Key") in wanted:
+                return False
+        for version in response.get("Versions", []) or []:
+            key = version.get("Key", "")
+            if not version.get("IsLatest") or key not in wanted:
+                continue
+            if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
+                return False
+            if not validateUnallowedFileExtensionAndContentType(key, ""):
+                return False
+            ok.add(key)
+        if not response.get("IsTruncated"):
+            break
+        kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
+        kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
+    return ok == wanted
+
+
 def get_job(event, database_id, asset_id, request_id):
     row = _owned_row(event, database_id, asset_id, request_id, "get")
     if not row:
@@ -1016,13 +1221,20 @@ def get_job(event, database_id, asset_id, request_id):
 
 
 def job_url(event, database_id, asset_id, request_id):
-    row = _owned_row(event, database_id, asset_id, request_id, "url")
+    """A short-lived download URL for a finished archive: the caller's own job, or (shared view)
+    another user's job on this asset when the caller may download from the asset."""
+    caller = _caller_id()
+    own = zip_table.get_item(Key=zd.row_key(caller, request_id), ConsistentRead=True).get("Item")
+    shared = not (own and own.get("databaseId") == database_id and own.get("assetId") == asset_id
+                  and not zd.is_expired(own))
+    row = _shared_row(event, database_id, asset_id, request_id) if shared else own
     if not row:
         return _not_found(event)
     asset = _get_asset(database_id, asset_id)
-    if not _can_read_asset(asset):
+    if not _can_read_asset(asset) or (shared and not _may_download_from_asset(database_id, asset_id)):
+        # AUDIT LOG: a download URL refused (the caller may not read, or download from, the asset).
         log_actions(event, "zipDownloadUrlDenied", {"databaseId": database_id, "assetId": asset_id,
-                                                    "requestId": request_id})
+                                                    "requestId": request_id, "shared": shared})
         return _not_found(event)
     try:
         require_distributable_asset(asset)
@@ -1031,6 +1243,13 @@ def job_url(event, database_id, asset_id, request_id):
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
+    if shared and not _recheck_members(asset, row):
+        # AUDIT LOG: another user's archive refused because a member is no longer downloadable.
+        log_actions(event, "zipDownloadUrlRefused", {"databaseId": database_id, "assetId": asset_id,
+                                                     "requestId": request_id,
+                                                     "requestedBy": row.get("userId", "")})
+        return general_error(status_code=400, body={"message": zd.MSG_ARCHIVED_IN_SELECTION},
+                             event=event)
     exists, size = zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", ""))
     if not exists:
         return general_error(status_code=410, body={"message": zd.MSG_EXPIRED}, event=event)
@@ -1042,9 +1261,13 @@ def job_url(event, database_id, asset_id, request_id):
         Params={"Bucket": aux_bucket_name, "Key": row["archiveKey"],
                 "ResponseContentDisposition": disposition},
         ExpiresIn=PRESIGNED_URL_TIMEOUT_SECONDS)
-    # AUDIT LOG: a download URL was issued (the URL itself is never logged).
-    log_actions(event, "zipDownloadUrl", {"databaseId": database_id, "assetId": asset_id,
-                                          "requestId": request_id, "archiveSizeBytes": size})
+    # AUDIT LOG: a download URL was issued (the URL itself is never logged). A download of another
+    # user's archive names both users.
+    audit = {"databaseId": database_id, "assetId": asset_id, "requestId": request_id,
+             "archiveSizeBytes": size}
+    if shared:
+        audit.update(shared=True, requestedBy=row.get("userId", ""), downloadedBy=caller)
+    log_actions(event, "zipDownloadUrl", audit)
     return success(body={"url": url, "expiresIn": PRESIGNED_URL_TIMEOUT_SECONDS,
                          "archiveFileName": file_name, "archiveSizeBytes": size})
 
@@ -1190,7 +1413,13 @@ def handle_api_request(event, context: LambdaContext) -> APIGatewayProxyResponse
         asset_id = path_parameters.get("assetId")
         request_id = path_parameters.get("requestId")
 
-        if API_ZIP_DOWNLOADS_ASSET.matches(path):
+        if API_ZIP_DOWNLOADS_ASSET_ALL_USERS.matches(path):
+            message = _validate_path(database_id, asset_id)
+            if message:
+                return validation_error(body={"message": message}, event=event)
+            if method == "GET":
+                return list_all_users_jobs(event, database_id, asset_id)
+        elif API_ZIP_DOWNLOADS_ASSET.matches(path):
             message = _validate_path(database_id, asset_id)
             if message:
                 return validation_error(body={"message": message}, event=event)

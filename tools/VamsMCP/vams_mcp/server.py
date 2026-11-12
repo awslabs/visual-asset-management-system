@@ -1834,6 +1834,40 @@ def list_zip_downloads(
 
 @mcp.tool()
 @tool_result
+def list_asset_zip_downloads_all_users(
+    database_id: str,
+    asset_id: str,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List EVERY user's zip download jobs for one asset, newest first (auto-paginated).
+
+    The Download Queue's "Show all users". The API allows it only to a role granted this list
+    route that may also read the asset; otherwise it answers AssetNotFoundError (the same answer as
+    for a missing asset) or an authorization error. Each row adds `requestedBy` (the requester's
+    user id), `isOwn`, and the API's own decisions for the caller: `canDownload` (whether
+    get_zip_download_url() would sign this archive) and `canRemove` (only the requester may cancel
+    or delete). Other users' rows carry the selection summary, not the selection preview. Jobs made
+    before this list existed appear only in their requester's own list. Bounded like
+    list_zip_downloads(): `truncated` means more jobs exist, and `NextToken` continues the walk via
+    `starting_token`.
+    """
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_zip_downloads(
+            database_id=database_id,
+            asset_id=asset_id,
+            max_items=params["pageSize"],
+            page_size=params["pageSize"],
+            starting_token=params.get("startingToken"),
+            all_users=True,
+        ),
+        max_items=max_items,
+        starting_token=starting_token,
+    )
+
+
+@mcp.tool()
+@tool_result
 def get_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
     """Read one of the caller's zip download jobs: status, progress and, on failure, the reason.
 
@@ -2471,7 +2505,9 @@ if CONFIG.enable_writes:
         Returns `url`, `expiresIn` (seconds), `archiveFileName` and `archiveSizeBytes`. A job that
         has not succeeded is ZipDownloadNotReadyError; a job past its expiresAt reads as not found
         (ZipDownloadNotFoundError), and a job whose archive is no longer stored is
-        ZipDownloadExpiredError.
+        ZipDownloadExpiredError. Another user's job (from list_asset_zip_downloads_all_users(), row
+        `canDownload`) is signed only when the caller may download from the asset and every archived
+        file is still downloadable; otherwise it reads as not found or is refused.
 
         The URL is a bearer credential: anyone holding it can download the archive — possibly the
         whole asset — until it expires, with no further authentication. Returning it puts it in the

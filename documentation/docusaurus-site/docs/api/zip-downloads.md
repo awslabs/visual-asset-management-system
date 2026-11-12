@@ -6,7 +6,8 @@ Download as Zip is enabled per deployment with `app.zipDownloads.enabled` (see [
 
 ## Concepts
 
--   **Ownership** -- A job is keyed by the authenticated caller's user ID, never by a value in the request. Every route reads and changes only the caller's own jobs. A job that belongs to another user, or one named under another asset's path, answers the same `404 Zip download not found` as a job that does not exist. Each such lookup is audited.
+-   **Ownership** -- A job is keyed by the authenticated caller's user ID, never by a value in the request. Create, get, cancel and delete reach only the caller's own jobs: a job that belongs to another user, or one named under another asset's path, answers the same `404 Zip download not found` as a job that does not exist. Each such lookup is audited.
+-   **Shared view** -- [List Every User's Zip Downloads for an Asset](#list-every-users-zip-downloads-for-an-asset) lists every user's jobs for one asset to a caller whose role grants that route and who may read the asset. [Get Zip Download URL](#get-zip-download-url) also signs another user's finished archive on that asset when the caller may download from the asset (the same permissions a file download needs) and every file in the archive is still downloadable. Only the requester can cancel or delete a job.
 -   **Authorization** -- Every route requires API access to the route (Tier 1) and asset `GET` permission on the asset (Tier 2), the same asset action a file download requires. The asset permission is checked again on every call, so a job on an asset the caller can no longer read is hidden from lists and refuses its URL. Such a job can also no longer be cancelled or deleted by its owner: a running job ends with its run (at most 12 hours) and still counts toward the owner's active-job limit until then, and its archive is removed when the job expires.
 -   **The whole job is refused** -- Create refuses the job when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Files under folder and whole-asset entries are checked within a bounded pre-scan; the Zip Archive job checks every member again before it writes the first byte, and a refusal there ends the job `FAILED` with a reason naming the asset-relative path.
 -   **Retention** -- A job expires at its `expiresAt`, 7 days after the job was created (a fixed retention). From then on it is no longer listed, every route answers `404` for it (so its archive can no longer be downloaded), and the table's time to live removes the record. The archive object is removed separately, by the auxiliary bucket's lifecycle rule 7 days after the archive was written; Amazon S3 applies that rule asynchronously, so the object can remain for up to a day or two after `expiresAt`. An archive of an asset that is later archived or permanently deleted can no longer be downloaded (the URL route refuses it) and also remains until the lifecycle rule removes it.
@@ -128,13 +129,28 @@ Selection rules:
 
 Lists the caller's jobs for one asset, newest first.
 
+### List Every User's Zip Downloads for an Asset
+
+`GET /database/{databaseId}/assets/{assetId}/download/zip-all-users`
+
+Lists every user's unexpired jobs for one asset, newest first (the web Download Queue's **Show all users**). The route is separate from the caller's own asset list, so a role can be granted or denied it on its own; the caller also needs asset `GET` permission on the asset. A caller without it, and a missing asset, get the same `404 Asset not found`, and the refusal is audited. Each item adds:
+
+| Field         | Type    | Description                                                                                                                              |
+| ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestedBy` | string  | The requester's user ID.                                                                                                                 |
+| `isOwn`       | boolean | Whether the caller requested the job.                                                                                                    |
+| `canDownload` | boolean | The API's decision whether [Get Zip Download URL](#get-zip-download-url) would sign this archive for the caller. The route checks again. |
+| `canRemove`   | boolean | Whether the caller may cancel or delete the job; only its requester may.                                                                 |
+
+Another user's job carries its `selectionSummary` but an empty `selectionPreview`. Jobs created before this route existed are returned only in their requester's own lists, until they expire.
+
 ### List All Zip Downloads
 
 `GET /download/zip`
 
 Lists the caller's jobs across every asset, newest first. A job on an asset the caller can no longer read is left out.
 
-**Query Parameters (both list routes):**
+**Query Parameters (all three list routes):**
 
 | Parameter       | Type    | Default | Description                                                                        |
 | --------------- | ------- | ------- | ---------------------------------------------------------------------------------- |
@@ -197,7 +213,7 @@ Returns one of the caller's jobs with its current status and progress.
 
 `POST /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url`
 
-Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only when the job is the caller's and `SUCCEEDED`, the caller still holds asset `GET` permission, the asset is still distributable and not archived, and the archive is within its retention. The URL downloads the archive as an attachment under its `archiveFileName`. It is valid for `expiresIn` seconds and is never written to the logs; request a new URL for each download.
+Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only when the job is `SUCCEEDED`, the caller still holds asset `GET` permission, the asset is still distributable and not archived, and the archive is within its retention. For another user's job on this asset, the caller must also be allowed to download from the asset (`POST /database/{databaseId}/assets/{assetId}/download`, the file download route), and every file in the archive must still be present, not archived, and not a blocked type at the time of the request. Each URL issued for another user's archive is audited with both user IDs. The URL downloads the archive as an attachment under its `archiveFileName`. It is valid for `expiresIn` seconds and is never written to the logs; request a new URL for each download.
 
 **Response:**
 
@@ -212,14 +228,14 @@ Issues a presigned Amazon S3 URL for a finished archive. The URL is issued only 
 
 **Error Responses:**
 
-| Status | Description                                                                                    |
-| ------ | ---------------------------------------------------------------------------------------------- |
-| `400`  | Invalid path parameters, or the asset is not distributable or is archived.                     |
-| `403`  | Not authorized.                                                                                |
-| `404`  | `Zip download not found`, the caller can no longer read the asset, or the feature is disabled. |
-| `409`  | `The archive is not ready for download` (the job is not `SUCCEEDED`).                          |
-| `410`  | `This zip download has expired` (the archive no longer exists).                                |
-| `500`  | Internal server error.                                                                         |
+| Status | Description                                                                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid path parameters, the asset is not distributable or is archived, or (another user's job) a file in the archive is archived, deleted, or blocked, with the message a refused create gives. |
+| `403`  | Not authorized.                                                                                                                                                                                  |
+| `404`  | `Zip download not found`, the caller can no longer read the asset or (another user's job) may not download from it, or the feature is disabled.                                                  |
+| `409`  | `The archive is not ready for download` (the job is not `SUCCEEDED`).                                                                                                                            |
+| `410`  | `This zip download has expired` (the archive no longer exists).                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                           |
 
 ---
 
@@ -283,7 +299,7 @@ A terminal job returns `{"message": "Zip download deleted", "action": "deleted"}
 | `completedAt`      | string  | ISO 8601 time the job reached a terminal status, or `null`.                                                                                                           |
 | `expiresAt`        | string  | ISO 8601 time the job expires (`createdAt` plus 7 days); afterwards it is not listed and cannot be downloaded. See Retention above.                                   |
 
-A job never exposes its owner's user ID, the archive's storage location, or the workflow run that produced it.
+A job never exposes the archive's storage location or the workflow run that produced it. Only the all-users list names the requester (`requestedBy`).
 
 ## Related resources
 

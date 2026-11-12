@@ -38,6 +38,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
     PREPARED_DOWNLOADS_PREFIX,
+    ZIP_DOWNLOAD_ASSET_INDEX,
     ZIP_DOWNLOAD_USER_ASSET_INDEX,
     storageResources,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -1689,7 +1690,7 @@ export const ZIP_ARCHIVE_WORKFLOW_ID = "utility-zip-archive";
 export const ZIP_DOWNLOAD_PRESIGNED_URL_TIMEOUT_SECONDS = 900;
 
 /**
- * The six routes the zip download service serves (backend common/apiRoutes.py ZIP_DOWNLOAD_ROUTES;
+ * The seven routes the zip download service serves (backend common/apiRoutes.py ZIP_DOWNLOAD_ROUTES;
  * test/api/apiRouteBackendCdkParity.test.ts holds the two lists equal).
  */
 export const ZIP_DOWNLOAD_ROUTES: ReadonlyArray<{
@@ -1705,6 +1706,10 @@ export const ZIP_DOWNLOAD_ROUTES: ReadonlyArray<{
         method: apigateway.HttpMethod.GET,
     },
     { routePath: "/download/zip", method: apigateway.HttpMethod.GET },
+    {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/zip-all-users",
+        method: apigateway.HttpMethod.GET,
+    },
     {
         routePath: "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}",
         method: apigateway.HttpMethod.GET,
@@ -1748,7 +1753,7 @@ function inVpc(config: Config.Config): boolean {
 
 /**
  * The zip download service: create, list (asset and global), get, cancel/delete and presigned URL,
- * one function for all six routes, plus the delayed sweep's passes (abort a stopped job's recorded
+ * one function for all seven routes, plus the delayed sweep's passes (abort a stopped job's recorded
  * uploads). Its own job table and its auxiliary-bucket prefix are granted as exact statements (the
  * actions the handler calls, the read-time reconcile's and the sweep's included), the asset data read the way downloadAsset
  * reads it, and the execution row read by GetItem only (read-time reconcile).
@@ -1788,6 +1793,7 @@ export function buildZipDownloadServiceFunction(
             resources: [
                 zipTable.tableArn,
                 `${zipTable.tableArn}/index/${ZIP_DOWNLOAD_USER_ASSET_INDEX}`,
+                `${zipTable.tableArn}/index/${ZIP_DOWNLOAD_ASSET_INDEX}`,
             ],
         })
     );

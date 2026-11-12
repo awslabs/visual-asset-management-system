@@ -12,11 +12,13 @@ import { ZIP_POLL_INTERVAL_MS, ZipDownloadJob } from "./zipDownloads";
 
 const mockAssetList = jest.fn();
 const mockGlobalList = jest.fn();
+const mockAllUsersList = jest.fn();
 const mockUrl = jest.fn();
 const mockDelete = jest.fn();
 jest.mock("../../services/APIService", () => ({
     fetchAssetZipDownloads: (...a: any[]) => mockAssetList(...a),
     fetchZipDownloads: (...a: any[]) => mockGlobalList(...a),
+    fetchAssetZipDownloadsAllUsers: (...a: any[]) => mockAllUsersList(...a),
     getZipDownloadUrl: (...a: any[]) => mockUrl(...a),
     deleteZipDownload: (...a: any[]) => mockDelete(...a),
 }));
@@ -78,6 +80,7 @@ describe("ZipDownloadsTable", () => {
         mockAllowed = { ...ALL };
         mockAssetList.mockReset();
         mockGlobalList.mockReset();
+        mockAllUsersList.mockReset();
         mockUrl.mockReset();
         mockDelete.mockReset();
     });
@@ -462,5 +465,113 @@ describe("ZipDownloadsTable", () => {
             expect.objectContaining({ startingToken: "tok" })
         );
         expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    });
+});
+
+describe("ZipDownloadsTable — Show all users (asset tab)", () => {
+    const ALL_USERS_ROUTE = "GET /database/{databaseId}/assets/{assetId}/download/zip-all-users";
+
+    beforeEach(() => {
+        mockAllowed = { ...ALL };
+        mockAssetList.mockReset();
+        mockAllUsersList.mockReset();
+        mockUrl.mockReset();
+        mockDelete.mockReset();
+    });
+
+    it("shows only the caller's jobs and no filter when the API does not allow the route", async () => {
+        mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        expect(screen.queryByText("Show all users")).toBeNull();
+        expect(mockAllUsersList).not.toHaveBeenCalled();
+    });
+
+    it("defaults to the caller's jobs, and lists every user's jobs on Show all users", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        mockAllUsersList.mockResolvedValue(
+            page([
+                job("2", "SUCCEEDED", {
+                    requestedBy: "bob",
+                    isOwn: false,
+                    canDownload: true,
+                    canRemove: false,
+                    selectionPreview: [],
+                }),
+                job("3", "SUCCEEDED", {
+                    requestedBy: "carol",
+                    isOwn: false,
+                    canDownload: false,
+                    canRemove: false,
+                    selectionPreview: [],
+                }),
+                job("1", "SUCCEEDED", {
+                    requestedBy: "alice",
+                    isOwn: true,
+                    canDownload: true,
+                    canRemove: true,
+                }),
+            ])
+        );
+        renderTable();
+        await screen.findByText("archive-1.zip");
+        // Default: the caller's own list; the all-users route is not called.
+        expect(mockAllUsersList).not.toHaveBeenCalled();
+        expect(screen.queryByText("Requested by")).toBeNull();
+
+        await userEvent.click(screen.getByText("Show all users"));
+        expect(await screen.findByText("archive-2.zip")).toBeInTheDocument();
+        expect(mockAllUsersList).toHaveBeenCalledWith(
+            expect.objectContaining({ databaseId: "db1", assetId: "a1" })
+        );
+        expect(screen.getByText("Requested by")).toBeInTheDocument();
+        expect(within(rowFor("archive-2.zip")).getByText("bob")).toBeInTheDocument();
+        expect(within(rowFor("archive-1.zip")).getByText("alice (you)")).toBeInTheDocument();
+
+        // Download follows the API's row flag; another user's job has no Cancel or Delete.
+        const bob = rowFor("archive-2.zip");
+        expect(within(bob).getByRole("button", { name: "Download archive-2.zip" })).toBeEnabled();
+        expect(within(bob).queryByRole("button", { name: /Delete|Cancel/ })).toBeNull();
+        const carol = rowFor("archive-3.zip");
+        expect(within(carol).queryByRole("button", { name: /Download/ })).toBeNull();
+        const mine = rowFor("archive-1.zip");
+        expect(within(mine).getByRole("button", { name: "Delete archive-1.zip" })).toBeEnabled();
+    });
+
+    it("downloads another user's archive through the URL route when its row allows it", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockAssetList.mockResolvedValue(page([]));
+        mockAllUsersList.mockResolvedValue(
+            page([job("2", "SUCCEEDED", { requestedBy: "bob", isOwn: false, canDownload: true })])
+        );
+        mockUrl.mockResolvedValue([
+            true,
+            { url: "https://example.invalid/signed", expiresIn: 900, archiveFileName: "n.zip" },
+        ]);
+        const click = jest
+            .spyOn(HTMLAnchorElement.prototype, "click")
+            .mockImplementation(() => undefined);
+        renderTable();
+        await screen.findByText("No download jobs");
+        await userEvent.click(screen.getByText("Show all users"));
+        await userEvent.click(
+            await screen.findByRole("button", { name: "Download archive-2.zip" })
+        );
+        await waitFor(() => expect(click).toHaveBeenCalled());
+        expect(mockUrl).toHaveBeenCalledWith({ databaseId: "db1", assetId: "a1", requestId: "2" });
+        click.mockRestore();
+    });
+
+    it("never offers the filter on the global page", async () => {
+        mockAllowed = { ...ALL, [ALL_USERS_ROUTE]: true };
+        mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+        render(
+            <MemoryRouter>
+                <ZipDownloadsTable />
+            </MemoryRouter>
+        );
+        await screen.findByText("archive-1.zip");
+        expect(screen.queryByText("Show all users")).toBeNull();
     });
 });

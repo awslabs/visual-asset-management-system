@@ -95,6 +95,20 @@ class TestRequests:
         assert wire.sends[1][1] == BASE + "/database/db/assets/a/download/zip"
         assert wire.sends[1][2]["params"] == {}
 
+    def test_list_all_users_calls_the_all_users_route(self, monkeypatch):
+        client = _client()
+        wire = _Wire(monkeypatch, client, _response({"Items": []}))
+        client.list_zip_downloads("db", "a", page_size=3, all_users=True)
+        assert wire.sends[0][:2] == ("GET", BASE + "/database/db/assets/a/download/zip-all-users")
+        assert wire.sends[0][2]["params"] == {"pageSize": 3}
+
+    def test_list_all_users_needs_the_asset(self, monkeypatch):
+        client = _client()
+        wire = _Wire(monkeypatch, client, _response({"Items": []}))
+        with pytest.raises(InvalidZipDownloadRequestError):
+            client.list_zip_downloads(all_users=True)
+        assert wire.sends == []
+
     def test_list_refuses_half_a_scope(self, monkeypatch):
         client = _client()
         wire = _Wire(monkeypatch, client, _response({"Items": []}))
