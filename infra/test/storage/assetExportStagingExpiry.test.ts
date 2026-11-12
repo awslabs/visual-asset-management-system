@@ -16,8 +16,13 @@
  *     delete marker), and a second rule removes the expired delete markers;
  *   * the expiry outlives the longest lifetime a presigned URL can have, and the presigned URL
  *     lifetime each shipped template configures;
+ *   * the bucket-wide incomplete-multipart abort rule, which names no prefix, covers it too;
  *   * the rules are on in every deployment shape, with no pipeline or add-on enabled, in the
- *     GovCloud and EU Sovereign templates and with the hardened options on.
+ *     GovCloud and EU Sovereign templates and with the hardened options on;
+ *   * the prefix cannot be a database ID. The bucket keys each database's preview and viewer data
+ *     under `{databaseId}/`, so a prefix whose first segment a database ID could take would let
+ *     the expiry delete that database's data. The database ID pattern is read from
+ *     backend/backend/common/validators.py.
  *
  * The Python handler keys the payload under the same literal, which the last test reads from source.
  * Asserted on the emitted templates; the control is the bucket's own multipart-upload rule.
@@ -39,6 +44,7 @@ const EXPORT_HANDLER = path.resolve(
     __dirname,
     "../../../backend/backend/handlers/assets/assetExportService.py"
 );
+const VALIDATORS = path.resolve(__dirname, "../../../backend/backend/common/validators.py");
 const SECONDS_PER_DAY = 86400;
 
 /** Commercial without WAF: CloudFront, no VPC, no customer managed key. */
@@ -98,7 +104,26 @@ const rulesOf = (bucket: Resource): any[] => bucket.properties.LifecycleConfigur
 const stagingRules = (bucket: Resource): any[] =>
     rulesOf(bucket).filter((rule: any) => rule.Prefix === PREFIX);
 
+/** The database ID pattern the backend validates `databaseId` against. */
+function databaseIdPattern(): RegExp {
+    const source = fs.readFileSync(VALIDATORS, "utf-8");
+    const match = /^id_pattern = r'([^']+)'$/m.exec(source);
+    expect(match).not.toBeNull();
+    return new RegExp((match as RegExpExecArray)[1]);
+}
+
 describe("asset export staging expiry", () => {
+    test("the staging prefix carries a character no database ID can contain", () => {
+        const pattern = databaseIdPattern();
+        // Control: the pattern accepts an ordinary ID and the bare word.
+        expect(pattern.test("db1")).toBe(true);
+        expect(pattern.test("assetExports")).toBe(true);
+        expect(PREFIX).toBe("vams.assetExports/");
+        const firstSegment = PREFIX.split("/")[0];
+        expect(pattern.test(firstSegment)).toBe(false);
+        expect(firstSegment).toMatch(/[^-_a-zA-Z0-9]/);
+    });
+
     test("the expiry outlives the longest presigned URL lifetime by at least a day", () => {
         const longestUrlDays = Config.PRESIGNED_URL_MAX_TIMEOUT_SECONDS / SECONDS_PER_DAY;
         expect(Number.isInteger(Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS)).toBe(true);
@@ -122,22 +147,55 @@ describe("asset export staging expiry", () => {
             ).toBe(true);
         });
 
+        test("the incomplete-multipart abort rule is bucket-wide, so it covers the prefix", () => {
+            const abort = rulesOf(bucket).filter(
+                (rule: any) => rule.AbortIncompleteMultipartUpload !== undefined
+            );
+            expect(abort).toHaveLength(1);
+            expect(abort[0].Status).toBe("Enabled");
+            expect(abort[0].Prefix).toBeUndefined();
+            expect(abort[0].Filter).toBeUndefined();
+        });
+
+        test("no rule names the database-shaped prefix", () => {
+            expect(rulesOf(bucket).filter((rule: any) => rule.Prefix === "assetExports/")).toEqual(
+                []
+            );
+        });
+
         test("the bucket is versioned, so the noncurrent expiry is what reclaims the storage", () => {
             expect(bucket.properties.VersioningConfiguration).toEqual({ Status: "Enabled" });
         });
 
-        test("staged payloads expire, with their noncurrent versions and delete markers", () => {
+        test("the prefix carries exactly two rules, both enabled", () => {
             const rules = stagingRules(bucket);
             expect(rules).toHaveLength(2);
-            const expiry = rules.find((rule: any) => rule.ExpirationInDays !== undefined);
-            expect(expiry).toEqual({
-                Status: "Enabled",
-                Prefix: PREFIX,
-                ExpirationInDays: Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS,
-                NoncurrentVersionExpiration: { NoncurrentDays: 1 },
-            });
-            const markers = rules.find((rule: any) => rule.ExpiredObjectDeleteMarker !== undefined);
-            expect(markers).toEqual({
+            expect(rules.every((rule: any) => rule.Status === "Enabled")).toBe(true);
+        });
+
+        test("current staged payloads expire after 8 days", () => {
+            const expiry = stagingRules(bucket).filter(
+                (rule: any) => rule.ExpirationInDays !== undefined
+            );
+            expect(expiry).toHaveLength(1);
+            expect(expiry[0].ExpirationInDays).toBe(Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS);
+            expect(expiry[0].ExpirationInDays).toBe(8);
+        });
+
+        test("noncurrent versions of staged payloads expire a day after they become noncurrent", () => {
+            const noncurrent = stagingRules(bucket).filter(
+                (rule: any) => rule.NoncurrentVersionExpiration !== undefined
+            );
+            expect(noncurrent).toHaveLength(1);
+            expect(noncurrent[0].NoncurrentVersionExpiration).toEqual({ NoncurrentDays: 1 });
+        });
+
+        test("expired delete markers under the prefix are removed", () => {
+            const markers = stagingRules(bucket).filter(
+                (rule: any) => rule.ExpiredObjectDeleteMarker !== undefined
+            );
+            expect(markers).toHaveLength(1);
+            expect(markers[0]).toEqual({
                 Status: "Enabled",
                 Prefix: PREFIX,
                 ExpiredObjectDeleteMarker: true,

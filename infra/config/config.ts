@@ -197,8 +197,10 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // The auxiliary-bucket prefix where the asset export service stages an over-size export payload
 // before returning a presigned URL for it (EXPORT_STAGING_PREFIX in
 // backend/backend/handlers/assets/assetExportService.py). The export function's S3 grant and the
-// bucket's lifecycle rule for staged payloads are both scoped to it, so the values move together.
-export const ASSET_EXPORT_STAGING_PREFIX = "assetExports/";
+// bucket's lifecycle rules for staged payloads are both scoped to it, so the values move together.
+// The bucket's preview and viewer data is keyed under {databaseId}/, so the prefix carries a dot, a
+// character no database ID can contain: the expiry on it never reaches a database's data.
+export const ASSET_EXPORT_STAGING_PREFIX = "vams.assetExports/";
 // Days after which the auxiliary bucket expires a staged export payload. The payload is read through
 // its presigned URL, possibly more than once, until that URL expires, so nothing deletes it on read.
 // Derived from the longest lifetime any presigned URL can have rather than the configured

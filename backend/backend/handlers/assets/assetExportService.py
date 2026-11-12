@@ -102,8 +102,10 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
 # Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
 # bucket's lifecycle expiry for staged payloads are scoped to this prefix
-# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together.
-EXPORT_STAGING_PREFIX = "assetExports/"
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together. The
+# bucket's preview and viewer data sits under {databaseId}/, and the dot is a character no database
+# ID can contain, so the expiry on this prefix never reaches a database's auxiliary data.
+EXPORT_STAGING_PREFIX = "vams.assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10

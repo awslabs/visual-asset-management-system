@@ -952,13 +952,15 @@ export function storageResourcesBuilder(
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
-            // The asset export service's staged payloads (assetExports/<databaseId>/<assetId>/...),
-            // one per export response too large to return inline. The service never deletes one: the
-            // client reads it through a presigned URL, possibly more than once, until the URL
-            // expires. The expiry outlives the longest lifetime a presigned URL can have, so it never
-            // removes a payload a live URL still points at. The bucket is versioned, so the expiry
-            // only writes a delete marker: the noncurrent expiry reclaims the storage, and the expired
-            // delete markers go with it. Always on, because the export API always is.
+            // The asset export service's staged payloads (vams.assetExports/<databaseId>/<assetId>/
+            // <id>.json), one per export response too large to return inline. The service never
+            // deletes one: the client reads it through a presigned URL, possibly more than once, until
+            // the URL expires. The expiry outlives the longest lifetime a presigned URL can have, so it
+            // never removes a payload a live URL still points at. The bucket is versioned, so the
+            // expiry only writes a delete marker: the noncurrent expiry reclaims the storage, and the
+            // expired delete markers go with it. The abort rule above covers the prefix too. The
+            // prefix carries a dot, which no database ID can, so these rules never reach the preview
+            // and viewer data keyed under {databaseId}/. Always on, because the export API always is.
             {
                 enabled: true,
                 prefix: Config.ASSET_EXPORT_STAGING_PREFIX,

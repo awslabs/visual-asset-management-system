@@ -234,7 +234,7 @@ When an asset is permanently deleted, the following are removed:
 | Amazon SNS topic         | The asset's subscription notification topic.                                          |
 | Subscription records     | Subscription records for this asset.                                                  |
 
-Auxiliary files are the previews and viewer data derived from the asset's files. Temporary working files that a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, belong to the execution or the export request rather than the asset, and permanent deletion does not remove them. Staged export payloads expire on their own 8 days after they are written.
+Auxiliary files are the previews and viewer data derived from the asset's files. Temporary working files that a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, belong to the execution or the export request rather than the asset, and permanent deletion does not remove them. Staged export payloads expire on their own 8 days after they are written.
 
 :::warning[Permanent deletion cannot be undone]
 Unlike archiving, permanent deletion removes all Amazon S3 object versions. The data cannot be recovered after this operation completes.

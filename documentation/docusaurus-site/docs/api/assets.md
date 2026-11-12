@@ -538,7 +538,7 @@ An archived asset is read-only. Write routes ignore `showArchived` and refuse ev
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAsset`
 
-Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
+Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, are not deleted.
 
 Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
 
@@ -795,7 +795,7 @@ A serialized payload of 100KB or less is returned inline with status `200`, as s
 ```json
 {
     "message": "Export payload exceeds the inline response size and is available at the redirect target",
-    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/assetExports/...",
+    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/vams.assetExports/...",
     "presignedExportPayloadExpiresIn": 3600
 }
 ```
