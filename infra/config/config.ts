@@ -5379,12 +5379,15 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
  * `lambdaFunctions/vectorReindexer` parameter. True whenever the system GenAI metadata pipeline is
  * enabled and registers its workflow, which the reindexer launches, with vector search on or off. With
  * vector search off a reindex run (`enqueue`) is the bulk way to analyze files that predate the
- * pipeline. Vector search on implies it (getConfig() requires the pipeline and its registration).
- * Read after getConfig() has resolved `autoRegisterWithVAMS`.
+ * pipeline. Vector search on always builds it (getConfig() also requires the pipeline and its
+ * registration then). Read after getConfig() has resolved `autoRegisterWithVAMS`.
  */
 export function systemWorkflowReindexerEnabled(config: ConfigPublic): boolean {
     const pipeline = config.app.pipelines.useSystemGenAiMetadata;
-    return pipeline?.enabled === true && pipeline.autoRegisterWithVAMS === true;
+    return (
+        config.app.vectorSearch?.enabled === true ||
+        (pipeline?.enabled === true && pipeline.autoRegisterWithVAMS === true)
+    );
 }
 
 /**
