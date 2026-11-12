@@ -1198,6 +1198,11 @@ AUDIT_VALUE_PREVIEW_CHARS = 512
 # the function nears its timeout, so a timing-out invocation still delivers.
 AUDIT_FLUSH_DEADLINE_SECONDS = 1.5
 AUDIT_PRE_TIMEOUT_MARGIN_MS = 750
+# The time a flush leaves before the function's timeout to write the auditFallback lines and the
+# AuditWriteFailures metric of the records it could not confirm. A flush waits at most
+# min(AUDIT_FLUSH_DEADLINE_SECONDS, remaining time - this reserve), so a pre-timeout flush that meets
+# a slow write still reports what it lost before the runtime ends the invocation.
+AUDIT_FALLBACK_RESERVE_MS = 250
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILED = "failed"
@@ -1524,12 +1529,29 @@ def audited_handler(handler: Callable) -> Callable:
     return wrapper
 
 
-def _deliver_records(records_by_type: Dict[str, List[str]], client: Any) -> None:
+def _flush_deadline_seconds(ctx: Optional[AuditContext]) -> float:
+    """
+    How long a flush of this context may wait: AUDIT_FLUSH_DEADLINE_SECONDS, cut to the function's
+    remaining time less AUDIT_FALLBACK_RESERVE_MS, and never below zero. At zero the writes are still
+    started but every record is reported as undelivered at once, while there is time to print it.
+    """
+    remaining = getattr(getattr(ctx, "lambda_context", None), "get_remaining_time_in_millis", None)
+    if not callable(remaining):
+        return AUDIT_FLUSH_DEADLINE_SECONDS
+    try:
+        left_seconds = (int(remaining()) - AUDIT_FALLBACK_RESERVE_MS) / 1000.0
+    except Exception:
+        return AUDIT_FLUSH_DEADLINE_SECONDS
+    return max(0.0, min(AUDIT_FLUSH_DEADLINE_SECONDS, left_seconds))
+
+
+def _deliver_records(records_by_type: Dict[str, List[str]], client: Any,
+                     deadline_seconds: float = AUDIT_FLUSH_DEADLINE_SECONDS) -> None:
     """
     Write records to their audit log groups: one write per group, the groups in parallel, the whole
-    bounded by AUDIT_FLUSH_DEADLINE_SECONDS. A group whose write is not confirmed by the deadline is
-    reported as undelivered (its write may still land, so delivery is at least once; recordId
-    identifies a duplicate). Never raises.
+    bounded by ``deadline_seconds`` (see _flush_deadline_seconds). A group whose write is not
+    confirmed by the deadline is reported as undelivered (its write may still land, so delivery is
+    at least once; recordId identifies a duplicate). Never raises.
     """
     work = []
     for log_type, records in records_by_type.items():
@@ -1554,7 +1576,7 @@ def _deliver_records(records_by_type: Dict[str, List[str]], client: Any) -> None
         for log_type, _, records in work:
             report_undelivered_audit_records(log_type, "unexpectedError", records)
         return
-    done, not_done = wait_for_futures(futures, timeout=AUDIT_FLUSH_DEADLINE_SECONDS)
+    done, not_done = wait_for_futures(futures, timeout=deadline_seconds)
     for future in not_done:
         log_type, records = futures[future]
         logger.error(f"Audit flush deadline passed with {len(records)} {log_type} records unconfirmed")
@@ -1572,7 +1594,7 @@ def flush_audit_context(ctx: AuditContext) -> None:
         with ctx.lock:
             pending, ctx.pending = ctx.pending, {}
         if pending:
-            _deliver_records(pending, audit_flush_client)
+            _deliver_records(pending, audit_flush_client, _flush_deadline_seconds(ctx))
     except Exception as e:
         logger.exception(f"Failed to flush the request audit records: {e}")
 
@@ -1589,7 +1611,7 @@ def _enqueue_records(ctx: Optional[AuditContext], log_type: str, records: List[s
                 return
     client = audit_flush_client if ctx is not None else cloudwatch_logs
     if ctx is not None:
-        _deliver_records({log_type: records}, client)
+        _deliver_records({log_type: records}, client, _flush_deadline_seconds(ctx))
         return
     key = _AUDIT_LOG_KEYS_BY_TYPE.get(log_type)
     name = _audit_log_group(key) if key is not None else None

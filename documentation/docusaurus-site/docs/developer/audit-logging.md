@@ -149,7 +149,7 @@ A handler entrypoint opens the request's audit context with `audit_request(event
 
 -   The caller's identity is resolved once per request instead of once per record.
 -   Successful action records are held and written when the handler returns, in one write per audit log group, all groups in parallel, bounded by a 1.5-second deadline. A request that touches three groups costs about one write's time, not three.
--   A timer writes the held records 750 milliseconds before the function times out, so a timing-out request still delivers them.
+-   A timer writes the held records 750 milliseconds before the function times out, so a timing-out request still delivers them. A write never waits past 250 milliseconds before the timeout: the deadline is the shorter of 1.5 seconds and the time left less 250 milliseconds, so the records it could not confirm are written to the function log, and counted, while the function still runs.
 -   Denials, failures and error records are written at once.
 -   A record not confirmed by the deadline is kept in the function log as an [undelivered entry](#monitoring-audit-logging-health) with reason `flushDeadlineExceeded`. Its write may still complete, so a record can appear twice; `recordId` identifies the copy.
 

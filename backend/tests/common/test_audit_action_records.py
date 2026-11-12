@@ -566,12 +566,53 @@ class TestRequestContext:
             auditLogging.log_action(event, "metadataUpdate")
             assert len(clients.flush.calls) == 2, "after the timer a record is written at once"
 
-    def test_a_context_opened_near_the_timeout_writes_through(self, clients):
+    def test_a_context_opened_near_the_timeout_writes_through(self, clients, capsys):
         context = SimpleNamespace(aws_request_id="r", get_remaining_time_in_millis=lambda: 100)
         event = api_event()
         with auditLogging.audit_request(event, context):
             auditLogging.log_action(event, "assetUpdate")
+            # No time is left to wait for the write, so the record is reported at once; the write
+            # is still started.
+            fallbacks = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+                         if line.startswith('{"auditFallback"')]
+            assert [line["reason"] for line in fallbacks] == ["flushDeadlineExceeded"]
+            deadline = time.monotonic() + 2
+            while not clients.flush.calls and time.monotonic() < deadline:
+                time.sleep(0.01)
             assert len(clients.flush.calls) == 1
+
+    def test_the_flush_deadline_leaves_room_for_the_fallback(self):
+        def context(remaining_ms):
+            return SimpleNamespace(lambda_context=SimpleNamespace(get_remaining_time_in_millis=lambda: remaining_ms))
+        assert auditLogging._flush_deadline_seconds(context(30000)) == auditLogging.AUDIT_FLUSH_DEADLINE_SECONDS
+        assert auditLogging._flush_deadline_seconds(context(750)) == pytest.approx(0.5)
+        assert auditLogging._flush_deadline_seconds(context(100)) == 0.0
+        assert auditLogging._flush_deadline_seconds(None) == auditLogging.AUDIT_FLUSH_DEADLINE_SECONDS
+
+    def test_a_slow_pre_timeout_flush_reports_before_the_timeout(self, monkeypatch, claims):
+        # 1,000 ms left when the request starts, and a write that takes 3 s: the fallback line and
+        # the metric must be written before the 1,000 ms mark, while the invocation still runs.
+        monkeypatch.setattr(auditLogging, "audit_flush_client", RecordingClient(delay=3.0))
+        started = time.monotonic()
+        context = SimpleNamespace(
+            aws_request_id="r",
+            get_remaining_time_in_millis=lambda: int(1000 - (time.monotonic() - started) * 1000))
+        reported = []
+        real_report = auditLogging.report_undelivered_audit_records
+
+        def recording_report(log_type, reason, records):
+            reported.append((time.monotonic() - started, reason))
+            real_report(log_type, reason, records)
+
+        monkeypatch.setattr(auditLogging, "report_undelivered_audit_records", recording_report)
+        event = api_event()
+        with auditLogging.audit_request(event, context):
+            auditLogging.log_action(event, "assetUpdate")
+            time.sleep(1.0 - (time.monotonic() - started) + 0.05)
+            assert reported, "nothing was reported by the time the function would have timed out"
+            at, reason = reported[0]
+            assert reason == "flushDeadlineExceeded"
+            assert at < 1.0 - auditLogging.AUDIT_FALLBACK_RESERVE_MS / 1000.0 + 0.1
 
     def test_records_are_flushed_when_the_handler_raises(self, clients):
         event = api_event()
