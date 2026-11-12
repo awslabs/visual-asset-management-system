@@ -140,7 +140,7 @@ class TestFetchSummary:
         assert referrers["/etc/shadow"] == "materials/model.mtl"
         assert incomplete.message() == (
             "Preview generated, but incomplete: 4 referenced files could not be fetched "
-            "(0 geometry layers, 4 textures/other files). See the job log for the list.")
+            "(0 geometry layers, 0 data files, 4 textures/other files). See the job log for the list.")
 
     def test_a_fully_fetched_input_is_not_incomplete(self, tmp_path):
         bucket = FakeBucket(tmp_path / "bucket")
@@ -185,8 +185,8 @@ class TestFetchSummary:
         with caplog.at_level(logging.WARNING):
             incomplete.log()
         lines = [record.getMessage() for record in caplog.records]
-        assert lines[0].startswith("Incomplete preview: Preview generated, but incomplete: 5 ")
-        assert any("Textures, materials and data files not fetched" in line for line in lines)
+        assert lines[0].startswith("Incomplete preview: 5 referenced files could not be fetched")
+        assert any("Textures, materials and other files not fetched" in line for line in lines)
         assert any("'models/extra.mtl' (named in 'models/model.obj'): missing from the asset" in line
                    for line in lines)
         # A name carrying a newline is logged escaped, on its own line.
@@ -258,7 +258,7 @@ class TestUsdStageSummary:
         assert _entries(incomplete.other_files) == {"scene/tex/missing.png": "missing from the asset"}
         assert incomplete.message() == (
             "Preview generated, but incomplete: 4 referenced files could not be fetched "
-            "(3 geometry layers, 1 texture/other file). See the job log for the list.")
+            "(3 geometry layers, 0 data files, 1 texture/other file). See the job log for the list.")
 
 
 # --------------------------------------------------------------------------------------------------
@@ -280,7 +280,7 @@ def _stage():
     )
 
 
-def _run(tmp_path, caplog, fetch, results_location=None, put_json=None):
+def _run(tmp_path, caplog, fetch, results_location=None, put_json=None, load=None):
     """Run the stage to completion against stubbed I/O and rendering with ``fetch`` standing in for
     the referenced-file fetch. Returns (result, the logged messages)."""
     def _create_dir(parts):
@@ -301,7 +301,7 @@ def _run(tmp_path, caplog, fetch, results_location=None, put_json=None):
     with caplog.at_level(logging.INFO), \
             patch.object(core, "_create_dir", _create_dir), \
             patch.object(core, "_check_existing_preview", MagicMock(return_value=None)), \
-            patch.object(core, "_load_file", MagicMock(return_value=MagicMock())), \
+            patch.object(core, "_load_file", load or MagicMock(return_value=MagicMock())), \
             patch.object(core.geometry_budget, "apply_budgets", lambda data, budgets: data), \
             patch.object(core, "_normalize_up_axis", lambda data, ext: data), \
             patch.object(core.splat_handler, "is_splat", lambda data: False), \
@@ -345,7 +345,7 @@ class TestCompletionMessage:
             ("scene/tex/wood.png", "missing from the asset")))
         assert result.status == PipelineStatus.COMPLETE, result.errorMessage
         expected = ("Preview generated, but incomplete: 2 referenced files could not be fetched "
-                    "(1 geometry layer, 1 texture/other file). See the job log for the list.")
+                    "(1 geometry layer, 0 data files, 1 texture/other file). See the job log for the list.")
         assert expected in messages
         assert core.SUCCESS_MESSAGE not in messages
         assert any("'scene/parts/wheel.usda' (named in 'scene/model.obj'): missing from the asset"
@@ -389,7 +389,8 @@ class TestResultDocument:
             "status": "INCOMPLETE",
             "message": incomplete.message(),
             "inputFile": "scene/root.usda",
-            "counts": {"skipped": 2, "geometryLayers": 1, "texturesOrOther": 1, "notFollowed": 0},
+            "counts": {"skipped": 2, "geometryLayers": 1, "dataFiles": 0, "texturesOrOther": 1,
+                       "notFollowed": 0},
             "fetchStoppedEarly": False,
             "skippedFiles": [
                 {"kind": "geometryLayer", "path": "scene/parts/wheel.usda", "namedIn": "scene/root.usda",
@@ -501,3 +502,263 @@ class TestTheCommandNamesTheResultsLocation:
                              MagicMock(side_effect=lambda s, *a, **k: s)) as stage_run:
             core.run(params, results_location=RESULTS)
         assert stage_run.call_args.kwargs["results_location"] == RESULTS
+
+
+# --------------------------------------------------------------------------------------------------
+# What is counted: composition arcs, not metadata; renderer MDL modules; data files
+# --------------------------------------------------------------------------------------------------
+
+# A set in the common studio layout: the set root references each component's interface layer, which
+# names itself in ``assetInfo`` relative to the SET root and loads its geometry through a payload.
+_SET_ROOT = """#usda 1.0
+(
+    defaultPrim = "Kitchen"
+    upAxis = "Z"
+)
+def Xform "Kitchen" (
+    kind = "assembly"
+)
+{
+    def Xform "Ball_1" (references = @./assets/Ball/Ball.usd@)
+    {
+    }
+    def Xform "Cup_1" (references = @./assets/Cup/Cup.usd@)
+    {
+    }
+}
+"""
+_COMPONENT = """#usda 1.0
+(
+    defaultPrim = "{name}"
+)
+def Xform "{name}" (
+    assetInfo = {{
+        asset identifier = @assets/{name}/{name}.usd@
+        string name = "{name}"
+    }}
+    kind = "component"
+    payload = @./{name}_payload.usd@
+)
+{{
+}}
+"""
+_COMPONENT_PAYLOAD = """#usda 1.0
+(
+    subLayers = [@./{name}.geom.usd@]
+    customLayerData = {{
+        asset sourceFile = @/authoring/machine/{name}.ma@
+    }}
+)
+"""
+_COMPONENT_GEOM = """#usda 1.0
+def Xform "{name}"
+{{
+    def Mesh "Mesh"
+    {{
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        asset info:texture = @./tex/{name}.png@
+    }}
+}}
+"""
+
+
+def _studio_set(tmp_path, missing=()):
+    bucket = FakeBucket(tmp_path / "bucket")
+    bucket.put("xid/Kitchen_set.usda", _SET_ROOT)
+    for name in ("Ball", "Cup"):
+        files = {
+            f"assets/{name}/{name}.usd": _COMPONENT.format(name=name),
+            f"assets/{name}/{name}_payload.usd": _COMPONENT_PAYLOAD.format(name=name),
+            f"assets/{name}/{name}.geom.usd": _COMPONENT_GEOM.format(name=name),
+            f"assets/{name}/tex/{name}.png": b"png",
+        }
+        for path, data in files.items():
+            if path not in missing:
+                bucket.put("xid/" + path, data)
+    return bucket
+
+
+def _fetch_set(tmp_path, bucket):
+    return _fetch(tmp_path, bucket, "xid/Kitchen_set.usda", ".usda")
+
+
+@pytest.mark.unit
+@requires_real("pxr")
+class TestUsdMetadataIsNotAGeometryLayer:
+    def test_a_complete_set_is_not_incomplete(self, tmp_path):
+        bucket = _studio_set(tmp_path)
+        report = _fetch_set(tmp_path, bucket)
+        assert sorted(report.fetched) == sorted(
+            f"assets/{n}/{f}" for n in ("Ball", "Cup")
+            for f in (f"{n}.usd", f"{n}_payload.usd", f"{n}.geom.usd", f"tex/{n}.png"))
+        # The fetch itself is unchanged: the identifier is still looked up (and is not in the asset at
+        # the path it resolves to), and the absolute customLayerData path is still refused.
+        assert "assets/Ball/assets/Ball/Ball.usd" in report.missing
+        assert "/authoring/machine/Ball.ma" in report.rejected
+        assert dependencies.incomplete_preview(report) is None
+
+    def test_one_missing_component_layer_is_one_geometry_layer(self, tmp_path):
+        report = _fetch_set(tmp_path, _studio_set(tmp_path, missing=("assets/Cup/Cup.geom.usd",)))
+        incomplete = dependencies.incomplete_preview(report)
+        assert _entries(incomplete.geometry_layers) == {"assets/Cup/Cup.geom.usd": "missing from the asset"}
+        assert incomplete.data_files == [] and incomplete.other_files == []
+
+    def test_a_missing_texture_attribute_is_a_texture(self, tmp_path):
+        report = _fetch_set(tmp_path, _studio_set(tmp_path, missing=("assets/Ball/tex/Ball.png",)))
+        incomplete = dependencies.incomplete_preview(report)
+        assert incomplete.geometry_layers == []
+        assert _entries(incomplete.other_files) == {"assets/Ball/tex/Ball.png": "missing from the asset"}
+
+    def test_a_complete_set_completes_with_plain_success_and_writes_no_result(self, tmp_path, caplog):
+        bucket = _studio_set(tmp_path)
+        real_fetch = dependencies.fetch_referenced_files
+
+        def fetch(*args, report=None, **kwargs):
+            with patch.object(dependencies, "fetch_referenced_files", real_fetch):
+                real = _fetch_set(tmp_path / "fetch", bucket)
+            report.__dict__.update(real.__dict__)
+            return report
+
+        put_json = MagicMock()
+        result, messages = _run(tmp_path, caplog, fetch, RESULTS, put_json)
+        assert result.status == PipelineStatus.COMPLETE
+        assert core.SUCCESS_MESSAGE in messages
+        assert not any(message.startswith("Incomplete preview") for message in messages)
+        put_json.assert_not_called()
+
+
+@pytest.mark.unit
+class TestRendererMdlModules:
+    def _report(self, tmp_path, monkeypatch, caplog):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scene/a.refs", "OmniPBR.mdl\nOmniPBR.mdl\nmaterials/Custom.mdl\n")
+        bucket.put("xid/scene/b.refs", "OmniPBR.mdl\n")
+        bucket.put("xid/scene/root.refs", "a.refs\nb.refs\n")
+        monkeypatch.setitem(dependencies._COLLECTORS, ".refs",
+                            lambda path: [(line, False) for line in open(path).read().split()])
+        with caplog.at_level(logging.INFO):
+            return _fetch(tmp_path, bucket, "xid/scene/root.refs", ".refs")
+
+    def test_a_bare_mdl_module_is_not_counted_and_logged_once(self, tmp_path, monkeypatch, caplog):
+        report = self._report(tmp_path, monkeypatch, caplog)
+        incomplete = dependencies.incomplete_preview(report)
+        assert _entries(incomplete.other_files) == {"scene/materials/Custom.mdl": "missing from the asset"}
+        body = dependencies.incomplete_result_document(incomplete).decode("utf-8")
+        assert "OmniPBR" not in body
+        infos = [r.getMessage() for r in caplog.records
+                 if "MDL module resolved by the renderer, not fetched: 'OmniPBR.mdl'" in r.getMessage()]
+        assert len(infos) == 1 and all(r.levelno == logging.INFO for r in caplog.records
+                                       if "OmniPBR" in r.getMessage())
+
+    def test_only_bare_mdl_modules_are_the_renderers(self):
+        assert dependencies._is_renderer_mdl("OmniPBR.mdl")
+        assert dependencies._is_renderer_mdl("OmniGlass.MDL")
+        for reference in ("materials/Custom.mdl", "./OmniPBR.mdl", "..\\mdl\\x.mdl",
+                          "omniverse://host/OmniPBR.mdl", "OmniPBR.png"):
+            assert not dependencies._is_renderer_mdl(reference)
+
+    def test_a_scene_missing_only_renderer_modules_is_complete(self, tmp_path, monkeypatch):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/root.refs", "OmniPBR.mdl\nOmniSurface.mdl\n")
+        monkeypatch.setitem(dependencies._COLLECTORS, ".refs",
+                            lambda path: [(line, False) for line in open(path).read().split()])
+        assert dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/root.refs", ".refs")) is None
+
+
+@pytest.mark.unit
+class TestTheResultNamesNoLocation:
+    @pytest.mark.parametrize("reference,expected", [
+        ("s3://vams-other-bucket-example", ""),
+        ("s3://vams-other-bucket-example/", ""),
+        ("s3://vams-other-bucket-example/xother/parts/part.usda", "part.usda"),
+        ("http://internal-host.example:8080", ""),
+        ("http://internal-host.example:8080/", ""),
+        ("https://user:secret@internal-host.example/a/Chair.usd", "Chair.usd"),
+        ("http://user:secret@internal-host.example", ""),
+        ("https://h.example/tex.png?X-Amz-Signature=abc#frag", "tex.png"),
+        ("file:///etc/passwd", ""),
+        ("file:///C:/Users/someone/tex.png", "tex.png"),
+        ("omniverse://nucleus.example.com/", ""),
+        ("omniverse://nucleus.example.com/Projects/scene.usd", "scene.usd"),
+        ("C:\\Users\\someone\\", ""),
+        ("C:\\Users\\someone", ""),
+        ("C:\\Users\\someone\\maps\\wood.png", "wood.png"),
+        ("\\\\fileserver\\share", ""),
+        ("\\\\fileserver\\share\\", ""),
+        ("\\\\fileserver\\share\\maps\\wood.png", "wood.png"),
+        ("https%3A%2F%2Finternal-host.example%2Fdir%2Ftex.png", "tex.png"),
+        ("https%253A%252F%252Finternal-host.example", ""),
+        ("https%3A%2F%2Finternal-host.example%3A8443", ""),
+        ("../../other-asset/secret.usda", "secret.usda"),
+        ("anon:0x7f00", ""),
+        ("/abs/.hidden.png", ""),
+        ("pkg.usdz[inner.usda]", "pkg.usdz"),
+        ("", ""),
+    ])
+    def test_the_safe_base_name(self, reference, expected):
+        assert dependencies.safe_base_name(reference) == expected
+
+    def test_a_refused_location_is_written_as_its_reason_only(self):
+        report = dependencies.FetchReport()
+        for reference in ("s3://vams-other-bucket-example", "http://internal-host.example:8080",
+                          "omniverse://nucleus.example.com/", "C:\\Users\\someone\\",
+                          "https%3A%2F%2Finternal-host.example%2Fdir%2Ftex.png"):
+            report.skipped.append(dependencies.SkippedReference(
+                reference, dependencies.rejection_reason(reference, "%" in reference), "scene/a.gltf",
+                rejected=True, percent_encoded="%" in reference))
+        body = dependencies.incomplete_result_document(dependencies.incomplete_preview(report)).decode()
+        for leaked in ("vams-other-bucket-example", "internal-host", "8080", "nucleus", "someone",
+                       "s3:", "http", "omniverse", "%3A"):
+            assert leaked not in body, leaked
+        rows = json.loads(body)["skippedFiles"]
+        assert [row["path"] for row in rows] == ["", "", "", "", "tex.png"]
+        assert all(row["reason"].startswith("outside the asset") for row in rows)
+
+
+@pytest.mark.unit
+class TestTheHeadlineWaitsForThePreview:
+    def test_a_run_that_fails_after_the_fetch_never_says_preview_generated(self, tmp_path, caplog):
+        result, messages = _run(tmp_path, caplog, _fetch_skipping(
+            ("scene/model.bin", "missing from the asset")),
+            load=MagicMock(side_effect=ValueError("buffer is missing")))
+        assert result.status == PipelineStatus.FAILED
+        assert any(message.startswith("Incomplete preview: 1 referenced file could not be fetched")
+                   for message in messages)
+        assert not any("Preview generated" in message for message in messages)
+        assert result.errorMessage.startswith("Failed to load 3D file")
+
+
+@pytest.mark.unit
+class TestDataFiles:
+    def test_a_missing_gltf_buffer_is_a_data_file_and_a_missing_image_a_texture(self, tmp_path, caplog):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/duck/Duck.gltf", json.dumps({
+            "buffers": [{"uri": "Duck0.bin"}], "images": [{"uri": "DuckCM.png"}]}))
+        incomplete = dependencies.incomplete_preview(
+            _fetch(tmp_path, bucket, "xid/duck/Duck.gltf", ".gltf"))
+        assert _entries(incomplete.data_files) == {"duck/Duck0.bin": "missing from the asset"}
+        assert _entries(incomplete.other_files) == {"duck/DuckCM.png": "missing from the asset"}
+        assert incomplete.message() == (
+            "Preview generated, but incomplete: 2 referenced files could not be fetched (0 geometry "
+            "layers, 1 data file, 1 texture/other file). See the job log for the list.")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            incomplete.log()
+        lines = [record.getMessage() for record in caplog.records]
+        data_title = next(i for i, line in enumerate(lines) if line.strip().startswith("Data files"))
+        assert "'duck/Duck0.bin'" in lines[data_title + 1]
+        assert "colour" not in lines[data_title]
+        document = json.loads(dependencies.incomplete_result_document(incomplete))
+        assert document["counts"]["dataFiles"] == 1
+        assert [row["kind"] for row in document["skippedFiles"]] == ["dataFile", "textureOrOther"]
+
+    def test_missing_lcc_data_files_are_data_files(self, tmp_path):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scan/meta.lcc", json.dumps({"version": "x"}))
+        bucket.put("xid/scan/index.bin", b"i")
+        incomplete = dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/scan/meta.lcc", ".lcc"))
+        assert set(_entries(incomplete.data_files)) == {"scan/data.bin", "scan/shcoef.bin",
+                                                         "scan/environment.bin"}
+        assert incomplete.other_files == [] and incomplete.geometry_layers == []

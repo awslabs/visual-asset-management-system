@@ -136,13 +136,23 @@ When any referenced file could not be fetched, the run still succeeds and writes
 -   **outside the asset** -- an absolute path, a URI scheme such as `http://` or `omniverse://`, or a `..` path that leaves the asset.
 -   **over the file, byte or disk budget** -- the fetch limits above were reached.
 
-The summary lists **geometry layers** (USD sublayers, references and payloads naming a `.usd`, `.usda`, `.usdc` or `.usdz` file) apart from **textures, materials and data files**. A missing geometry layer means part of the model is absent from the preview; a missing texture or material means colour or detail is. The run's completion line then reads, for example:
+The summary groups the skipped files by what their absence costs the preview:
+
+-   **Geometry layers** -- USD sublayers, references and payloads. Part of the model is missing.
+-   **Data files** -- glTF buffers (`.bin`) and the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene. Geometry or points are missing.
+-   **Textures and other files** -- images, OBJ material libraries and other asset-valued attributes. Colour or detail may be missing.
+
+Two kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD metadata, such as a component's `assetInfo` `identifier`, and MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library. They are still looked up as before and appear in the log, but never make a preview incomplete.
+
+Once the preview has been written, the run's completion line reads, for example:
 
 ```
-Preview generated, but incomplete: 2 referenced files could not be fetched (1 geometry layer, 1 texture/other file). See the job log for the list.
+Preview generated, but incomplete: 2 referenced files could not be fetched (1 geometry layer, 0 data files, 1 texture/other file). See the job log for the list.
 ```
 
-The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset; for a reference outside the asset only its file name is recorded, and the full reference is in the job log.
+A run that fails after the fetch (for example because a missing glTF buffer leaves nothing to load) reports its failure as before; the skipped-files summary is still in its log.
+
+The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, data files, and textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset. A reference outside the asset is recorded by its reason and at most its bare file name; no bucket, host, port, share or folder is ever written. The full reference is in the job log.
 
 A run that fetched every referenced file ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
 

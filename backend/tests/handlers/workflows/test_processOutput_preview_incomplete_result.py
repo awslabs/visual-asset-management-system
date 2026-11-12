@@ -77,8 +77,9 @@ class TestTheIncompletePreviewResultIsRecorded:
         assert record["resultsContentTruncated"] is False
         document = json.loads(record["resultsContent"])
         assert document["status"] == "INCOMPLETE"
-        assert document["counts"] == {"skipped": 2, "geometryLayers": 1, "texturesOrOther": 1,
-                                      "notFollowed": 0}
+        assert document["counts"] == {"skipped": 2, "geometryLayers": 1, "dataFiles": 0,
+                                      "texturesOrOther": 1, "notFollowed": 0}
+        assert "example.com" not in record["resultsContent"]
 
     def test_the_document_fits_the_rows_text_budget_untruncated(self):
         assert deps.MAX_RESULT_DOCUMENT_BYTES < er.MAX_TEXT_FIELD_BYTES

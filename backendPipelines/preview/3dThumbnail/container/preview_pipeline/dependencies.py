@@ -55,6 +55,20 @@ class FetchLimits:
     disk_headroom_bytes: int = DEFAULT_DISK_HEADROOM_BYTES
 
 
+# What a referenced file is to the preview, which decides how its absence is reported. A collector
+# names the kind with each reference; one that names none is classified by the target's extension.
+KIND_GEOMETRY_LAYER = "geometryLayer"   # a USD sublayer, reference or payload: geometry is missing
+KIND_DATA_FILE = "dataFile"             # a glTF buffer, LCC data or chunk file: geometry/points missing
+KIND_TEXTURE_OR_OTHER = "textureOrOther"  # a texture, material or other asset-valued attribute
+# Asset paths that load nothing (a USD ``assetInfo`` identifier and other metadata): still fetched as
+# before, but a missing one removes nothing from the preview, so it is not reported.
+KIND_METADATA = "metadata"
+# A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
+# file of the asset: still looked up as before, not reported.
+KIND_RENDERER_MDL = "rendererMdl"
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+
+
 @dataclass
 class SkippedReference:
     """One referenced file that was not fetched: as the referring file names it (a rejected reference)
@@ -64,10 +78,20 @@ class SkippedReference:
     referrer: str = ""
     # True for a reference refused as not a path inside the asset: ``reference`` is then as authored.
     rejected: bool = False
+    # What the file is to the preview (KIND_*); empty classifies by the target's extension.
+    kind: str = ""
+    # True when ``reference`` is a percent-encoded URI (glTF).
+    percent_encoded: bool = False
+
+    @property
+    def resolved_kind(self) -> str:
+        if self.kind:
+            return self.kind
+        return KIND_GEOMETRY_LAYER if is_geometry_layer(self.reference) else KIND_TEXTURE_OR_OTHER
 
     @property
     def is_geometry_layer(self) -> bool:
-        return is_geometry_layer(self.reference)
+        return self.resolved_kind == KIND_GEOMETRY_LAYER
 
 
 @dataclass
@@ -83,15 +107,13 @@ class FetchReport:
     not_followed: List[SkippedReference] = field(default_factory=list)
 
 
-# USD layer files: a skipped sublayer, reference or payload naming one drops geometry from the stage.
-# An asset-valued attribute (a texture) is a reference too, so the target's extension decides.
+# USD layer files, for a reference whose collector named no kind.
 _GEOMETRY_LAYER_EXTENSIONS = _USD_LAYER_EXTENSIONS | {".usdz"}
 
 
 def is_geometry_layer(reference: str) -> bool:
-    """True when ``reference`` names a USD layer, whose absence drops geometry from the preview. Any
-    other referenced file (a texture, an OBJ material library, a glTF buffer, a splat data file) is a
-    texture, material or data file."""
+    """True when ``reference`` names a USD layer file by its extension. Used only for a reference whose
+    collector named no kind; a USD layer's own references are classified by their composition arc."""
     if not isinstance(reference, str):
         return False
     path = reference.strip().replace("\\", "/").split("[", 1)[0].split("?", 1)[0].split("#", 1)[0]
@@ -200,11 +222,11 @@ def _gltf_references(path: str) -> List[tuple]:
     with open(path, "r", encoding="utf-8") as handle:
         document = json.load(handle)
     references = []
-    for group in ("buffers", "images"):
+    for group, kind in (("buffers", KIND_DATA_FILE), ("images", KIND_TEXTURE_OR_OTHER)):
         for entry in document.get(group) or []:
             uri = entry.get("uri") if isinstance(entry, dict) else None
             if isinstance(uri, str) and uri and not uri.startswith("data:"):
-                references.append((uri, True))
+                references.append((uri, True, kind))
     return references
 
 
@@ -264,21 +286,80 @@ def _mtl_references(path: str) -> List[tuple]:
     return references
 
 
+def _asset_values(value) -> List[str]:
+    """The asset paths an attribute value holds (an ``Sdf.AssetPath`` or an array of them)."""
+    from pxr import Sdf
+
+    if isinstance(value, Sdf.AssetPath):
+        return [value.path]
+    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+        return []
+    try:
+        return [item.path for item in value if isinstance(item, Sdf.AssetPath)]
+    except TypeError:
+        return []
+
+
+def _usd_reference_kinds(path: str) -> Optional[tuple]:
+    """(composition arcs, asset-valued attribute paths) authored in one layer, as authored, or None
+    when the layer cannot be read for it. Anything else ``ExtractExternalReferences`` returns is
+    metadata (an ``assetInfo`` identifier, say), which loads nothing."""
+    from pxr import Sdf
+
+    try:
+        layer = Sdf.Layer.FindOrOpen(path)
+        if layer is None:
+            return None
+        composition = {str(value) for value in layer.GetCompositionAssetDependencies()}
+        attribute_assets = set()
+
+        def visit(spec_path):
+            spec = layer.GetObjectAtPath(spec_path)
+            if not isinstance(spec, Sdf.AttributeSpec):
+                return
+            if spec.HasDefaultValue():
+                attribute_assets.update(_asset_values(spec.default))
+            for time in layer.ListTimeSamplesForPath(spec_path):
+                attribute_assets.update(_asset_values(layer.QueryTimeSample(spec_path, time)))
+
+        layer.Traverse(Sdf.Path.absoluteRootPath, visit)
+        return composition, attribute_assets
+    except Exception as e:
+        logger.info(f"  Could not classify the references in {os.path.basename(path)} "
+                    f"({type(e).__name__}); classifying them by extension")
+        return None
+
+
 def _usd_references(path: str) -> List[tuple]:
-    """Sublayers, references, payloads and asset-valued attribute paths authored in one layer."""
+    """Sublayers, references, payloads and asset-valued attribute paths authored in one layer, each
+    with its kind: a composition arc is a geometry layer, an asset-valued attribute (a texture) is a
+    texture or other file, and an asset path in metadata (an ``assetInfo`` identifier) loads nothing.
+    Which references are fetched does not depend on the kind."""
     from pxr import UsdUtils
 
     sublayers, references, payloads = UsdUtils.ExtractExternalReferences(path)
+    kinds = _usd_reference_kinds(path)
     found = []
-    for value in list(sublayers) + list(references) + list(payloads):
-        value = str(value)
-        if "<UDIM>" in value.upper():
-            logger.info(f"  Not fetching UDIM texture set: {value}")
-            continue
-        # A package-relative path names a file inside a .usdz: fetch the package itself.
-        if "[" in value:
-            value = value.split("[", 1)[0]
-        found.append((value, False))
+    for arc, values in (("sublayer", sublayers), ("reference", references), ("payload", payloads)):
+        for value in values:
+            value = str(value)
+            if arc != "reference":
+                kind = KIND_GEOMETRY_LAYER
+            elif kinds is None:
+                kind = ""
+            elif value in kinds[0]:
+                kind = KIND_GEOMETRY_LAYER
+            elif value in kinds[1]:
+                kind = KIND_TEXTURE_OR_OTHER
+            else:
+                kind = KIND_METADATA
+            if "<UDIM>" in value.upper():
+                logger.info(f"  Not fetching UDIM texture set: {value}")
+                continue
+            # A package-relative path names a file inside a .usdz: fetch the package itself.
+            if "[" in value:
+                value = value.split("[", 1)[0]
+            found.append((value, False, kind))
     return found
 
 
@@ -321,13 +402,13 @@ _LCC_SIBLINGS = ("data.bin", "index.bin", "shcoef.bin", "environment.bin")
 
 def _lcc_references(path: str) -> List[tuple]:
     """The data files beside an LCC scene description, plus the environment file its JSON names."""
-    references = [(name, False) for name in _LCC_SIBLINGS]
+    references = [(name, False, KIND_DATA_FILE) for name in _LCC_SIBLINGS]
     try:
         with open(path, "rb") as handle:
             meta = json.loads(handle.read(_JSON_SCAN_LIMIT).decode("utf-8", errors="replace"))
         environment = meta.get("environment") if isinstance(meta, dict) else None
-        if isinstance(environment, str) and (environment, False) not in references:
-            references.append((environment, False))
+        if isinstance(environment, str) and (environment, False, KIND_DATA_FILE) not in references:
+            references.append((environment, False, KIND_DATA_FILE))
     except (OSError, ValueError):
         pass
     return references
@@ -342,7 +423,7 @@ def _lcc2_references(path: str, max_splats: Optional[int] = None) -> List[tuple]
 
     meta = lcc_meta.read_meta(path)
     _, names = lcc_meta.lcc2_level_files(meta, max_splats or lcc_meta.DEFAULT_MAX_SPLATS)
-    return [(name, False) for name in names]
+    return [(name, False, KIND_DATA_FILE) for name in names]
 
 
 _COLLECTORS: Dict[str, Callable[[str], List[tuple]]] = {
@@ -361,6 +442,16 @@ _BUDGETED_COLLECTORS = {".lcc2"}
 def has_references(ext: str) -> bool:
     """True when files of this extension can reference other files the container fetches."""
     return ext.lower() in _COLLECTORS
+
+
+def _is_renderer_mdl(reference) -> bool:
+    """True for a ``.mdl`` reference with no folder component: a material module the renderer resolves
+    from its own MDL search path, not a file next to the layer."""
+    if not isinstance(reference, str):
+        return False
+    value = reference.strip()
+    return value.lower().endswith(".mdl") and "/" not in value and "\\" not in value \
+        and not _SCHEME.match(value)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -389,10 +480,14 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
     queue = deque([(local_input_path, input_rel, ext.lower(), 0)])
     budget_logged = False
 
-    def skip(kind: List[str], name: str, reason: str, referrer: str):
-        kind.append(name)
+    mdl_logged = set()
+
+    def skip(bucket_list: List[str], name: str, reason: str, referrer: str, kind: str = "",
+             percent_encoded: bool = False):
+        bucket_list.append(name)
         report.skipped.append(SkippedReference(name, reason, referrer,
-                                               rejected=kind is report.rejected))
+                                               rejected=bucket_list is report.rejected, kind=kind,
+                                               percent_encoded=percent_encoded))
 
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
@@ -410,7 +505,11 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                 rel_path, f"its references could not be read ({type(e).__name__})"))
             continue
         referrer_dir = posixpath.dirname(rel_path)
-        for raw, percent_encoded in references:
+        for entry in references:
+            raw, percent_encoded = entry[0], entry[1]
+            kind = entry[2] if len(entry) > 2 else ""
+            if _is_renderer_mdl(raw):
+                kind = KIND_RENDERER_MDL
             relative = resolve_reference(raw, referrer_dir, percent_encoded=percent_encoded)
             target = local_path_for(local_root, relative) if relative else None
             if relative is None or target is None:
@@ -418,7 +517,7 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                                f"{raw!r}")
                 reason = (rejection_reason(raw, percent_encoded) if relative is None
                           else "outside the asset")
-                skip(report.rejected, raw, reason, rel_path)
+                skip(report.rejected, raw, reason, rel_path, kind, percent_encoded)
                 continue
             if relative in seen:
                 continue
@@ -429,29 +528,35 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                                    f"further references are skipped")
                     budget_logged = True
                 skip(report.skipped_for_budget, relative,
-                     f"over the file budget ({limits.max_files} files)", rel_path)
+                     f"over the file budget ({limits.max_files} files)", rel_path, kind)
                 continue
             key = root_key + relative
             size = s3.head_object_size(bucket, key)
             if size is None:
-                logger.warning(f"  Referenced file not found in the asset: {relative}")
-                skip(report.missing, relative, "missing from the asset", rel_path)
+                if kind == KIND_RENDERER_MDL:
+                    if raw not in mdl_logged:
+                        mdl_logged.add(raw)
+                        logger.info(f"  MDL module resolved by the renderer, not fetched: {raw!r}")
+                else:
+                    logger.warning(f"  Referenced file not found in the asset: {relative}")
+                skip(report.missing, relative, "missing from the asset", rel_path, kind)
                 continue
             if report.total_bytes + size > limits.max_total_bytes:
                 logger.warning(f"  Skipping {relative} ({size} bytes): referenced files would exceed "
                                f"{limits.max_total_bytes} bytes")
                 skip(report.skipped_for_budget, relative,
-                     f"over the byte budget ({limits.max_total_bytes} bytes)", rel_path)
+                     f"over the byte budget ({limits.max_total_bytes} bytes)", rel_path, kind)
                 continue
             free = shutil.disk_usage(local_root).free
             if size + limits.disk_headroom_bytes > free:
                 logger.warning(f"  Skipping {relative} ({size} bytes): {free} bytes of disk free")
                 skip(report.skipped_for_budget, relative,
-                     f"over the disk budget ({size} bytes, {free} bytes free)", rel_path)
+                     f"over the disk budget ({size} bytes, {free} bytes free)", rel_path, kind)
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             if s3.download(bucket, key, target) is None:
-                skip(report.missing, relative, "could not be downloaded from the asset", rel_path)
+                skip(report.missing, relative, "could not be downloaded from the asset", rel_path,
+                     kind)
                 continue
             report.fetched.append(relative)
             report.total_bytes += size
@@ -487,32 +592,43 @@ class IncompletePreview:
     other_files: List[SkippedReference]
     not_followed: List[SkippedReference]
     fetch_error: str = ""
+    # glTF buffers and LCC data or chunk files: their absence drops geometry or points.
+    data_files: List[SkippedReference] = field(default_factory=list)
 
     @property
     def skipped_count(self) -> int:
-        return len(self.geometry_layers) + len(self.other_files)
+        return len(self.geometry_layers) + len(self.data_files) + len(self.other_files)
+
+    def summary(self) -> str:
+        """What was not fetched, as one sentence without a verdict on the preview."""
+        if not self.skipped_count:
+            return "not every referenced file could be read"
+        geometry = len(self.geometry_layers)
+        data = len(self.data_files)
+        other = len(self.other_files)
+        return (f"{self.skipped_count} referenced {_plural(self.skipped_count, 'file', 'files')} "
+                f"could not be fetched ({geometry} geometry {_plural(geometry, 'layer', 'layers')}, "
+                f"{data} data {_plural(data, 'file', 'files')}, "
+                f"{other} {_plural(other, 'texture/other file', 'textures/other files')})")
 
     def message(self) -> str:
-        """The run's completion message for an incomplete preview."""
+        """The run's completion message, once the preview has been generated."""
         if self.skipped_count:
-            geometry = len(self.geometry_layers)
-            other = len(self.other_files)
-            return (f"Preview generated, but incomplete: {self.skipped_count} referenced "
-                    f"{_plural(self.skipped_count, 'file', 'files')} could not be fetched "
-                    f"({geometry} geometry {_plural(geometry, 'layer', 'layers')}, "
-                    f"{other} {_plural(other, 'texture/other file', 'textures/other files')}). "
-                    f"See the job log for the list.")
+            return f"Preview generated, but incomplete: {self.summary()}. See the job log for the list."
         return ("Preview generated, but it may be incomplete: not every referenced file could be "
                 "read. See the job log for the details.")
 
     def log(self):
-        """One WARNING summary: the count, then each skipped file with its reason, geometry layers
-        first. Every listed name is quoted with repr, so a reference cannot forge a log line."""
-        logger.warning(f"Incomplete preview: {self.message()}")
+        """One WARNING summary, logged after the fetch and before the preview is rendered: the count,
+        then each skipped file with its reason, geometry layers first. Every listed name is quoted with
+        repr, so a reference cannot forge a log line."""
+        logger.warning(f"Incomplete preview: {self.summary()}")
         _log_group("Geometry layers not fetched (their geometry is missing from the preview)",
                    self.geometry_layers)
-        _log_group("Textures, materials and data files not fetched (colour or detail may be "
-                   "missing from the preview)", self.other_files)
+        _log_group("Data files not fetched (geometry buffers or point data: geometry or points are "
+                   "missing from the preview)", self.data_files)
+        _log_group("Textures, materials and other files not fetched (colour or detail may be missing "
+                   "from the preview)", self.other_files)
         _log_group("Fetched files whose own references were not followed", self.not_followed)
         if self.fetch_error:
             logger.warning(f"  The referenced-file fetch stopped early ({self.fetch_error}); "
@@ -539,12 +655,15 @@ def incomplete_preview(report: Optional[FetchReport],
     """The incomplete-preview summary of a fetch, or None when every referenced file was fetched.
 
     A reference skipped more than once (the same name in several layers) is counted once per reason.
-    ``fetch_error`` is the exception that ended the fetch early, if one did.
+    A reference that loads nothing (USD metadata) or that the renderer resolves itself (a bare ``.mdl``
+    module) is not counted. ``fetch_error`` is the exception that ended the fetch early, if one did.
     """
     report = report or FetchReport()
     unique: List[SkippedReference] = []
     keys = set()
     for entry in report.skipped:
+        if entry.resolved_kind in _UNREPORTED_KINDS:
+            continue
         key = (entry.reference, entry.reason)
         if key not in keys:
             keys.add(key)
@@ -552,8 +671,9 @@ def incomplete_preview(report: Optional[FetchReport],
     if not unique and not report.not_followed and fetch_error is None:
         return None
     return IncompletePreview(
-        geometry_layers=[entry for entry in unique if entry.is_geometry_layer],
-        other_files=[entry for entry in unique if not entry.is_geometry_layer],
+        geometry_layers=[e for e in unique if e.resolved_kind == KIND_GEOMETRY_LAYER],
+        data_files=[e for e in unique if e.resolved_kind == KIND_DATA_FILE],
+        other_files=[e for e in unique if e.resolved_kind == KIND_TEXTURE_OR_OTHER],
         not_followed=list(report.not_followed),
         fetch_error=type(fetch_error).__name__ if fetch_error is not None else "",
     )
@@ -573,6 +693,15 @@ MAX_RESULT_ENTRIES = 100
 MAX_RESULT_TEXT_CHARS = 256
 # Upper bound of the encoded document, well inside the results row's text budget.
 MAX_RESULT_DOCUMENT_BYTES = 64 * 1024
+# A refused reference is named in the document only by a base file name of one of these types; any
+# other value (a bucket, a host, a share, a user folder) is left out and only the reason is written.
+_SAFE_RESULT_EXTENSIONS = {
+    ".usd", ".usda", ".usdc", ".usdz", ".gltf", ".glb", ".bin", ".obj", ".mtl", ".fbx", ".mdl",
+    ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".dds", ".exr", ".hdr", ".psd", ".gif",
+    ".ktx", ".ktx2", ".webp", ".lcc", ".lcc2", ".spz", ".sog", ".ply", ".splat", ".ksplat", ".vdb",
+    ".abc",
+}
+_SAFE_BASE_NAME = re.compile(r"^[A-Za-z0-9 _.()+\-]{1,128}$")
 
 
 def _bounded(text: str) -> str:
@@ -580,30 +709,59 @@ def _bounded(text: str) -> str:
     return text if len(text) <= MAX_RESULT_TEXT_CHARS else text[:MAX_RESULT_TEXT_CHARS - 3] + "..."
 
 
-def _result_path(entry: SkippedReference, rejected: bool) -> str:
-    """The path the document names: the asset-relative path of a file the fetch looked up, or only the
-    file name of a reference refused as outside the asset, since that value is as authored and can
-    name another bucket, a host or an authoring machine's directory."""
-    if not rejected:
+def safe_base_name(reference) -> str:
+    """The base file name of an as-authored reference with every location part removed, or "" when no
+    safe file name is left. Percent-encoding is decoded first; then the URI scheme and authority
+    (``s3://bucket/``, ``http://host:port/``, ``omniverse://host/``), a Windows drive or UNC server,
+    the query, the fragment and any package path are dropped, and what remains must be a plain file
+    name of a known file type."""
+    if not isinstance(reference, str):
+        return ""
+    value = reference.strip()
+    for _ in range(3):  # a doubly encoded value decodes in two passes
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    value = value.replace("\\", "/").split("?", 1)[0].split("#", 1)[0].split("[", 1)[0]
+    scheme = _SCHEME.match(value)
+    if scheme:
+        value = value[scheme.end():]
+    if value.startswith("//"):
+        authority_and_path = value[2:]
+        value = authority_and_path.split("/", 1)[1] if "/" in authority_and_path else ""
+    if not value or value.endswith("/"):
+        return ""
+    base = value.rsplit("/", 1)[-1]
+    if not _SAFE_BASE_NAME.match(base) or base.startswith("."):
+        return ""
+    if posixpath.splitext(base)[1].lower() not in _SAFE_RESULT_EXTENSIONS:
+        return ""
+    return base
+
+
+def _result_path(entry: SkippedReference) -> str:
+    """The path the document names: the asset-relative path of a file the fetch looked up, or at most a
+    safe base file name of a reference refused as outside the asset (``safe_base_name``)."""
+    if not entry.rejected:
         return _bounded(entry.reference)
-    value = entry.reference if isinstance(entry.reference, str) else ""
-    value = _SCHEME.sub("", value.strip()).replace("\\", "/").split("?", 1)[0].split("#", 1)[0]
-    return _bounded(value.rstrip("/").rsplit("/", 1)[-1])
+    return safe_base_name(entry.reference)
 
 
 def incomplete_result_document(incomplete: IncompletePreview, input_path: str = "") -> bytes:
     """The result document of an incomplete preview, as UTF-8 JSON bytes of at most
     MAX_RESULT_DOCUMENT_BYTES: the completion message, the counts by kind, and up to MAX_RESULT_ENTRIES
     skipped files (geometry layers first), with ``truncated`` set when any were left out. Paths are
-    relative to the input's asset; no bucket name or S3 key is written."""
+    relative to the input's asset; no bucket name, host, S3 key or full URI is written."""
     rows = []
-    for kind, entries in (("geometryLayer", incomplete.geometry_layers),
-                          ("textureOrOther", incomplete.other_files),
+    for kind, entries in ((KIND_GEOMETRY_LAYER, incomplete.geometry_layers),
+                          (KIND_DATA_FILE, incomplete.data_files),
+                          (KIND_TEXTURE_OR_OTHER, incomplete.other_files),
                           ("notFollowed", incomplete.not_followed)):
         for entry in entries:
             rows.append({
                 "kind": kind,
-                "path": _result_path(entry, entry.rejected),
+                "path": _result_path(entry),
                 "namedIn": _bounded(entry.referrer),
                 "reason": _bounded(entry.reason),
             })
@@ -615,6 +773,7 @@ def incomplete_result_document(incomplete: IncompletePreview, input_path: str = 
         "counts": {
             "skipped": incomplete.skipped_count,
             "geometryLayers": len(incomplete.geometry_layers),
+            "dataFiles": len(incomplete.data_files),
             "texturesOrOther": len(incomplete.other_files),
             "notFollowed": len(incomplete.not_followed),
         },
