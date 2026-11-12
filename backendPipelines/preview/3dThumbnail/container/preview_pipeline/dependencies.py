@@ -301,6 +301,15 @@ def _asset_values(value) -> List[str]:
         return []
 
 
+def _prim_info(spec, key):
+    """One metadata field of a prim spec, or None when it is absent or this usd-core cannot read it."""
+    try:
+        return spec.GetInfo(key) if spec.HasInfo(key) else None
+    except Exception as e:
+        logger.debug(f"  Could not read {key!r} on {spec.path} ({type(e).__name__}); skipping it")
+        return None
+
+
 def _usd_reference_kinds(path: str) -> Optional[dict]:
     """The authored asset paths of one layer that decide a reference's kind, as authored, or None when
     the layer cannot be read for it:
@@ -309,10 +318,12 @@ def _usd_reference_kinds(path: str) -> Optional[dict]:
     - ``attributes``: the values of its ``asset`` and ``asset[]`` attributes (defaults and time
       samples). Only attributes of those types are read, so a layer's geometry and animation samples
       are never loaded for this;
-    - ``clips``: its value-clip asset paths (``clips`` ``assetPaths`` and ``manifestAssetPath``, and the
-      older ``clipAssetPaths`` / ``clipManifestAssetPath``);
-    - ``identifiers``: the ``assetInfo`` ``identifier`` of its prims, which names the asset and loads
-      nothing.
+    - ``clips``: its value-clip asset paths (``clips`` ``assetPaths`` and ``manifestAssetPath``).
+
+    Each metadata field is read on its own, so a field this usd-core cannot read affects only that
+    field. The pre-``clips`` keys (``clipAssetPaths``, ``clipManifestAssetPath``) are not read: usd-core
+    reports them present but refuses to return them, and ``ExtractExternalReferences`` does not list
+    their paths, so they are neither fetched nor reported.
     """
     from pxr import Sdf
 
@@ -322,7 +333,7 @@ def _usd_reference_kinds(path: str) -> Optional[dict]:
             return None
         asset_types = (Sdf.ValueTypeNames.Asset, Sdf.ValueTypeNames.AssetArray)
         found = {"composition": {str(value) for value in layer.GetCompositionAssetDependencies()},
-                 "attributes": set(), "clips": set(), "identifiers": set()}
+                 "attributes": set(), "clips": set()}
 
         def visit(spec_path):
             spec = layer.GetObjectAtPath(spec_path)
@@ -334,17 +345,11 @@ def _usd_reference_kinds(path: str) -> Optional[dict]:
                 for time in layer.ListTimeSamplesForPath(spec_path):
                     found["attributes"].update(_asset_values(layer.QueryTimeSample(spec_path, time)))
             elif isinstance(spec, Sdf.PrimSpec):
-                info = spec.assetInfo or {}
-                identifier = info.get("identifier") if hasattr(info, "get") else None
-                found["identifiers"].update(_asset_values(identifier))
-                clips = spec.GetInfo("clips") if spec.HasInfo("clips") else {}
+                clips = _prim_info(spec, "clips") or {}
                 for clip_set in (clips.values() if hasattr(clips, "values") else []):
                     if hasattr(clip_set, "get"):
                         found["clips"].update(_asset_values(clip_set.get("assetPaths")))
                         found["clips"].update(_asset_values(clip_set.get("manifestAssetPath")))
-                for key in ("clipAssetPaths", "clipManifestAssetPath"):
-                    if spec.HasInfo(key):
-                        found["clips"].update(_asset_values(spec.GetInfo(key)))
 
         layer.Traverse(Sdf.Path.absoluteRootPath, visit)
         return found

@@ -896,3 +896,70 @@ class TestTheClassificationReadsOnlyAssetAttributes:
         assert kinds["attributes"] == {"./tex/a.png", "./tex/b.png", "./tex/c.png"}
         assert queried and all(p.endswith(".info:texture") for p in queried)
         assert not any("points" in p for p in queried)
+
+
+# A scene with every kind of reference plus one pre-``clips`` clip key, which usd-core reports present
+# but refuses to read. The unreadable key must not change how the layer's other references are counted.
+_EDGE_ROOT = """#usda 1.0
+(
+    customLayerData = { asset exportedFrom = @./src/scene.blend@ }
+    subLayers = [@./sub.usda@]
+)
+def Xform "A" (
+    assetInfo = { asset identifier = @assets/A/A.usd@ }
+    variants = { string v = "x" }
+    prepend variantSets = "v"
+    clips = {
+        dictionary default = {
+            asset[] assetPaths = [@./clips/c1.usd@, @./clips/c2.usd@]
+            asset manifestAssetPath = @./clips/manifest.usda@
+            string primPath = "/A"
+        }
+    }
+)
+{
+    asset inputs:file = @./tex/a.png@
+    asset inputs:anim.timeSamples = { 1: @./tex/anim1.png@ }
+    variantSet "v" = {
+        "x" (prepend references = @./geo/variant.usd@) {}
+    }
+    def Material "M" (prepend references = @./mat/look.mtlx@</M>) {}
+    def Shader "S" {
+        uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+    }
+    def Shader "S2" {
+        uniform asset info:mdl:sourceAsset = @./mdl/Custom.mdl@
+    }
+}
+def Xform "Meta" (
+    customData = { asset sourceFile = @./src/source.ma@ }
+{legacy}
+)
+{
+}
+"""
+_EDGE_PRESENT = ("sub.usda", "geo/variant.usd", "mat/look.mtlx", "tex/a.png", "tex/anim1.png")
+
+
+@pytest.mark.unit
+@requires_real("pxr")
+class TestAnUnreadableMetadataKeyAffectsOnlyItself:
+    def _incomplete(self, tmp_path, legacy):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/root.usda", _EDGE_ROOT.replace("{legacy}", legacy))
+        for path in _EDGE_PRESENT:
+            bucket.put("xid/" + path, "#usda 1.0\n" if path.endswith((".usd", ".usda")) else b"x")
+        return dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/root.usda", ".usda"))
+
+    @pytest.mark.parametrize("legacy", ["", "    clipAssetPaths = [@./clips/legacy.usd@]"],
+                             ids=["no-legacy-key", "legacy-clipAssetPaths"])
+    def test_the_same_four_are_reported_with_or_without_an_old_style_clip_key(self, tmp_path, legacy):
+        incomplete = self._incomplete(tmp_path, legacy)
+        assert incomplete.geometry_layers == []
+        assert _entries(incomplete.data_files) == {
+            "clips/c1.usd": "missing from the asset",
+            "clips/c2.usd": "missing from the asset",
+            "clips/manifest.usda": "missing from the asset",
+        }
+        assert _entries(incomplete.other_files) == {"mdl/Custom.mdl": "missing from the asset"}
+        assert incomplete.skipped_count == 4
