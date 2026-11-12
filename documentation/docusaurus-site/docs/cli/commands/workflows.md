@@ -62,7 +62,7 @@ full `specifiedPipelines` list as JSON.
 ```bash
 # Reference two pipelines, one with a default template
 vamscli workflow create -d my-db -n "Convert + Label" \
-    --pipeline global:conversion-3d-basic:to-glb \
+    --pipeline global:conversion-3d-basic:convert-to-glb \
     --pipeline my-db:my-labeler
 
 # Supply the pipeline list and system config from files
@@ -91,7 +91,7 @@ positional, use an empty third segment to set a job name without a default templ
 ```bash
 # With a default template
 vamscli workflow create -d my-db -n "Convert then label" \
-    --pipeline global:conversion-3d-basic:to-glb:convert-to-glb \
+    --pipeline global:conversion-3d-basic:convert-to-glb:convert-to-glb \
     --pipeline global:metadata-3d-labeling::label-converted
 ```
 
@@ -105,7 +105,7 @@ passed through as given:
 ```bash
 vamscli workflow create -d my-db -n "Convert then label" --specified-pipelines '[
   {"pipelineDatabaseId":"global","pipelineId":"conversion-3d-basic",
-   "defaultTemplateId":"to-glb","jobName":"convert-to-glb"}
+   "defaultTemplateId":"convert-to-glb","jobName":"convert-to-glb"}
 ]'
 ```
 
@@ -198,7 +198,7 @@ vamscli workflow trigger set -d my-db -w my-workflow \
 
 # Set with per-pipeline default templates
 vamscli workflow trigger set -d my-db -w my-workflow \
-    --default-template-ids '{"global:conversion-3d-basic": "to-glb"}' --enable
+    --default-template-ids '{"global:conversion-3d-basic": "convert-to-glb"}' --enable
 
 # Delete
 vamscli workflow trigger delete -d my-db -w my-workflow -t fileUpload
@@ -238,7 +238,7 @@ vamscli workflow execute --workflow-database-id global -w my-workflow \
 # Multiple input files (may span assets) + per-pipeline template selection
 vamscli workflow execute --workflow-database-id global -w my-workflow \
     --input-file my-db:asset1:/a.glb --input-file my-db:asset2:/b.glb \
-    --pipeline-parameters '{"conversion-3d-basic": {"templateId": "to-obj"}}'
+    --pipeline-parameters '{"conversion-3d-basic": {"templateId": "convert-to-obj"}}'
 
 # From files + output-target override + execution group
 vamscli workflow execute --workflow-database-id global -w my-workflow \
