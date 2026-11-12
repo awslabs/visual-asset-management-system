@@ -14,6 +14,10 @@
     "vector_reindexer_function_name": null,
     "clear_vectors": false,
 
+    "_comment_metadata_step": "===== STEP: metadataBackfill (opt-in) =====",
+    "_comment_metadata": "With vector search off and the SYSTEM GenAI metadata pipeline on, set this to true (or pass --generate-metadata-for-existing-files for one run) to analyze every existing latest live file: the step invokes the vectorReindexer with operation 'enqueue', and the system workflow writes the files' attributes and GenAI metadata (no vectors). One Bedrock-billed analysis run per file, so the account-id confirmation applies. Skipped when false, with vector search on (vectorBackfill analyzes every file), and when the pipeline is not enabled (no reindexer published); an unreadable or inconsistent state is an error. clear_vectors does not apply. Turning the pipeline on later with vector search off: deploy, then run --steps metadataBackfill with this set.",
+    "generate_metadata_for_existing_files": false,
+
     "_comment_retirement_step": "===== STEP: systemPipelineRetirement (report only) =====",
     "_comment_retirement": "Lists executions of the retired workflows that are still in flight and user workflows that reference a retired pipeline id, with guidance. Writes nothing. workflow_storage_table_name_v2 above is reused.",
     "workflow_executions_storage_table_name_v2": null,

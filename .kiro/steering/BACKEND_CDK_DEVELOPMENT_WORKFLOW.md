@@ -465,6 +465,9 @@ cannot see and a suite importing everything never reaches.
     `vectorReindexer` enqueues one system-workflow launch per latest live file version.
     Both are invoked directly or as a CDK custom resource on deploy
     (`app.openSearch.reindexOnCdkDeploy` / `app.vectorSearch.reindexOnCdkDeploy`).
+    `vectorReindexer` and `systemWorkflowLauncher` are also deployed with vector search off
+    whenever the system GenAI metadata pipeline is on and registered; the reindexer then gets
+    `VECTOR_SEARCH_ENABLED=false` and refuses `clear` and `both` (`enqueue` is unchanged).
 
 A new family takes the same shape: its own `handlers/<family>` and `common/<family>`
 packages, its own SQS queue subscribed to the storage stack's SNS fan-out topics (as the

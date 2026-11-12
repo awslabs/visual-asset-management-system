@@ -246,7 +246,7 @@ Storage accumulates: each month's vectors are added to the vectors already store
 
 ### Backfilling an existing library
 
-Enabling the feature on a deployment that already holds files, re-enabling it, changing the embedding model, and setting `app.vectorSearch.reindexOnCdkDeploy` all run the vector reindexer, which launches the pipeline for the latest live version of every file in scope. The reindex is not incremental, so it costs the per-file figure once for every file: about $300 for 10,000 files, $3,000 for 100,000 files, and $30,000 for 1,000,000 files at $0.03 each. `reindexOnCdkDeploy` repeats the run on every deployment while it is `true`. The reindexer's `databaseId` and `limit` keys narrow a run; see [Reindexing](../concepts/vector-search.md#reindexing).
+Enabling the feature on a deployment that already holds files, re-enabling it, changing the embedding model, and setting `app.vectorSearch.reindexOnCdkDeploy` all run the vector reindexer, which launches the pipeline for the latest live version of every file in scope. The reindex is not incremental, so it costs the per-file figure once for every file: about $300 for 10,000 files, $3,000 for 100,000 files, and $30,000 for 1,000,000 files at $0.03 each. `reindexOnCdkDeploy` repeats the run on every deployment while it is `true`. The reindexer's `databaseId` and `limit` keys narrow a run; see [Reindexing](../concepts/vector-search.md#reindexing). With vector search off, the reindexer still exists while the SYSTEM GenAI metadata pipeline is on, and its `enqueue` (or the migration's opt-in `metadataBackfill` step) costs one analysis run per file in scope, without the embedding.
 
 ### Cost controls
 

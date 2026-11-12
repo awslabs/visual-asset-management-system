@@ -79,7 +79,7 @@ CoreVAMSStack (root)
   |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch, vector indexing, POST /search/nlp)  -> storage, resourceNames, ApiBuilder2,
-  |     |                                                                    PipelineBuilder (vectorSearch.enabled only)
+  |     |                                                                    PipelineBuilder (when the system-workflow reindexer exists)
   |     |    (its system-workflow launcher invokes the ApiBuilder2 executeWorkflow Lambda by name; its vector
   |     |     reindexer launches the SYSTEM workflow the pipeline stack registers)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
