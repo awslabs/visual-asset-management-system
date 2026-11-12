@@ -299,6 +299,43 @@ def test_an_overflowing_scene_is_re_routed_to_the_fargate_render_job(monkeypatch
 
 
 @pytest.mark.unit
+def test_an_overflowing_scene_the_fargate_job_cannot_read_renders_in_lambda(monkeypatch, tmp_path):
+    """The Fargate job runs in the isolated subnets: a scene in a bucket whose Region has no cross-Region
+    S3 endpoint stays on the Blender Lambda, renders what fits the budget, and says why."""
+    objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["big.bin"], images=["tex.png"]),
+               "xid1234/parts/big.bin": b"b" * 4000, "xid1234/parts/tex.png": b"p" * 100}
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-west-2")
+
+    def _fargate(handler):
+        monkeypatch.setattr(handler, "USE_FARGATE_RENDERER", True)
+        monkeypatch.setattr(handler.scene_dependencies, "LAMBDA_MAX_TOTAL_BYTES", 1000)
+
+    result, _fake, blender, manifest, _h = _run(monkeypatch, tmp_path, "xid1234/parts/pump.gltf", objects,
+                                                event={"inputBucketRegion": "eu-west-1"}, prepare=_fargate)
+    assert result["renderBranch"] == "BLENDER" and len(blender.calls) == 1
+    assert result.get("dependencyOverflow") is not True
+    assert manifest["dependencyReport"]["truncated"]["reason"] == "bytes"
+    assert any("no cross-Region Amazon S3 endpoint for eu-west-1" in w for w in manifest["warnings"])
+
+
+@pytest.mark.unit
+def test_an_overflowing_scene_in_an_endpoint_served_region_is_re_routed(monkeypatch, tmp_path):
+    objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["big.bin"]), "xid1234/parts/big.bin": b"b" * 4000}
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", "us-west-2,eu-west-1")
+
+    def _fargate(handler):
+        monkeypatch.setattr(handler, "USE_FARGATE_RENDERER", True)
+        monkeypatch.setattr(handler.scene_dependencies, "LAMBDA_MAX_TOTAL_BYTES", 1000)
+
+    result, _fake, blender, _manifest, _h = _run(monkeypatch, tmp_path, "xid1234/parts/pump.gltf", objects,
+                                                 event={"inputBucketRegion": "eu-west-1"}, prepare=_fargate)
+    assert result["renderBranch"] == "FARGATE" and result["dependencyOverflow"] is True
+    assert blender.calls == []
+
+
+@pytest.mark.unit
 def test_a_budget_the_configuration_lowered_is_not_re_routed(monkeypatch, tmp_path):
     """Fargate would keep a lowered budget too, so re-routing would not render more."""
     objects = {"xid1234/parts/pump.gltf": _gltf(buffers=["big.bin"]), "xid1234/parts/big.bin": b"b" * 4000}

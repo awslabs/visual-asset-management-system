@@ -103,6 +103,15 @@ def abort_external_workflow(error, task_token):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
+PIPELINE_LAMBDAS_IN_VPC_ENV = "PIPELINE_LAMBDAS_IN_VPC"
+
+
+def lambdas_in_vpc():
+    """Whether this pipeline's Lambda functions run in the VPC's isolated subnets, as the CDK sets
+    ``PIPELINE_LAMBDAS_IN_VPC`` from ``app.useGlobalVpc.enabled`` and ``useForAllLambdas``."""
+    return os.environ.get(PIPELINE_LAMBDAS_IN_VPC_ENV, "false").strip().lower() == "true"
+
+
 def lambda_handler(event, context):
     # VAMS reads this function's log group for the lines that carry the run's workflow execution id;
     # the previous invocation's ids are removed before anything is logged (see executionLogKeys).
@@ -150,10 +159,14 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
-        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
-        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
-        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before any compute starts.
-        manifestHelper.enforce_inputs_in_region(resolved)
+        # The functions that read the input run in the VPC's isolated subnets only when every Lambda
+        # does (PIPELINE_LAMBDAS_IN_VPC). There they reach Amazon S3 in the deployment Region and in the
+        # Regions served by the VPC's cross-Region S3 endpoints (CROSS_REGION_S3_ENDPOINT_REGIONS), so an
+        # input anywhere else is rejected before any compute starts. Outside the VPC they reach every
+        # Region; the Fargate renderer, which is always in the VPC, is skipped for an input it cannot
+        # reach (constructPipeline, and the Blender branch's re-route).
+        if lambdas_in_vpc():
+            manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         if not resolved.get('inputFiles'):

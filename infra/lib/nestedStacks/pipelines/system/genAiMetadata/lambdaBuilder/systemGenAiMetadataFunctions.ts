@@ -275,8 +275,12 @@ export function buildVamsExecuteSystemGenAiMetadataFunction(
         ...vpcPlacement(config, vpc, subnets, pipelineSecurityGroups),
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
+            // Whether the pipeline's functions run in the isolated subnets. Only then is an input
+            // outside the deployment Region and the Regions below rejected at launch; outside the VPC
+            // the functions read a bucket in any Region.
+            PIPELINE_LAMBDAS_IN_VPC: lambdasInVpc(config) ? "true" : "false",
             // The Regions the isolated-subnet compute reaches Amazon S3 in through a cross-Region
-            // interface endpoint; an input in any other Region is rejected at launch.
+            // interface endpoint.
             CROSS_REGION_S3_ENDPOINT_REGIONS: Config.crossRegionS3EndpointRegions(config).join(","),
         },
     });
@@ -415,6 +419,9 @@ export function buildConstructPipelineFunction(
             VECTOR_SEARCH_ENABLED: config.app.vectorSearch.enabled ? "true" : "false",
             GENAI_ANALYSIS_ENABLED: pipeline.useGenAiAnalysis ? "true" : "false",
             USE_FARGATE_RENDERER: pipeline.useFargateRenderer ? "true" : "false",
+            // The Regions the Fargate renderer, in the isolated subnets, reaches Amazon S3 in through a
+            // cross-Region endpoint; an over-limit file in another Region is not sent to it.
+            CROSS_REGION_S3_ENDPOINT_REGIONS: Config.crossRegionS3EndpointRegions(config).join(","),
             MAX_INPUT_FILE_SIZE_MB: String(pipeline.lambdaLimits.maxInputFileSizeMb),
             MAX_POINT_CLOUD_POINTS: String(pipeline.lambdaLimits.maxPointCloudPoints),
             // Where the render images of a run are decided: none for a text-only analysis model.

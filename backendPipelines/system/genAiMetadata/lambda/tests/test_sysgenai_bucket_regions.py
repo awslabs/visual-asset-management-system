@@ -3,9 +3,10 @@
 
 """system/genAiMetadata: the asset buckets' Regions travel from the manifest to the branch handlers.
 
-``vamsExecute`` resolves ``inputBucketRegion`` / ``outputBucketRegion`` from the manifest, admits only
-an input Region the isolated-subnet compute can reach (the deployment Region, or one with a cross-Region
-S3 endpoint named in ``CROSS_REGION_S3_ENDPOINT_REGIONS``), and passes both Regions to ``openPipeline``,
+``vamsExecute`` resolves ``inputBucketRegion`` / ``outputBucketRegion`` from the manifest; when the
+pipeline's functions run in the VPC (``PIPELINE_LAMBDAS_IN_VPC``) it admits only an input Region the
+isolated subnets can reach (the deployment Region, or one with a cross-Region S3 endpoint named in
+``CROSS_REGION_S3_ENDPOINT_REGIONS``), and outside the VPC any Region. It passes both Regions to ``openPipeline``,
 which forwards them in the state-machine input; ``constructPipeline`` reads the input file with a client
 for its Region and turns the Regions into the state's ``bucketRegions`` map (bucket name -> Region,
 deployment-Region buckets left out), which the containers register before their first S3 call."""
@@ -53,17 +54,36 @@ class TestVamsExecuteCarriesAndGatesTheRegions:
         payload = vams_execute._payload(mod)
         assert (payload["inputBucketRegion"], payload["outputBucketRegion"]) == ("", "")
 
-    def test_an_input_in_a_region_with_no_endpoint_is_rejected_and_reported(self, monkeypatch):
+    def test_without_a_vpc_an_input_in_a_region_with_no_endpoint_is_admitted(self, monkeypatch):
+        """The functions run outside the VPC unless every Lambda is in it, and read any Region."""
         monkeypatch.delenv("CROSS_REGION_S3_ENDPOINT_REGIONS", raising=False)
+        monkeypatch.delenv("PIPELINE_LAMBDAS_IN_VPC", raising=False)
+        mod, response = vams_execute._run(vams_execute._body(), _manifest_with_regions(REMOTE_REGION, ""))
+        assert response["statusCode"] == 200
+        mod.sfn_client.send_task_failure.assert_not_called()
+        assert vams_execute._payload(mod)["inputBucketRegion"] == REMOTE_REGION
+
+    def test_with_the_lambdas_outside_the_vpc_flag_false_the_input_is_admitted(self, monkeypatch):
+        monkeypatch.delenv("CROSS_REGION_S3_ENDPOINT_REGIONS", raising=False)
+        monkeypatch.setenv("PIPELINE_LAMBDAS_IN_VPC", "false")
+        _mod, response = vams_execute._run(vams_execute._body(), _manifest_with_regions(REMOTE_REGION, ""))
+        assert response["statusCode"] == 200
+
+    def test_an_input_in_a_region_with_no_endpoint_is_rejected_and_reported(self, monkeypatch):
+        """With every Lambda in the VPC (useForAllLambdas) the readers are in the isolated subnets."""
+        monkeypatch.delenv("CROSS_REGION_S3_ENDPOINT_REGIONS", raising=False)
+        monkeypatch.setenv("PIPELINE_LAMBDAS_IN_VPC", "true")
         mod, response = vams_execute._run(vams_execute._body(), _manifest_with_regions(REMOTE_REGION, ""))
         assert response["statusCode"] == 500
         mod.lambda_client.invoke.assert_not_called()
         vams_execute._assert_token_failed(mod)
         cause = mod.sfn_client.send_task_failure.call_args.kwargs["cause"]
         assert "Cross-Region inputs are not supported" in cause
+        assert "runs in the VPC's isolated subnets" in cause
 
     def test_an_input_in_an_endpoint_served_region_is_admitted(self, monkeypatch):
         monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", f"us-west-2, {REMOTE_REGION}")
+        monkeypatch.setenv("PIPELINE_LAMBDAS_IN_VPC", "true")
         mod, response = vams_execute._run(vams_execute._body(), _manifest_with_regions(REMOTE_REGION, ""))
         assert response["statusCode"] == 200
         mod.sfn_client.send_task_failure.assert_not_called()
@@ -74,6 +94,7 @@ class TestVamsExecuteCarriesAndGatesTheRegions:
         single = source.index("manifestHelper.enforce_single_input_file(resolved)")
         gate = source.index("manifestHelper.enforce_inputs_in_region(resolved)")
         assert gate > single
+        assert "if lambdas_in_vpc():" in source[single:gate]
         assert "except" not in source[single:gate]
         assert "enforce_same_region_io" not in source
 
@@ -162,3 +183,34 @@ class TestConstructPipelineBucketRegions:
         }) == {"in-bkt": "eu-west-1", "out-bkt": "eu-west-1"}
         assert mod.bucket_regions({"inputS3AssetFilePath": "s3://in-bkt/a", "inputBucketRegion": ""}) == {}
         assert mod.bucket_regions({"inputS3AssetFilePath": "not-a-uri", "inputBucketRegion": "eu-west-1"}) == {}
+
+
+def _oversized_cross_region_run(monkeypatch, endpoint_regions):
+    """constructPipeline on a 3 MiB mesh in a REMOTE_REGION bucket with the Fargate renderer deployed and
+    a 2 MiB Lambda limit; the input is read through a stub regional client."""
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("CROSS_REGION_S3_ENDPOINT_REGIONS", endpoint_regions)
+    s3 = construct._s3_with("xidM/models/pump.glb", b"glTF....", ContentLength=3 * 1024 * 1024)
+    mod = h.load_handler("constructPipeline", {"MAX_INPUT_FILE_SIZE_MB": "2", "USE_FARGATE_RENDERER": "true"})
+    mod.s3_client = s3
+    with patch.object(mod.manifestHelper, "s3_client_for_region", return_value=s3):
+        state = mod.lambda_handler(construct._state(inputBucketRegion=REMOTE_REGION), MagicMock())
+    return state, s3.json_at("aux", construct.MANIFEST_KEY)
+
+
+@pytest.mark.unit
+class TestFargateRendererReadsOnlyEndpointServedRegions:
+    """The Fargate renderer runs in the isolated subnets. An over-limit file has no Lambda branch, so a
+    file whose bucket Region the VPC cannot reach is described from its attributes, with a warning."""
+
+    def test_an_oversized_input_in_a_region_without_an_endpoint_is_described_from_its_attributes(
+            self, monkeypatch):
+        state, manifest = _oversized_cross_region_run(monkeypatch, "")
+        assert (state["renderBranch"], state["renderSkipped"]) == ("NONE", "size")
+        assert manifest["renderBranch"] == "NONE"
+        assert any("Fargate renderer not used" in w and REMOTE_REGION in w for w in manifest["warnings"])
+
+    def test_an_oversized_input_in_an_endpoint_served_region_goes_to_fargate(self, monkeypatch):
+        state, manifest = _oversized_cross_region_run(monkeypatch, f"us-west-2,{REMOTE_REGION}")
+        assert (state["renderBranch"], state["renderSkipped"]) == ("FARGATE", None)
+        assert not any("Fargate renderer not used" in w for w in manifest["warnings"])

@@ -1541,7 +1541,14 @@ it for a new container that runs an upstream tool as a non-root user.
     entry points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the
     Region the manifest names. Moving a pipeline between placements means adding or removing that call
     and the env var. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the
-    four functions' value to the VPC builder's endpoint list.
+    four functions' value to the VPC builder's endpoint list. The SYSTEM GenAI metadata pipeline's
+    readers are Lambda functions that sit in the isolated subnets only with `useForAllLambdas`, so its
+    `vamsExecute` calls the gate only when `PIPELINE_LAMBDAS_IN_VPC` (set by its lambda builder) is
+    `true`; its Fargate renderer, always in the isolated subnets, is skipped for an input Region the VPC
+    cannot reach (`constructPipeline.fargate_reads_region` for an over-limit file, which stays on NONE
+    with a warning, and the Blender handler's `fargate_reads_region` for a dependency overflow, which
+    renders in Lambda with what fits). `constructPipeline` and the Blender function carry
+    `CROSS_REGION_S3_ENDPOINT_REGIONS` for that check.
     **Batch containers get the Regions through the job definition:** `vamsExecute` passes
     `inputBucketRegion` / `outputBucketRegion` to `openPipeline` (state-machine input), `constructPipeline`
     turns them into the definition's `bucketRegions` map (`bucket_regions(event)`: bucket name -> Region,

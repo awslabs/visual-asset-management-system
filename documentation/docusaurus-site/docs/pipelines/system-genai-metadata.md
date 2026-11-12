@@ -637,7 +637,13 @@ Every Amazon Bedrock call fed with user-supplied content runs behind a prompt-at
 
 The pipeline's Lambda functions run outside the VPC unless `app.useGlobalVpc.useForAllLambdas` is `true`, in which case VAMS creates the Amazon Bedrock Runtime interface endpoint for them. With `useFargateRenderer` the AWS Batch job runs in the isolated pipeline subnets and needs the shared Batch and ECR endpoints. See [Pipeline System Overview — VPC and Network Requirements](overview.md#vpc-and-network-requirements).
 
-An input file whose asset bucket is in another Region is read through that Region: the workflow manifest names the bucket's Region, `vamsExecute` forwards it, and every reader of the file — the classifier's header and digest reads, the media and Blender extractors, the 3D renderer — signs its requests for that Region through the state's `bucketRegions` map. Because the compute runs in the isolated pipeline subnets, such an input is admitted only when the VPC carries a cross-Region Amazon S3 interface endpoint for its Region (`app.useGlobalVpc.addCrossRegionS3Endpoints`); an input in any other Region is rejected at launch with `SendTaskFailure` naming both remedies. See [External Amazon S3 Setup — Pipelines and cross-Region inputs](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs).
+An input file whose asset bucket is in another Region is read through that Region: the workflow manifest names the bucket's Region, `vamsExecute` forwards it, and every reader of the file — the classifier's header and digest reads, the media and Blender extractors, the 3D renderer — signs its requests for that Region through the state's `bucketRegions` map. Whether such an input is admitted depends on where the code that reads it runs:
+
+-   **Outside the VPC** (the default, `app.useGlobalVpc.useForAllLambdas` off), the Lambda functions read a bucket in any Region through the public Amazon S3 endpoints, and the input is admitted.
+-   **With `useForAllLambdas`**, every function runs in the isolated pipeline subnets, so the input is admitted only when the VPC carries a cross-Region Amazon S3 interface endpoint for its Region (`app.useGlobalVpc.addCrossRegionS3Endpoints`); an input in any other Region is rejected at launch with `SendTaskFailure` naming both remedies.
+-   **The Fargate renderer** (`useFargateRenderer`) always runs in the isolated subnets, so it is used only for an input in the deployment Region or in a Region with such an endpoint. Elsewhere a file over the Lambda limits is described from its attributes, as it would be without the renderer, and a scene whose referenced files exceed the Blender function's budget is rendered by that function with the files that fit; a warning in `analysis-summary.json` names the Region.
+
+See [External Amazon S3 Setup — Pipelines and cross-Region inputs](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs).
 
 ## Configuration
 

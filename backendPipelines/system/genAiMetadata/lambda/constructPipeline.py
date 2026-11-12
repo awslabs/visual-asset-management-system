@@ -170,11 +170,28 @@ def build_sys_file(name, ext, head, version_id, sha256_hex, detected_format=None
     return sys_file
 
 
-def apply_size_gate(file_class, render_branch, size_bytes, point_count):
+def fargate_reads_region(region):
+    """Whether the Fargate render job, which runs in the VPC's isolated subnets, can read a bucket in
+    ``region``: the deployment Region (``""`` or ``AWS_REGION``) through the S3 gateway endpoint, or a
+    Region in ``CROSS_REGION_S3_ENDPOINT_REGIONS`` through the VPC's cross-Region S3 interface endpoint."""
+    return (not region or region == os.environ.get("AWS_REGION", "")
+            or region in manifestHelper.cross_region_s3_endpoint_regions())
+
+
+def fargate_is_unreachable(file_class, input_region):
+    """True when an over-limit file would go to the Fargate renderer but its bucket's Region is one the
+    VPC cannot reach, so the size gate keeps it on NONE instead."""
+    return (USE_FARGATE_RENDERER and file_class != fileClassifier.CLASS_OTHER
+            and not fargate_reads_region(input_region))
+
+
+def apply_size_gate(file_class, render_branch, size_bytes, point_count, input_region=""):
     """``(renderBranch, renderSkipped)`` after the Lambda limits. A class that never renders keeps
     NONE with ``unsupported``; a renderable file over a limit goes to Fargate when the operator enabled
-    that branch, else to NONE with ``size``. An ``other`` file over the limit is never sent to Fargate:
-    the generic probe reads a header the Lambda could read as well, so it keeps NONE with ``size``."""
+    that branch and the job can read the file's bucket Region (``input_region``), else to NONE with
+    ``size``: no Lambda branch takes a file over the limits, so the file is described from its attributes.
+    An ``other`` file over the limit is never sent to Fargate: the generic probe reads a header the Lambda
+    could read as well, so it keeps NONE with ``size``."""
     if render_branch == fileClassifier.BRANCH_NONE:
         return render_branch, common.RENDER_SKIPPED_UNSUPPORTED
     over_size = size_bytes > MAX_INPUT_FILE_SIZE_MB * 1024 * 1024
@@ -182,7 +199,8 @@ def apply_size_gate(file_class, render_branch, size_bytes, point_count):
                    and point_count > MAX_POINT_CLOUD_POINTS)
     if not (over_size or over_points):
         return render_branch, None
-    if USE_FARGATE_RENDERER and file_class != fileClassifier.CLASS_OTHER:
+    if (USE_FARGATE_RENDERER and file_class != fileClassifier.CLASS_OTHER
+            and fargate_reads_region(input_region)):
         return fileClassifier.BRANCH_FARGATE, None
     return fileClassifier.BRANCH_NONE, common.RENDER_SKIPPED_SIZE
 
@@ -218,7 +236,8 @@ def lambda_handler(event, context):
     aux_bucket, aux_prefix = manifestHelper.parse_s3_uri(event["inputOutputS3AssetAuxiliaryFilesPath"])
     config = manifestHelper.fetch_input_configuration(s3_client, event.get("inputConfigurationS3Location", ""))
     version_id = event.get("versionId", "") or ""
-    input_s3 = _input_client(event.get("inputBucketRegion", "") or "")
+    input_region = event.get("inputBucketRegion", "") or ""
+    input_s3 = _input_client(input_region)
     head = _head(bucket, key, version_id, input_s3)
     version_id = version_id or (head.get("VersionId", "") or "")
 
@@ -234,7 +253,8 @@ def lambda_handler(event, context):
     if file_class == fileClassifier.CLASS_POINTCLOUD and natural_branch != fileClassifier.BRANCH_NONE:
         point_count = fileClassifier.point_count_from_header(ext, sniff(fileClassifier.SNIFF_BYTES))
 
-    render_branch, render_skipped = apply_size_gate(file_class, natural_branch, size_bytes, point_count)
+    render_branch, render_skipped = apply_size_gate(file_class, natural_branch, size_bytes, point_count,
+                                                    input_region)
 
     sha256_hex = _sha256(bucket, key, version_id, input_s3) if size_bytes <= SHA256_MAX_BYTES else None
     sys_file = build_sys_file(name, ext, head, version_id, sha256_hex,
@@ -246,6 +266,10 @@ def lambda_handler(event, context):
             f"render skipped: the file exceeds the Lambda limits (sizeBytes={size_bytes}, "
             f"points={point_count}, maxInputFileSizeMb={MAX_INPUT_FILE_SIZE_MB}, "
             f"maxPointCloudPoints={MAX_POINT_CLOUD_POINTS})")
+        if fargate_is_unreachable(file_class, input_region):
+            manifest["warnings"].append(
+                f"Fargate renderer not used: it runs in the VPC, which has no cross-Region Amazon S3 endpoint "
+                f"for {input_region}, where the file's bucket is; the file is described from its attributes")
     manifest_uri = common.uri_join(event["inputOutputS3AssetAuxiliaryFilesPath"],
                                    common.ANALYSIS_MANIFEST_FILENAME)
     common.write_json(s3_client, manifest_uri, manifest)

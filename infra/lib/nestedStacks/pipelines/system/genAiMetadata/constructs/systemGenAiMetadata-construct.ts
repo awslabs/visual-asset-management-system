@@ -201,6 +201,12 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             "USE_FARGATE_RENDERER",
             pipelineConfig.useFargateRenderer ? "true" : "false"
         );
+        // The Fargate job reads the scene from the isolated subnets, so a scene in a bucket whose Region
+        // has no cross-Region S3 endpoint stays on the Blender Lambda with the referenced files that fit.
+        blenderRenderFunction.addEnvironment(
+            "CROSS_REGION_S3_ENDPOINT_REGIONS",
+            Config.crossRegionS3EndpointRegions(props.config).join(",")
+        );
         const render3dFunction = buildRender3dFunction(
             this,
             assetAuxiliaryBucket,

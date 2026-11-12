@@ -264,6 +264,16 @@ def discover_dependencies(bucket, root_key, input_rel, local_path, local_root, e
     return resolver
 
 
+def fargate_reads_region(region):
+    """Whether the Fargate render job, which runs in the VPC's isolated subnets, can read a bucket in
+    ``region``: the deployment Region (``""`` or ``AWS_REGION``), or a Region in the comma-separated
+    ``CROSS_REGION_S3_ENDPOINT_REGIONS`` the VPC has a cross-Region S3 interface endpoint for."""
+    if not region or region == os.environ.get("AWS_REGION", ""):
+        return True
+    reachable = {name.strip() for name in os.environ.get("CROSS_REGION_S3_ENDPOINT_REGIONS", "").split(",")}
+    return region in reachable
+
+
 def overflows_to_fargate(resolver):
     """True when the deployment has the Fargate renderer and the referenced files discovery sized exceed
     the Lambda byte budget (and no configuration lowered the budget below it, which Fargate would keep)."""
@@ -610,7 +620,15 @@ def lambda_handler(event, context):
             resolver = discover_dependencies(input_bucket, root_key, input_rel, local_path, local_root, extension,
                                              options, context)
         if overflows_to_fargate(resolver):
-            return reroute_to_fargate(event, existing, resolver, file_class, warnings, manifest_bucket, manifest_key)
+            input_region = event.get("inputBucketRegion", "") or ""
+            if fargate_reads_region(input_region):
+                return reroute_to_fargate(event, existing, resolver, file_class, warnings, manifest_bucket,
+                                          manifest_key)
+            # The Fargate job cannot read the scene's bucket, so the scene renders here with what fits.
+            warnings.append(
+                f"the referenced files ({resolver.predicted_bytes} bytes) exceed the Lambda budget, but the "
+                f"Fargate render job runs in the VPC, which has no cross-Region Amazon S3 endpoint for "
+                f"{input_region}; the scene is rendered in Lambda with the referenced files that fit the budget")
         report = None
         if resolver is not None:
             try:
