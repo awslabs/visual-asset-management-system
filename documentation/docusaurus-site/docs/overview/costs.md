@@ -132,7 +132,9 @@ Configuration validation accepts `app.vectorSearch.enabled: true` only when:
 
 -   `app.pipelines.useSystemGenAiMetadata.enabled`, `autoRegisterWithVAMS`, and `autoRegisterAutoTriggerOnFileUpload` are all `true`. The pipeline's upload trigger runs it on every new file version, and the pipeline produces the embeddings the vector index holds.
 -   `bedrockModels.embeddingModelId` names an embedding model and `embeddingDimensions` its vector width (`amazon.titan-embed-text-v2:0` and `1024` by default).
--   The deployment is outside the AWS European Sovereign Cloud, where Amazon DynamoDB vector search is not offered. In AWS GovCloud (US) the feature is supported once Amazon Bedrock model access is enabled by hand; see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access).
+-   The pipeline creates an Amazon Bedrock guardrail (`bedrockGuardrail.create.enabled`, the default) or names an operator-owned one (`bedrockGuardrail.guardrailIdentifier`).
+-   `embeddingDimensions` is a width the embedding model's family produces, and `app.vectorSearch.indexingConcurrency` is an integer from 2 to 1000.
+-   The Region is in the commercial (`aws`) or AWS GovCloud (US) (`aws-us-gov`) partition. Validation refuses vector search in every other partition, including the AWS European Sovereign Cloud, where Amazon DynamoDB vector search is not offered. In AWS GovCloud (US) the feature is supported once Amazon Bedrock model access is enabled by hand; see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access).
 
 Natural-language search needs neither a VPC nor Amazon OpenSearch Service. The following block is the minimum configuration for the full functionality: generated descriptions, a guardrail on the analysis prompts and on the embedded text, whole-file and content-chunk vectors, and the search API. Every field the block omits takes its default, which creates the Amazon Bedrock guardrail and leaves the Fargate renderer off:
 
@@ -222,7 +224,7 @@ Each `POST /search/nlp` request embeds the query once and reads the vector index
 | Asset record reads (`BatchGetItem`)        | $0.125 per million read request units                                 | Under $0.00001                          |
 | **Total**                                  |                                                                       | **~$0.0001 (~$0.10 per 1,000 queries)** |
 
-A caller who can read every database is served by two `SearchVectors` calls, one over whole-file vectors and one over all vectors; any other caller adds two calls for each database they can read, up to 200 databases. A request with `includeSegments: false` makes one call per target. Amazon DynamoDB meters each call on the bytes it examines and returns, so the 1 MB per call above is an assumption; the `VectorSearchRequestBytes` Amazon CloudWatch metric reports the actual figure.
+A caller who can read every database is served by two `SearchVectors` calls, one over whole-file vectors and one over all vectors; any other caller, and any request that names databases, is served by two calls per database searched instead, up to 200 databases. A request with `includeSegments: false` makes one call per target. Amazon DynamoDB meters each call on the bytes it examines and returns, so the 1 MB per call above is an assumption; the `VectorSearchRequestBytes` Amazon CloudWatch metric reports the actual figure.
 
 ### Vector storage
 

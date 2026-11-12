@@ -609,7 +609,7 @@ GLOBAL pipelines are typically built-in processing pipelines deployed with VAMS 
 VAMS may include built-in pipelines depending on your deployment configuration. These are created during deployment and registered as GLOBAL pipelines. Common built-in pipelines include:
 
 -   **3D Conversion** -- Converts 3D mesh file formats (for example, OBJ to glTF).
--   **GenAI Metadata Generation** (`SYSTEM - GenAI`) -- Analyzes every viewable file with Amazon Bedrock, writes file attributes and descriptive metadata, and produces the embeddings behind natural-language search.
+-   **GenAI Metadata Generation** (`SYSTEM - GenAI`) -- Analyzes every uploaded file, of any type: records its attributes and, with the GenAI layer on, describes it with Amazon Bedrock; produces the embeddings behind natural-language search.
 -   **Preview Generation** (`SYSTEM - Preview`) -- Creates thumbnail preview images for 3D files.
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Coordinate Transform** -- Reprojects point clouds between coordinate reference systems.

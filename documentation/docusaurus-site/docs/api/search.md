@@ -340,8 +340,8 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
                     "sourceModalities": [
                         "asset-metadata",
                         "file-identity",
-                        "genai-metadata",
-                        "segment-frames"
+                        "segment-frames",
+                        "genai-metadata"
                     ],
                     "indexedAt": "2026-09-13T10:22:41Z",
                     "fileClass": "video",
@@ -349,7 +349,7 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
                     "bestSegment": {
                         "segmentKey": "t0000083456",
                         "segmentKind": "videoTime",
-                        "segmentLabel": "00:01:23",
+                        "segmentLabel": "00:01:23.456–00:01:28.456",
                         "segmentStartMs": 83456,
                         "segmentEndMs": 88456
                     }
@@ -393,7 +393,7 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 
 -   `_id` is `databaseId#assetId#filePath#versionId` for a file hit and `databaseId#assetId` for an asset hit. `_score` is `1 - distance`, clipped to `[0, 1]`.
 -   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
--   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search ([Using vector indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html)), so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of `0` is `eq`, unless `nlp.truncated` is `true`. `nlp.truncated` is `true` only when a result window filled or the accessible database list was cut.
+-   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search ([Using vector indexes in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/VectorSearch.html)), so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of `0` is `eq`, unless `nlp.truncated` is `true`. `nlp.truncated` is `true` when a whole-file result window filled, when the accessible database list was cut, or when a searched database is one the caller may open only in part (see [Vector search](../concepts/vector-search.md#searching)).
 -   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
 -   `nlp.candidatesEvaluated` is the number of distinct vector items of the files the caller may open, after the per-database results were merged; `nlp.itemsCollapsed` is how many of those items folded into another hit of the same file. Neither counts an item of a file the caller cannot open. Both are counted before the OpenSearch-only constraints (`filters`, `metadataQuery`, `geoSearch`, `tags`) are applied, so an answer those constraints empty can still report them above 0.
 

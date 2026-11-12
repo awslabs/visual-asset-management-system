@@ -4222,12 +4222,16 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    //Supported in GovCloud; Amazon Bedrock model access there is enabled by hand in two accounts.
+    //Supported in GovCloud; Amazon Bedrock model access there is enabled by hand. Per the Amazon
+    //Bedrock User Guide (model access in AWS GovCloud (US)), a third-party model is enabled in both the
+    //GovCloud account and its linked commercial account, and an Amazon model in the GovCloud account only.
     if (config.app.vectorSearch.enabled && config.app.govCloud.enabled) {
         console.warn(
             "Configuration Warning: app.vectorSearch.enabled is true in a GovCloud deployment. Amazon " +
-                "Bedrock model access there is a manual step in both the GovCloud account and its linked " +
-                `commercial account; confirm the embedding model ` +
+                "Bedrock model access there is a manual step: a third-party model (such as Anthropic " +
+                "Claude or Cohere) is enabled in both the GovCloud account and its linked commercial " +
+                "account, and an Amazon model (such as Amazon Titan) in the GovCloud account only. " +
+                `Confirm the embedding model ` +
                 `(${config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId}) ` +
                 "and the analysis model are enabled before the first execution."
         );

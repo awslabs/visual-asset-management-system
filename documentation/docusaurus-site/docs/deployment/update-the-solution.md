@@ -798,9 +798,9 @@ DynamoDB-backed natural-language search over files, and formalises system-owned 
 `app.vectorSearch` follows the system pipeline: it resolves to enabled only when
 `app.pipelines.useSystemGenAiMetadata` is enabled, its upload trigger is armed and its registration is
 not turned off, outside AWS GovCloud (US) and the AWS European Sovereign Cloud. Enabling the system
-pipeline and vector search is the configuration edit in step 2 below. The features themselves are described on the vector search concept page (`concepts/vector-search`),
-the system pipelines page (`pipelines/system-pipelines`), and the system GenAI metadata pipeline page
-(`pipelines/system-genai-metadata`).
+pipeline and vector search is the configuration edit in step 2 below. The features themselves are described in [Vector search](../concepts/vector-search.md),
+[System pipelines](../pipelines/system-pipelines.md), and
+[SYSTEM GenAI metadata pipeline](../pipelines/system-genai-metadata.md).
 :::
 
 **Breaking changes:**
@@ -872,7 +872,7 @@ the system pipelines page (`pipelines/system-pipelines`), and the system GenAI m
 
     A dry run reports zero rows when there is nothing to do, so a zero-row result on its own is not evidence that the step is configured correctly — read the counts against what the deployment holds. The deploy in step 3 has already handled the retired built-ins: their `GLOBAL` pipeline and workflow rows are archived, their `fileUpload` trigger rows are deleted, and their past executions are kept. After that deploy, `orphanedTriggers` therefore usually reports 0 rows to delete. A row it does name belongs to a workflow archived before the upgrade, a workflow that no longer exists, or a retired built-in whose trigger delete did not complete during the deploy; the summary counts each reason separately. `Trigger rows examined` stays above 0 while the system pipeline's own trigger is registered. `systemPipelineRetirement` reports each retired pipeline and workflow as `archived (expected after the v2.7 deploy)`, and lists any of their executions still in flight and any workflow of yours that still references them.
 
-7.  Set `"dry_run": false` in your copy of the config (the shipped template pins `true`, and `--execute` alone does not override it), then run the migration with `--execute`. `orphanedTriggers` deletes rows and `vectorBackfill` launches one Bedrock-billed execution per file, so the script echoes the resolved account, Region, and caller and asks you to type the account id. In automation, where stdin is not a terminal, pass `--confirm-account <12-digit id>`; the resolved account must equal it. No flag skips the check, and a run whose caller identity cannot be resolved is refused.
+7.  Set `"dry_run": false` in your copy of the config (the shipped template pins `true`, and `--execute` alone does not override it), then run the migration with `--execute`. `orphanedTriggers` deletes rows and `vectorBackfill` launches one Amazon Bedrock-billed execution per file, so the script echoes the resolved account, Region, and caller and asks you to type the account id. In automation, where stdin is not a terminal, pass `--confirm-account <12-digit id>`; the resolved account must equal it. No flag skips the check, and a run whose caller identity cannot be resolved is refused.
 
     **Linux / macOS**
 
@@ -904,8 +904,9 @@ The step reads the deployment's `VECTORSEARCH` feature switch before it does any
 
 -   **Upgrading with vector search on:** run the migration after the deploy, and `vectorBackfill` embeds the files that existed before the upgrade.
 -   **Upgrading with vector search off:** the migration skips `vectorBackfill`, and nothing else is needed.
--   **Turning vector search on later on a 2.7 deployment:** deploy with `app.vectorSearch.enabled: true`, then run the migration again with `--steps vectorBackfill` (or set `app.vectorSearch.reindexOnCdkDeploy` to `true` for one deploy, or invoke the reindexer directly). The run launches one execution per file in scope and bills one analysis and one embedding for each, as on an upgrade; `--limit 25` shows the per-file cost first.
--   **Turning vector search off and on again:** the vectors written before survive, and the same `--steps vectorBackfill` run embeds the files whose pipeline runs completed while it was off.
+-   **Turning vector search on later on a 2.7 deployment:** deploy with `app.vectorSearch.enabled: true`, then run the migration again with `--steps vectorBackfill` (or set `app.vectorSearch.reindexOnCdkDeploy` to `true` for one deploy, or invoke the reindexer directly; see [Reindexing](../concepts/vector-search.md#reindexing) and [Reindexing on deploy](../concepts/vector-search.md#reindexing-on-deploy)). The run launches one execution per file in scope and bills one analysis and one embedding for each, as on an upgrade; `--limit 25` shows the per-file cost first, and [Backfilling an existing library](../overview/costs.md#backfilling-an-existing-library) gives the cost per file.
+-   **Turning vector search off and on again:** the vectors written before survive and are searchable again once the re-created index is active, and the same `--steps vectorBackfill` run embeds the files whose pipeline runs completed while it was off (see [Reindexing](../concepts/vector-search.md#reindexing)).
+-   **With or without Amazon OpenSearch Service:** natural-language search works in both; with OpenSearch it also accepts the keyword search's metadata, tag, and location filters, and with a provisioned domain or a private Serverless collection its functions run in the VPC. See [Filters with and without Amazon OpenSearch](../concepts/vector-search.md#filters-with-and-without-amazon-opensearch).
 -   **Upgrading with vector search off and the system pipeline on:** `vectorBackfill` is skipped. To analyze the files that existed before the upgrade (GenAI metadata, no vectors), set `generate_metadata_for_existing_files` to `true` in the config or pass `--generate-metadata-for-existing-files`, and the `metadataBackfill` step runs the reindexer's `enqueue`; without it the step is skipped. With vector search on, `metadataBackfill` is skipped because `vectorBackfill` already analyzes every file, and with the pipeline off both are skipped.
 -   **Turning the pipeline on later with vector search off:** deploy, then run the migration with `--steps metadataBackfill --generate-metadata-for-existing-files`. It costs one analysis run per file in scope; `--limit 25` shows the per-file cost first.
 
@@ -934,7 +935,8 @@ The vector index is created for one embedding model and dimension count (index n
 2. Set `app.vectorSearch.enabled: false` and deploy; wait until `aws dynamodb describe-table` shows no vector index on the table (CloudFormation returns while the index is still deleting, and a create during that window fails with `LimitExceededException`).
 3. Set the new `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` (and `embeddingDimensions`), set `app.vectorSearch.enabled: true`, and deploy. The new index is created on the empty table.
 4. Run the `vectorBackfill` step with `--execute` and **without** `--clear-vectors`. `POST /search/nlp` answers `503` until the index is `ACTIVE`.
-   :::
+
+:::
 
 :::warning[Executions of the retired workflows]
 An execution of a retired workflow that was `RUNNING` during the deploy cannot finish: its inner state machine was deleted with the retired nested stack, so no task token arrives and the workflow records it `FAILED` when the task times out (5 hours for GenAI 3D Metadata Labeling, 15 minutes for CAD/Mesh Metadata Extraction). Abort them beforehand (step 1) or afterwards from the `systemPipelineRetirement` report; abort and permanent delete tolerate the missing sub-resources. Full-mode log retrieval for those executions lists the deleted log group under `warnings`; the truncated log stored on the execution row is what remains.

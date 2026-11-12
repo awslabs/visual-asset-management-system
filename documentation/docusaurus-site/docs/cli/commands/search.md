@@ -256,7 +256,7 @@ vamscli search mapping --json-output
 
 ## search nlp
 
-Search files by meaning. The query is embedded with the deployment's Amazon Bedrock embedding model and ranked against the vector index of every indexed file version; `_score` is `1 - distance`. Works with or without Amazon OpenSearch Service; requires the `VECTORSEARCH` feature switch.
+Search files by meaning. The query is embedded with the deployment's Amazon Bedrock embedding model and ranked against the latest live version of every indexed file; `_score` is `1 - distance`. Works with or without Amazon OpenSearch Service; requires the `VECTORSEARCH` feature switch.
 
 ```bash
 vamscli search nlp -q TEXT [OPTIONS]
@@ -281,7 +281,7 @@ vamscli search nlp -q TEXT [OPTIONS]
 
 When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) give matching classes a ranking bonus of 0.1 rather than filtering: a hit of a named class moves ahead of one of another class that scores less than 0.1 higher, and the `score` column still shows the similarity without the bonus. Words that describe content, such as `report` or `manual`, name no type. The classes detected are echoed in `nlp.classIntent` of the JSON response.
 
-The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. Every total that is not zero reads `N+`, because the vector index uses approximate nearest-neighbour search and can miss a weak match even when no window filled; a filled window or an unsearched database (the `truncated:*` warnings) means more files may match than were ranked. Each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
+The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. Every total that is not zero reads `N+`, because the vector index uses approximate nearest-neighbour search and can miss a weak match even when no window filled, and so does a zero total when the answer is truncated (`0+`); a filled window or an unsearched database (the `truncated:*` warnings) means more files may match than were ranked. Each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
 
 `--filters` and `--metadata-query` are applied by the OpenSearch file index. When OpenSearch is enabled but cannot apply them, the command fails with `Search Unavailable` and the server's message instead of printing hits the filters were not applied to. The same error, with its own message, is printed while the vector index is still being built and when the search service is busy; retry in a few minutes. An unknown `--file-class` or a malformed `--filters` value fails with `Invalid search parameters` and the server's message.
 

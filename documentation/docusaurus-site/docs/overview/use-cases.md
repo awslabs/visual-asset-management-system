@@ -207,7 +207,7 @@ AI and ML teams working with spatial data need to manage, curate, and label larg
 
 ### How VAMS Solves It
 
-VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The SYSTEM GenAI metadata pipeline uses Amazon Bedrock to generate descriptive metadata for every file type VAMS can display, and — with vector search enabled — embeds each file version so datasets can be searched by content. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
+VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The SYSTEM GenAI metadata pipeline uses Amazon Bedrock to generate descriptive metadata for every uploaded file, and — with vector search enabled — embeds each file version so datasets can be searched by content. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
 
 **Key features used:**
 
