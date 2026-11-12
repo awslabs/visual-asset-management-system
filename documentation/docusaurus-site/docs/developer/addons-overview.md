@@ -22,13 +22,13 @@ The tier-1 services are Amazon S3, Amazon DynamoDB, Amazon API Gateway, AWS Lamb
 These are not add-ons, even when they call an AWS service outside the tier-1 set or a vendor's service:
 
 -   **Viewers.** Each viewer is a plugin with its own `enabled` flag. A licensed viewer, or a viewer that belongs to an add-on, is listed in `addonViewerConfig.json` ([Viewer Plugins](../additional/viewer-plugins.md)).
--   **Processing pipelines.** Each pipeline deploys from its own nested stack and is turned on by its own `app.pipelines.*` setting. The pipeline system that runs them is part of this exception, including the AWS Batch and Amazon SageMaker jobs a workflow can stop and the AWS Deadline Cloud execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`) ([Pipeline System Overview](../pipelines/overview.md)).
+-   **Processing pipelines.** Each pipeline deploys from its own nested stack and is turned on by its own `app.pipelines.*` setting. The pipeline system that runs them is part of this exception, including the AWS Batch and Amazon SageMaker jobs a workflow can stop ([Pipeline System Overview](../pipelines/overview.md)).
 -   **Settings that point core at a deployment's own resources**, such as an external OAuth, SAML or OIDC identity provider, existing asset buckets, a VPC or a KMS key.
 -   **Client-side connectors** in `tools/ExternalIntegrations/`, such as the ArcGIS Pro connector and the Isaac Sim integration. They run inside the external application, call VAMS through the CLI, and deploy nothing.
 
 Every add-on has an on/off setting in the deployment configuration and is off by default.
 
-Two core features run on AWS services outside the tier-1 set and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), and the maps on Amazon Location Service (`app.useLocationService`). New functionality that needs either service is an add-on.
+Three core features run on AWS services outside the tier-1 set and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), the maps on Amazon Location Service (`app.useLocationService`), and the AWS Deadline Cloud pipeline execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`, off by default). Other new functionality that needs one of these services is an add-on.
 
 ## Current add-ons
 
