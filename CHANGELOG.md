@@ -84,6 +84,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend/CLI** Fixed an upload whose every file is over 1 GiB being reported as failed although its files are queued and land in the asset: the completion reports success with the files marked for asynchronous processing, `vamscli file upload` exits 0, and a workflow whose asset-file outputs are all over 1 GiB no longer ends FAILED at the write-back. ([#1140](https://github.com/awslabs/visual-asset-management-system/issues/1140))
 -   **Permissions** Fixed read-only users seeing nothing in every file viewer except the Three.js Viewer, and getting `403` on download: the `database-readonly` and `global-readonly` permission templates and the seeded `basicReadOnly` role grant `POST` on the file download route (`/database/{databaseId}/assets/{assetId}/download`) and on no other route. ([#537](https://github.com/awslabs/visual-asset-management-system/issues/537))
     -   Note: `basicReadOnly` gets the grant on update. A role imported from either template before v2.6.7 does not; add it by importing a template that holds only the download constraint, not the whole template again (see the update guide).
+-   **Web** File details panel: the **File Attributes** and **File Metadata** tables keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. ([#1307](https://github.com/awslabs/visual-asset-management-system/issues/1307))
 
 ### Chores
 
