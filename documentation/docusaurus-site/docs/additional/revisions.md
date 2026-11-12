@@ -326,6 +326,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
 -   **Uploads of files over 1 GiB** — An upload whose every file is over 1 GiB reports success with the files marked for asynchronous processing, instead of "No files were successfully uploaded" while the files land; `vamscli file upload` exits 0 and a workflow whose asset-file outputs are all over 1 GiB no longer fails at the write-back. (issue #1140)
 -   **Validation errors logged at WARNING** — The shared validation-error response logs a request refused with a 4xx at WARNING instead of ERROR, so it no longer adds an ERROR line for a request the caller got wrong; a 5xx stays at ERROR, and the audit entry and the response are unchanged. (issue #1304)
+-   **GenAI 3D metadata labeling with a geographic inference profile** — With a `us.`, `eu.`, `apac.` or `us-gov.` `bedrockModelId`, the metadata generation Lambda function's Amazon Bedrock grant names the configured foundation model in every Region the profile can route to; it named the deployment Region only, so a request routed elsewhere could be refused. (issue #1390)
 
 **Other changes:**
 
