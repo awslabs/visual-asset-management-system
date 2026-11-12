@@ -99,6 +99,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Isaac Lab training time limit** — AWS Batch no longer stops an Isaac Lab training job after 6 hours of running; the job limit matches the workflow's 8 hours. (issue #1324)
 -   **Isaac Lab pipeline page** — The page states that its timeouts include the wait for a GPU instance, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
 -   **API keeps working after an IAM role rename** — After an update that renames the IAM roles, such as setting or changing `IamRoleNamePrefix`, the REST API stage moves to a new deployment that names the renamed authorizer role, instead of answering every route with `500`. The first update to this version creates one new API deployment. (issue #1210)
+-   **Current Amazon Bedrock model for GenAI 3D Metadata Labeling** — The pipeline defaults to Claude Sonnet 5.5 (`global.anthropic.claude-sonnet-5-5`) in the commercial template. Amazon Bedrock refused the previous default, the Legacy Claude Sonnet 4.5, to accounts that had not used it for 30 days. A deployment that sets its own model keeps it; one on Claude Sonnet 4.5 changes it and redeploys. (issue #1353)
 
 **Other changes:**
 
