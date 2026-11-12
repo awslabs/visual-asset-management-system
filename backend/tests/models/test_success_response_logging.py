@@ -294,8 +294,9 @@ class TestErrorHelpersDoNotInterpolateTheBody:
             response = helper(body=dict(body))
 
         assert response["statusCode"] == status
-        # general_error() logs a 4xx below ERROR; the other helpers log every response at ERROR.
-        logged = spy.warning if name == "general_error" else spy.error
+        # validation_error() and general_error() log a 4xx below ERROR; the other helpers log every
+        # response at ERROR.
+        logged = spy.warning if name in ("validation_error", "general_error") else spy.error
         assert logged.call_count == 1
         message = logged.call_args.args[0]
         # A rendered body brings the dict's own braces with it, so their absence pins the plain message.
