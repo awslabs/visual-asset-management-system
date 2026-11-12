@@ -9,7 +9,7 @@ is gone. Its `HeadObject` then answers 404 on every receive: reporting the recor
 failed only redrives it until the source queue dead-letters it, which raises the
 indexer DLQ alarm for a search index that is already correct. The object's own
 removal event is what updates its search document, so these tests also run that
-event after the skipped create and check the document is gone.
+event after the skipped create and check the document's final state.
 """
 
 import importlib.util
@@ -254,11 +254,18 @@ class TestCreateEventForAMissingObject:
 @pytest.mark.unit
 class TestCopyThenMove:
     """`file copy /a.txt /b.txt` then `file move /b.txt /c.txt` then `file delete /c.txt`,
-    all before the indexer reads the two copy events, which arrive in one message."""
+    all before the indexer reads the two copy events, which arrive in one message.
+
+    A move removes its source with DeleteObject and no VersionId, which on the versioned
+    asset bucket writes a delete marker, so `/b.txt` ends archived. `file delete` asks for
+    a permanent delete, so no version of `/c.txt` remains.
+    """
 
     def _after_the_operations(self, harness):
         harness.bucket.put(f"{ASSET_ID}/a.txt")
         harness.index[(DATABASE_ID, ASSET_ID, "/a.txt")] = False
+        harness.bucket.put(f"{ASSET_ID}/b.txt")
+        harness.bucket.archive(f"{ASSET_ID}/b.txt")
 
     def test_the_message_is_not_reported_for_redrive(self, harness):
         self._after_the_operations(harness)
@@ -272,7 +279,8 @@ class TestCopyThenMove:
         assert response["batchItemFailures"] == []
         assert harness.index == {(DATABASE_ID, ASSET_ID, "/a.txt"): False}
 
-    def test_the_removal_events_that_follow_leave_only_the_source(self, harness):
+    def test_the_removal_events_that_follow_archive_the_move_source_and_drop_the_deleted_file(
+            self, harness):
         self._after_the_operations(harness)
 
         response = _run(
@@ -280,12 +288,16 @@ class TestCopyThenMove:
             _indexer_sqs_message("m-copies",
                                  _s3_record("ObjectCreated:Copy", "/b.txt"),
                                  _s3_record("ObjectCreated:Copy", "/c.txt")),
-            _indexer_sqs_message("m-move-source", _s3_record("ObjectRemoved:Delete", "/b.txt")),
+            _indexer_sqs_message("m-move-source",
+                                 _s3_record("ObjectRemoved:DeleteMarkerCreated", "/b.txt")),
             _indexer_sqs_message("m-delete", _s3_record("ObjectRemoved:Delete", "/c.txt")),
         )
 
         assert response["batchItemFailures"] == []
-        assert harness.index == {(DATABASE_ID, ASSET_ID, "/a.txt"): False}
+        assert harness.index == {
+            (DATABASE_ID, ASSET_ID, "/a.txt"): False,
+            (DATABASE_ID, ASSET_ID, "/b.txt"): True,
+        }
 
 
 @pytest.mark.unit
