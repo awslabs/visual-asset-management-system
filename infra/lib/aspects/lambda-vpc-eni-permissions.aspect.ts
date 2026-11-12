@@ -28,8 +28,7 @@ export const LAMBDA_ENI_CHANGE_ACTIONS = [
 export const LAMBDA_ENI_DENY_POLICY_ID = "LambdaEniChangesDeniedToFunctionCode";
 
 /**
- * Keeps the network interface permissions on every Lambda execution role while the deployment has a VPC
- * (#1347).
+ * Keeps the network interface permissions on every Lambda execution role while the deployment has a VPC.
  *
  * VAMS puts most functions in the VPC only when `app.useGlobalVpc.useForAllLambdas` is on, and CDK attaches
  * `AWSLambdaVPCAccessExecutionRole` to a function's role only while the function is in the VPC. An update
@@ -49,8 +48,8 @@ export const LAMBDA_ENI_DENY_POLICY_ID = "LambdaEniChangesDeniedToFunctionCode";
  * no new EC2 access. A partition without that condition key leaves the Deny inert, never stricter.
  *
  * shortcut: turning `app.useGlobalVpc.enabled` off removes the VPC and this aspect in one update, so the
- * functions still in the VPC at that point lose the policy as they leave it; keep the grants for one
- * update after the VPC goes if that path needs to be clean.
+ * functions still in the VPC at that point lose the policy as they leave it; the troubleshooting guide's
+ * two-update procedure avoids that. For a one-step path, keep the grants for one update after the VPC goes.
  */
 export class LambdaVpcEniPermissionsAspect implements cdk.IAspect {
     private readonly vpcAccessPolicy = iam.ManagedPolicy.fromAwsManagedPolicyName(

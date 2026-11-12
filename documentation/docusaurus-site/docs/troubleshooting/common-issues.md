@@ -76,7 +76,9 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Orphaned Lambda network interfaces
 
-Before the fix for [#1347](https://github.com/awslabs/visual-asset-management-system/issues/1347), an update that took Lambda functions out of the VPC removed the network interface permissions from their execution roles in the same update. That happens when `app.useGlobalVpc.useForAllLambdas` is turned off, when `app.useGlobalVpc.enabled` is turned off, and when an update that turned `useForAllLambdas` on rolls back. Lambda deletes a function's network interfaces after the function leaves the VPC, using the function's role. Without the permissions that call fails, Lambda does not retry it, and the interfaces stay in the VPC. The current release keeps the permissions while the VPC is enabled. Interfaces orphaned earlier stay until you delete them.
+Lambda deletes a function's network interfaces after the function leaves the VPC, using the function's execution role. If the role no longer has the network interface permissions, the call is denied, Lambda does not retry it, and the interfaces stay in the VPC with interface type `interface` until you delete them. While `app.useGlobalVpc.enabled` is `true`, VAMS keeps these permissions on every Lambda execution role, so turning `app.useGlobalVpc.useForAllLambdas` off, or rolling back an update that turned it on, leaves no interfaces behind.
+
+Turning `app.useGlobalVpc.enabled` off removes the VPC and these permissions in the same update, so it orphans the interfaces of every function still in the VPC at that point. To turn the VPC off, use two updates. First, with `app.useGlobalVpc.enabled` still `true`, follow steps 1 and 2 of [Subnet or VPC Resource Deletion Failures](#subnet-or-vpc-resource-deletion-failures) so no function stays in the VPC, and wait until the VPC holds no interface whose description starts with `AWS Lambda VPC ENI-` (Lambda can take up to 20 minutes). Then deploy with `app.useGlobalVpc.enabled` set to `false`.
 
 **Symptoms:**
 
@@ -90,13 +92,15 @@ Before the fix for [#1347](https://github.com/awslabs/visual-asset-management-sy
 
     ```bash
     aws ec2 describe-network-interfaces \
-        --filters Name=vpc-id,Values=<VAMS_VPC_ID> Name=interface-type,Values=lambda Name=status,Values=available \
-        --query 'NetworkInterfaces[].[NetworkInterfaceId,Description,SubnetId,Groups[0].GroupId]' --output text
+        --filters Name=vpc-id,Values=<VAMS_VPC_ID> Name=status,Values=available "Name=description,Values=AWS Lambda VPC ENI-*" \
+        --query 'NetworkInterfaces[].[NetworkInterfaceId,InterfaceType,Description,SubnetId,Groups[0].GroupId]' --output text
     ```
 
 2. For each interface, check that:
     - its status is `available` and it has no attachment. An `in-use` interface belongs to a function that still runs in the VPC.
-    - its description is `AWS Lambda VPC ENI-<function name>-…`, and the function belongs to this VAMS deployment.
+    - its interface type is `interface`. An `available` interface whose type is still `lambda` is still managed by Lambda, which can take up to 20 minutes to delete it; check it again later.
+    - its description is `AWS Lambda VPC ENI-<function name>`, and the function belongs to this VAMS deployment.
+    - its `RequesterId` starts with `AROA`, the ID of the function's execution role that Lambda created the interface with.
     - the function is no longer in the VPC, or no longer exists: `aws lambda get-function-configuration --function-name <FUNCTION_NAME> --query VpcConfig.SubnetIds` returns an empty list or `ResourceNotFoundException`. Lambda manages the interfaces of a function that is still in the VPC; leave those alone.
 3. Delete each interface that passed:
 

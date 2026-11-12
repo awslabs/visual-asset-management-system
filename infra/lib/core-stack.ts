@@ -99,7 +99,7 @@ export class CoreVAMSStack extends cdk.Stack {
         Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
 
         // While there is a VPC, every Lambda role keeps the network interface permissions, so an update
-        // that takes a function out of the VPC does not orphan its network interfaces (#1347). Runs before
+        // that takes a function out of the VPC does not orphan its network interfaces. Runs before
         // CDK Nag so the checks see the result.
         if (props.config.app.useGlobalVpc.enabled) {
             Aspects.of(this).add(new LambdaVpcEniPermissionsAspect(), {
