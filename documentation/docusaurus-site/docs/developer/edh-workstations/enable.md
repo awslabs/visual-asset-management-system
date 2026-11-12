@@ -83,7 +83,7 @@ The EDH installer can deploy the cluster into the VPC that VAMS runs in, so no p
 2. **Install EDH** as [Step 2](#step-2-deploy-the-edh-cluster) shows, with `--vpc-id "${VPC}" --public-subnets <public subnet ids> --private-subnets <private subnet ids>` in place of `--vpc-cidr`, and with `Config.network.use_vpc_endpoints` left at `false`.
 3. **Mind the deployment mode.**
     - With `--deployment-mode private`, the load balancer is internal, in the VPC the add-on's functions run in. EDH's load balancer security group admits all traffic from the VPC's address ranges, so it needs no new rule. The Amazon DCV entry point is internal as well, so users need a VPN or AWS Direct Connect.
-    - With `--deployment-mode public`, the load balancer is internet-facing and needs `lambdaSubnets` `"private"`. In existing-VPC mode the installer admits HTTPS from the public addresses of the NAT gateways in the subnets it is given, so the VAMS NAT gateways, which sit in the VAMS public subnets, are admitted when they exist at install time. Otherwise add them as [Load balancer security group](#load-balancer-security-group) describes.
+    - With `--deployment-mode public`, the load balancer is internet-facing and needs `lambdaSubnets` `"private"`. In existing-VPC mode the installer admits HTTPS on the load balancer from the public addresses of the NAT gateways in the subnets it is given, and the same addresses on the login nodes' SSH load balancer, so the VAMS NAT gateways, which sit in the VAMS public subnets, are admitted when they exist at install time. Otherwise add them as [Load balancer security group](#load-balancer-security-group) describes.
 4. **Configure VAMS** for the cluster ([Step 3](#step-3-configure-edh-for-vams) and [Step 5](#step-5-configure-vams)) and deploy it again ([Step 6](#step-6-deploy-vams)). `lambdaSubnets` `"private"` works with either deployment mode, since the private subnets also reach an internal load balancer in the same VPC. While EDH uses subnets that VAMS created, keep `"private"`, or another feature that needs private subnets, enabled.
 
 Plan for these before you choose this layout:
@@ -364,7 +364,7 @@ for IP in $(aws ec2 describe-nat-gateways --region <Region> \
 done
 ```
 
-Adding the addresses to the cluster's client prefix list instead also admits them to the Amazon DCV entry point (see [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)), so the security group rule is the narrower choice. Revoke the rules when you remove the add-on, or when the NAT gateways are removed, as setting `lambdaSubnets` back to `"isolated"` does in a VPC where no other feature needs private subnets.
+Adding the addresses to the cluster's client prefix list instead also admits them to the Amazon DCV entry point (see [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)), so the security group rule is the narrower choice. Either way, a NAT gateway's address stands for every workload whose traffic leaves through that gateway, not only the add-on's functions: in a VPC that VAMS creates, the pipelines that run in the private subnets as well. Revoke the rules when you remove the add-on, or when the NAT gateways are removed, as setting `lambdaSubnets` back to `"isolated"` does in a VPC where no other feature needs private subnets.
 
 ### Browser access to Amazon DCV
 
