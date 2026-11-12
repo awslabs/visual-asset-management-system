@@ -60,6 +60,7 @@ TYPED_TOOLS = {
     "list_executions": "filterStartDate", "list_workflow_executions": "filterStartDate",
     "get_execution_details": "truncatedCollections", "get_execution_results": "resultContent",
     "generate_download_url": "downloadUrl", "generate_download_urls_bulk": "files",
+    "get_file_info": "relativePath", "export_asset": "totalAssetsInTree", "list_features": "fetched_at",
 }
 
 
