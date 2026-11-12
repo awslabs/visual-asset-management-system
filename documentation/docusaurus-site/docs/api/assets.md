@@ -807,7 +807,7 @@ Two constraints apply to the redirect target:
 -   **Send no `Authorization` header to the presigned URL.** It carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect.
 -   **Issue a `GET`, not a `POST`.** The status is `303` rather than `307` precisely so that redirect-following clients switch the method; the URL is signed for a `GET` and rejects any other verb.
 
-`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly.
+`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly. The staged object is deleted automatically 8 days after it is written, by which time no presigned URL for it still works.
 :::
 
 **Error Responses:**

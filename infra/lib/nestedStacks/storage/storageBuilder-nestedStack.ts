@@ -952,6 +952,24 @@ export function storageResourcesBuilder(
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
+            // The asset export service's staged payloads (assetExports/<databaseId>/<assetId>/...),
+            // one per export response too large to return inline. The service never deletes one: the
+            // client reads it through a presigned URL, possibly more than once, until the URL
+            // expires. The expiry outlives the longest lifetime a presigned URL can have, so it never
+            // removes a payload a live URL still points at. The bucket is versioned, so the expiry
+            // only writes a delete marker: the noncurrent expiry reclaims the storage, and the expired
+            // delete markers go with it. Always on, because the export API always is.
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiration: Duration.days(Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS),
+                noncurrentVersionExpiration: Duration.days(1),
+            },
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiredObjectDeleteMarker: true,
+            },
             // The video SOP/BOM pipeline's scratch objects (pipelines/<pipelineId>/<executionId>/...:
             // definition document, extracted audio, Transcribe output, analysis artefacts). A run deletes
             // its own on success and its pipelineEnd Lambda deletes them on failure; the objects a

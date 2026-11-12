@@ -100,9 +100,9 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
 # client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
-# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
-# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
-# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
+# bucket's lifecycle expiry for staged payloads are scoped to this prefix
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together.
 EXPORT_STAGING_PREFIX = "assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
