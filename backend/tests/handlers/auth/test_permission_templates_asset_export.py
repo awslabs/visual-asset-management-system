@@ -13,8 +13,14 @@ The two shipped read-only templates (run through the import's own substitution a
 seeded ``basicReadOnly`` role (read from its CDK construct the way the deploy writes it) are each
 evaluated by the real policy generation and Casbin enforcer, with only the two table reads stubbed.
 The controls show the grant is the export constraint alone, and that it reaches no write route.
+
+The download and export grants each match their one route by pattern, whatever the path parameters
+are. ``TestNoOtherWriteRouteIsReached`` probes every POST, PUT and DELETE route with each path
+parameter filled with a dummy value and with each segment those grants name, because a grant that
+matched on a path suffix also reached a write route whose last parameter was set to that segment.
 """
 
+import itertools
 import re
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +30,14 @@ import backend.backend.handlers.authz as authz_module  # noqa: E402
 from backend.backend.common.apiRoutes import (  # noqa: E402
     ALL_API_ROUTES,
     API_ASSET_EXPORT,
+    API_AUTH_LOGIN_PROFILE,
+    API_AUTH_ROUTES,
+    API_CHECK_SUBSCRIPTION,
+    API_DOWNLOAD_ASSET,
+    API_REVERT_ASSET_VERSION,
+    API_REVERT_FILE_VERSION,
+    API_SEARCH,
+    API_SEARCH_SIMPLE,
     DELETE,
     POST,
     PUT,
@@ -163,7 +177,88 @@ class TestTheExportGrantIsNarrow:
         assert with_export - without_export == {API_ASSET_EXPORT}
         assert without_export <= with_export
 
-    def test_only_the_export_route_ends_with_export(self):
-        """The grant matches a suffix, so it is narrow only while no other route ends the same way."""
-        routes = [route.path for route in ALL_API_ROUTES if route.path.endswith("/export")]
-        assert routes == [API_ASSET_EXPORT.path]
+
+
+# The path segments the read-only POST grants name. A path parameter set to one of them is the shape
+# a suffix-matching grant would mistake for the granted route.
+GRANTED_SEGMENTS = ("export", "download")
+DUMMY_SEGMENT = "probe-id"
+WRITE_METHODS = (POST, PUT, DELETE)
+_PARAMETER = re.compile(r"\{[^/{}]+\}")
+
+
+def _fillings(route_path):
+    """Every concrete path of the route with each parameter set to the dummy value or to one of the
+    granted segments, independently."""
+    parameters = _PARAMETER.findall(route_path)
+    choices = (DUMMY_SEGMENT,) + GRANTED_SEGMENTS
+    for values in itertools.product(choices, repeat=len(parameters)):
+        path = route_path
+        for value in values:
+            path = _PARAMETER.sub(value, path, count=1)
+        yield path
+
+
+# The write-method routes a read-only role is meant to reach: POST reads that carry a body, and, for
+# the seeded role only, management of the caller's own API keys.
+_TEMPLATE_ALLOWED = {(POST, route) for route in (
+    API_AUTH_ROUTES, API_AUTH_LOGIN_PROFILE, API_SEARCH, API_SEARCH_SIMPLE, API_CHECK_SUBSCRIPTION,
+    API_DOWNLOAD_ASSET, API_ASSET_EXPORT)}
+EXPECTED_WRITE_METHOD_ROUTES = {
+    "template database-readonly.json": _TEMPLATE_ALLOWED,
+    "template global-readonly.json": _TEMPLATE_ALLOWED,
+    "seeded basicReadOnly": _TEMPLATE_ALLOWED | {
+        (method, route) for route in ALL_API_ROUTES if route.path.startswith("/auth/user/api-keys")
+        for method in WRITE_METHODS if method in route.methods},
+}
+
+
+@pytest.mark.unit
+class TestNoOtherWriteRouteIsReached:
+    """Every POST, PUT and DELETE route in the core and add-on route lists, with each path parameter
+    filled with a dummy value and with each segment the read-only grants name, is denied unless it
+    is one of the routes the role is meant to reach."""
+
+    @pytest.mark.parametrize("name", sorted(READ_ONLY_SETS))
+    def test_a_read_only_role_is_denied_every_other_write_method_route(self, enforcer_for, name):
+        enforcer = enforcer_for(READ_ONLY_SETS[name]())
+        expected = EXPECTED_WRITE_METHOD_ROUTES[name]
+        reached = []
+        for route in ALL_API_ROUTES:
+            for method in WRITE_METHODS:
+                if method not in route.methods:
+                    continue
+                for path in _fillings(route.path):
+                    if not enforcer.enforce(_api_request(path), method):
+                        continue
+                    # The concrete path may belong to an expected route as well as to this one.
+                    if not any(m == method and r.matches(path) for m, r in expected):
+                        reached.append(f"{method} {path} ({route.path})")
+        assert not reached, f"{name} reaches routes it must not: {reached}"
+
+    @pytest.mark.parametrize("name", sorted(READ_ONLY_SETS))
+    def test_a_read_only_role_reaches_each_expected_route(self, enforcer_for, name):
+        """Control for the test above: the expected routes are reached, so the denials are not the
+        enforcer denying everything."""
+        enforcer = enforcer_for(READ_ONLY_SETS[name]())
+        for method, route in EXPECTED_WRITE_METHOD_ROUTES[name]:
+            path = _concrete_path(route.path)
+            assert enforcer.enforce(_api_request(path), method) is True, f"{method} {path}"
+
+    @pytest.mark.parametrize("name", sorted(READ_ONLY_SETS))
+    def test_the_revert_routes_are_denied_with_a_granted_segment_as_their_version(self, enforcer_for, name):
+        """The two POST routes under an asset whose last segment is a parameter."""
+        enforcer = enforcer_for(READ_ONLY_SETS[name]())
+        for segment in GRANTED_SEGMENTS:
+            for route in (API_REVERT_ASSET_VERSION, API_REVERT_FILE_VERSION):
+                path = route.path.replace("{databaseId}", DATABASE_ID)
+                path = _PARAMETER.sub("probe-id", path, count=1)
+                path = _PARAMETER.sub(segment, path, count=1)
+                assert enforcer.enforce(_api_request(path), POST) is False, path
+
+    def test_the_fillings_cover_the_trailing_parameter_routes(self):
+        """Control for the enumeration: a route ending in a parameter is probed with that parameter
+        set to each granted segment."""
+        paths = set(_fillings(API_REVERT_ASSET_VERSION.path))
+        assert any(path.endswith("/revertAssetVersion/export") for path in paths)
+        assert any(path.endswith("/revertAssetVersion/download") for path in paths)

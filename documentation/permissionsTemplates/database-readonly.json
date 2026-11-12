@@ -123,22 +123,28 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-download",
-            "description": "Allow requesting a file download, which the file viewers and the download action use; the request is a POST because its body names the file and version",
+            "description": "Allow requesting a file download (file viewers, download action); a POST because its body names the file and version. The pattern matches that one route only, whatever its path parameters are",
             "objectType": "api",
             "criteriaAnd": [
-                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
-                { "field": "route__path", "operator": "ends_with", "value": "/download" }
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/database/[^/]+/assets/[^/]+/download"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-export",
-            "description": "Allow requesting an asset export, which lists the asset tree, its metadata and its files and can sign download links for them; the request is a POST because its body carries the export options, and it changes nothing",
+            "description": "Allow requesting an asset export, which lists the asset tree, metadata and files and signs download links; a POST because its body carries the options. The pattern matches that one route only, whatever its path parameters are",
             "objectType": "api",
             "criteriaAnd": [
-                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
-                { "field": "route__path", "operator": "ends_with", "value": "/export" }
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/database/[^/]+/assets/[^/]+/export"
+                }
             ],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "POST", "type": "allow" }]

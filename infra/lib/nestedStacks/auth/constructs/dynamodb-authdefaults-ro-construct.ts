@@ -905,26 +905,13 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: `0_${roleNameIDClean}_api_paths_download`,
                                 },
                                 operator: {
-                                    S: "starts_with",
+                                    S: "equals",
                                 },
                                 value: {
-                                    S: "/database/",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `1_${roleNameIDClean}_api_paths_download`,
-                                },
-                                operator: {
-                                    S: "ends_with",
-                                },
-                                value: {
-                                    S: "/download",
+                                    // The one route, whatever its path parameters are: a suffix
+                                    // match would also reach a write route whose last segment is
+                                    // a parameter set to "download".
+                                    S: "/database/[^/]+/assets/[^/]+/download",
                                 },
                             },
                         },
@@ -1511,26 +1498,13 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: `0_${roleNameIDClean}_api_paths_export`,
                                 },
                                 operator: {
-                                    S: "starts_with",
+                                    S: "equals",
                                 },
                                 value: {
-                                    S: "/database/",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `1_${roleNameIDClean}_api_paths_export`,
-                                },
-                                operator: {
-                                    S: "ends_with",
-                                },
-                                value: {
-                                    S: "/export",
+                                    // The one route, whatever its path parameters are: a suffix
+                                    // match would also reach a write route whose last segment is
+                                    // a parameter set to "export".
+                                    S: "/database/[^/]+/assets/[^/]+/export",
                                 },
                             },
                         },

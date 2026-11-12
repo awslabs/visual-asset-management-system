@@ -48,7 +48,8 @@ def _regex(value):
 
 
 # Every distinct criterion value the shipped permission templates and the seeded admin / read-only
-# constraints carry. Literals, one wildcard, and the two template placeholders.
+# constraints carry. Literals, one wildcard, the two route patterns of the read-only POST grants, and
+# the two template placeholders.
 SHIPPED_CRITERION_VALUES = [
     '.*',
     'GLOBAL',
@@ -78,11 +79,11 @@ SHIPPED_CRITERION_VALUES = [
     '/database',
     '/database/',
     '/databases',
-    '/download',
+    '/database/[^/]+/assets/[^/]+/download',
+    '/database/[^/]+/assets/[^/]+/export',
     '/edh/admin',
     '/edh/workstations',
     '/executions',
-    '/export',
     '/ingest-asset',
     '/metadata',
     '/metadataschema',

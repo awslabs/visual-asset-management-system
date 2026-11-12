@@ -12,8 +12,9 @@
  *
  * The role must likewise reach `POST /database/{databaseId}/assets/{assetId}/download`, through which
  * the file viewers and the download action request a file. The route is a read carried in a POST
- * body, so the role's GET constraint does not reach it, and the grant is narrowed to paths that start
- * with `/database/` and end with `/download` so that no write route under `/database` matches it.
+ * body, so the role's GET constraint does not reach it, and the grant is one `equals` pattern for that
+ * route (`/database/[^/]+/assets/[^/]+/download`) so that no write route under `/database` matches it,
+ * whatever its path parameters are. The asset export grant is built the same way.
  *
  * This applies to existing deployments as much as to new ones. `deployment/update-the-solution.md`
  * records that every default constraint - each one whose id begins `initial_admin_` or
@@ -208,12 +209,13 @@ describe("seeded basicReadOnly api constraints", () => {
 });
 
 describe("seeded basicReadOnly file download grant", () => {
-    it("grants POST on paths that start with /database/ and end with /download, and nothing wider", () => {
+    it("grants POST on the file download route alone", () => {
         const constraint = byId("allow_download_api");
         expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        // One pattern for the one route: a suffix match would also reach a write route whose last
+        // path parameter is set to "download" (revertAssetVersion, revertFileVersion).
         expect(constraint.routeCriteriaAnd).toEqual([
-            { operator: "starts_with", value: "/database/" },
-            { operator: "ends_with", value: "/download" },
+            { operator: "equals", value: "/database/[^/]+/assets/[^/]+/download" },
         ]);
         // A route value in criteriaOr would be OR-joined after the AND list and widen the grant.
         expect(constraint.routeValuesOr).toEqual([]);
@@ -237,14 +239,15 @@ describe("seeded basicReadOnly file download grant", () => {
 });
 
 describe("seeded basicReadOnly asset export grant", () => {
-    it("grants POST on paths that start with /database/ and end with /export, and nothing wider", () => {
+    it("grants POST on the asset export route alone", () => {
         // POST /database/{databaseId}/assets/{assetId}/export is a read carried in a POST body (the
         // export options), so the role's GET constraint does not reach it.
         const constraint = byId("allow_export_api");
         expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        // One pattern for the one route: a suffix match would also reach a write route whose last
+        // path parameter is set to "export" (revertAssetVersion, revertFileVersion).
         expect(constraint.routeCriteriaAnd).toEqual([
-            { operator: "starts_with", value: "/database/" },
-            { operator: "ends_with", value: "/export" },
+            { operator: "equals", value: "/database/[^/]+/assets/[^/]+/export" },
         ]);
         expect(constraint.routeValuesOr).toEqual([]);
     });
