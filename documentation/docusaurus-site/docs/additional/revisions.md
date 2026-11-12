@@ -329,6 +329,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Validation errors logged at WARNING** — The shared validation-error response logs a request refused with a 4xx at WARNING instead of ERROR, so it no longer adds an ERROR line for a request the caller got wrong; a 5xx stays at ERROR, and the audit entry and the response are unchanged. (issue #1304)
 -   **Audit record prefix values encoded** — Brackets, backslashes, line breaks and other control, bidirectional and zero-width characters in the user ID, role names, secondary type and probe endpoint of an audit record are written as `\uXXXX`, so every record is one line with its fields in place; a user ID of the usual characters is unchanged. The payload and event echo are ASCII-only JSON, and a request value JSON cannot encode no longer drops the record. (PR #TBD)
 -   **Undelivered audit entries kept** — An audit entry that cannot be written to its audit log group is written to the Lambda function's own log as an `auditFallback` line and counted in the new `AuditWriteFailures` metric (namespace `VAMS/Audit`, dimension `AuditLogType`), instead of being lost; the audit logging page gives an example alarm. (issue #1416)
+-   **Credential headers redacted in audit records** — The `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` header values are redacted from the request echo of audit records and from structured logs, like `Authorization`, whatever their letter case. (issue #1417)
 
 **Other changes:**
 
