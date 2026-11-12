@@ -270,3 +270,36 @@ def test_both_spellings_of_the_endpoint_are_served_without_a_redirect(remote):
     for path in ("/mcp", "/mcp/"):
         response = running.post(LIST_DATABASES, deployment.token(), path=path)
         assert response.status_code == 200, (path, response.status_code)
+
+
+def test_a_chunked_body_over_the_limit_is_refused_with_413(remote):
+    import requests
+
+    _, running, deployment = remote
+
+    def chunks():
+        for _ in range(40):
+            yield b"x" * 65536  # 2.5 MiB in all, with no Content-Length
+
+    response = requests.post(
+        f"{running.url}/mcp", data=chunks(), timeout=30,
+        headers={"Authorization": f"Bearer {deployment.token()}", "Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"},
+    )
+    assert response.status_code == 413
+    assert deployment.api_authorizations == []
+    # The server stays healthy.
+    assert running.tool_result(running.call_tool("vams_status", token=deployment.token()))["authenticated"] is True
+
+
+def test_a_chunked_body_within_the_limit_is_served(remote):
+    import requests
+
+    _, running, deployment = remote
+    payload = json.dumps(LIST_DATABASES).encode()
+    response = requests.post(
+        f"{running.url}/mcp", data=iter([payload[:10], payload[10:]]), timeout=30, allow_redirects=False,
+        headers={"Authorization": f"Bearer {deployment.token('alice')}", "Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18"},
+    )
+    assert running.tool_result(response)["Items"][0]["databaseId"] == "db-of-alice"

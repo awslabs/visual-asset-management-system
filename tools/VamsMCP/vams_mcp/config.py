@@ -32,6 +32,8 @@ Environment variables (all optional):
     VAMS_MCP_PORT           Remote mode: the port to listen on. Default 8000.
     VAMS_MCP_AUTH_CONFIG    Remote mode: path of the auth configuration file (required).
     VAMS_MCP_TOOL_TIMEOUT   Remote mode: seconds one tool call may take. Default 240.
+    VAMS_MCP_MAX_CALLS_PER_USER
+                            Remote mode: tool calls one user may have in progress. Default 8.
 """
 
 from __future__ import annotations
@@ -81,6 +83,11 @@ DEFAULT_TOOL_TIMEOUT = 240
 MIN_TOOL_TIMEOUT = 10
 MAX_TOOL_TIMEOUT = 1800
 
+# Remote mode: the tool calls one user may have in progress at once, so one user cannot occupy every
+# worker thread and delay everyone else's calls.
+DEFAULT_MAX_CALLS_PER_USER = 8
+MAX_MAX_CALLS_PER_USER = 64
+
 
 def is_loopback_host(host: str) -> bool:
     """Whether ``host`` names only this machine (``localhost`` or a loopback address)."""
@@ -106,6 +113,7 @@ class Config:
     port: int = DEFAULT_PORT
     auth_config_path: Optional[str] = None
     tool_timeout: int = DEFAULT_TOOL_TIMEOUT
+    max_calls_per_user: int = DEFAULT_MAX_CALLS_PER_USER
 
     @property
     def remote(self) -> bool:
@@ -142,8 +150,15 @@ class Config:
         try:
             port = int(os.environ.get("VAMS_MCP_PORT") or DEFAULT_PORT)
             tool_timeout = int(os.environ.get("VAMS_MCP_TOOL_TIMEOUT") or DEFAULT_TOOL_TIMEOUT)
+            max_calls_per_user = int(os.environ.get("VAMS_MCP_MAX_CALLS_PER_USER") or DEFAULT_MAX_CALLS_PER_USER)
         except ValueError as exc:
-            raise ConfigError(f"VAMS_MCP_PORT / VAMS_MCP_TOOL_TIMEOUT must be integers: {exc}")
+            raise ConfigError(
+                f"VAMS_MCP_PORT / VAMS_MCP_TOOL_TIMEOUT / VAMS_MCP_MAX_CALLS_PER_USER must be integers: {exc}"
+            )
+        if not 1 <= max_calls_per_user <= MAX_MAX_CALLS_PER_USER:
+            raise ConfigError(
+                f"VAMS_MCP_MAX_CALLS_PER_USER must be between 1 and {MAX_MAX_CALLS_PER_USER}, not {max_calls_per_user}"
+            )
         if not 1 <= port <= 65535:
             raise ConfigError(f"VAMS_MCP_PORT must be between 1 and 65535, not {port}")
         if not MIN_TOOL_TIMEOUT <= tool_timeout <= MAX_TOOL_TIMEOUT:
@@ -180,4 +195,5 @@ class Config:
             port=port,
             auth_config_path=auth_config_path,
             tool_timeout=tool_timeout,
+            max_calls_per_user=max_calls_per_user,
         )

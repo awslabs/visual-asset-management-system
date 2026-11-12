@@ -130,7 +130,10 @@ answers `401` with `WWW-Authenticate: Bearer resource_metadata="..."`, pointing 
 Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, the only route
 answered without a token. If the issuer's keys cannot be read, every request is refused with `503`.
 The default tool set is the read-only `consumer` set, and each call has a time budget
-(`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it.
+(`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
+delete or compute call still running at the budget may yet complete, so its answer says the outcome is
+unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
+retry. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
 
 ## Configure (optional)
 
@@ -138,19 +141,20 @@ All configuration is via environment variables — none are required. Set them i
 of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
 `.env.example` lists every supported variable for reference.
 
-| Variable                  | Description                                                                                   |
-| ------------------------- | --------------------------------------------------------------------------------------------- |
-| `VAMS_PROFILE`            | vamscli profile to use (default: active profile). Refused in remote mode                      |
-| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools and tools that issue a credential (default off)          |
-| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off)                          |
-| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)                                       |
-| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)                                   |
-| `VAMS_MCP_TOOLSETS`       | Comma-separated [tool sets](#tool-sets) (default `all` over stdio, `consumer` in remote mode) |
-| `VAMS_MCP_TRANSPORT`      | `stdio` (default) or `streamable-http` ([remote mode](#remote-mode))                          |
-| `VAMS_MCP_AUTH_CONFIG`    | Remote mode: the auth configuration file `vams-mcp setup-remote` writes (required)            |
-| `VAMS_MCP_HOST`           | Remote mode: listen address (default `127.0.0.1`; wider only behind an HTTPS front end)       |
-| `VAMS_MCP_PORT`           | Remote mode: listen port (default `8000`)                                                     |
-| `VAMS_MCP_TOOL_TIMEOUT`   | Remote mode: seconds one tool call may take (default `240`, 10 to 1800)                       |
+| Variable                      | Description                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `VAMS_PROFILE`                | vamscli profile to use (default: active profile). Refused in remote mode                      |
+| `VAMS_ENABLE_WRITES`          | `true` to expose create/update tools and tools that issue a credential (default off)          |
+| `VAMS_ENABLE_DESTRUCTIVE`     | `true` to expose archive/delete tools (needs writes on; default off)                          |
+| `VAMS_MAX_PAGES`              | Max pages auto-followed for list endpoints (default 20)                                       |
+| `VAMS_PAGE_SIZE`              | Page size per paginated call (default 100, clamped to 1000)                                   |
+| `VAMS_MCP_TOOLSETS`           | Comma-separated [tool sets](#tool-sets) (default `all` over stdio, `consumer` in remote mode) |
+| `VAMS_MCP_TRANSPORT`          | `stdio` (default) or `streamable-http` ([remote mode](#remote-mode))                          |
+| `VAMS_MCP_AUTH_CONFIG`        | Remote mode: the auth configuration file `vams-mcp setup-remote` writes (required)            |
+| `VAMS_MCP_HOST`               | Remote mode: listen address (default `127.0.0.1`; wider only behind an HTTPS front end)       |
+| `VAMS_MCP_PORT`               | Remote mode: listen port (default `8000`)                                                     |
+| `VAMS_MCP_TOOL_TIMEOUT`       | Remote mode: seconds one tool call may take (default `240`, 10 to 1800)                       |
+| `VAMS_MCP_MAX_CALLS_PER_USER` | Remote mode: tool calls one user may have in progress (default `8`, 1 to 64)                  |
 
 ### Tool sets
 

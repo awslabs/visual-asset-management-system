@@ -48,6 +48,8 @@ Send = Callable[[Dict[str, Any]], Awaitable[None]]
 # The largest request body accepted. An MCP tool call is a small JSON-RPC message.
 MAX_BODY_BYTES = 1024 * 1024
 WELL_KNOWN = "/.well-known/oauth-protected-resource"
+# Worker threads for token verification, apart from the ones tool calls run on (server.py).
+VERIFY_THREADS = 16
 
 
 def _json_response(status: int, body: Dict[str, Any], headers: Optional[List[Tuple[bytes, bytes]]] = None):
@@ -143,7 +145,8 @@ class RemoteGate:
             )
             return
         try:
-            identity = await anyio.to_thread.run_sync(self.verifier.verify, token)
+            # On its own thread limiter, so verification never waits behind tool calls.
+            identity = await anyio.to_thread.run_sync(self.verifier.verify, token, limiter=_verify_limiter())
         except VerificationUnavailable as exc:
             logger.warning("[vams-mcp] cannot verify tokens: %s", exc)
             await self._send(
@@ -173,16 +176,24 @@ class RemoteGate:
                 await self._send(send, 413, {"error": "request_too_large"})
                 return
 
-        received = 0
+        # The whole body is read here, before the SDK sees the request, so a body past the limit is
+        # answered 413 whether it declared its length or arrived in chunks.
+        body = await _read_body(receive)
+        if body is None:
+            await self._send(send, 413, {"error": "request_too_large"})
+            logger.info(
+                "[vams-mcp] request user=%s client=%s method=%s status=413 ms=%d",
+                identity.user_id, identity.client_id, scope.get("method"), (time.monotonic() - started) * 1000,
+            )
+            return
+        delivered = False
 
-        async def limited_receive() -> Dict[str, Any]:
-            nonlocal received
-            message = await receive()
-            if message.get("type") == "http.request":
-                received += len(message.get("body", b""))
-                if received > MAX_BODY_BYTES:
-                    raise _BodyTooLarge()
-            return message
+        async def replay_receive() -> Dict[str, Any]:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
 
         status = {"code": 500}
 
@@ -195,10 +206,7 @@ class RemoteGate:
             if scope.get("path") in self.mcp_paths and scope.get("path") != self.served_path:
                 scope = {**scope, "path": self.served_path, "raw_path": self.served_path.encode("ascii")}
             with request_context.acting_for(identity):
-                await self.inner(scope, limited_receive, tracking_send)
-        except _BodyTooLarge:
-            await self._send(send, 413, {"error": "request_too_large"})
-            status["code"] = 413
+                await self.inner(scope, replay_receive, tracking_send)
         finally:
             logger.info(
                 "[vams-mcp] request user=%s client=%s method=%s status=%s ms=%d",
@@ -207,8 +215,40 @@ class RemoteGate:
             )
 
 
-class _BodyTooLarge(Exception):
-    pass
+_VERIFY_LIMITER: Any = None
+
+
+def _verify_limiter() -> Any:
+    """The token-verification thread limiter of the running event loop."""
+    from anyio.lowlevel import RunVar
+
+    global _VERIFY_LIMITER
+    if _VERIFY_LIMITER is None:
+        _VERIFY_LIMITER = RunVar("vams_mcp_verify_limiter")
+    try:
+        return _VERIFY_LIMITER.get()
+    except LookupError:
+        limiter = anyio.CapacityLimiter(VERIFY_THREADS)
+        _VERIFY_LIMITER.set(limiter)
+        return limiter
+
+
+async def _read_body(receive: Receive) -> Optional[bytes]:
+    """The request body, or None once it passes MAX_BODY_BYTES (reading stops there)."""
+    chunks: List[bytes] = []
+    size = 0
+    while True:
+        message = await receive()
+        if message.get("type") != "http.request":
+            break  # the client disconnected
+        chunk = message.get("body", b"") or b""
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+        if not message.get("more_body", False):
+            break
+    return b"".join(chunks)
 
 
 def transport_security_settings(settings: RemoteAuthSettings, config: Config):

@@ -438,7 +438,18 @@ asymmetry other callers rely on):
       `request_context.time_budget`). A loop that issues several API requests checks
       `request_context.budget_low()` before the next one and stops with a resumable answer, as
       `paginate()`, `get_execution_results` and `find_and_summarize` do; a call past its budget is
-      answered `ToolTimeout`. Over stdio no budget applies.
+      answered `ToolTimeout`. Over stdio no budget applies. The worker thread of a call answered at its
+      budget runs on, so a non-read tool's timeout never invites a retry: it says the outcome is
+      unknown (`outcomeUnknown`) and names the read tool that checks it (`checkWith`, from
+      `server._OUTCOME_CHECKS`); a new non-read tool must resolve to a registered read tool there
+      (`tests/test_remote_mode.py`).
+    - **One user cannot starve the others.** Tool bodies run on their own thread limiter, token
+      verification on another (`http_app._verify_limiter`), and the verifier never holds its cache lock
+      across a key-set download. A user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in
+      progress, counted until each worker thread really ends; a call past it is answered
+      `TooManyConcurrentCalls` without running.
+    - **The request body is read whole in the gate** (at most 1 MiB, declared or chunked; `413`
+      otherwise) before the SDK sees the request.
     - The gate is ours, not the SDK's auth middleware, because the SDK's resource-server wiring
       differs across the supported `mcp` range (1.10.x serves the metadata at a path its own
       challenge does not name). The SDK still carries the protocol and its DNS rebinding check,

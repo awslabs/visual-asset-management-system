@@ -124,9 +124,12 @@ class FakeDeployment:
                 if user is not None:
                     claims["cognito:username"] = user
         else:
+            # An external IdP names its user in `sub`.
             claims["aud"] = client_id
             if user is None:
                 claims.pop("sub")
+            else:
+                claims["sub"] = user
         claims.update(extra or {})
         for name in drop:
             claims.pop(name, None)
@@ -168,6 +171,17 @@ class FakeDeployment:
                 if path.startswith("/api/"):
                     return self._api(path[len("/api"):])
                 return self._json(404, {"message": "not found"})
+
+            def _write(self):  # POST, PUT and DELETE reach the same fake API routes
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                path = urlsplit(self.path).path
+                if path.startswith("/api/"):
+                    return self._api(path[len("/api"):])
+                return self._json(404, {"message": "not found"})
+
+            do_POST = do_PUT = do_DELETE = _write  # noqa: N815
 
             def _api(self, route: str) -> None:
                 header = self.headers.get("Authorization", "")

@@ -26,9 +26,11 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     try:
         from .server import main as server_main
+
+        # A configuration the server cannot run with stops it before anything listens: one read at
+        # import (for example a remote server without its auth configuration) or at start (a bind
+        # beyond this machine without an https resource URL).
+        server_main()
     except ConfigError as exc:
-        # A configuration the server cannot run with (for example a remote server without its auth
-        # configuration) stops it here, before anything listens.
         print(f"[vams-mcp] cannot start: {exc}", file=sys.stderr)
         sys.exit(2)
-    server_main()

@@ -69,7 +69,8 @@ def test_the_file_holds_no_token_or_secret(cognito, tmp_path):
     flat = json.dumps(data).lower()
     assert "secret" not in flat and "password" not in flat
     assert set(data) == {"version", "apiUrl", "resourceUrl", "provider", "issuer", "jwksUri", "audiences",
-                         "scopes", "client"}
+                         "scopes", "client", "webAppClientId"}
+    assert data["webAppClientId"] == WEB_CLIENT_ID
     assert set(data["client"]) == {"clientId", "authorizationUrl", "tokenUrl"}
 
 
@@ -131,3 +132,28 @@ def test_the_vams_mcp_command_dispatches_setup_remote(cognito, tmp_path, capsys)
     assert exit_info.value.code == 0
     out = capsys.readouterr().out
     assert "Values for the remote MCP client" in out and REMOTE_CLIENT_ID in out
+
+
+def test_the_web_applications_own_client_is_refused_as_an_audience(cognito, tmp_path, capsys):
+    code, output = _run(cognito, tmp_path, "--audience", WEB_CLIENT_ID)
+    assert code == 1 and not output.exists()
+    assert "web application's own client" in capsys.readouterr().err
+
+
+def test_the_external_idps_web_client_is_refused_as_an_audience(external, tmp_path, capsys):
+    external_web = "external-web-client"
+    original = external.amplify_config
+
+    def with_web_client():
+        return {**original(), "externalOAuthIdpClientId": external_web}
+
+    external.amplify_config = with_web_client
+    code, output = _run(external, tmp_path, "--audience", external_web)
+    assert code == 1 and not output.exists()
+    assert "web application's own client" in capsys.readouterr().err
+
+
+def test_the_fallback_user_pool_host_follows_the_partition():
+    assert setup_remote._dns_suffix("eusc-de-east-1") == "amazonaws.eu"
+    assert setup_remote._dns_suffix("us-gov-west-1") == "amazonaws.com"
+    assert setup_remote._dns_suffix("us-east-1") == "amazonaws.com"

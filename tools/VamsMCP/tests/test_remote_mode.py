@@ -204,3 +204,129 @@ async def test_a_call_that_overruns_its_budget_is_answered_with_a_timeout(deploy
         assert time.monotonic() - started < 1.5
         deployment.api_delay = 0
         await asyncio.sleep(2.1)  # let the abandoned worker finish before the fake API stops
+
+
+# --- What a call past its budget tells the agent, by tier ----------------------------------------------
+
+
+@pytest.mark.parametrize("tool, arguments, retry_invited", [
+    ("list_databases", {}, True),                                                    # read
+    ("create_database", {"database_id": "d", "description": "dddd", "default_bucket_id": "b"}, False),  # write
+    ("execute_workflow", None, False),                                               # compute
+    ("delete_asset_metadata", {"database_id": "d", "asset_id": "a", "metadata_keys": ["k"]}, False),  # destructive
+])
+async def test_a_timed_out_call_invites_a_retry_only_for_a_read(deployment, tmp_path, monkeypatch, tool, arguments,
+                                                                  retry_invited):
+    env = {"VAMS_MCP_TOOL_TIMEOUT": "10", "VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true",
+           "VAMS_ENABLE_DESTRUCTIVE": "true"}
+    with remote_server_module(deployment.settings_dict("http://127.0.0.1:9/mcp"), tmp_path, env=env) as server:
+        monkeypatch.setattr(server, "_REMOTE_TIMEOUT_GRACE_SECONDS", -9.8)  # answer after 0.2 s
+        fn = getattr(server, tool)
+        if arguments is None:  # every required parameter of the tool, filled with a placeholder
+            import inspect as _inspect
+            arguments = {name: "x" for name, param in _inspect.signature(fn).parameters.items()
+                         if param.default is _inspect.Parameter.empty}
+        identity = VerifiedIdentity(deployment.token("alice"), "alice", "c", None)
+        deployment.api_delay = 2
+        with request_context.acting_for(identity):
+            result = await fn(**arguments)
+        deployment.api_delay = 0
+        await asyncio.sleep(2.1)  # let the abandoned worker finish before the fake API stops
+    assert result["error_type"] == "ToolTimeout"
+    if retry_invited:
+        assert "call the tool again" in result["error"] and "outcomeUnknown" not in result
+    else:
+        assert result["outcomeUnknown"] is True
+        assert "call the tool again" not in result["error"] and f"Do not call {tool} again" in result["error"]
+        assert result["checkWith"] in result["error"]
+
+
+async def test_every_non_read_tool_names_a_read_tool_that_checks_its_outcome(server_with_switches):
+    from vamscli import addon_constants
+
+    switches = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS]
+    with server_with_switches(switches, enable_writes=True, enable_destructive=True) as server:
+        tools = {tool.name: tool.model_dump(by_alias=True) for tool in await server.mcp.list_tools()}
+        missing = {}
+        for name, tool in tools.items():
+            if tool["annotations"]["readOnlyHint"]:
+                continue
+            check = server.outcome_check_tool(name)
+            if check not in tools or not tools[check]["annotations"]["readOnlyHint"]:
+                missing[name] = check
+    assert missing == {}
+
+
+# --- One user cannot starve the others ------------------------------------------------------------------
+
+
+def test_one_users_slow_calls_do_not_delay_another_users_calls(deployment, tmp_path):
+    """The reviewer's starvation probe: 60 slow calls by one user, then another user's call."""
+    import concurrent.futures as cf
+
+    from vams_mcp import http_app
+
+    from .remote_support import RemoteServer, free_port
+
+    port = free_port()
+    with remote_server_module(deployment.settings_dict(f"http://127.0.0.1:{port}/mcp"), tmp_path) as server:
+        app = http_app.build_app(server.mcp, server.REMOTE_SETTINGS, server.CONFIG)
+        with RemoteServer(app, port) as running:
+            alice, bob = deployment.token("alice"), deployment.token("bob")
+            deployment.api_delay = 3
+            with cf.ThreadPoolExecutor(60) as pool:
+                calls = [pool.submit(running.call_tool, "list_databases", {}, alice) for _ in range(60)]
+                time.sleep(1.0)
+                started = time.monotonic()
+                status = RemoteServer.tool_result(running.call_tool("vams_status", {}, bob))
+                waited = time.monotonic() - started
+                results = [RemoteServer.tool_result(call.result()) for call in calls]
+            deployment.api_delay = 0
+    assert status["userId"] == "bob" and waited < 1.0, waited
+    refused = [r for r in results if r.get("error_type") == "TooManyConcurrentCalls"]
+    served = [r for r in results if "Items" in r]
+    assert len(served) == server.CONFIG.max_calls_per_user and len(refused) == 60 - len(served)
+    assert "call the tool again" in refused[0]["error"]
+
+
+def test_the_per_user_call_limit_is_a_bounded_setting(monkeypatch):
+    assert Config.from_env().max_calls_per_user == 8
+    monkeypatch.setenv("VAMS_MCP_MAX_CALLS_PER_USER", "3")
+    assert Config.from_env().max_calls_per_user == 3
+    for value in ("0", "65", "many"):
+        monkeypatch.setenv("VAMS_MCP_MAX_CALLS_PER_USER", value)
+        with pytest.raises(ConfigError):
+            Config.from_env()
+
+
+def test_a_wide_bind_without_https_prints_the_cannot_start_line(tmp_path):
+    """Run as its own process: the check runs at start, after the configuration was read."""
+    import json as _json
+    import os
+    import subprocess
+    import sys
+
+    from .remote_support import FakeDeployment as _Fake
+
+    with _Fake() as fake:
+        path = tmp_path / "auth.json"
+        path.write_text(_json.dumps(fake.settings_dict("http://127.0.0.1:8000/mcp")))
+        env = {**os.environ, "VAMS_MCP_TRANSPORT": "streamable-http", "VAMS_MCP_AUTH_CONFIG": str(path),
+               "VAMS_MCP_HOST": "0.0.0.0", "VAMS_MCP_PORT": "1"}
+        completed = subprocess.run(
+            [sys.executable, "-c", "from vams_mcp.cli import main; main([])"],
+            env=env, capture_output=True, text=True, timeout=120,
+        )
+    assert completed.returncode == 2, completed.stderr[-500:]
+    assert "[vams-mcp] cannot start:" in completed.stderr and "https" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_an_auth_file_listing_the_web_applications_client_stops_the_server():
+    data = _settings("https://mcp.example.com/mcp").to_dict()
+    data["webAppClientId"] = "webclient"
+    data["audiences"] = ["client", "webclient"]
+    with pytest.raises(ConfigError, match="web application"):
+        RemoteAuthSettings.from_dict(data)
+    data["audiences"] = ["client"]
+    assert RemoteAuthSettings.from_dict(data).web_app_client_id == "webclient"

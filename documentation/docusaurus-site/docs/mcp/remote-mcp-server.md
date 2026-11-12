@@ -24,7 +24,8 @@ VAMS API (authorizer and two-tier Casbin authorization decide every call)
 -   **Each request acts as its own user.** The server builds a VAMS API client for each request from that request's token and never reads a CLI profile. The VAMS API's authorizer and two-tier Casbin authorization decide every call for that user, exactly as for the web application. The server makes no permission decision of its own.
 -   **OAuth discovery.** The server publishes the OAuth 2.0 Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, naming the deployment's authorization server and scopes. It is the only route answered without a token, and it holds public discovery data only.
 -   **Tool sets.** A remote server registers the read-only `consumer` tool set by default. Each named set holds at most 100 tools, so it fits clients that list at most 100 tools per connection (see [Tool sets](#tool-sets)).
--   **Time budget.** Each tool call has a time budget (240 seconds by default). A list stops early and returns a `NextToken` to continue from, rather than run past the budget, so every call finishes well inside common client limits, such as Amazon Quick's 5 minutes per operation.
+-   **Time budget.** Each tool call has a time budget (240 seconds by default). A list stops early and returns a `NextToken` to continue from, rather than run past the budget, so every call finishes well inside common client limits, such as Amazon Quick's 5 minutes per operation. A write, delete or compute call that is still running at the budget may still complete, so its answer says the outcome is unknown, names the read tool that shows whether it took effect (`checkWith`), and tells the agent not to call it again.
+-   **Fair share.** Token verification runs apart from tool calls, and one user may have at most 8 tool calls in progress (`VAMS_MCP_MAX_CALLS_PER_USER`). A call past that limit is answered `TooManyConcurrentCalls` without running, so one user's slow calls cannot delay other users.
 -   **No token logging.** No token is logged, returned in a tool result, or written to disk. The CLI's shared request log is turned off in remote mode, because one process serves many users. The server logs one line per request and one per tool call: the user, the client, the tool, the outcome and the duration.
 
 ## Prerequisites
@@ -49,7 +50,9 @@ Remote MCP clients sign users in through an OAuth client of their own, separate 
     aws cognito-idp create-user-pool-domain --user-pool-id <user-pool-id> --domain <domain-prefix>
     ```
 
-    A deployment that federates the pool to SAML or OIDC already has a domain; use it.
+    A deployment that federates the pool to SAML or OIDC already has a domain; use it. Adding a domain does not open hosted sign-in for the web application's own app client: that client gets it only if OAuth flows are enabled on it.
+
+    The domain's form depends on the partition. Copy it from the user pool's domain settings in the Cognito console rather than building it: `<prefix>.auth.<region>.amazoncognito.com` in commercial Regions, `<prefix>.auth-fips.<region>.amazoncognito.com` in AWS GovCloud (US), and the form the console shows in the AWS European Sovereign Cloud. The authorization and token URLs are `https://<domain>/oauth2/authorize` and `https://<domain>/oauth2/token` on that same domain.
 
 2. **Create an app client** in the same user pool:
 
@@ -103,17 +106,17 @@ vams-mcp setup-remote \
     --output ./vams-mcp-remote-auth.json
 ```
 
-| Option                | Meaning                                                                                                                            |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `--vams-url`          | The VAMS web application URL or API Gateway URL                                                                                    |
-| `--resource-url`      | The public HTTPS URL MCP clients connect to. Its path is `/mcp`                                                                    |
-| `--client-id`         | The client from step 1. It cannot be the web application's own client                                                              |
-| `--audience`          | Another accepted audience, repeatable (at most 10 in all). For an external IdP whose audience is not the client id, pass it here   |
-| `--cognito-domain`    | Cognito: the user pool domain, for the authorization and token URLs. Without it the command reads them from the issuer when it can |
-| `--issuer`            | External IdP: the issuer of its access tokens, when it differs from the discovery document                                         |
-| `--scopes`            | The scopes the MCP client requests. Default: `openid email profile` (Cognito), or the deployment's configured scope (external IdP) |
-| `--output`, `--force` | The file to write, and whether to replace an existing one                                                                          |
-| `--json`              | Print the summary as JSON                                                                                                          |
+| Option                | Meaning                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--vams-url`          | The VAMS web application URL or API Gateway URL                                                                                                                    |
+| `--resource-url`      | The public HTTPS URL MCP clients connect to. Its path is `/mcp`                                                                                                    |
+| `--client-id`         | The client from step 1. It cannot be the web application's own client                                                                                              |
+| `--audience`          | Another accepted audience, repeatable (at most 10 in all). For an external IdP whose audience is not the client id, pass it here                                   |
+| `--cognito-domain`    | Cognito: the user pool domain as the Cognito console shows it, for the authorization and token URLs. Without it the command reads them from the issuer when it can |
+| `--issuer`            | External IdP: the issuer of its access tokens, when it differs from the discovery document                                                                         |
+| `--scopes`            | The scopes the MCP client requests. Default: `openid email profile` (Cognito), or the deployment's configured scope (external IdP)                                 |
+| `--output`, `--force` | The file to write, and whether to replace an existing one                                                                                                          |
+| `--json`              | Print the summary as JSON                                                                                                                                          |
 
 The command prints:
 
@@ -126,7 +129,9 @@ Values for the remote MCP client:
   Scopes:            openid email profile
 ```
 
-The file holds URLs, client ids and scopes. It holds no secret and no user token, and the command handles none.
+The URLs in this example are the commercial form; the command prints the ones for your domain. The issuer and key set come from the deployment's own `/api/amplify-config` (its user pool endpoint, which follows the partition), so they are right in AWS GovCloud (US) and the AWS European Sovereign Cloud too.
+
+The file holds URLs, client ids and scopes, and the web application's own client id, which the server then refuses to accept as an audience. It holds no secret and no user token, and the command handles none. The command refuses the web application's client as `--client-id` or `--audience`.
 
 ## Step 3: Build and run the container image
 
@@ -170,6 +175,7 @@ Never publish the port on all interfaces (`-p 8000:8000`): clients reach the ser
 | `VAMS_MCP_PORT`                    | `8000`      | The listen port                                                                                  |
 | `VAMS_MCP_TOOLSETS`                | `consumer`  | The [tool sets](#tool-sets) to register                                                          |
 | `VAMS_MCP_TOOL_TIMEOUT`            | `240`       | Seconds one tool call may take (10 to 1800). Keep it below the client's own limit                |
+| `VAMS_MCP_MAX_CALLS_PER_USER`      | `8`         | Tool calls one user may have in progress at once (1 to 64)                                       |
 | `VAMS_ENABLE_WRITES`               | `false`     | `true` registers the write tools of the selected sets                                            |
 | `VAMS_ENABLE_DESTRUCTIVE`          | `false`     | `true` (with writes) registers the archive and delete tools of the selected sets                 |
 | `VAMS_MAX_PAGES`, `VAMS_PAGE_SIZE` | `20`, `100` | Paging bounds, as for the local server                                                           |
@@ -211,6 +217,8 @@ When the VAMS API is reachable only from your VPC (a private API endpoint, or an
 ## Step 5: Connect a client
 
 ### Amazon Quick
+
+Amazon Quick is available in some AWS Regions and partitions only; check its Region availability before planning on it, in particular for AWS GovCloud (US) and the AWS European Sovereign Cloud.
 
 Add the server as an MCP integration in Amazon Quick, with user authentication (OAuth):
 
@@ -254,15 +262,15 @@ In the client, ask the agent to call `vams_status`. In remote mode it returns `m
 
 ### Threat model
 
-| Concern                   | What protects against it                                                                                                                                                                                                                                                                        |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Who can reach what        | Anyone who can reach the endpoint can fetch the metadata document (public data) and nothing else without a valid token. Every tool call needs a token the issuer signed for one of the configured clients, and the VAMS API checks every call again (authorizer and Casbin) for that user.      |
-| Token theft               | A stolen access token works only until it expires, and only within the user's own permissions. TLS on the front end protects tokens in transit; the server never logs or stores them. Keep access token lifetimes short in the IdP, and revoke a user's sessions in the IdP when needed.        |
-| Confused deputy           | The server accepts only tokens issued to its own configured clients, not the web application's tokens or another client's, and forwards each token only to the VAMS API the deployment's authorizer protects, for that same request. It never uses one user's token for another user's request. |
-| Machine-to-machine tokens | Tokens that name no user (client credentials) are refused by the server and by the VAMS API.                                                                                                                                                                                                    |
-| Denial of service         | Request bodies are limited to 1 MiB, each tool call has a time budget, lists are paged and bounded (`VAMS_MAX_PAGES`, `VAMS_PAGE_SIZE`), and unknown signing keys cannot trigger a key download per request. Add a rate-based AWS WAF rule on the front end.                                    |
-| Identity provider outage  | When the issuer's keys cannot be read, no request passes (`503`); the server never falls back to accepting unverified tokens.                                                                                                                                                                   |
-| DNS rebinding             | The server accepts only the endpoint's own host name and the loopback names in the `Host` header.                                                                                                                                                                                               |
+| Concern                   | What protects against it                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who can reach what        | Anyone who can reach the endpoint can fetch the metadata document (public data) and nothing else without a valid token. Every tool call needs a token the issuer signed for one of the configured clients, and the VAMS API checks every call again (authorizer and Casbin) for that user.                                                                    |
+| Token theft               | A stolen access token works only until it expires, and only within the user's own permissions. TLS on the front end protects tokens in transit; the server never logs or stores them. Keep access token lifetimes short in the IdP, and revoke a user's sessions in the IdP when needed.                                                                      |
+| Confused deputy           | The server accepts only tokens issued to its own configured clients, not the web application's tokens or another client's, and forwards each token only to the VAMS API the deployment's authorizer protects, for that same request. It never uses one user's token for another user's request.                                                               |
+| Machine-to-machine tokens | Tokens that name no user (client credentials) are refused by the server and by the VAMS API.                                                                                                                                                                                                                                                                  |
+| Denial of service         | Request bodies are limited to 1 MiB, each tool call has a time budget, one user may have at most 8 calls in progress, token verification never waits behind tool calls, lists are paged and bounded (`VAMS_MAX_PAGES`, `VAMS_PAGE_SIZE`), and unknown signing keys cannot trigger a key download per request. Add a rate-based AWS WAF rule on the front end. |
+| Identity provider outage  | When the issuer's keys cannot be read, no request passes (`503`); the server never falls back to accepting unverified tokens.                                                                                                                                                                                                                                 |
+| DNS rebinding             | The server accepts only the endpoint's own host name and the loopback names in the `Host` header.                                                                                                                                                                                                                                                             |
 
 ## Troubleshooting
 
@@ -275,6 +283,8 @@ In the client, ask the agent to call `vams_status`. In remote mode it returns `m
 | The server stops at start with `cannot start`                          | The message names the setting: a missing or invalid auth configuration file, `VAMS_PROFILE` set, or a wide bind with a non-`https` resource URL.                                                                                                        |
 | The client lists fewer tools than expected                             | Check `VAMS_MCP_TOOLSETS` and the write and destructive gates (`vams_status` reports them). A combination of sets above 100 tools can be cut by the client. After a change, refresh the client's tool list (Sync in Amazon Quick).                      |
 | A long list stops with a `NextToken` and a note about the time budget  | The call reached its time budget. Call the tool again with `starting_token`, or narrow the request.                                                                                                                                                     |
+| A tool answers `ToolTimeout` with `outcomeUnknown`                     | A write, delete or compute call ran past its time budget and may still complete. Check with the tool named in `checkWith` before calling it again.                                                                                                      |
+| A tool answers `TooManyConcurrentCalls`                                | The user already has `VAMS_MCP_MAX_CALLS_PER_USER` calls in progress. Nothing ran; call again when they finish.                                                                                                                                         |
 
 ## Upgrade
 

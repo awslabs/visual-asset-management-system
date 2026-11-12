@@ -13,6 +13,7 @@ import inspect
 import json
 import logging
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -151,8 +152,13 @@ class _ToolSetServer(McpServer):
         register = super().tool(*args, **kwargs)
         explicit = kwargs.get("name") or (args[0] if args and isinstance(args[0], str) else None)
 
+        annotations = kwargs.get("annotations")
+        read_only = bool(annotations is not None and annotations.model_dump(by_alias=True).get("readOnlyHint"))
+
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
             name = explicit or fn.__name__
+            # Recorded for every defined tool: a remote call past its time budget is answered by tier.
+            _READ_ONLY_TOOLS[name] = read_only
             if not TOOLSET_SELECTION.includes(name):
                 return fn
             return register(fn)
@@ -161,6 +167,8 @@ class _ToolSetServer(McpServer):
 
 
 TOOLSET_SELECTION = toolsets.Selection(CONFIG.toolsets)
+# Tool name -> whether it carries readOnlyHint (a tool without annotations counts as not read-only).
+_READ_ONLY_TOOLS: Dict[str, bool] = {}
 
 mcp = _ToolSetServer("vams", instructions=SERVER_INSTRUCTIONS)
 
@@ -301,6 +309,120 @@ def _run_remote_body(fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict
         return result
 
 
+# The read tool that shows whether a write, destructive or compute call took effect, by the first
+# fragment of its name that matches. A non-read call past its budget may still complete in its
+# worker thread, so its timeout answer names this tool instead of inviting a retry.
+_OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
+    ("edh_container", "list_edh_container_jobs"),
+    ("edh_ami_recipe_build", "list_edh_ami_recipe_builds"),
+    ("edh_ami_recipe", "list_edh_ami_recipes"),
+    ("edh_capacity_reservation", "list_edh_admin_capacity_reservations"),
+    ("edh_admin_instance", "list_edh_admin_instances"),
+    ("edh_admin_settings", "get_edh_admin_settings"),
+    ("edh_vdi_image", "list_edh_admin_images"),
+    ("edh_simulation_image", "list_edh_admin_images"),
+    ("edh_workstation", "list_edh_workstations"),
+    ("execution", "list_executions"),
+    ("execute_workflow", "list_executions"),
+    ("workflow_trigger", "list_workflow_triggers"),
+    ("pipeline_template", "list_pipeline_templates"),
+    ("pipeline", "list_pipelines"),
+    ("workflow", "list_workflows"),
+    ("metadata_schema", "list_metadata_schemas"),
+    ("file_metadata", "get_file_metadata"),
+    ("asset_metadata", "get_asset_metadata"),
+    ("asset_link", "get_asset_links"),
+    ("asset_version", "list_asset_versions"),
+    ("file", "list_asset_files"),
+    ("folder", "list_asset_files"),
+    ("tag_type", "list_tag_types"),
+    ("tag", "list_tags"),
+    ("comment", "list_asset_comments"),
+    ("subscri", "list_subscriptions"),
+    ("user_api_key", "list_user_api_keys"),
+    ("api_key", "list_api_keys"),
+    ("database", "get_database"),
+    ("asset", "get_asset"),
+)
+
+
+def outcome_check_tool(tool_name: str) -> Optional[str]:
+    """The read tool that shows whether a non-read call of ``tool_name`` took effect."""
+    return next((check for fragment, check in _OUTCOME_CHECKS if fragment in tool_name), None)
+
+
+def _remote_timeout(tool_name: str) -> Dict[str, Any]:
+    budget = CONFIG.tool_timeout
+    if _READ_ONLY_TOOLS.get(tool_name, False):
+        return {
+            "error": (
+                f"The call did not finish within this server's time budget of {budget} seconds. Narrow the "
+                "request (filters, max_items) and call the tool again."
+            ),
+            "error_type": "ToolTimeout",
+        }
+    check = outcome_check_tool(tool_name)
+    how = f"Check with {check} whether it took effect" if check else "Check whether it took effect"
+    return {
+        "error": (
+            f"The call did not finish within this server's time budget of {budget} seconds, and its OUTCOME "
+            f"IS UNKNOWN: the change may still be made. Do not call {tool_name} again. {how}, and tell the user."
+        ),
+        "error_type": "ToolTimeout",
+        "outcomeUnknown": True,
+        **({"checkWith": check} if check else {}),
+    }
+
+
+# Tool calls in progress per user, counted until the worker thread really ends (a call answered at
+# its budget keeps counting while its thread runs on), so one user cannot occupy every thread.
+_CALLS_IN_FLIGHT: Dict[str, int] = {}
+_CALLS_LOCK = threading.Lock()
+# Worker threads for remote tool bodies, apart from the default pool and from token verification.
+REMOTE_TOOL_THREADS = 64
+_TOOL_LIMITER: Any = None
+
+
+def _tool_limiter() -> Any:
+    """The tool-body thread limiter of the running event loop."""
+    import anyio
+    from anyio.lowlevel import RunVar
+
+    global _TOOL_LIMITER
+    if _TOOL_LIMITER is None:
+        _TOOL_LIMITER = RunVar("vams_mcp_tool_limiter")
+    try:
+        return _TOOL_LIMITER.get()
+    except LookupError:
+        limiter = anyio.CapacityLimiter(REMOTE_TOOL_THREADS)
+        _TOOL_LIMITER.set(limiter)
+        return limiter
+
+
+def _claim_call(user_id: str) -> bool:
+    with _CALLS_LOCK:
+        if _CALLS_IN_FLIGHT.get(user_id, 0) >= CONFIG.max_calls_per_user:
+            return False
+        _CALLS_IN_FLIGHT[user_id] = _CALLS_IN_FLIGHT.get(user_id, 0) + 1
+        return True
+
+
+def _release_call(user_id: str) -> None:
+    with _CALLS_LOCK:
+        left = _CALLS_IN_FLIGHT.get(user_id, 1) - 1
+        if left > 0:
+            _CALLS_IN_FLIGHT[user_id] = left
+        else:
+            _CALLS_IN_FLIGHT.pop(user_id, None)
+
+
+def _run_counted(user_id: str, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+    try:
+        return _run_remote_body(fn, args, kwargs)
+    finally:
+        _release_call(user_id)
+
+
 def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     import anyio
 
@@ -310,21 +432,26 @@ def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
         if identity is None:
             return _remote_not_authenticated("this request carries no verified sign-in")
         started = time.monotonic()
-        with request_context.time_budget(CONFIG.tool_timeout):
-            # Copied after the budget is set, so the worker thread sees the identity and the deadline.
-            context = contextvars.copy_context()
-            with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
-                result = await anyio.to_thread.run_sync(
-                    context.run, _run_remote_body, fn, args, kwargs, abandon_on_cancel=True
-                )
-        if scope.cancelled_caught:
-            result = {
+        if not _claim_call(identity.user_id):
+            # Nothing ran, so calling again later is safe for every tier.
+            result: Dict[str, Any] = {
                 "error": (
-                    f"The call did not finish within this server's time budget of {CONFIG.tool_timeout} "
-                    "seconds. Narrow the request (filters, max_items) and call the tool again."
+                    f"This user already has {CONFIG.max_calls_per_user} calls in progress on this server. Wait for "
+                    "them to finish, then call the tool again."
                 ),
-                "error_type": "ToolTimeout",
+                "error_type": "TooManyConcurrentCalls",
             }
+        else:
+            with request_context.time_budget(CONFIG.tool_timeout):
+                # Copied after the budget is set, so the worker thread sees the identity and the deadline.
+                context = contextvars.copy_context()
+                with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
+                    result = await anyio.to_thread.run_sync(
+                        context.run, _run_counted, identity.user_id, fn, args, kwargs,
+                        abandon_on_cancel=True, limiter=_tool_limiter(),
+                    )
+            if scope.cancelled_caught:
+                result = _remote_timeout(fn.__name__)
         outcome = result.get("error_type", "ok") if isinstance(result, dict) else "ok"
         _REMOTE_LOG.info(
             "[vams-mcp] tool=%s user=%s client=%s outcome=%s ms=%d",
@@ -558,13 +685,12 @@ def _remote_status() -> Dict[str, Any]:
 def vams_status() -> results.Status:
     """Check the VAMS connection: call this first, or when a tool returns NotAuthenticated.
 
-    Answers without any API request and also when nobody is signed in. Returns `authenticated`,
+    Answers without an API request, even signed out. Returns `authenticated`,
     `profile`, `apiUrl` (the deployment), `userId` (who the tools act as), `featureSwitches` (what the
     deployment enabled at the last sign-in), `gates` (whether create/update and delete tools and
     which add-ons are registered), `mcpVersion` and `cliVersion`. When `authenticated` is false,
     `reason` says why and `user_action` is the step to ask the user to take. `tokenExpired` true with
-    a `note`: the next call renews the sign-in or answers NotAuthenticated. A remote server answers
-    `mode` "remote" and `clientId` instead of `profile`."""
+    a `note`: the next call renews the sign-in or answers NotAuthenticated. Remote: `mode`, `clientId`."""
     if CONFIG.remote:
         return _remote_status()
     status = describe_profile(CONFIG)
@@ -681,8 +807,8 @@ def list_assets(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> results.AssetPage:
-    """Use to browse assets in one database, or in every database the user can read. To find an asset
-    by name use search_assets. Rows: databaseId, assetId, assetName, description, tags, status.
+    """Use to browse assets in one database, or every database the user can read (by name:
+    search_assets). Rows: databaseId, assetId, assetName, description, tags, status.
     include_archived adds archived assets.
 
     BOUNDED: `truncated` means rows were
@@ -767,8 +893,7 @@ def get_file_metadata(
     starting_token: Optional[str] = None,
     include_archived: bool = False,
 ) -> results.MetadataPage:
-    """Use to read one file's metadata, or with metadata_type="attribute" its attributes (rows:
-    metadataKey, metadataValue, metadataValueType).
+    """Use to read one file's metadata, or with metadata_type="attribute" its attributes.
     BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue."""
     if metadata_type not in FILE_METADATA_TYPES:
         return {"error": f"metadata_type must be one of {list(FILE_METADATA_TYPES)}", "error_type": "ValueError"}
@@ -948,7 +1073,7 @@ def export_asset(
 ) -> results.AssetExport:
     """Use to read an asset and its children in one call: `assets` (metadata, files), `relationships`,
     `totalAssetsInTree`. One child level unless fetch_entire_subtrees; fetch_relationships=False: the
-    asset alone. ONE PAGE per call, capped at 100 assets and 1000 files: `truncated` + `NextToken` mean
+    asset alone. ONE PAGE per call (at most 100 assets and 1000 files): `truncated` + `NextToken` mean
     more; pass it as `starting_token` (files_truncated assets continue there)."""
     params: Dict[str, Any] = {
         "generatePresignedUrls": False,
@@ -1074,8 +1199,7 @@ def search_assets(
     - geo_search: one of `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight}) or
       `geoJson`, plus an optional `relation` (intersects, within, contains, disjoint).
     - size / from_offset: one page of hits; page on by advancing from_offset.
-    - sort_field / sort_desc: order by an index field, e.g. "date_asset_version_createdate" for the
-      newest; get_search_fields() lists the names.
+    - sort_field / sort_desc: order by an index field; get_search_fields() lists the names.
 
     Returns `total`, `returned` and `results` (id, score, source). When `total_is_lower_bound` is
     true the count is at least `total`: report `total_display` (e.g. "120+"). Without OpenSearch
@@ -1162,8 +1286,7 @@ def list_workflow_executions(
     starting_token: Optional[str] = None,
 ) -> results.ExecutionPage:
     """Use to see the workflow runs of ONE asset (list_executions covers every asset). A workflow id
-    is unique across every database, so workflow_id alone identifies it; workflow_database_id is a
-    narrowing filter, and a value that is not its database empties the result.
+    is unique across every database; workflow_database_id is a narrowing filter (a wrong one empties it).
 
     `filterStartDate` is the applied window (90 days by default), so an asset processed before it
     lists nothing: widen it with filter_start_date (UTC "YYYY-MM-DDTHH:MM:SSZ"). Other filters match as
@@ -1278,7 +1401,7 @@ def generate_download_url(
 
     The URL is a bearer credential: anyone holding it can download the object until it expires, at
     most `presignedUrlTimeoutSeconds` (24 hours by default) or sooner if the credentials that signed it
-    expire. It lands in the agent transcript and the host's logs, so treat it as disclosed.
+    expire. It lands in transcripts and host logs: treat it as disclosed.
     `presignedUrlNetworkRestrictions` (allowedIpRanges / allowedVpceIds) can limit where it works."""
     return CLIENT.api.download_asset_file(
         database_id, asset_id, file_key=file_key, version_id=version_id
@@ -1487,8 +1610,8 @@ def list_executions(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> results.ExecutionPage:
-    """Use to find workflow runs across every workflow and asset, newest first (e.g. "the last failed
-    run"). For ONE asset's runs use list_workflow_executions().
+    """Use to find workflow runs across every workflow and asset, newest first. For ONE asset's runs
+    use list_workflow_executions().
 
     Equality filters: status (RUNNING, SUCCEEDED, FAILED, ABORTED, SKIPPED), workflow_id,
     workflow_database_id, trigger_type ('manual' or 'fileUpload'), group_id, triggered_by_user_id;
@@ -1656,7 +1779,7 @@ def get_execution_results(execution_id: str,
                           starting_token: Optional[str] = None) -> results.ExecutionResults:
     """Use for "what did the run output" from a pipeline that produces text rather than files. Returns
     {resultContent, resultContentTruncated, resultRowCount, resultContentBytes, pageCount}, at most
-    5 MiB per call: a `NextToken` means more text remains (pass it as `starting_token`).
+    5 MiB per call: a `NextToken` means more remains (pass it as `starting_token`).
     `resultContentTruncated` true means text was stored cut and cannot be read. A run with no result
     returns resultContent "", not an error."""
     parts = []
@@ -2013,7 +2136,7 @@ if CONFIG.enable_writes:
     @tool_result
     def revert_file_version(database_id: str, asset_id: str, file_key: str, version_id: str) -> Dict[str, Any]:
         """Use to restore an earlier version of one file (version_id from get_file_info with
-        include_versions). It writes that content as a new current version; no version is removed."""
+        include_versions) as its new current version; no version is removed."""
         return CLIENT.api.revert_file_version(database_id, asset_id, version_id, {"filePath": file_key})
 
     @mcp.tool(title="Create folder", annotations=WRITE)
@@ -2156,9 +2279,8 @@ if CONFIG.enable_writes:
         fileAttributes, databaseMetadata (default true), assetFileMetadata and metadataSchema (default
         false).
 
-        A successful save can still carry a `warnings` array (e.g. a requireTemplate pipeline in an
-        auto-triggered workflow with no default template). The pipeline saved; relay the warnings rather
-        than reporting a clean success."""
+        A successful save can still carry a `warnings` array: the pipeline saved; relay the warnings
+        rather than reporting a clean success."""
         return _unwrap_message_with_warnings(CLIENT.api.create_pipeline(database_id, body))
 
     @mcp.tool(title="Update pipeline", annotations=WRITE)
@@ -2245,8 +2367,8 @@ if CONFIG.enable_writes:
     def execute_workflow(
         workflow_database_id: str, workflow_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Use to run a workflow on input files. Returns the new executionId. This starts real compute.
-        Confirm with the user before calling it.
+        """Use to run a workflow on input files. Returns the new executionId. This starts real compute:
+        confirm with the user first.
 
         `body` takes inputFiles (each databaseId, assetId, relativeFileKey ("/" = the whole asset) and
         optional versionId), outputAssetId + outputDatabaseId (REQUIRED when inputs span more than one
@@ -2267,8 +2389,8 @@ if CONFIG.enable_writes:
         """Use to re-run ONE execution from its stored inputs, as a NEW execution, with the CALLER's
         permissions: returns the new id. This starts real compute; confirm with the user first.
 
-        execution_group_id ASSIGNS the new run's group; it does not select what to re-run. There is no
-        re-run-the-whole-group operation: call this once per execution id. A file the original launch
+        execution_group_id ASSIGNS the new run's group; it does not select what to re-run (call this
+        once per execution id). A file the original launch
         pinned is read at that version again, every other file at its current version (executions from
         before 2.7.0 use current versions). Relay the response's `warnings`."""
         return CLIENT.unwrap_message(CLIENT.api.rerun_execution(execution_id, execution_group_id=execution_group_id))
@@ -2507,8 +2629,7 @@ if CONFIG.enable_destructive:
     @mcp.tool(title="Delete asset metadata", annotations=DESTRUCTIVE)
     @tool_result
     def delete_asset_metadata(database_id: str, asset_id: str, metadata_keys: List[str]) -> Dict[str, Any]:
-        """Use only when asked to remove metadata keys from an asset (set_asset_metadata cannot). Not
-        reversible."""
+        """Use only when asked to remove metadata keys from an asset. Not reversible."""
         return CLIENT.api.delete_asset_metadata_v2(database_id, asset_id, list(metadata_keys))
 
     @mcp.tool(title="Delete tag", annotations=DESTRUCTIVE)

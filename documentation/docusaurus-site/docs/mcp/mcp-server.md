@@ -185,7 +185,7 @@ The server is configured only through environment variables in the client's `env
 | `VAMS_PAGE_SIZE`          | `100`                  | Rows requested per page; values above 1000 are reduced to 1000                                     |
 | `VAMS_MCP_TOOLSETS`       | `all`                  | The [tool sets](#tool-sets) to register, comma-separated                                           |
 
-The `VAMS_MCP_TRANSPORT`, `VAMS_MCP_AUTH_CONFIG`, `VAMS_MCP_HOST`, `VAMS_MCP_PORT` and `VAMS_MCP_TOOL_TIMEOUT` variables configure a remotely hosted server; see [Remote MCP Server](remote-mcp-server.md#settings).
+The `VAMS_MCP_TRANSPORT`, `VAMS_MCP_AUTH_CONFIG`, `VAMS_MCP_HOST`, `VAMS_MCP_PORT`, `VAMS_MCP_TOOL_TIMEOUT` and `VAMS_MCP_MAX_CALLS_PER_USER` variables configure a remotely hosted server; see [Remote MCP Server](remote-mcp-server.md#settings).
 
 ### Tool sets
 

@@ -104,6 +104,8 @@ class RemoteAuthSettings:
     audiences: Tuple[str, ...]
     scopes: Tuple[str, ...] = ()
     client: Dict[str, Any] = field(default_factory=dict)
+    # The web application's own client, recorded by `vams-mcp setup-remote`; never an audience.
+    web_app_client_id: Optional[str] = None
 
     @property
     def resource_path(self) -> str:
@@ -156,6 +158,15 @@ class RemoteAuthSettings:
         client = data.get("client") or {}
         if not isinstance(client, dict):
             raise ConfigError("remote auth configuration: 'client' must be an object")
+        web_app_client_id = data.get("webAppClientId") or None
+        if web_app_client_id is not None and not isinstance(web_app_client_id, str):
+            raise ConfigError("remote auth configuration: 'webAppClientId' must be a string")
+        if web_app_client_id and web_app_client_id in audiences:
+            raise ConfigError(
+                "remote auth configuration: 'audiences' lists the web application's own client "
+                f"('{web_app_client_id}'); the remote server accepts only the clients registered for remote "
+                "MCP clients. Remove it, or write the file again with `vams-mcp setup-remote`"
+            )
         return cls(
             api_url=_check_url("apiUrl", data.get("apiUrl")).rstrip("/"),
             resource_url=_check_url("resourceUrl", data.get("resourceUrl"), require_path=MCP_PATH).rstrip("/"),
@@ -165,6 +176,7 @@ class RemoteAuthSettings:
             audiences=tuple(dict.fromkeys(audiences)),
             scopes=tuple(dict.fromkeys(scopes)),
             client=dict(client),
+            web_app_client_id=web_app_client_id,
         )
 
     @classmethod
@@ -191,6 +203,7 @@ class RemoteAuthSettings:
             "audiences": list(self.audiences),
             "scopes": list(self.scopes),
             "client": dict(self.client),
+            **({"webAppClientId": self.web_app_client_id} if self.web_app_client_id else {}),
         }
 
 
@@ -256,6 +269,7 @@ class TokenVerifier:
         self.settings = settings
         self._session = session or requests.Session()
         self._lock = threading.Lock()
+        self._fetch_lock = threading.Lock()
         self._keys: Dict[str, Any] = {}
         self._fetched_at: Optional[float] = None
         self._last_attempt: Optional[float] = None
@@ -307,26 +321,39 @@ class TokenVerifier:
         return keys
 
     def _key_for(self, kid: str) -> Any:
+        # The cache lock is held only to read or swap the cached set, never across the key-set
+        # download: a refetch (up to the fetch timeout) must not hold up the verification of tokens
+        # whose key is already cached. Downloads are single-flight under _fetch_lock.
         now = time.monotonic()
         with self._lock:
             fresh = self._fetched_at is not None and now - self._fetched_at < JWKS_CACHE_SECONDS
             if fresh and kid in self._keys:
                 return self._keys[kid]
-            # A kid the cached set lacks is what a key rotation looks like: refetch, but not more
-            # often than JWKS_REFETCH_MIN_SECONDS, so unknown kids cannot drive a fetch per request.
-            if fresh and self._last_attempt is not None and now - self._last_attempt < JWKS_REFETCH_MIN_SECONDS:
-                return None
-            self._last_attempt = now
-            self._keys = self._fetch_keys()
-            self._fetched_at = time.monotonic()
-            return self._keys.get(kid)
+        with self._fetch_lock:
+            now = time.monotonic()
+            with self._lock:
+                fresh = self._fetched_at is not None and now - self._fetched_at < JWKS_CACHE_SECONDS
+                if fresh and kid in self._keys:
+                    return self._keys[kid]  # another thread fetched it meanwhile
+                # A kid the cached set lacks is what a key rotation looks like: refetch, but not more
+                # often than JWKS_REFETCH_MIN_SECONDS, so unknown kids cannot drive a fetch per request.
+                if fresh and self._last_attempt is not None and now - self._last_attempt < JWKS_REFETCH_MIN_SECONDS:
+                    return None
+                self._last_attempt = now
+            keys = self._fetch_keys()
+            with self._lock:
+                self._keys = keys
+                self._fetched_at = time.monotonic()
+                return keys.get(kid)
 
     def prefetch(self) -> None:
         """Read the issuer's keys now (at start), raising VerificationUnavailable when they cannot be."""
-        with self._lock:
+        with self._fetch_lock:
             self._last_attempt = time.monotonic()
-            self._keys = self._fetch_keys()
-            self._fetched_at = time.monotonic()
+            keys = self._fetch_keys()
+            with self._lock:
+                self._keys = keys
+                self._fetched_at = time.monotonic()
 
     # --- Claims -----------------------------------------------------------
 

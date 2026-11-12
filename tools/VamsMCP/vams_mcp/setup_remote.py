@@ -86,6 +86,20 @@ def _domain_url(domain: str) -> str:
     return domain if domain.startswith("https://") else f"https://{domain}"
 
 
+def _dns_suffix(region: str) -> str:
+    """The AWS DNS suffix of a Region's partition (the EU Sovereign Cloud uses amazonaws.eu)."""
+    return "amazonaws.eu" if region.startswith("eusc-") else "amazonaws.com"
+
+
+def _refuse_web_client(audiences: List[str], web_client_id: Optional[str]) -> None:
+    """Refuse the web application's own client as the client id or as an extra audience."""
+    if web_client_id and web_client_id in audiences:
+        raise SetupError(
+            f"'{web_client_id}' is the web application's own client; the remote server must not accept its "
+            "tokens. Register a separate app client for remote MCP clients (see the remote MCP server documentation)"
+        )
+
+
 def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteAuthSettings:
     api_url = _set(amplify.get("api"))
     if not api_url:
@@ -101,17 +115,16 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         for value in audiences:
             if not _COGNITO_CLIENT_ID.match(value):
                 raise SetupError(f"'{value}' is not a Cognito app client id")
-        if args.client_id == _set(amplify.get("cognitoAppClientId")):
-            raise SetupError(
-                "the client id is the web application's own app client; register a separate app client "
-                "for remote MCP clients (see the remote MCP server documentation)"
-            )
+        web_client_id = _set(amplify.get("cognitoAppClientId"))
+        _refuse_web_client(audiences, web_client_id)
+        # The deployment reports its own partition-aware user pool endpoint; the fallback serves
+        # deployments older than the field.
         endpoint = _set(amplify.get("cognitoUserPoolEndpoint"))
         if not endpoint:
             region = _set(amplify.get("region"))
             if not region:
                 raise SetupError("the deployment's amplify configuration names no region")
-            endpoint = f"https://cognito-idp.{region}.amazonaws.com"
+            endpoint = f"https://cognito-idp.{region}.{_dns_suffix(region)}"
         issuer = f"{endpoint.rstrip('/')}/{pool_id}"
         jwks_uri = f"{issuer}/.well-known/jwks.json"
         scopes = tuple(args.scopes.split()) if args.scopes else DEFAULT_COGNITO_SCOPES
@@ -126,6 +139,8 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
             token_url = _set(document.get("token_endpoint"))
     elif _set(amplify.get("externalOAuthIdpURL")):
         provider = PROVIDER_EXTERNAL
+        web_client_id = _set(amplify.get("externalOAuthIdpClientId"))
+        _refuse_web_client(audiences, web_client_id)
         provider_url = _set(amplify.get("externalOAuthIdpURL"))
         document = _discovery(args.issuer or provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")))
         if document is None:
@@ -156,6 +171,10 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         "scopes": list(scopes),
         "client": {"clientId": args.client_id, "authorizationUrl": authorization_url, "tokenUrl": token_url},
     }
+    if web_client_id:
+        # Recorded so the server refuses to start if the file is later edited to accept the web
+        # application's tokens.
+        data["webAppClientId"] = web_client_id
     try:
         return RemoteAuthSettings.from_dict(data)
     except ConfigError as exc:
