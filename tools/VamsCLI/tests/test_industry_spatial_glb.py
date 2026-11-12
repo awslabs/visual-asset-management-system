@@ -675,9 +675,13 @@ class TestGLBAssetCombineSystemTempFolder:
                         else {'return_value': mock_export_result})
         upload_patch = ({'side_effect': upload} if upload is not None
                         else {'return_value': {'overall_success': True}})
-        with spatial_command_mocks,              patch('vamscli.commands.industry.spatial.glb.export_command', **export_patch),              patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
-                   side_effect=self._write_combined_glb),              patch('vamscli.commands.industry.spatial.glb.create_command',
-                   return_value={'assetId': 'new-asset-id'}),              patch('vamscli.commands.industry.spatial.glb.upload_command', **upload_patch):
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command', **export_patch), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=self._write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command', **upload_patch):
             return cli_runner.invoke(cli, [
                 'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
                 *(['--json-output'] if json_output else []), *extra
