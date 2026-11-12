@@ -75,6 +75,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed bucket sync permanently deleting asset files whose names end in `init`, such as `postinit` or `config.init`, with all their versions. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. ([#1223](https://github.com/awslabs/visual-asset-management-system/issues/1223))
 -   **Pipelines** Fixed Isaac Lab training jobs being stopped by AWS Batch after 6 hours of running although the workflow allows 8; the job limit is now 8 hours, so a long run is no longer cut short and reported as a heartbeat timeout. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
 -   **Documentation** The Isaac Lab pipeline page states that its timeouts include the wait for a GPU instance, gives a CodeBuild status command that finds the project on the Isaac Lab nested stack, shows where checkpoints and videos land (`checkpoints/<executionId>/`, `videos/<executionId>/`), and notes that AutoMate assembly with rl_games needs a multiple of 128 environments. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
+-   **CDK** Fixed every API route answering `500` (`AuthorizerConfigurationException`) after an update that renames the IAM roles, such as setting or changing `environments.aws.IamRoleNamePrefix`: the REST API stage now moves to a new deployment that names the renamed authorizer role. ([#1210](https://github.com/awslabs/visual-asset-management-system/issues/1210))
+    -   Note: the first update to this version creates one new API deployment and moves the stage to it; the API stays available.
 
 ### Chores
 
