@@ -594,7 +594,8 @@ class TestGLBAssetCombineDeleteTemporaryFiles:
              patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
                    return_value=(str(tmp_path / 'root__COMBINED.glb'), {'total_assets_processed': 2})), \
              patch('vamscli.commands.industry.spatial.glb.create_command', return_value={'assetId': 'new-asset-id'}), \
-             patch('vamscli.commands.industry.spatial.glb.upload_command', return_value={'success': True}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   return_value={'overall_success': True}), \
              patch('builtins.open', create=True), \
              patch('os.path.getsize', return_value=1024000), \
              patch('tempfile.mkdtemp', return_value=str(tmp_path)), \
