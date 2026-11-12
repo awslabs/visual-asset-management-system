@@ -761,15 +761,17 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
     Log authorization events from API Gateway authorizer with silent failure.
 
     SECURITY: This function is designed for the API Gateway authorizer which runs
-    BEFORE normal request processing. It only logs non-sensitive data:
+    BEFORE normal request processing. Its payload carries only non-sensitive data:
     - User ID (only from verified JWT claims after successful authorization)
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
+    The record's request echo is the authorizer event after mask_sensitive_data, so the
+    headers it keeps are the ones not on the credential key list.
 
     NEVER logs:
     - Raw JWT tokens
-    - Authorization headers
+    - Authorization headers, or any other header on the credential key list
     - Token signatures
     - Detailed validation errors that could expose token structure
 
