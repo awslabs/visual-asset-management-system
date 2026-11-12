@@ -11,6 +11,7 @@ here: the same records `log_authorization` writes, through `_write_batch_to_clou
 chunks them within the PutLogEvents limits.
 """
 
+import json
 import os
 
 from unittest.mock import patch
@@ -57,3 +58,53 @@ def test_nothing_is_written_for_no_denial_and_a_failure_is_silent():
             patch.object(auditLogging, "_write_batch_to_cloudwatch") as write:
         auditLogging.log_authorization_denials({"tokens": ["u1"]}, [{"action": "GET"}])
         write.assert_not_called()
+
+
+def _fallback_lines(capsys):
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    return ([line for line in lines if line.get("auditFallback") is True],
+            [line for line in lines if "_aws" in line])
+
+
+def test_an_unresolved_log_group_keeps_every_denial(capsys):
+    """Like every audit record (#1420), a denial whose log group does not resolve is written to the
+    function's own log as undelivered and counted, never dropped."""
+    denials = [{"action": "GET", "obj": {"assetId": f"kept-{index}"}} for index in range(3)]
+    with patch.object(auditLogging, "_audit_log_group", return_value=None), \
+            patch.object(auditLogging, "_write_batch_to_cloudwatch") as write:
+        auditLogging.log_authorization_denials({"tokens": ["u1"], "roles": ["r"]}, denials)
+    write.assert_not_called()
+    fallbacks, metrics = _fallback_lines(capsys)
+    assert [(f["logGroupKey"], f["reason"]) for f in fallbacks] == [
+        ("auditAuthorization", "logGroupUnresolved")] * 3
+    for index, fallback in enumerate(fallbacks):
+        assert fallback["record"].startswith("[AUTHORIZATION][authorized: False] [user: u1]")
+        assert f'"kept-{index}"' in fallback["record"]
+    assert [(m["AuditLogType"], m["AuditWriteFailures"]) for m in metrics] == [
+        ("auditAuthorization", 3)]
+
+
+def test_a_denial_that_cannot_be_formatted_is_counted_under_its_log_type(capsys):
+    circular = {}
+    circular["self"] = circular
+    with patch.object(auditLogging, "_audit_log_group", return_value="authz-group"), \
+            patch.object(auditLogging, "_write_batch_to_cloudwatch") as write:
+        auditLogging.log_authorization_denials({"tokens": ["u1"]}, [{"action": "GET", "obj": circular}])
+    fallbacks, _metrics = _fallback_lines(capsys)
+    assert [(f["logGroupKey"], f["reason"]) for f in fallbacks] == [
+        ("auditAuthorization", "formatFailed")]
+    # The marker record is still written, as log_authorization writes it.
+    assert write.call_args.args[1] == ["[AUTHORIZATION][authorized: False] "
+                                       "[ERROR: Failed to format message]"]
+
+
+def test_an_unexpected_failure_keeps_the_formatted_denials(capsys):
+    with patch.object(auditLogging, "_audit_log_group", side_effect=RuntimeError("ssm down")), \
+            patch.object(auditLogging, "_write_batch_to_cloudwatch") as write:
+        auditLogging.log_authorization_denials(
+            {"tokens": ["u1"]}, [{"action": "GET", "obj": {"assetId": "kept"}}])
+    write.assert_not_called()
+    fallbacks, _metrics = _fallback_lines(capsys)
+    assert [(f["logGroupKey"], f["reason"]) for f in fallbacks] == [
+        ("auditAuthorization", "unexpectedError")]
+    assert '"kept"' in fallbacks[0]["record"]
