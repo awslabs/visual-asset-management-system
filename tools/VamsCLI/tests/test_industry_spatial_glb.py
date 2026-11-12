@@ -887,6 +887,20 @@ class TestGLBAssetCombineSystemTempFolder:
         assert '✗ Asset Creation Error: upload refused' in result.stderr
         assert os.listdir(tmp_path) == []
 
+    def test_failed_upload_with_no_delete_temporary_files_keeps_the_folder(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        """--no-delete-temporary-files keeps the built files after a failed upload, as its help says."""
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           '--asset-create-name', 'Combined Model', '--no-delete-temporary-files',
+                           upload=RuntimeError("upload refused"), json_output=False)
+
+        assert result.exit_code == 1
+        assert '✗ Asset Creation Error: upload refused' in result.stderr
+        kept = sorted(name for _, _, names in os.walk(tmp_path) for name in names)
+        assert kept == ['Root Asset__COMBINED.glb', 'Root Asset_export.json']
+
 
 if __name__ == '__main__':
     pytest.main([__file__])

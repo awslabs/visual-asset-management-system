@@ -441,11 +441,13 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         raise click.ClickException(str(e))
     
     finally:
-        # A run that failed before it had a result leaves nothing behind: remove the whole mkdtemp
-        # folder, not only the timestamped folder inside it. A run that built a result keeps the
-        # folder, because the result names the combined GLB and the export JSON in it; the upload
-        # path above has already removed it when --delete-temporary-files applies.
-        if base_temp_dir and not result_built and os.path.exists(base_temp_dir):
+        # A run that failed before it had a result removes the whole mkdtemp folder, not only the
+        # timestamped folder inside it, unless --asset-create-name with --no-delete-temporary-files
+        # keeps the files. A run that built a result keeps the folder, because the result names
+        # the combined GLB and the export JSON in it; the upload path above has already removed it
+        # when --delete-temporary-files applies.
+        keep_files = asset_create_name and not delete_temporary_files
+        if base_temp_dir and not result_built and not keep_files and os.path.exists(base_temp_dir):
             try:
                 shutil.rmtree(base_temp_dir)
             except Exception:
