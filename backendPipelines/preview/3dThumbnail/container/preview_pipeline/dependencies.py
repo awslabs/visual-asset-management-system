@@ -62,6 +62,8 @@ class SkippedReference:
     reference: str
     reason: str
     referrer: str = ""
+    # True for a reference refused as not a path inside the asset: ``reference`` is then as authored.
+    rejected: bool = False
 
     @property
     def is_geometry_layer(self) -> bool:
@@ -389,7 +391,8 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
 
     def skip(kind: List[str], name: str, reason: str, referrer: str):
         kind.append(name)
-        report.skipped.append(SkippedReference(name, reason, referrer))
+        report.skipped.append(SkippedReference(name, reason, referrer,
+                                               rejected=kind is report.rejected))
 
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
@@ -554,3 +557,74 @@ def incomplete_preview(report: Optional[FetchReport],
         not_followed=list(report.not_followed),
         fetch_error=type(fetch_error).__name__ if fetch_error is not None else "",
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# Incomplete-preview result document
+# --------------------------------------------------------------------------------------------------
+
+# The object an incomplete run writes under the execution's results folder. The workflow's output step
+# records every object there as a results row on the execution, so it shows under Output Results.
+INCOMPLETE_RESULT_FILENAME = "preview-incomplete.json"
+INCOMPLETE_RESULT_SCHEMA = "vams.preview3dThumbnail.incomplete/v1"
+# Entries listed in the document, across every kind; the counts are always complete.
+MAX_RESULT_ENTRIES = 100
+# Characters kept of any one path or reason.
+MAX_RESULT_TEXT_CHARS = 256
+# Upper bound of the encoded document, well inside the results row's text budget.
+MAX_RESULT_DOCUMENT_BYTES = 64 * 1024
+
+
+def _bounded(text: str) -> str:
+    text = text if isinstance(text, str) else str(text)
+    return text if len(text) <= MAX_RESULT_TEXT_CHARS else text[:MAX_RESULT_TEXT_CHARS - 3] + "..."
+
+
+def _result_path(entry: SkippedReference, rejected: bool) -> str:
+    """The path the document names: the asset-relative path of a file the fetch looked up, or only the
+    file name of a reference refused as outside the asset, since that value is as authored and can
+    name another bucket, a host or an authoring machine's directory."""
+    if not rejected:
+        return _bounded(entry.reference)
+    value = entry.reference if isinstance(entry.reference, str) else ""
+    value = _SCHEME.sub("", value.strip()).replace("\\", "/").split("?", 1)[0].split("#", 1)[0]
+    return _bounded(value.rstrip("/").rsplit("/", 1)[-1])
+
+
+def incomplete_result_document(incomplete: IncompletePreview, input_path: str = "") -> bytes:
+    """The result document of an incomplete preview, as UTF-8 JSON bytes of at most
+    MAX_RESULT_DOCUMENT_BYTES: the completion message, the counts by kind, and up to MAX_RESULT_ENTRIES
+    skipped files (geometry layers first), with ``truncated`` set when any were left out. Paths are
+    relative to the input's asset; no bucket name or S3 key is written."""
+    rows = []
+    for kind, entries in (("geometryLayer", incomplete.geometry_layers),
+                          ("textureOrOther", incomplete.other_files),
+                          ("notFollowed", incomplete.not_followed)):
+        for entry in entries:
+            rows.append({
+                "kind": kind,
+                "path": _result_path(entry, entry.rejected),
+                "namedIn": _bounded(entry.referrer),
+                "reason": _bounded(entry.reason),
+            })
+    document = {
+        "schema": INCOMPLETE_RESULT_SCHEMA,
+        "status": "INCOMPLETE",
+        "message": incomplete.message(),
+        "inputFile": _bounded(input_path),
+        "counts": {
+            "skipped": incomplete.skipped_count,
+            "geometryLayers": len(incomplete.geometry_layers),
+            "texturesOrOther": len(incomplete.other_files),
+            "notFollowed": len(incomplete.not_followed),
+        },
+        "fetchStoppedEarly": bool(incomplete.fetch_error),
+        "skippedFiles": rows[:MAX_RESULT_ENTRIES],
+        "truncated": len(rows) > MAX_RESULT_ENTRIES,
+    }
+    body = json.dumps(document, indent=2).encode("utf-8")
+    while len(body) > MAX_RESULT_DOCUMENT_BYTES and document["skippedFiles"]:
+        document["skippedFiles"] = document["skippedFiles"][:len(document["skippedFiles"]) // 2]
+        document["truncated"] = True
+        body = json.dumps(document, indent=2).encode("utf-8")
+    return body

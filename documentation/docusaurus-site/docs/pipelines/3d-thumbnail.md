@@ -142,7 +142,9 @@ The summary lists **geometry layers** (USD sublayers, references and payloads na
 Preview generated, but incomplete: 2 referenced files could not be fetched (1 geometry layer, 1 texture/other file). See the job log for the list.
 ```
 
-A run that fetched every referenced file ends with `Preview 3D Thumbnail pipeline executed successfully.` To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
+The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset; for a reference outside the asset only its file name is recorded, and the full reference is in the job log.
+
+A run that fetched every referenced file ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
 
 :::note[Relative Path Preservation]
 If the input file is at `<assetId>/subfolder/model.glb`, the preview is written to `<assetId>/subfolder/model.glb.previewFile.gif`. The `assetId` is threaded through the pipeline from the workflow state to ensure correct path computation.

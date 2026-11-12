@@ -13,6 +13,7 @@ textures, materials and data files (whose absence drops colour or detail), and i
 The USD case needs the real pxr and runs where usd-core is installed (the pipeline image, CI).
 """
 
+import json
 import logging
 import os
 import shutil
@@ -279,7 +280,7 @@ def _stage():
     )
 
 
-def _run(tmp_path, caplog, fetch):
+def _run(tmp_path, caplog, fetch, results_location=None, put_json=None):
     """Run the stage to completion against stubbed I/O and rendering with ``fetch`` standing in for
     the referenced-file fetch. Returns (result, the logged messages)."""
     def _create_dir(parts):
@@ -309,8 +310,10 @@ def _run(tmp_path, caplog, fetch):
             patch.object(core.dependencies, "fetch_referenced_files", fetch), \
             patch.object(core.s3, "get_object_size", MagicMock(return_value=1024)), \
             patch.object(core.s3, "download", _download), \
-            patch.object(core.s3, "upload", MagicMock(side_effect=lambda bucket, key, path: key)):
-        result = core._run_preview_pipeline(_stage(), {}, {}, False, "xid")
+            patch.object(core.s3, "upload", MagicMock(side_effect=lambda bucket, key, path: key)), \
+            patch.object(core.s3, "put_json", put_json if put_json is not None else MagicMock()):
+        result = core._run_preview_pipeline(_stage(), {}, {}, False, "xid",
+                                            results_location=results_location)
     return result, [record.getMessage() for record in caplog.records]
 
 
@@ -356,3 +359,145 @@ class TestCompletionMessage:
                                       "not be fetched") for message in messages)
         assert any("fetch stopped early (RuntimeError)" in message for message in messages)
         assert core.SUCCESS_MESSAGE not in messages
+
+
+# --------------------------------------------------------------------------------------------------
+# The result document under the execution's results folder
+# --------------------------------------------------------------------------------------------------
+
+RESULTS = {"bucketName": "run-bucket", "objectDir": "pipelines/preview3dThumbnail/JOB/output/E1/results/"}
+RESULT_KEY = RESULTS["objectDir"] + "preview-incomplete.json"
+
+
+def _skipped_report(*entries):
+    report = dependencies.FetchReport()
+    for reference, reason, rejected in entries:
+        report.skipped.append(dependencies.SkippedReference(reference, reason, "scene/root.usda",
+                                                            rejected=rejected))
+    return report
+
+
+@pytest.mark.unit
+class TestResultDocument:
+    def test_the_document_names_the_message_counts_and_each_file(self):
+        incomplete = dependencies.incomplete_preview(_skipped_report(
+            ("scene/parts/wheel.usda", "missing from the asset", False),
+            ("scene/tex/wood.png", "over the byte budget (10 bytes)", False)))
+        document = json.loads(dependencies.incomplete_result_document(incomplete, "scene/root.usda"))
+        assert document == {
+            "schema": "vams.preview3dThumbnail.incomplete/v1",
+            "status": "INCOMPLETE",
+            "message": incomplete.message(),
+            "inputFile": "scene/root.usda",
+            "counts": {"skipped": 2, "geometryLayers": 1, "texturesOrOther": 1, "notFollowed": 0},
+            "fetchStoppedEarly": False,
+            "skippedFiles": [
+                {"kind": "geometryLayer", "path": "scene/parts/wheel.usda", "namedIn": "scene/root.usda",
+                 "reason": "missing from the asset"},
+                {"kind": "textureOrOther", "path": "scene/tex/wood.png", "namedIn": "scene/root.usda",
+                 "reason": "over the byte budget (10 bytes)"},
+            ],
+            "truncated": False,
+        }
+
+    def test_a_reference_refused_as_outside_the_asset_is_named_by_its_file_name_only(self):
+        incomplete = dependencies.incomplete_preview(_skipped_report(
+            ("s3://other-bucket/xother/secret/part.usda", "outside the asset (URI scheme)", True),
+            ("C:\\Users\\artist\\maps\\wood.png", "outside the asset (absolute path)", True),
+            ("../../xother/tex.png?sig=abc", "outside the asset ('..' escape)", True)))
+        body = dependencies.incomplete_result_document(incomplete, "scene/root.usda").decode("utf-8")
+        paths = [row["path"] for row in json.loads(body)["skippedFiles"]]
+        assert paths == ["part.usda", "wood.png", "tex.png"]
+        for leaked in ("other-bucket", "xother", "artist", "sig=abc", "s3://"):
+            assert leaked not in body
+
+    def test_the_list_is_capped_with_complete_counts_and_a_truncated_flag(self):
+        entries = [(f"scene/tex/t{index}.png", "missing from the asset", False) for index in range(250)]
+        incomplete = dependencies.incomplete_preview(_skipped_report(*entries))
+        document = json.loads(dependencies.incomplete_result_document(incomplete))
+        assert len(document["skippedFiles"]) == dependencies.MAX_RESULT_ENTRIES
+        assert document["counts"]["skipped"] == 250 and document["truncated"] is True
+
+    def test_long_values_are_bounded_and_the_document_stays_within_its_byte_limit(self):
+        entries = [("scene/" + "x" * 2000 + f"{index}.usda", "r" * 2000, False) for index in range(150)]
+        incomplete = dependencies.incomplete_preview(_skipped_report(*entries))
+        body = dependencies.incomplete_result_document(incomplete, "i" * 5000)
+        document = json.loads(body)
+        assert len(body) <= dependencies.MAX_RESULT_DOCUMENT_BYTES
+        assert all(len(row["path"]) <= dependencies.MAX_RESULT_TEXT_CHARS
+                   and len(row["reason"]) <= dependencies.MAX_RESULT_TEXT_CHARS
+                   for row in document["skippedFiles"])
+        assert len(document["inputFile"]) <= dependencies.MAX_RESULT_TEXT_CHARS
+        assert document["truncated"] is True
+
+    def test_a_fetch_that_stopped_early_says_so(self):
+        incomplete = dependencies.incomplete_preview(dependencies.FetchReport(), RuntimeError("x"))
+        document = json.loads(dependencies.incomplete_result_document(incomplete))
+        assert document["fetchStoppedEarly"] is True and document["skippedFiles"] == []
+
+
+@pytest.mark.unit
+class TestTheResultIsWrittenOnlyForAnIncompleteRun:
+    def test_an_incomplete_run_writes_one_document_under_the_results_folder(self, tmp_path, caplog):
+        put_json = MagicMock(side_effect=lambda bucket, key, body: key)
+        result, _ = _run(tmp_path, caplog, _fetch_skipping(
+            ("scene/parts/wheel.usda", "missing from the asset")), RESULTS, put_json)
+        assert result.status == PipelineStatus.COMPLETE
+        put_json.assert_called_once()
+        bucket, key, body = put_json.call_args.args
+        assert (bucket, key) == ("run-bucket", RESULT_KEY)
+        document = json.loads(body)
+        assert document["inputFile"] == "scene/model.obj"
+        assert document["counts"]["geometryLayers"] == 1
+        assert document["message"].startswith("Preview generated, but incomplete: 1 referenced file ")
+
+    def test_a_complete_run_writes_nothing(self, tmp_path, caplog):
+        put_json = MagicMock()
+        result, messages = _run(tmp_path, caplog, _fetch_skipping(), RESULTS, put_json)
+        assert result.status == PipelineStatus.COMPLETE
+        put_json.assert_not_called()
+        assert core.SUCCESS_MESSAGE in messages
+
+    def test_without_a_results_location_nothing_is_written(self, tmp_path, caplog):
+        """A command from a Lambda built before the location travelled (the upgrade window)."""
+        put_json = MagicMock()
+        result, messages = _run(tmp_path, caplog, _fetch_skipping(
+            ("scene/tex/wood.png", "missing from the asset")), None, put_json)
+        assert result.status == PipelineStatus.COMPLETE
+        put_json.assert_not_called()
+        assert any(message.startswith("Preview generated, but incomplete") for message in messages)
+
+    @pytest.mark.parametrize("put_json", [MagicMock(return_value=None),
+                                          MagicMock(side_effect=RuntimeError("AccessDenied"))])
+    def test_a_failed_write_never_fails_the_run(self, tmp_path, caplog, put_json):
+        result, _ = _run(tmp_path, caplog, _fetch_skipping(
+            ("scene/tex/wood.png", "missing from the asset")), RESULTS, put_json)
+        assert result.status == PipelineStatus.COMPLETE, result.errorMessage
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Could not write the incomplete-preview result" in message for message in warnings)
+
+
+@pytest.mark.unit
+class TestTheCommandNamesTheResultsLocation:
+    @pytest.mark.parametrize("extra,expected", [
+        ([], None),
+        (['{"inputVersions": {"PREVIEW_3D_THUMBNAIL": "v1"}}'], None),
+        (['{"inputVersions": {}, "outputResults": {"bucketName": "run-bucket", '
+          '"objectDir": "pipelines/preview3dThumbnail/JOB/output/E1/results"}}'], RESULTS),
+        (['{"inputVersions": {}, "outputResults": {"bucketName": "", "objectDir": "r/"}}'], None),
+        (['{"inputVersions": {}, "outputResults": "s3://run-bucket/r/"}'], None),
+        (["not json"], None),
+    ])
+    def test_the_location_or_none(self, extra, expected):
+        from preview_pipeline.utils.pipeline import objects
+        assert objects.results_location(extra) == expected
+
+    def test_run_hands_the_location_to_the_stage(self):
+        stage = _stage()
+        params = {"jobName": "j", "stages": [stage.__dict__], "localTest": "True"}
+        with patch.object(core.manifest_io, "fetch_metadata", MagicMock(return_value={})), \
+                patch.object(core.manifest_io, "fetch_input_configuration", MagicMock(return_value={})), \
+                patch.object(core, "_run_preview_pipeline",
+                             MagicMock(side_effect=lambda s, *a, **k: s)) as stage_run:
+            core.run(params, results_location=RESULTS)
+        assert stage_run.call_args.kwargs["results_location"] == RESULTS
