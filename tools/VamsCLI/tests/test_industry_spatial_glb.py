@@ -874,19 +874,18 @@ class TestGLBAssetCombineSystemTempFolder:
         assert result.exit_code == 1
         assert os.listdir(tmp_path) == []
 
-    def test_failed_upload_keeps_the_files_the_result_names(
+    def test_failed_upload_removes_the_whole_mkdtemp_folder(
             self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
-        """A partial success reports the combined GLB, so a failed upload does not remove it (#1389)."""
+        """A failed upload ends the run with an error (#1349) and leaves nothing behind (#1388)."""
         monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
 
         result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
                            '--asset-create-name', 'Combined Model',
                            upload=RuntimeError("upload refused"), json_output=False)
 
-        assert result.exit_code == 0, result.output
-        assert 'completed with some failures' in result.output
-        kept = sorted(name for _, _, names in os.walk(tmp_path) for name in names)
-        assert kept == ['Root Asset__COMBINED.glb', 'Root Asset_export.json']
+        assert result.exit_code == 1
+        assert '✗ Asset Creation Error: upload refused' in result.stderr
+        assert os.listdir(tmp_path) == []
 
 
 if __name__ == '__main__':
