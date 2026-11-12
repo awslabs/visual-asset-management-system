@@ -218,6 +218,7 @@ const sidebars: SidebarsConfig = {
                         },
                     ],
                 },
+                "mcp/mcp-server",
                 {
                     type: "category",
                     label: "API Reference",

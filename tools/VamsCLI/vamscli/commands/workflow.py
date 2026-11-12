@@ -355,9 +355,9 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
-            --pipeline global:conversion-3d-basic:to-glb --pipeline my-db:my-labeler
+            --pipeline global:conversion-3d-basic:convert-to-glb --pipeline my-db:my-labeler
         vamscli workflow create -d my-db -n "Convert for web" \\
-            --pipeline global:conversion-3d-basic:to-glb:convert-for-web
+            --pipeline global:conversion-3d-basic:convert-to-glb:convert-for-web
         vamscli workflow create -d my-db -n "Label only" \\
             --pipeline my-db:my-labeler
         vamscli workflow create -d my-db -n "WF" --specified-pipelines-file pipes.json

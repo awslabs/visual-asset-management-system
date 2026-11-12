@@ -1787,6 +1787,17 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 is_archived = False
                     
             except ClientError as e:
+                if e.response.get('Error', {}).get('Code') in S3_NOT_FOUND_ERROR_CODES:
+                    # Deleted, moved or archived since the event was sent. That change's own
+                    # ObjectRemoved event updates the document, and every redelivery of this
+                    # one would get the same answer, so it is finished rather than failed.
+                    logger.info(f"Object {s3_key} no longer exists; skipping its {event_name} event")
+                    return IndexOperationResponse(
+                        success=True,
+                        message="Object no longer exists, skipping",
+                        indexName=opensearch_file_index,
+                        operation="skip"
+                    )
                 logger.exception(f"Error getting S3 object metadata: {e}")
                 return IndexOperationResponse(
                     success=False,

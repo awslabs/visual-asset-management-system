@@ -226,6 +226,80 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 }
 
 /**
+ * Rules for app.authProvider.<provider>.additionalTokenAudiences (config.ts:
+ * validateAdditionalTokenAudiences, and the "additionalTokenAudiences is ignored because" warning
+ * getConfig() gives when the provider is disabled). Each entry is matched exactly by the API
+ * authorizer, so the shape rules reject what could never match or would widen it.
+ */
+const MAX_ADDITIONAL_TOKEN_AUDIENCES = 10;
+const ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH = 512;
+const COGNITO_APP_CLIENT_ID_PATTERN = /^[\w+]{1,128}$/;
+
+function additionalTokenAudienceRules(
+    base: string,
+    provider: "cognito" | "external",
+    enabledLabel: string,
+    primaryLabel: string
+): Rule[] {
+    const path = `${base}.additionalTokenAudiences`;
+    const list = (c: ConfigShape): unknown[] | undefined => {
+        const value = g(c, path);
+        return Array.isArray(value) ? value : undefined;
+    };
+    const enabled = (c: ConfigShape) => !!g(c, `${base}.enabled`);
+    return [
+        {
+            id: `${provider}-additional-token-audiences-ignored-warn`,
+            severity: "warning",
+            fieldPaths: [path],
+            appliesWhen: (c) => !enabled(c) && (list(c)?.length ?? 0) > 0,
+            message: `${path} is ignored because ${enabledLabel} is false.`,
+        },
+        {
+            id: `${provider}-additional-token-audiences-shape`,
+            severity: "error",
+            fieldPaths: [path],
+            appliesWhen: (c) => {
+                if (!enabled(c)) return false;
+                const value = g(c, path);
+                if (value == null) return false;
+                if (!Array.isArray(value) || value.length > MAX_ADDITIONAL_TOKEN_AUDIENCES)
+                    return true;
+                return value.some(
+                    (a: unknown) =>
+                        typeof a !== "string" ||
+                        a.trim() === "" ||
+                        a !== a.trim() ||
+                        a.includes("*") ||
+                        a.length > ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH ||
+                        (provider === "cognito" && !COGNITO_APP_CLIENT_ID_PATTERN.test(a))
+                );
+            },
+            message:
+                provider === "cognito"
+                    ? `${path} must list at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} exact Amazon Cognito app client ids (letters, digits, '_' and '+') of app clients in the VAMS user pool; wildcards, blank entries and surrounding whitespace are not accepted.`
+                    : `${path} must list at most ${MAX_ADDITIONAL_TOKEN_AUDIENCES} exact audience values of up to ${ADDITIONAL_TOKEN_AUDIENCE_MAX_LENGTH} characters; wildcards, blank entries and surrounding whitespace are not accepted.`,
+        },
+        {
+            id: `${provider}-additional-token-audiences-duplicate`,
+            severity: "error",
+            fieldPaths: [path],
+            appliesWhen: (c) => {
+                const value = list(c);
+                if (!enabled(c) || !value) return false;
+                if (new Set(value.map((a) => String(a))).size !== value.length) return true;
+                const primary =
+                    provider === "external"
+                        ? g(c, `${base}.lambdaAuthorizorJWTAudience`)
+                        : undefined;
+                return !!primary && value.some((a) => a === primary);
+            },
+            message: `${path} lists an audience more than once, or repeats ${primaryLabel}, which is always accepted.`,
+        },
+    ];
+}
+
+/**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
  * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
@@ -2782,6 +2856,18 @@ const CORE_RULES: Rule[] = [
         message:
             "useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true and the user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. Leave it unset or true for an existing deployment. A new deployment must set it to false, or creating the user pool fails with Amazon Cognito's attribute name error.",
     },
+    ...additionalTokenAudienceRules(
+        "app.authProvider.useCognito",
+        "cognito",
+        "useCognito.enabled",
+        "the web app client"
+    ),
+    ...additionalTokenAudienceRules(
+        "app.authProvider.useExternalOAuthIdp",
+        "external",
+        "useExternalOAuthIdp.enabled",
+        "lambdaAuthorizorJWTAudience"
+    ),
     {
         id: "external-vpc-context-warn",
         severity: "warning",

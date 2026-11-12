@@ -32,7 +32,7 @@ mypy = "1.0"
 boto3 = "1.43.89"
 botocore = "1.43.89"
 geojson = "3.2.0"
-joserfc = "1.7.5"
+joserfc = "1.7.6"
 pyjwt = { extras = ["crypto"], version = "2.15.1" }
 
 [build-system]

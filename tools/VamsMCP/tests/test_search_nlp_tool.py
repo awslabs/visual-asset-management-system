@@ -20,7 +20,6 @@ REPO_ROOT = SERVER_PATH.parents[3]
 
 WARNING_CODES = ("truncated:window", "truncated:targets", "databases:none_accessible",
                  "opensearch:fields_ignored", "opensearch:enrichment_failed", "segments:window_full")
-STORED_TRIGGER_VALUES = ("Manual", "File-Upload", "System-Reindex")
 
 
 def _line_of(text: str) -> int:
@@ -123,8 +122,9 @@ def test_readme_lists_search_nlp_and_keeps_it_out_of_autoapprove():
     assert "search_nlp" in CLAUDE_TEXT, "Rule 4's three-place list must name the tool"
 
 
-@pytest.mark.parametrize("name", ["list_executions", "list_workflow_executions"])
-def test_the_execution_listings_name_the_stored_trigger_values(name):
-    doc = _docstring_of(name)
-    for value in STORED_TRIGGER_VALUES:
-        assert value in doc, f"{name}: {value}"
+def test_the_execution_listings_name_the_system_reindex_trigger_type():
+    """The backfill's runs carry the systemReindex trigger type. list_executions names the three wire
+    values; list_workflow_executions points to it rather than repeating them (Mandatory Rule 11)."""
+    assert "'manual', 'fileUpload' or 'systemReindex'" in " ".join(_docstring_of("list_executions").split())
+    assert "Other filters match as on list_executions" in " ".join(
+        _docstring_of("list_workflow_executions").split())

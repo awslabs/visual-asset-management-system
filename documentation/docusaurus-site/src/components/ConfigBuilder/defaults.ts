@@ -331,7 +331,7 @@ const COMMERCIAL: ConfigShape = {
                 useCodeBuild: true,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
-                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 openAi: { modelId: "", apiKeySecretArn: "" },
                 allowInternetResearch: true,
                 bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
@@ -441,6 +441,7 @@ const COMMERCIAL: ConfigShape = {
                 useUserPasswordAuthFlow: false,
                 credTokenTimeoutSeconds: 3600,
                 retainLegacyGroupsAttribute: false,
+                additionalTokenAudiences: [],
             },
             useExternalOAuthIdp: {
                 enabled: false,
@@ -455,6 +456,7 @@ const COMMERCIAL: ConfigShape = {
                 idpAuthProviderDiscoveryEndpoint: null,
                 lambdaAuthorizorJWTIssuerUrl: null,
                 lambdaAuthorizorJWTAudience: null,
+                additionalTokenAudiences: [],
             },
         },
         webUi: {

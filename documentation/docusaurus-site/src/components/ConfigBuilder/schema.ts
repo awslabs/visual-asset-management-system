@@ -844,6 +844,15 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
+        path: "app.authProvider.useCognito.additionalTokenAudiences",
+        label: "Additional accepted app clients",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "App client ids of other clients in the VAMS user pool (for example one registered for a remote MCP server) whose ID and access tokens the API accepts, alongside the web app client. Exact ids, at most 10, no wildcards. Empty accepts the web app client only.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
         path: "app.authProvider.useExternalOAuthIdp.enabled",
         label: "External OAuth IdP",
         input: "boolean",
@@ -942,6 +951,15 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "text",
         section: "auth",
         advanced: true,
+        visibleWhen: oauthEnabled,
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        label: "Additional accepted JWT audiences",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "Other aud values (for example of a client registered with your IdP for a remote MCP server) the API accepts alongside the JWT audience above. Exact values, at most 10, no wildcards. Empty accepts that audience only.",
         visibleWhen: oauthEnabled,
     },
     {
@@ -1074,7 +1092,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Default model provider. Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help: "Default model provider. Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
