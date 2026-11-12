@@ -342,8 +342,10 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
     all geometry in engineered models is intentional. A near-flat part far
-    larger than the rest of a scene (a ground or environment plane) is left
-    out of the framing bounds and still drawn (``scene_parts``).
+    larger than the rest of a scene (a ground or environment plane) is cut
+    out of the preview after loading (``scene_parts.without_backdrop``); one
+    still present here, because its parts could not be cut out, is left out
+    of the framing bounds and drawn.
     """
     points = pv_data.points
 

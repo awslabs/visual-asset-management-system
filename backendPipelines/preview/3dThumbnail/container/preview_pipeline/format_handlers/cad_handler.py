@@ -84,16 +84,17 @@ def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
 
 
 def _content_alone(parts, mesh, part_points, max_triangles):
-    """``mesh`` or, when it holds environment geometry that encloses its content
-    (``scene_parts.without_enclosure``), the content's parts tessellated again on their own. The linear
-    deflection follows the bounding-box diagonal of what is tessellated, so the content then comes out
-    as fine as from a file holding it alone, not as coarse as the enclosure's size made it."""
-    if scene_parts.without_enclosure(mesh) is mesh:
+    """``mesh`` or, when it holds environment geometry (``scene_parts.without_environment``: an
+    enclosure around its content or a backdrop under it), the kept parts tessellated again on their
+    own. The linear deflection follows the bounding-box diagonal of what is tessellated, so the content
+    then comes out as fine as from a file holding it alone, not as coarse as the environment's size made
+    it."""
+    keep = scene_parts.environment_kept(mesh)
+    if keep is None:
         return mesh
-    screen = scene_parts.enclosure_screen(scene_parts.part_bounds(mesh))
     placed = [index for index, count in enumerate(part_points) if count > 0]
-    content = [parts[placed[row]] for row in np.flatnonzero(screen[2])]
-    logger.info(f"Tessellating the {len(content)} part(s) inside the enclosure on their own")
+    content = [parts[placed[row]] for row in np.flatnonzero(keep)]
+    logger.info(f"Tessellating the {len(content)} kept part(s) on their own")
     from OCP.BRepTools import BRepTools
 
     for shape, _, _, _ in content:

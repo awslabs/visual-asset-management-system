@@ -335,14 +335,14 @@ class TestPipelineLoad:
         np.testing.assert_allclose(np.asarray(loaded.points), np.asarray(alone.points))
         assert loaded.n_cells == alone.n_cells
 
-    def test_the_run_leaves_the_enclosure_out_before_the_budget(self):
-        """The orchestration calls ``without_enclosure`` on the loaded data, before the budgets."""
+    def test_the_run_leaves_the_environment_out_before_the_budget(self):
+        """The orchestration calls ``without_environment`` on the loaded data, before the budgets."""
         import inspect
 
         from preview_pipeline import core
 
         source = inspect.getsource(core._run_preview_stage)
-        assert source.index("scene_parts.without_enclosure(pv_data)") < source.index("apply_budgets(pv_data")
+        assert source.index("scene_parts.without_environment(pv_data)") < source.index("apply_budgets(pv_data")
 
 
 @pytest.mark.unit
