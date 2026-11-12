@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import copy
+import os
 import boto3
 import json
 
@@ -28,6 +29,11 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
+
+# USER_POOL_ID is set only when Amazon Cognito is the deployment's identity provider; without it
+# there is no pool to read subscriber emails from
+user_pool_id = os.environ.get("USER_POOL_ID", "")
+cognito_client = boto3.client('cognito-idp', config=retry_config) if user_pool_id else None
 
 # Hard-coded allowed values for subscription fields
 ALLOWED_EVENT_NAMES = [
@@ -298,6 +304,23 @@ def get_subscription_obj(event_name, entity_name, entity_id):
     return resp.get('Item')
 
 
+def get_cognito_email(userId):
+    """The email attribute of the Cognito user userId, or None when the deployment has no
+    Cognito pool, the user does not exist, or the pool cannot be read."""
+    if not cognito_client or not user_pool_id:
+        return None
+    try:
+        user = cognito_client.admin_get_user(UserPoolId=user_pool_id, Username=userId)
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'UserNotFoundException':
+            logger.warning(f"Could not read the Cognito user for a subscriber: {e.response.get('Error', {}).get('Code')}")
+        return None
+    for attribute in user.get('UserAttributes', []):
+        if attribute.get('Name') == 'email':
+            return attribute.get('Value') or None
+    return None
+
+
 def get_userProfile_Email(userId):
 
     #Try to get user email information
@@ -309,10 +332,14 @@ def get_userProfile_Email(userId):
     )
 
     #Lookup user profile email and use that.
-    #If not available or blank, set to userID and validate it's in email format
+    #A user who has not signed in to the web app has no profile; use their Cognito email.
+    #If neither is available, set to userID and validate it's in email format
     email = None
     if 'Item' in response:
         email = response['Item'].get('email','')
+
+    if not email:
+        email = get_cognito_email(userId)
 
     if not email or email == '':
         (valid, message) = validate({
