@@ -1751,7 +1751,8 @@ def build_audit_payload(
     max_bytes: int = AUDIT_RECORD_MAX_BYTES,
 ) -> Dict[str, Any]:
     """
-    Build a version 1 record payload, its JSON text bounded to ``max_bytes``. Keys that do not apply are left out, never written as null.
+    Build a version 1 record payload, its JSON text bounded to ``max_bytes``. Keys that do not
+    apply are left out, never written as null.
 
     ``changes`` holds each field a write set with its new value, ``previous`` the prior values the
     handler already held, ``requestParameters`` what a read, search or download asked for (filters,
@@ -1961,7 +1962,7 @@ def log_action(
             # A read, search or download records what was asked, never what was written or returned.
             passed = [name for name, value in (("changes", changes), ("previous", previous)) if value]
             if passed:
-                logger.error(f"Audit action {action_name!r} is a {kind}; dropped {', '.join(passed)}")
+                logger.error(f"Audit action {action_name!r} is a {kind} action, dropped {', '.join(passed)}")
             changes = previous = None
             if kind != KIND_DOWNLOAD and not AUDIT_READ_ITEM_COUNT:
                 item_count = None
