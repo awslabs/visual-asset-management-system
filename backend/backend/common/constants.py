@@ -509,7 +509,12 @@ CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "Access
                            "SessionToken", "apiKey", "apiKeySecret", "rawKey",
                            # The origin verification value CloudFront adds to forwarded API requests
                            # (common/auth/originVerify.py ORIGIN_VERIFY_HEADER_NAME).
-                           "x-vams-origin-verify")
+                           "x-vams-origin-verify",
+                           # Request and response headers that carry a credential: a client's
+                           # cookies (session cookies included), an API Gateway API key, proxy
+                           # credentials, and an AWS SigV4 session token.
+                           "cookie", "set-cookie", "x-api-key", "proxy-authorization",
+                           "x-amz-security-token")
 
 # Keys the free-text redactor (common/logRedaction.py) finds in log text returned to a caller: the
 # AWS and token credential keys above, plus the two that reach a caller only through returned log

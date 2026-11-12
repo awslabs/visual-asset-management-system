@@ -67,6 +67,29 @@ class TestMaskSensitiveData:
         assert value not in json.dumps(out)
         assert "x-vams-origin-verify" in SENSITIVE_KEYS
 
+    @pytest.mark.parametrize("header", ["Cookie", "Set-Cookie", "X-Api-Key", "Proxy-Authorization",
+                                        "X-Amz-Security-Token"])
+    @pytest.mark.parametrize("spelling", [str.lower, str.upper, lambda name: name])
+    def test_credential_headers_redacted_in_headers_and_multi_value_headers(self, header, spelling):
+        """API Gateway forwards every request header to the handler event, in both ``headers`` and
+        ``multiValueHeaders``, with the client's own letter case; the audit echo carries both."""
+        value = f"credential-value-for-{header.lower()}"
+        name = spelling(header)
+        event = {"headers": {name: value, "User-Agent": "client/1.0"},
+                 "multiValueHeaders": {name: [value, value + "-2"], "User-Agent": ["client/1.0"]}}
+        out = mask_sensitive_data(event)
+        assert out["headers"][name] == REDACTED
+        assert out["multiValueHeaders"][name] == REDACTED
+        assert out["headers"]["User-Agent"] == "client/1.0"
+        assert out["multiValueHeaders"]["User-Agent"] == ["client/1.0"]
+        assert value not in json.dumps(out)
+
+    def test_header_names_that_only_resemble_credentials_survive(self):
+        """Matching is on the whole header name: an identifier or a cache header stays readable."""
+        event = {"headers": {"X-Api-Key-Id": "key-id-1", "Cookie-Policy": "strict",
+                             "X-Amzn-Trace-Id": "Root=1-abc", "apiKeyId": "k1"}}
+        assert mask_sensitive_data(event) == event
+
     def test_non_sensitive_keys_survive(self):
         event = {
             "requestContext": {"http": {"method": "PUT", "path": "/pipelines/templates/t1"}},
@@ -205,3 +228,21 @@ class TestAuditEventEcho:
         message = self._write(event)[0]["message"]
         assert "secret prompt" not in message
         assert "templateTags" in message
+
+    def test_forwarded_credential_headers_not_echoed(self):
+        """The header set API Gateway forwarded to the handler event on a deployed stack, each
+        credential header carrying a marker value: none of the markers reaches the record."""
+        markers = {"Authorization": "Bearer marker-authz", "Cookie": "session=marker-cookie",
+                   "X-Api-Key": "marker-api-key", "Proxy-Authorization": "Basic marker-proxy",
+                   "X-Amz-Security-Token": "marker-session-token"}
+        headers = dict(markers, **{"Accept-Encoding": "gzip", "Host": "abc123.execute-api.us-east-1.amazonaws.com",
+                                   "User-Agent": "client/1.0", "X-Amzn-Trace-Id": "Root=1-abc",
+                                   "X-Forwarded-For": "203.0.113.7", "X-Forwarded-Port": "443",
+                                   "X-Forwarded-Proto": "https"})
+        event = {"type": "REQUEST", "headers": headers,
+                 "multiValueHeaders": {name: [value] for name, value in headers.items()},
+                 "requestContext": {"identity": {"sourceIp": "203.0.113.7"}}}
+        message = self._write(event)[0]["message"]
+        for value in markers.values():
+            assert value.split()[-1].split("=")[-1] not in message
+        assert "203.0.113.7" in message and "client/1.0" in message
