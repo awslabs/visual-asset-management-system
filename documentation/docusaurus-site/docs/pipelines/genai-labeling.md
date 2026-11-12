@@ -48,7 +48,7 @@ Add the following to your `config.json` under `app.pipelines`:
         "pipelines": {
             "useGenAiMetadata3dLabeling": {
                 "enabled": true,
-                "bedrockModelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             }
@@ -57,17 +57,17 @@ Add the following to your `config.json` under `app.pipelines`:
 }
 ```
 
-| Option                                | Default    | Description                                                                                                                                |
-| ------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                             | `false`    | Enable or disable the pipeline deployment.                                                                                                 |
-| `bedrockModelId`                      | (required) | The Amazon Bedrock model ID to use for image analysis and summarization. Must support the Anthropic Messages API with vision capabilities. |
-| `autoRegisterWithVAMS`                | `true`     | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                 |
-| `autoRegisterAutoTriggerOnFileUpload` | `false`    | When `true`, the workflow automatically triggers on upload of supported file types (`.stl`, `.obj`, `.ply`, `.glb`, `.abc`, `.fbx`).       |
+| Option                                | Default                                                                                                                 | Description                                                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                             | `false`                                                                                                                 | Enable or disable the pipeline deployment.                                                                                                                        |
+| `bedrockModelId`                      | `global.anthropic.claude-sonnet-5-5` in the commercial template; empty in the GovCloud and EU Sovereign Cloud templates | The Amazon Bedrock model ID to use for image analysis and summarization. Required when enabled. Must support the Anthropic Messages API with vision capabilities. |
+| `autoRegisterWithVAMS`                | `true`                                                                                                                  | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                                        |
+| `autoRegisterAutoTriggerOnFileUpload` | `false`                                                                                                                 | When `true`, the workflow automatically triggers on upload of supported file types (`.stl`, `.obj`, `.ply`, `.glb`, `.abc`, `.fbx`).                              |
 
 ## Prerequisites
 
 :::warning[Amazon Bedrock model access required]
-You must enable access to the configured Amazon Bedrock model in your deployment region before using this pipeline. Go to the Amazon Bedrock console, select **Model access**, and request access to the desired model (for example, Anthropic Claude 3 Sonnet).
+You must enable access to the configured Amazon Bedrock model in your deployment region before using this pipeline. Go to the Amazon Bedrock console, select **Model access**, and request access to the desired model (for example, Anthropic Claude Sonnet 5.5).
 :::
 
 -   **Amazon Bedrock** -- The deployment region must have access to the model specified in `bedrockModelId`.
@@ -135,13 +135,7 @@ The VAMS workflow process-output step reads this file and persists the keywords 
 
 ## Supported Amazon Bedrock models
 
-Any Amazon Bedrock model that supports the Anthropic Messages API with image input can be used. Recommended models include:
-
-| Model                       | Model ID                                    |
-| --------------------------- | ------------------------------------------- |
-| Anthropic Claude 3 Sonnet   | `anthropic.claude-3-sonnet-20240229-v1:0`   |
-| Anthropic Claude 3 Haiku    | `anthropic.claude-3-haiku-20240307-v1:0`    |
-| Anthropic Claude 3.5 Sonnet | `anthropic.claude-3-5-sonnet-20240620-v1:0` |
+Any Amazon Bedrock model that supports the Anthropic Messages API with image input, is offered in the deployment Region and has the lifecycle status `ACTIVE` can be used. The commercial template uses the `global.anthropic.claude-sonnet-5-5` cross-Region inference profile. [Choosing an Amazon Bedrock model](../deployment/configuration-reference.md#choosing-an-amazon-bedrock-model) shows how to list the models a Region offers and check their status, and which model ids each partition accepts.
 
 :::info[Cost considerations]
 Each pipeline execution makes multiple Amazon Bedrock API calls (one per rendered image plus one summarization call) and multiple Amazon Rekognition `detect_labels` calls. The number of rendered images depends on the Blender render script configuration. Monitor Amazon Bedrock and Amazon Rekognition usage for cost management.
