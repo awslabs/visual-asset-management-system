@@ -389,7 +389,7 @@ def test_the_auto_approve_sample_is_every_safe_core_read():
     assert NOT_AUTO_APPROVED_READS <= reads
 
 
-# --- The suite is hermetic (in-dev D4) --------------------------------------------------------------
+# --- The suite is hermetic ---------------------------------------------------------------------------
 
 
 def test_the_suite_runs_without_the_hosts_vamscli_profile():

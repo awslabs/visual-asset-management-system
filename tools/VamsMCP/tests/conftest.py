@@ -45,7 +45,7 @@ for _name in GATE_AND_TUNING_ENV_VARS:
 # The vamscli profile lives under $HOME (vamscli.constants.get_config_dir). Point HOME at an empty
 # directory BEFORE vams_mcp.server is first imported, so the suite never reads the developer's own
 # profile: CI runs with no profile, and a suite that passes only with a signed-in profile on the
-# host is not a guard (in-dev D4 of the pull request that added the degraded start). Every test then
+# host is not a guard. Every test then
 # starts from the same state, nobody signed in, and the `signed_in_by_default` fixture below supplies
 # a mocked client to every test that does not ask for the signed-out state.
 import tempfile  # noqa: E402

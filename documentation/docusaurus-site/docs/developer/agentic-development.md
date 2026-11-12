@@ -178,13 +178,7 @@ The steering documents above guide agents that **write VAMS code**. VAMS also sh
 
 The MCP server exposes the VAMS API as agent-callable tools for any MCP-capable host (Kiro, Claude Desktop, Amazon Bedrock agents, or an internal orchestrator). It is built on the `mcp` SDK and reuses the VamsCLI `APIClient`, inheriting its retries, throttling backoff, typed errors, and automatic token refresh.
 
-The server stores no keys, tokens, or URLs. It reads the API Gateway URL and authentication from the local `vamscli` profile, so the MCP host configuration contains no secrets and every user runs the server against their own account:
-
-```bash
-pip install ./tools/VamsCLI
-vamscli setup https://<your-api-id>.execute-api.<region>.amazonaws.com
-vamscli auth login -u you@example.com
-```
+The server stores no keys, tokens, or URLs. It reads the API Gateway URL and authentication from the local `vamscli` profile, so the MCP host configuration contains no secrets and every user runs the server against their own account. Installation, client registration, configuration, upgrading and troubleshooting are covered in [MCP Server](../mcp/mcp-server.md).
 
 Tools are organized into three tiers, gated by environment variable:
 
@@ -207,7 +201,7 @@ Four tool behaviours are worth knowing before an agent is allowed to call them, 
 
 The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task. The listing checks each `{param}` path segment as the placeholder `vams:any`, so when the user's `api` constraints name a concrete value in a parameter position, a route can be left out although it is allowed on those concrete paths, or listed although it is refused there (see [List allowed API routes](../api/auth.md#list-allowed-api-routes)).
 
-See `tools/VamsMCP/README.md` for installation, host registration, and the full tool list.
+See [MCP Server](../mcp/mcp-server.md) for installation and host registration, and `tools/VamsMCP/README.md` for the full tool list.
 
 #### Making the Server's Tools the Agent's First Choice
 

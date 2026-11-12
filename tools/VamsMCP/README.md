@@ -27,27 +27,17 @@ typed errors, and automatic token refresh.
 
 -   Python 3.12+
 -   [`vamscli`](../VamsCLI) installed and configured (see below)
--   `mcp` 1.2+ or 2.x — both SDK generations are supported
+-   `mcp` 1.10.0+ or 2.x and `pydantic` 2.11+, installed with the server. `mcp` 1.10.0 to 1.21.1
+    need `pydantic` below 2.12.
+
+The full installation, client registration, configuration, upgrade and troubleshooting guide is the
+documentation site's **MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/mcp-server.md`). The steps below are the short form.
 
 ## Setup
 
-**1. Install and configure vamscli** (if you haven't already):
-
-```bash
-pip install ./tools/VamsCLI
-vamscli setup https://<your-api-id>.execute-api.<region>.amazonaws.com
-vamscli auth login -u you@example.com
-```
-
-> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
-> stores the API Gateway invoke URL, which the MCP server reads.
-
-> If the deployment authenticates through an external identity provider, or through an Amazon
-> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
-> token instead — `vamscli auth login --user-id you@example.com --token-override "<token>"` — and
-> the MCP server picks it up from the profile like any other login.
-
-**2. Install the MCP server:**
+**1. Create a virtual environment and install vamscli, then the server** (vamscli is not on PyPI,
+so it goes first):
 
 ```bash
 # from tools/VamsMCP
@@ -55,6 +45,26 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ../VamsCLI     # provides the reused APIClient + ProfileManager
 pip install -e .
 ```
+
+**2. Point vamscli at your deployment and sign in:**
+
+```bash
+vamscli setup https://<your-vams-web-or-api-url>
+vamscli auth login -u you@example.com
+# or with a VAMS API key, read from stdin:
+echo "$VAMS_API_KEY" | vamscli auth login --user-id you@example.com --token-override-stdin
+```
+
+> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
+> stores the API Gateway invoke URL, which the MCP server reads.
+
+> If the deployment authenticates through an external identity provider, or through an Amazon
+> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
+> token on stdin the same way, and the MCP server picks it up from the profile like any other login.
+
+**Upgrading from 2.6.x:** `git pull`, then `pip install -e ../VamsCLI` and
+`pip install --upgrade -e .` in the server's virtual environment, and restart the server in the
+client. A client that caches the tool list needs it refreshed.
 
 ## Run
 
