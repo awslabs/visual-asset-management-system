@@ -304,6 +304,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Deterministic exclusion test** — The backend test that compares an asset execution listing with and without `excludeStatus` pins the listing start date, so it no longer fails intermittently on the time-derived `filterStartDate` echo. (issue #1227)
 -   **Upload alerts name the asset** — The upload page's completion and failure alerts name the asset instead of its internal id. (issue #1189)
 -   **Extraction errors name the input file** — A CAD/Mesh Metadata Extraction failure names the input's path within its asset rather than the temporary `input.<ext>` download. (issue #1188)
+-   **Large models get their CAD/Mesh attributes** — A value longer than the 400,000-character metadata value limit, such as the scene hierarchy of a GLB with about a thousand placed parts, is shortened and marked with `_truncated` instead of failing the write-back, so the model's other attributes are written. (issue #1355)
 -   **Home-page carousel list semantics** — The carousel's slide container is no longer marked up as a list, so the home page scans clean against axe-core's `list` rule. (issue #1236)
 -   **Versions table action labels** — The Actions column on the asset page's Versions tab carries a minimum width, so its button labels no longer wrap inside their words. (issue #1229)
 -   **Changelog note placement** — The Robotics Data Viewer note about `app.webUi.allowUnsafeEvalFeatures` sits under its own 2.7.0 bullet rather than under the Three.js USD bullet. (issue #1214)
