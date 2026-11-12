@@ -104,7 +104,9 @@ def get_subscriptions(query_params):
     resolved_assets = {}
     for obj in page_iterator.get('Items', []):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in obj.items()}
-        entity_name, entity_id = deserialized_document["entityName_entityId"].split("#")
+        # entityName cannot contain '#' (OBJECT_NAME) while an asset ID may end with one, so the
+        # first '#' is the separator and the rest is the entityId
+        entity_name, entity_id = deserialized_document["entityName_entityId"].split("#", 1)
         output_obj = {
             "eventName": deserialized_document["eventName"],
             "entityName": entity_name,
@@ -547,7 +549,7 @@ def lambda_handler(event, context):
             },
             'entityId': {
                 'value': event['body']['entityId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'subscribers': {
                 'value': event['body']['subscribers'],

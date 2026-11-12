@@ -25,6 +25,9 @@ export const EDH_SHIPPED_AMI_RECIPE_DIRS = [
     "backendAddons/edh/amiRecipes/isaacsim",
 ];
 
+/** The values of `lambdaSubnets`: the VAMS subnet tier the add-on's EDH-calling Lambdas run in. */
+export const EDH_LAMBDA_SUBNETS = ["isolated", "private"] as const;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -213,6 +216,9 @@ export interface LoadedEdhAmiRecipe {
     buildOnDeploy: boolean;
 }
 
+/** A `lambdaSubnets` value (`EDH_LAMBDA_SUBNETS`). */
+export type EdhLambdaSubnets = (typeof EDH_LAMBDA_SUBNETS)[number];
+
 export interface ConfigEdhWorkstations {
     enabled: boolean;
     edhApiEndpoint: string;
@@ -220,6 +226,9 @@ export interface ConfigEdhWorkstations {
     edhApiCaBundleSecretArn: string;
     edhApiTlsServerName: string;
     edhClusterId: string;
+    // The VAMS subnets the add-on's Lambdas that call EDH run in: "isolated" (no route out of the
+    // VPC) or "private" (NAT egress, for an internet-facing EDH load balancer). Unset is "isolated".
+    lambdaSubnets: EdhLambdaSubnets;
     // Copy the root key EDH regenerates on each start of its web interface into the root-key secret,
     // from the controller, whenever EDH rejects the key the secret holds. Unset is on.
     edhRootKeyAutoSync: boolean;
@@ -272,6 +281,7 @@ export function applyEdhWorkstationsDefaults(config: Config): void {
             edhApiCaBundleSecretArn: "",
             edhApiTlsServerName: "",
             edhClusterId: "",
+            lambdaSubnets: "isolated",
             edhRootKeyAutoSync: true,
             autoProvisionUsers: true,
             edhAllowedInstanceTypes: [],
@@ -317,6 +327,8 @@ export function applyEdhWorkstationsDefaults(config: Config): void {
     if (edhBlock.edhApiCaBundleSecretArn == undefined) edhBlock.edhApiCaBundleSecretArn = "";
     if (edhBlock.edhApiTlsServerName == undefined) edhBlock.edhApiTlsServerName = "";
     if (edhBlock.edhClusterId == undefined) edhBlock.edhClusterId = "";
+    // Isolated unless set: a deployment written before the field existed keeps its placement.
+    if (edhBlock.lambdaSubnets == undefined) edhBlock.lambdaSubnets = "isolated";
     // On unless set to false: a deployment written before the field existed gets the sync too.
     if (edhBlock.edhRootKeyAutoSync == undefined) edhBlock.edhRootKeyAutoSync = true;
     if (edhBlock.autoProvisionUsers == undefined) edhBlock.autoProvisionUsers = true;
@@ -458,6 +470,15 @@ export function edhVpcRequiringFeatures(config: Config): string[] {
     return config.app.addons.useEdhWorkstations.enabled ? ["addons.useEdhWorkstations"] : [];
 }
 
+/**
+ * Whether the add-on's Lambdas that call EDH run in the VAMS private subnets (`lambdaSubnets`
+ * `"private"`), so a VPC that VAMS creates needs its public and private subnets and NAT gateways.
+ */
+export function edhLambdasInPrivateSubnets(config: Config): boolean {
+    const edh = config.app.addons.useEdhWorkstations;
+    return edh?.enabled === true && edh.lambdaSubnets === "private";
+}
+
 /** The secret name an AWS Secrets Manager secret ARN carries (with its random suffix), or undefined. */
 function secretNameOfArn(arn: unknown): string | undefined {
     if (typeof arn !== "string") return undefined;
@@ -590,6 +611,34 @@ export function validateEdhWorkstationsConfig(config: Config): void {
                     `is on: the root key sync finds the EDH controller by that stack name and reads the key file ` +
                     `under /opt/edh/<edhClusterId>/. Set edhRootKeyAutoSync to false to keep another id. Got: ` +
                     `${JSON.stringify(edh.edhClusterId)}`
+            );
+        }
+
+        // The subnet tier of the Lambdas that call EDH. An internet-facing EDH load balancer resolves
+        // to public addresses, which only the private subnets reach, through their NAT gateways.
+        if (!(EDH_LAMBDA_SUBNETS as readonly unknown[]).includes(edh.lambdaSubnets)) {
+            throw new Error(
+                `Configuration Error: ${edhPath}.lambdaSubnets must be "isolated" or "private". Got: ${JSON.stringify(
+                    edh.lambdaSubnets
+                )}`
+            );
+        }
+        const importedVpc =
+            !!config.app.useGlobalVpc.optionalExternalVpcId &&
+            config.app.useGlobalVpc.optionalExternalVpcId !== "UNDEFINED" &&
+            config.app.useGlobalVpc.optionalExternalVpcId.trim() !== "";
+        const importedPrivateSubnetIds = config.app.useGlobalVpc.optionalExternalPrivateSubnetIds;
+        if (
+            edh.lambdaSubnets === "private" &&
+            importedVpc &&
+            (!importedPrivateSubnetIds ||
+                importedPrivateSubnetIds === "UNDEFINED" ||
+                importedPrivateSubnetIds.trim() === "")
+        ) {
+            throw new Error(
+                `Configuration Error: ${edhPath}.lambdaSubnets "private" places the add-on's Lambdas in ` +
+                    "the private subnets of the imported VPC, and app.useGlobalVpc.optionalExternalPrivateSubnetIds " +
+                    'names none. List private subnets that route through a NAT gateway, or set lambdaSubnets to "isolated".'
             );
         }
 
