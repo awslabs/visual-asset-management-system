@@ -375,6 +375,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Fixed Isaac Lab training jobs being stopped by AWS Batch after 6 hours of running although the workflow allows 8; the job limit is now 8 hours, so a long run is no longer cut short and reported as a heartbeat timeout. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
 -   **Documentation** The Isaac Lab pipeline page states that its timeouts include the wait for a GPU instance, gives a CodeBuild status command that finds the project on the Isaac Lab nested stack, shows where checkpoints and videos land (`checkpoints/<executionId>/`, `videos/<executionId>/`), and notes that AutoMate assembly with rl_games needs a multiple of 128 environments. ([#1324](https://github.com/awslabs/visual-asset-management-system/issues/1324))
 -   **Web** API key pages: the calendar button of the expiration date picker on the Create API Key and Update API Key pages says which date it chooses and, once one is picked, which date is selected, instead of being announced only as "button". ([#1278](https://github.com/awslabs/visual-asset-management-system/issues/1278))
+-   **Web** File details panel: the **File Attributes** and **File Metadata** tables keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. ([#1307](https://github.com/awslabs/visual-asset-management-system/issues/1307))
 
 ### Chores
 
