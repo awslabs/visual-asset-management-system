@@ -308,6 +308,11 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (issue #536)
 -   **Search result count after Clear All Filters** — The search page's title row shows no count until the reloaded list arrives, instead of "0 results". (issue #1252)
 -   **Isaac Lab evaluation videos with rl_games and skrl** — An Isaac Lab evaluation with the rl_games or skrl library uploads its recorded video when `recordVideo` is on. (issue #1313)
+-   **Isaac Lab training time limit** — AWS Batch no longer stops an Isaac Lab training job after 6 hours of running; the job limit matches the workflow's 8 hours. (issue #1324)
+-   **Isaac Lab pipeline page** — The page states that its timeouts include the wait for a GPU instance, a CodeBuild status command that finds the project, the per-execution folders that checkpoints and videos land in, and the 128-environment multiple that AutoMate assembly with rl_games needs. (issue #1324)
+-   **API key expiration date picker** — The calendar button of the expiration date picker on the Create API Key and Update API Key pages says which date it chooses and which date is selected, instead of being announced only as "button". (issue #1278)
+-   **Metadata table value column** — The File Attributes and File Metadata tables in the file details panel keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. (issue #1307)
+-   **Reindex utility exit code** — `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, when the Lambda function raises or reaches its own time limit, and when the reindexer answers with an error status, and `2` when a synchronous invocation times out and the outcome is unverified, instead of exiting `0` in each case. (issue #1296)
 
 **Other changes:**
 
@@ -370,6 +375,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Combined search facet counts** — A search across both assets and files reports database and tag facet counts and `aggregationTotal` for assets and files together, not assets only. (issue #1027)
 -   **IAM permissions boundary applied** — `environments.aws.PermissionBoundaryArn` in `infra/cdk.json` now sets the boundary on every IAM role VAMS creates; synthesis rejects a malformed or other-partition ARN. (issue #431)
 -   **Bucket sync keeps files whose names end in `init`** — Bucket sync no longer permanently deletes asset files such as `postinit` or `config.init`. Only an object named exactly `init`, or a folder named `init/`, is an import marker, and deleting a marker removes only that marker's own versions. (issue #1223)
+-   **API keeps working after an IAM role rename** — After an update that renames the IAM roles, such as setting or changing `IamRoleNamePrefix`, the REST API stage moves to a new deployment that names the renamed authorizer role, instead of answering every route with `500`. The first update to this version creates one new API deployment. (issue #1210)
 
 **Other changes:**
 
