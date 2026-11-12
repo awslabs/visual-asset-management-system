@@ -15,7 +15,7 @@ The following open-source projects are integrated into VAMS as viewer plugins, p
 | [Online 3D Viewer](https://3dviewer.net/)         | Web viewer for Rhinoceros 3D, AMF, BIM, OFF, VRML formats   | MIT                   | Viewer plugins (`online3d-viewer`, `online3d-viewer-rhino`) |
 | [CesiumJS](https://cesium.com/platform/cesiumjs/) | Geospatial 3D tileset viewer with streaming support         | Apache-2.0            | Viewer plugin (`cesium-viewer`)                             |
 | [Potree](https://potree.github.io/)               | Point cloud viewer for E57, LAS, LAZ formats                | BSD-2-Clause          | Viewer plugin (`potree-viewer`) + processing pipeline       |
-| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY and SPZ files                 | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)           |
+| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY, SPZ, SPLAT and SOG files     | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)           |
 | [PlayCanvas](https://playcanvas.com/)             | Gaussian splat viewer for PLY and SOG files                 | MIT                   | Viewer plugin (`gaussian-splat-viewer-playcanvas`)          |
 | [Needle Engine](https://needle.tools/)            | USD format WASM viewer for .usd, .usda, .usdc, .usdz        | Apache-2.0 (Modified) | Viewer plugin (`needletools-usd-viewer`)                    |
 | [Three.js](https://threejs.org/)                  | General-purpose 3D viewer for mesh and optional CAD formats | MIT                   | Viewer plugin (`threejs-viewer`)                            |
@@ -107,6 +107,18 @@ VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif
 See [Physna Integration](../developer/physna-integration.md) for configuration, architecture diagrams, metadata precedence rules, and troubleshooting guidance.
 :::
 
+### Cloud Workstations
+
+| Integration                                                   | Purpose                                                                                                                                             | License    | VAMS Component               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------- |
+| [EDH](https://github.com/awslabs/engineering-development-hub) | Launch, connect to, renew, stop and delete Amazon DCV desktops on an EDH cluster, build desktop AMIs with EC2 Image Builder, and run container jobs | Apache-2.0 | Addon (`useEdhWorkstations`) |
+
+The EDH Workstations [add-on](../developer/addons-overview.md) turns an EDH cluster in the same AWS account into a workstation provider for VAMS users, who launch Amazon DCV desktops from VAMS and open them in the browser. Administrators register desktop images and, with the add-on's optional features, build them from AMI recipes and run container jobs on the cluster.
+
+:::tip[Learn more]
+See [EDH Workstations Add-on](../developer/edh-workstations/overview.md) for how the add-on works, its architecture, permissions and limits.
+:::
+
 ---
 
 ## Licensed Commercial Integrations
@@ -173,6 +185,7 @@ VAMS Backend
   |-- Addons
         |-- Amazon SQS --> Garnet Framework (Knowledge Graph)
         |-- Amazon SQS --> Physna Sync (Geometric 3D Search)
+        |-- HTTPS --> EDH Workstations (Amazon DCV Desktops)
 ```
 
 :::info

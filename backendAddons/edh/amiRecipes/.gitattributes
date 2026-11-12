@@ -1,0 +1,5 @@
+# AMI recipe documents must have LF endings. They are uploaded byte-for-byte by the
+# CDK deployment and hashed by the seeding, so their endings must not depend on the
+# checkout platform. The shell scripts they contain are quoted heredocs, so the
+# terminators must match.
+* text eol=lf

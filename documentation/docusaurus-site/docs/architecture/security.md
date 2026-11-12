@@ -107,6 +107,8 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
+An API key whose name starts with the reserved prefix `temporary-session-` is a temporary session key: a short-lived key that a VAMS backend component mints on a user's behalf, through a Lambda cross-call, for one session. A caller that authenticates with a temporary session key cannot create or update API keys and receives `403`, so a session credential cannot outlive its session through a key of its own making. The API key service refuses a key name that carries the prefix with `400` unless the request is a Lambda cross-call, so no key a user creates passes for a temporary session key.
+
 ## Custom Lambda Authorizer
 
 VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, providing unified authentication across Amazon Cognito, external OAuth, and API key mechanisms.
@@ -558,7 +560,7 @@ For custom bucket policy statements beyond network restrictions, `infra/config/p
 
 ## AWS WAF and Rate Limiting
 
-When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. An enabled add-on can relax individual managed rules on its own routes in both web ACLs, the regional one and, on a CloudFront deployment, the CloudFront one; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)). The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
 
 The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. On a CloudFront deployment, CloudFront adds a per-deployment origin verification header to the API requests it forwards, and the regional web ACL's rate-based rule counts only requests without a valid value, so requests through CloudFront are counted per viewer address by the CloudFront-scoped web ACL rather than per CloudFront edge address. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
@@ -692,8 +694,10 @@ VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, ea
 | Errors                 | Application errors and exceptions                          |
 
 :::info[Silent Failure Pattern]
-Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations.
+Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations. The entry that could not be written is kept in the Lambda's own log as an `auditFallback` line and counted in the `AuditWriteFailures` metric (namespace `VAMS/Audit`); alarm on that metric (see [Monitoring Audit Logging Health](../developer/audit-logging.md#monitoring-audit-logging-health)).
 :::
+
+Each record carries an echo of the request after credential keys and caller-authored template content are redacted, including the verified token claims and the submitted request body, so audit records can contain personal data a user enters. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
 
 ## AWS CloudTrail Integration
 

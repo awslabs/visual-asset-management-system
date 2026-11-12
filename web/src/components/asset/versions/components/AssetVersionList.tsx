@@ -80,6 +80,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         versionToCompare,
         // New properties for enhanced functionality
@@ -285,6 +286,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 
             if (success) {
                 refreshVersions();
+                onVersionsChanged?.();
             } else {
                 console.log("Failed to unarchive version:", response);
             }
@@ -431,6 +433,13 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         {
             id: "actions",
             header: "Actions",
+            // Four labelled buttons sit in this cell, and without a minimum the column only gets
+            // the width the other columns leave - about 110px at 1440px with the navigation open,
+            // which breaks the labels inside their words and makes every row several hundred
+            // pixels tall. This value keeps every label on one line; it is not wide enough for
+            // the widest row (Edit, Download, Revert, Archive), which needs about 457px before
+            // the cell padding, so that set wraps onto two rows of whole buttons instead.
+            minWidth: 420,
             cell: (item: AssetVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button

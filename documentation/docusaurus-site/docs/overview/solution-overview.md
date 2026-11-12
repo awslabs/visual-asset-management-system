@@ -47,6 +47,7 @@ VAMS delivers the following core capabilities:
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
 -   **Compliance Enforcement** -- Bind versioned compliance schemas to databases or assets, evaluate assets automatically, on demand, or in sweeps, and quarantine assets that fail `quarantine`-level rules, with approval-gated cascades and an audit trail
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
+-   **Optional Add-ons** -- Synchronize data to Garnet Framework or Physna, or launch Amazon DCV desktops through the EDH Workstations add-on ([Add-ons Overview](../developer/addons-overview.md))
 
 ---
 
@@ -132,6 +133,11 @@ graph TB
         WAF["AWS WAF<br/>(Optional)"]
     end
 
+    subgraph "Optional Add-ons"
+        ADDONAPI["Add-on API Functions"]
+        ADDONSYNC["Add-on Sync Functions<br/>via Amazon SQS"]
+    end
+
     User --> CF
     User --> ALB
     CF --> APIGW
@@ -149,6 +155,9 @@ graph TB
     KMS --> DDB
     WAF --> CF
     WAF --> ALB
+    AUTH --> ADDONAPI
+    DDB --> ADDONSYNC
+    S3 --> ADDONSYNC
 ```
 
 The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud and European Sovereign Cloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
@@ -179,6 +188,7 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 | [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                                    |
 | [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
 | [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
+| [EDH](https://github.com/awslabs/engineering-development-hub)                                                                                               | Addon             | Amazon DCV desktops, desktop AMIs and container jobs on an EDH cluster                        |
 | [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
 | [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |
 

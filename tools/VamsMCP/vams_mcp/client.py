@@ -7,12 +7,14 @@ URLs are stored by this server; everything is read from the vamscli profile.
 
 Adds MCP-friendly helpers: auto-pagination for list endpoints, a raw request
 escape hatch for endpoints without a dedicated client method (e.g. listing
-assets in a database), and search-result trimming.
+assets in a database), search-result trimming, and the profile's feature-switch
+snapshot for tools that are feature-gated.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,10 +54,70 @@ from vamscli.constants import (  # noqa: E402,F401
 )
 from vamscli.utils.api_client import APIClient  # noqa: E402
 from vamscli.utils.exceptions import SearchDisabledError  # noqa: E402,F401
+from vamscli.utils.exceptions import (  # noqa: E402,F401
+    AuthenticationError,
+    OverrideTokenError,
+    TokenExpiredError,
+)
+from vamscli.version import CLI_VERSION  # noqa: E402,F401
 from vamscli.utils.features import is_feature_enabled  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402
 
 from .config import Config, ConfigError  # noqa: E402
+
+
+class FeatureDisabledError(Exception):
+    """The deployment has not enabled the feature a tool requires."""
+
+
+def login_step_for(config: Config) -> str:
+    """The sign-in command the USER runs for this server's profile (``--profile`` before the command)."""
+    prefix = f"vamscli --profile {config.profile} " if config.profile else "vamscli "
+    return f"`{prefix}auth login -u <user>`"
+
+
+def describe_profile(config: Config) -> Dict[str, Any]:
+    """What the vamscli profile this server uses holds, read from disk and without any request.
+
+    Used by the ``vams_status`` tool, which must answer even when no client could be built. Returns
+    the profile name, its API URL, the signed-in user id, whether the stored access token's expiry
+    has passed (the client refreshes it on the next call when the refresh token still works), and the
+    feature switches the last ``vamscli auth login`` saw. Never returns a token.
+    """
+    try:
+        name = config.profile or ProfileManager().get_active_profile()
+    except Exception:  # noqa: BLE001 - a status read must not fail
+        name = config.profile or "default"
+    manager = ProfileManager(name)
+    status: Dict[str, Any] = {"profile": name, "apiUrl": None, "userId": None}
+    try:
+        status["apiUrl"] = manager.load_config().get("api_gateway_url")
+    except Exception:  # noqa: BLE001 - not set up
+        pass
+    auth = manager.load_auth_profile() or {}
+    if auth:
+        status["userId"] = auth.get("user_id")
+        expires_at = auth.get("expires_at")
+        if isinstance(expires_at, (int, float)):
+            status["tokenExpired"] = time.time() >= expires_at
+    try:
+        status["featureSwitches"] = list(manager.get_feature_switches())
+    except Exception:  # noqa: BLE001
+        status["featureSwitches"] = []
+    return status
+
+
+def sign_in_marker(config: Config) -> Any:
+    """The stored sign-in's expiry, which every new sign-in or renewal rewrites; None without one.
+
+    The server compares it with the value seen when VAMS refused a call, so a sign-in the user made
+    since then is not reported as refused.
+    """
+    try:
+        name = config.profile or ProfileManager().get_active_profile()
+        return (ProfileManager(name).load_auth_profile() or {}).get("expires_at")
+    except Exception:  # noqa: BLE001 - a status read must not fail
+        return None
 
 
 class VamsClient:
@@ -74,19 +136,25 @@ class VamsClient:
 
         # Discover the API Gateway URL from the profile (raises a clear,
         # actionable error if the user hasn't run `vamscli setup`).
+        setup_step = f"`{cli_prefix}setup <api-gateway-url>`"
+        login_step = f"`{cli_prefix}auth login -u <user>`"
         try:
             profile_config = self._profile.load_config()
         except Exception as exc:  # ProfileNotFoundError / ConfigurationError
             raise ConfigError(
                 f"vamscli profile '{profile_name}' is not set up: {exc} "
-                f"Run `{cli_prefix}setup <api-gateway-url>` first."
+                f"Run {setup_step} first.",
+                reason=f"the VAMS profile '{profile_name}' is not set up on this machine",
+                user_step=f"{setup_step} and then {login_step}",
             )
 
         api_url = profile_config.get("api_gateway_url")
         if not api_url:
             raise ConfigError(
                 f"vamscli profile '{profile_name}' has no api_gateway_url. "
-                f"Re-run `{cli_prefix}setup <api-gateway-url>`."
+                f"Re-run {setup_step}.",
+                reason=f"the VAMS profile '{profile_name}' has no VAMS API URL",
+                user_step=f"{setup_step} and then {login_step}",
             )
 
         # Require an existing login. The APIClient will refresh tokens as needed;
@@ -94,15 +162,47 @@ class VamsClient:
         if self._profile.load_auth_profile() is None:
             raise ConfigError(
                 f"Not authenticated for vamscli profile '{profile_name}'. "
-                f"Run `{cli_prefix}auth login -u <user>` first."
+                f"Run {login_step} first.",
+                reason=f"nobody is signed in on the VAMS profile '{profile_name}'",
+                user_step=login_step,
             )
+        self.login_step = login_step
 
         self.api_url = api_url
         self.api = APIClient(api_url, self._profile)
 
+    # --- Feature switches -------------------------------------------------
+
+    def has_feature(self, feature_name: str) -> bool:
+        """Whether the feature-switch snapshot the profile stored at its last ``vamscli auth login``
+        (or ``set-override``) carries ``feature_name``."""
+        return self._profile.has_feature_switch(feature_name)
+
+    def require_feature(self, feature_name: str, message: str) -> None:
+        """Raise ``FeatureDisabledError(message)`` unless the snapshot carries ``feature_name``.
+
+        The MCP counterpart of vamscli's ``requires_feature`` gate, and the first statement of a
+        feature-gated tool: a deployment without the feature is answered with ``message`` (the CLI's
+        own sentence) before any request. Without it the request meets API Gateway's 403 for a route
+        that was never created, which the client reports only as a request no deployed route matches.
+        """
+        if not self.has_feature(feature_name):
+            raise FeatureDisabledError(message)
+
     def search_enabled(self) -> bool:
         """False on a deployment without OpenSearch (the profile's NOOPENSEARCH feature switch)."""
         return not is_feature_enabled(FEATURE_NOOPENSEARCH, self._profile)
+
+    def feature_switches(self) -> Dict[str, Any]:
+        """The profile's feature-switch snapshot as ``vamscli features list`` reports it: ``enabled``
+        (sorted), ``total`` and ``fetched_at``, plus ``has_feature_switches``. Read from disk only."""
+        info = self._profile.get_feature_switches_info()
+        return {
+            "has_feature_switches": bool(info.get("has_feature_switches")),
+            "enabled": sorted(info.get("enabled") or []),
+            "total": info.get("count", 0),
+            "fetched_at": info.get("fetched_at"),
+        }
 
     # --- Raw request escape hatch ----------------------------------------
 

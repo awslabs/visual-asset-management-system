@@ -7,8 +7,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
 import { downloadFailureMessage } from "../../core/streamFailure";
 import { VntanaDependencyManager } from "./dependencies";
-import { VntanaViewerProps, VntanaViewerElement } from "./types/viewer.types";
+import { VntanaViewerProps, VntanaViewerElement, VntanaErrorEvent } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import "./VntanaViewerComponent.css";
 
 const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
     assetId,
@@ -114,8 +115,13 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                     });
 
                     viewer.addEventListener("error", (event: Event) => {
-                        const errorEvent = event as any;
-                        const errorMessage = errorEvent.detail?.message || "Failed to load model";
+                        const errorEvent = event as VntanaErrorEvent;
+                        // @vntana/viewer 3.x reports what failed in `detail.type`; keep reading
+                        // `detail.message` for any build that still sends one.
+                        const errorMessage =
+                            errorEvent.detail?.message ||
+                            errorEvent.detail?.type ||
+                            "Failed to load model";
                         console.error("VNTANA Viewer: Error loading model:", errorMessage);
                         setError(errorMessage);
                         setIsLoading(false);
@@ -201,10 +207,8 @@ const VntanaViewerComponent: React.FC<VntanaViewerProps> = ({
                         }, 500);
                     }
                 } else {
-                    console.error("VNTANA Viewer: Failed to download asset");
                     // A refused download names why, from the API's answer (#1211, D166).
-                    setError(downloadFailureMessage(response, "Failed to download asset"));
-                    setIsLoading(false);
+                    throw new Error(downloadFailureMessage(response, "Failed to download asset"));
                 }
             } catch (error) {
                 console.error("VNTANA Viewer: Initialization error:", error);

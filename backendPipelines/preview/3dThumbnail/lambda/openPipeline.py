@@ -202,6 +202,8 @@ def lambda_handler(event, context):
         "outputS3AssetFilesPath": output_s3_asset_files_uri,
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
+        # Named here so the state machine carries it to constructPipeline; empty from an older Lambda.
+        "outputS3AssetResultsPath": event.get("outputS3AssetResultsPath", ""),
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,

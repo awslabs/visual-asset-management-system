@@ -737,11 +737,11 @@ The run area is shared across the deployment: one execution resolves a single de
 
 The auxiliary bucket (a separate bucket managed by VAMS) stores:
 
-| Prefix                                    | Purpose                | Description                                                                                                                                                                     |
-| ----------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{databaseId}/{assetFileKey}/preview/`    | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
-| `pipelines/{pipelineName}/{executionId}/` | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
-| `assetExports/{databaseId}/{assetId}/`    | Export staging         | Staged asset export payloads, delivered through a presigned URL                                                                                                                 |
+| Prefix                                      | Purpose                | Description                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{databaseId}/{assetFileKey}/preview/`      | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
+| `pipelines/{pipelineName}/{executionId}/`   | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
+| `vams.assetExports/{databaseId}/{assetId}/` | Export staging         | Staged asset export payloads, delivered through a presigned URL and expired 8 days after creation                                                                               |
 
 ### How databases, buckets, and assets relate
 
@@ -883,6 +883,8 @@ After deployment, place a file named `init` inside each asset folder. This trigg
 7. Skip sending the `init` file to the file indexer (it is not a real asset file).
 
 The `init` file can be empty (zero bytes). Its only purpose is to trigger the S3 event notification.
+
+An object named exactly `init`, or a folder named `init/`, at any level inside an asset folder is an import marker. Bucket sync deletes it with all its versions, so do not store asset files named `init`. A file whose name only ends in `init`, such as `postinit` or `config.init`, is an ordinary asset file.
 
 **Bulk-create init files using the AWS CLI:**
 
@@ -1048,7 +1050,7 @@ The init-file approach scales well. Add a short delay (0.5-1 second) between cre
 
 **Will the init files remain in my bucket?**
 
-Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
+Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. Other files in the folder are kept, including files whose names start or end with `init`, such as `init.txt` or `postinit`. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
 
 ## Related resources
 

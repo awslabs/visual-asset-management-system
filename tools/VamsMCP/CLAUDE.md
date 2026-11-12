@@ -33,20 +33,44 @@ tools/VamsMCP/
                              # nothing loads a .env; set them in the MCP host's `env` block)
   vams_mcp/
     __init__.py              # __version__ (roll with pyproject.toml)
-    config.py                # env-based config (profile, feature gates, pagination)
+    config.py                # env-based config (profile, feature gates, pagination); ConfigError
+                             # carries `reason` (for the agent) and `user_step` (the user's command)
+    annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
+    results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
-    server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard;
-                             # calls register_custom_tools() once, after the destructive block
+    server.py                # FastMCP app + SERVER_INSTRUCTIONS, vams_status, the NotAuthenticated
+                             # degraded start (Rule 14), response-shape helpers, tool definitions,
+                             # logging guard;
+                             # calls register_addon_tools() then register_custom_tools(), once each,
+                             # after the destructive block
+    addon_tools/             # ADD-ON LANE (upstream-owned): one module per add-on's tools
+      __init__.py            # register_addon_tools(): calls register() of each ADDON_TOOL_MODULES entry
+      edh.py                 # EDH Workstations tools (see "Add-on Tools")
     custom_tools.py          # FORK EXTENSION POINT: register_custom_tools() (shipped as a no-op)
+  evals/
+    agent-scenarios.md       # agent-behaviour scenarios + pass criteria, run live before a release
+                             # that changes tools, descriptions or instructions (Rule 11)
+    check_transcript.py      # applies the tool criteria to a recorded session (offline)
   tests/
     conftest.py              # clears VAMS_ENABLE_* / VAMS_PROFILE / pagination vars at import,
                              # BEFORE vams_mcp.server reads them at module level
     test_config.py           # env parsing + the writes/destructive gate interaction
-    test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
+    test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results(), has_feature(),
+                             # require_feature()
     test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
     test_gated_tools.py      # the write/destructive tool bodies, via a module reload with both gates on
     test_custom_tools.py     # the custom-tools hook: called once after the destructive block, and a
                              # probe hook's tools are registered under the server's own gates
+    test_addon_tools.py      # the add-on lane: the hook's placement and order, and every
+                             # addon_tools module's layout (see "Add-on Tools")
+    test_agent_surface.py    # what a client sees: instructions, description budgets, titles,
+                             # annotations per gate (core + add-on), outputSchema and structured
+                             # content, NotAuthenticated and vams_status, the README autoApprove sample
+    test_agent_scenarios.py  # evals/check_transcript.py
+    api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
+                             # it, an exclusion with its reason, or a not-yet-exposed gap (Rule 15)
+    test_api_coverage.py     # the manifest against APIClient and the tools' client.api calls
+    test_coverage_tools.py   # the file, export, feature-switch, asset-link and tag tools' requests
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
@@ -54,6 +78,21 @@ tools/VamsMCP/
                              # maxItems-keyed pages (evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
                              # bodies, docstring contracts
+    addon/
+      test_edh_tools.py      # the EDH tools on a recording fake mcp, one Config per gate setting:
+                             # payloads, the pre-flight switch of each tool, the connect tool with
+                             # the writes, no desktop sign-in, and the README's EDH section
+      test_edh_capacity_reservation_tools.py
+                             # the capacity reservation tools and create's capacity_reservation_id:
+                             # requests, passthrough (launchAllowed, edhSubnetAvailable and the
+                             # fallback reason, from web/src/addons/edh/capacityDisplayCases.json),
+                             # the RESERVATION_FULL and RESERVATION_NOT_PERMITTED errors, the README
+      test_edh_start_status_tools.py
+                             # the asynchronous start: start's 202 record passed through unchanged,
+                             # `activity` / `startFailure` passthrough, the descriptions and README
+      test_edh_image_tools.py
+                             # the image fields (`imageName` ... `imageLatest`) passed through by every
+                             # workstation tool, named in one sentence of each description and the README
 ```
 
 **No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
@@ -69,16 +108,20 @@ source. Document a new variable in `.env.example` **and** in the README's `env` 
 1. `config.py` — reads env vars into a frozen `Config`. No secrets/URLs.
 2. `client.py` — `VamsClient` resolves the vamscli profile, discovers the API
    Gateway URL, verifies auth, and builds an `APIClient`. Adds `paginate()`,
-   `get_json()/post_json()`, and `trim_search_results()`.
+   `get_json()/post_json()`, `trim_search_results()`, `has_feature()` and
+   `require_feature()`.
 3. `server.py` — defines `@mcp.tool()` functions that call `CLIENT`. Reads are
    always registered; writes/destructive tools are registered conditionally.
 
 `client.py` helpers worth knowing: `paginate()` (follows `NextToken`, normalizes
 any list field onto `Items`, flags `truncated`), `unwrap_message()` (strips the
-legacy `message` envelope), and `trim_search_results()` (compacts an OpenSearch
+legacy `message` envelope), `trim_search_results()` (compacts an OpenSearch
 response to `total` / `total_is_lower_bound` / `total_display` / `returned` /
 `results`; `total` stays numeric, and `total_display` is `"N+"` when the API
-reports `hits.total.relation == "gte"`).
+reports `hits.total.relation == "gte"`), `has_feature()` (the
+feature-switch snapshot the profile stored at its last `vamscli auth login`), and
+`require_feature()` (raises `FeatureDisabledError` with the given message when that
+snapshot lacks the switch: the pre-flight of an add-on tool).
 
 `server.py` adds two response-shape helpers of its own, deliberately kept out of
 `VamsClient` because they describe how the tool surface presents a response
@@ -146,6 +189,9 @@ asymmetry other callers rely on):
    `revoke_quarantine_exception` is write-tier too, although it can put an asset back
    into quarantine (and notify its subscribers) — it only restores the asset's last
    recorded verdict.
+   An add-on tool that starts, resumes, extends the lease of or interrupts billed
+   compute stays out of `autoApprove` the same way, and its add-on's subsection of
+   "Add-on Tools" below names it.
    The same three-place rule holds for the tools that RETURN a credential:
    `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
    API key value, a bearer token with the acting user's permissions, so both stay out
@@ -169,6 +215,7 @@ asymmetry other callers rely on):
     is simply absent with no import error. `tests/test_server_tools.py` asserts the
     source layout (uniqueness, position relative to each gate and the entrypoint,
     and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
+    `tests/test_addon_tools.py` holds the modules of `addon_tools/` to the same layout.
 
 5. **Return data, not exceptions.** Wrap tool bodies with `@tool_result` so
    failures return `{"error": ..., "error_type": ...}` plus the exception's
@@ -178,8 +225,10 @@ asymmetry other callers rely on):
    a request the deployment's AWS WAF web ACL blocked before VAMS handled it. A new
    machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI
    and every tool carry it alike.
-6. **API Gateway URL only.** The server rejects CloudFront URLs implicitly (the
-   profile stores the API Gateway URL). Never point at the CloudFront web URL.
+6. **The profile supplies the URL.** The server takes no URL of its own; it reads
+   `api_gateway_url` from the `vamscli` profile. `vamscli setup` stores there the
+   API Gateway invoke URL that `GET /api/amplify-config` returns, whether it was
+   given the web application URL or the API Gateway URL.
 7. **Match the endpoint's list field.** `paginate()` normalizes results onto
    `Items`, but it reads the source list from `items_key` — which differs per
    endpoint (`Items` for databases/assets/workflows, `items` for `listFiles`,
@@ -301,7 +350,74 @@ asymmetry other callers rely on):
     `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
     `mcp.server.mcpserver` and removed the old module. `server.py` imports it
     through a `try`/`except ImportError` alias (`McpServer`) — keep that shim and
-    the `mcp>=1.2.0,<3.0.0` pin, and test against both before widening it.
+    the `mcp>=1.10.0,<3.0.0` pin, and test against both before widening it (CI installs the
+    newest release the pin allows; run the newest 1.x and the floor yourself,
+    `pip install "mcp==1.10.0" "pydantic<2.12"`, when you
+    touch `@mcp.tool(...)` arguments or return types). 1.10.0 is the oldest release with tool
+    titles and structured output; 1.9.x cannot register these tools. mcp 1.10.0 to 1.21.1 fail
+    at import with pydantic 2.12 or later (`eval_type_backport` was removed from a pydantic
+    internal they use), so those releases need `pydantic<2.12`; 1.21.2+ and 2.x do not. mcp 2.x spells `ToolAnnotations` fields in snake_case in Python
+    (`read_only_hint`) and camelCase on the wire; a test reads a tool through
+    `tool.model_dump(by_alias=True)` so it holds on both.
+
+11. **Descriptions are written for the agent, within a budget.** A tool's docstring is its MCP
+    description: every connected agent reads every description at the start of every session.
+    Line 1 says when to use the tool (core tools start `Use ...`; `vams_status` starts `Check
+...`), then the parameters that matter, then what the result means for a conclusion (bounds,
+    truncation, credential and compute warnings — Rules 4 and 8 still require those). Handler
+    quirks, why a helper exists and other maintainer rationale go in code comments or this file,
+    never in the docstring. Each description stays within 1,200 characters, except the short named
+    list in `tests/test_agent_surface.py` (`DESCRIPTION_EXCEPTIONS`, each with its reason and
+    ceiling), and the core tools together within 30,000. Before adding text, cut text. Many older
+    contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
+    changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
+    `evals/agent-scenarios.md` against a test deployment in Kiro and Claude Code.
+
+12. **Every tool carries a title and the annotation of its gate.** Decorate with
+    `@mcp.tool(title="...", annotations=<CONST>)` then `@tool_result`, using the constants in
+    `vams_mcp/annotations.py`: `READ` in the read block, `WRITE` (or `COMPUTE`) under
+    `enable_writes`, `DESTRUCTIVE` (or `DESTRUCTIVE_COMPUTE`) under `enable_destructive`. The
+    `*_COMPUTE` constants (`openWorldHint: true`) are for tools that start, resume, extend, stop or
+    terminate billed compute — the same tools Rule 4 keeps out of `autoApprove`. The tier decides,
+    not what the tool seems to do: `get_edh_workstation_connect` changes nothing but sits in the
+    write tier, so it is `WRITE`. `tests/test_agent_surface.py` checks every core and add-on tool
+    as a client lists it; `tests/test_addon_tools.py` checks an add-on module's source.
+
+13. **A stable read shape is typed.** A read tool whose response shape is stable returns a model
+    from `vams_mcp/results.py` (`-> results.AssetPage`), so the SDK publishes an `outputSchema` and
+    returns structured content. The model only describes the dict the tool already returns:
+    `extra="allow"`, every field optional, loose types, and `ToolResult.model_dump` dumps only the
+    keys that were set, so the structured copy equals the text JSON (pinned for success and error
+    results). A new list tool usually subclasses `Page`. Do not type a tool whose body passes an
+    unmodelled handler response through unless every field you name is certain.
+
+14. **Errors never tell the agent to run a CLI, and the server starts without a sign-in.** An
+    agent told "run `vamscli auth login`" goes to the shell and stays there. Without a usable
+    profile `CLIENT` is `None`, the server still starts, and `@tool_result` returns
+    `{"error", "error_type": "NotAuthenticated", "user_action"}` for every tool except those in
+    `_WORKS_WITHOUT_SIGN_IN` (`vams_status`). `error` states the fact and asks the agent to have the
+    user sign in; `user_action` names the command as the USER's step. `ConfigError` carries the
+    two parts (`reason`, `user_step`), and the CLI's sign-in exceptions (`AuthenticationError`,
+    `TokenExpiredError`, `OverrideTokenError`) raised mid-session map to the same error. Each call
+    retries building the client, so a later sign-in needs no restart (add-on tools do). Keep
+    `SERVER_INSTRUCTIONS` (the MCP `instructions`, at most 2,000 characters) current when a tool
+    family is added or a start point changes; a test checks that every tool it names exists. The
+    instructions also say what has no tool (uploads, sync, user, role and constraint
+    administration) so the agent tells the user instead of looking for a way round.
+15. **Every public `APIClient` method has an MCP decision, in the coverage manifest.**
+    `tests/api_coverage.py` lists each public method of the CLI's `APIClient`, its add-on mixins
+    and its fork mixin in exactly one table: `TOOLS` (method -> the tools that call it, core and
+    add-on), `EXCLUDED` (no tool by decision, with a one-line reason: HTTP verb helpers, setup and
+    sign-in, which the USER does, upload, user/role/constraint administration, the EDH desktop
+    sign-in) or `NOT_YET_EXPOSED` (an agent-usable operation without a tool yet, recorded so the
+    gap stays visible). `tests/test_api_coverage.py` fails on a public method in no table, an
+    entry for a method that no longer exists, a method in two tables, a `TOOLS` tool that is not
+    registered with every gate and add-on on, and any difference between `TOOLS` and the
+    `client.api.<method>` calls the tools make. So a new CLI method fails CI until its MCP side is
+    decided, and a new tool fails until the manifest names what it calls. A fork's own
+    `CustomAPIClientMixin` method counts as covered when `custom_tools.py` calls it; a fork that
+    keeps one CLI-only lists it in `EXCLUDED`. Upload and administration stay CLI-only unless
+    planning decides otherwise: moving one to `TOOLS` changes the server instructions too.
 
 ---
 
@@ -311,10 +427,14 @@ asymmetry other callers rely on):
    (`tools/VamsCLI/vamscli/utils/api_client.py`); prefer it. Read the method's
    real signature — several take required positional arguments the endpoint
    demands (for example `execute_workflow` requires `workflow_database_id`).
-2. Add an `@mcp.tool()` + `@tool_result` function in `server.py`. Use type hints
-   and a clear docstring (both feed the tool's MCP schema/description).
+2. Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function in
+   `server.py`. Use type hints and an agent-facing docstring (both feed the tool's MCP
+   schema/description): when to use it, the parameters that matter, what the result means, within
+   the budget of Mandatory Rule 11. Type the return with a `results.*` model when the shape is
+   stable (Rule 13).
 3. Place it in the correct section: read (top), write (`enable_writes`), or
-   destructive (`enable_destructive`).
+   destructive (`enable_destructive`), and give it that tier's annotation constant (Rule 12).
+   Name a new tool family or start point in `SERVER_INSTRUCTIONS` (Rule 14).
 4. For list endpoints, use `CLIENT.paginate(...)` with the correct `items_key`
    (see Mandatory Rule 7), or `_paginate_with_page_metadata(...)` when the
    endpoint reports `warnings` or echoes its applied filters (Rule 8). For search,
@@ -332,6 +452,11 @@ asymmetry other callers rely on):
 8. Add a unit test in `tests/` mocking `CLIENT`. Assert the params that reach the
    `APIClient`, not just that the call happened: a dropped optional parameter is a
    silent server-default, which no assertion on the return value catches.
+   Then record the method in `tests/api_coverage.py` (Mandatory Rule 15): move it from
+   `NOT_YET_EXPOSED` to `TOOLS` with the new tool's name, or add it there. Write and
+   destructive tools also go in the `WRITE_TOOLS` / `DESTRUCTIVE_TOOLS` tuples of
+   `tests/test_gated_tools.py`, and a safe read in the README's `autoApprove` sample and
+   the docs-site MCP page's auto-approval list.
 9. When the server's contract with the CLI changes, roll the version in **both**
    `pyproject.toml` and `vams_mcp/__init__.py`, alongside
    `tools/VamsCLI/vamscli/version.py` (root `CLAUDE.md` Pattern 7 rule 6).
@@ -342,18 +467,119 @@ A fork adds tools in `vams_mcp/custom_tools.py`, never in `server.py`. Upstream 
 `register_custom_tools(mcp, client, config, tool_result)` as a no-op and never edits
 it; `server.py` calls it exactly once, at module level after the destructive block
 and before `def main()` (`tests/test_custom_tools.py`). Inside it, define each tool
-with `@mcp.tool()` then `@tool_result`, put write tools under
+with `@mcp.tool(title=..., annotations=...)` then `@tool_result` (the constants of
+`vams_mcp/annotations.py`, Rule 12), put write tools under
 `if config.enable_writes:` and destructive tools under `if config.enable_destructive:`,
 and call `client.api.<method>` — a method added to the CLI's `CustomAPIClientMixin`
 (`tools/VamsCLI/vamscli/utils/custom_api_client.py`) is an ordinary `APIClient`
 method here. Steps 4–8 above apply, except that the README entry goes in the fork's
 own documentation (the README tool-list test covers the upstream tools only). Tool
 names prefixed `custom_` are recommended, not enforced. A custom tool with the name of
-a core tool is not registered: the MCP SDK keeps the first registration (the core
-tool) and logs `Tool already exists: <name>` (pinned by `tests/test_custom_tools.py`).
-A fork tests its tools by
+a core or add-on tool is not registered: the MCP SDK keeps the first registration (the
+core or add-on tool) and logs `Tool already exists: <name>` (pinned by
+`tests/test_custom_tools.py` and `tests/test_addon_tools.py`). A fork tests its tools by
 calling `register_custom_tools` with a fake `mcp` and client, or with the reload
 pattern of `tests/test_custom_tools.py`.
+
+### Add-on Tools
+
+An add-on's tools use an add-on lane that mirrors the fork lane above. Upstream edits it when it
+ships an add-on with tools; a fork does not.
+
+-   Each add-on keeps its tools in one module of `vams_mcp/addon_tools/`, listed in
+    `ADDON_TOOL_MODULES` (`addon_tools/__init__.py`). The module's
+    `register(mcp, client, config, tool_result)` defines each tool with
+    `@mcp.tool(title="...", annotations=<CONST>)` then `@tool_result` (Rule 12; `from ..annotations
+import ...`): the reads directly in its body, write tools under `if config.enable_writes:`
+    and destructive tools under `if config.enable_destructive:`. It calls `client.api.<method>`,
+    whose add-on methods live in the CLI's add-on mixin
+    (`tools/VamsCLI/vamscli/utils/addon/<addon>_api_client.py`).
+-   `server.py` calls `register_addon_tools(mcp, CLIENT, CONFIG, tool_result)` once, at module
+    level after the destructive block and before `register_custom_tools(...)`. The MCP SDK keeps
+    the first registration of a name, so a core tool wins over an add-on tool and an add-on tool
+    over a custom one.
+-   **An add-on's tools exist only on a deployment with the add-on.** Each module declares its
+    add-on's switch in `FEATURE` (a `FEATURE_*` of `vamscli.addon_constants`), and
+    `register_addon_tools` registers the module only when `addon_deployed(client, module)`: the
+    profile's feature-switch snapshot, read at server start, carries it (no client registers
+    nothing). Enabling the add-on later takes `vamscli auth login` and a server restart; the README
+    says so. Tests that look at a server's add-on tools reload it through the `server_with_switches`
+    fixture (`tests/conftest.py`), never over the developer's own profile
+    (`tests/test_addon_tool_registration.py`).
+-   **A feature-gated add-on tool opens with a pre-flight.** Its first statement is
+    `client.require_feature(<FEATURE_*>, <*_DISABLED_MESSAGE>)`, both names from
+    `vamscli.addon_constants`: the MCP counterpart of the CLI's `@requires_feature`. It reads the
+    profile's login-time feature-switch snapshot and raises `FeatureDisabledError` with the CLI's
+    own sentence, which `@tool_result` returns as data. Without it, a deployment that never
+    created the add-on's routes answers API Gateway's 403, which the client reports only as a
+    request no deployed route matches, naming no feature switch.
+-   The README lists an add-on's tools in its subsection of "Add-on tools", with the safe reads in
+    that subsection's `autoApprove` addition, never in the core sample. Steps 4–9 of "Adding a New
+    Tool" apply. Its tests go under `tests/addon/` and register the module on a recording fake
+    `mcp`, with a mocked client and one `Config(...)` per gate setting.
+-   `tests/test_addon_tools.py` checks the hook's placement and, for every module: each tool sits
+    directly in `register` or directly under one of its two gates, with the decorator order and
+    the pre-flight as its first statement; the read section calls no mutating `client.api` method,
+    raw verb or `client.post_json`; every `client.api.<method>` exists on `APIClient`; no tool
+    takes a name a core tool or another add-on uses; and the module is listed in
+    `ADDON_TOOL_MODULES`.
+
+#### EDH Workstations
+
+-   `addon_tools/edh.py` holds 18 read, 17 write and 8 destructive tools. The container tools
+    pre-flight `FEATURE_EDH_CONTAINERS`, the AMI recipe tools `FEATURE_EDH_AMI_RECIPES`, and the
+    rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
+    `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
+    without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
+    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError` and
+    `EdhDisplaySessionEndedError` carry `outcomeUnknown` / `startInProgress` / `code`
+    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`) in their `json_fields`, which `@tool_result` passes through
+    (Mandatory Rule 5).
+-   Capacity reservations: the catalog items carry `launchAllowed` (false: the role may see the
+    reservation but not launch into it; create answers 403 `RESERVATION_NOT_PERMITTED`) and both
+    listings `edhSubnetAvailable` (false only on the admin list: the user catalog leaves such a
+    reservation out); workstation records carry `capacityReservationFallbackReason` (`full` |
+    `ended`). The tools pass them through, and the catalog, admin list, create, list and start
+    descriptions name them.
+-   Start status: `start_edh_workstation` returns the record the route accepts the start with
+    (HTTP 202, still STOPPED with `activity` `starting`) and does not poll; the agent follows it
+    with `list_edh_workstations`. Every workstation record and admin instance item carries
+    `activity` (`starting` | `stopping` | null) and `startFailure` (why the last start left a
+    STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL`,
+    `RESERVATION_ENDED` or `START_FAILED`); the tools pass both through, and the workstation
+    tools' descriptions name them.
+    A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH accepted and
+    has not finished after 30 minutes; the list, get, admin-instances, start and stop
+    descriptions name the code, and stop's says it accepts that row.
+-   Image name: every workstation record and admin instance item also carries `imageName`,
+    `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
+    (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The
+    tools pass them through, and each workstation tool's description (list, get, admin instances,
+    create, start, stop, renew, delete) names them in one sentence.
+-   Capacity reservations: `list_edh_catalog_capacity_reservations` (read, in the README's
+    `autoApprove` addition) and `list_edh_admin_capacity_reservations` (read, admin),
+    `register_edh_capacity_reservation` and `update_edh_capacity_reservation` (write) and
+    `unregister_edh_capacity_reservation` (destructive) change VAMS's registry only, never EC2;
+    `create_edh_workstation` takes an optional `capacity_reservation_id`, sent only when given.
+-   Compute: `create_edh_workstation`, `renew_edh_workstation`, `start_edh_workstation`,
+    `stop_edh_workstation` and `stop_edh_admin_instance` (write tier) start, resume, extend the
+    lease of, or interrupt a GPU desktop, `submit_edh_container_job` (write tier) starts a
+    Batch/EKS job, `start_edh_ami_recipe_build` (write tier) starts an EC2 Image Builder build
+    instance, and `deactivate_edh_admin_instance` and `kill_edh_container_job` (destructive tier)
+    terminate one — all nine stay out of `autoApprove`.
+-   `get_edh_workstation_connect` changes no stored data but issues a DCV `connectionUrl` carrying
+    a session auth token — the same class as the presigned-URL tools — so it is the one read
+    placed in the write tier (behind `VAMS_ENABLE_WRITES`, not always available), it never enters
+    `autoApprove`, and its docstring and the README security note both say so.
+-   No tool calls `get_edh_workstation_os_sign_in`: the desktop sign-in, a Windows desktop's password
+    included, is shown to its owner in the web app and behind the CLI's
+    `vamscli edh workstation connect --show-sign-in` only, never returned to an agent. The workstation
+    tools reach the CLI methods that refuse an id which is not one path segment (`_edh_session_id`),
+    and beneath every client method
+    `_make_request` refuses a request path with an empty, `.` or `..` segment (raw or
+    percent-encoded), so an id cannot address the sign-in route either.
+    `tests/addon/test_edh_tools.py` holds the tools to the absent call and to `_edh_session_id`;
+    `tools/VamsCLI/tests/test_api_request_path.py` holds the `_make_request` check.
 
 ## Upstream Dependency on the CLI
 
@@ -362,7 +588,8 @@ directly rather than the REST API. Any change to a `vamscli` `APIClient` method
 signature or response handling can break a tool here without an error at import
 time. Root `CLAUDE.md` Pattern 7 defines the propagation chain; when a CLI change
 reveals a missing or wrong `APIClient` method, fix it in the CLI instead of
-hand-rolling raw requests here.
+hand-rolling raw requests here. A new `APIClient` method also needs its entry in
+`tests/api_coverage.py` (Mandatory Rule 15), or this suite fails.
 
 ---
 
@@ -407,7 +634,16 @@ pip install -e '.[dev]'
 pytest
 ```
 
-Tests mock `vams_mcp.server.CLIENT` so no live VAMS deployment is required.
+Tests mock `vams_mcp.server.CLIENT`, or pass a mocked client to an add-on module's
+`register`, so no live VAMS deployment is required.
+
+The suite is hermetic: `tests/conftest.py` points `HOME` at an empty directory before the server is
+imported, so the developer's own vamscli profile is never read and the server always starts signed
+out, as in CI. Its autouse `signed_in_by_default` fixture then puts a mocked `CLIENT` in place for
+every test; a test of the signed-out path requests `signed_out` or `no_client` instead.
+`test_the_suite_runs_without_the_hosts_vamscli_profile` fails if that isolation is removed. CI runs
+Python 3.12, which keeps docstring indentation that 3.13 strips; `tool_result` cleans each
+docstring, so descriptions and their budgets are the same on both.
 
 CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
 its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
@@ -418,10 +654,10 @@ A test written to prove one specific change landed — a removed tool, a renamed
 `@pytest.mark.temporary` (registered in `pyproject.toml`) plus a line saying what it pins, so release
 cleanup can find it with `pytest -m temporary --collect-only`.
 
-Do **not** mark the source-layout guards in `tests/test_server_tools.py`. They are durable: a duplicate
-`def` silently shadows an earlier tool, a `def` placed outside its gate block never executes, and a read
-tool calling a mutating `APIClient` method is a permission defect — each stays writable, so each guard
-can still fire. Full criterion: root `CLAUDE.md` Rule 13.
+Do **not** mark the source-layout guards in `tests/test_server_tools.py` and `tests/test_addon_tools.py`.
+They are durable: a duplicate `def` silently shadows an earlier tool, a `def` placed outside its gate
+block never executes, and a read tool calling a mutating `APIClient` method is a permission defect — each
+stays writable, so each guard can still fire. Full criterion: root `CLAUDE.md` Rule 13.
 
 ---
 

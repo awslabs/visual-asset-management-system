@@ -80,6 +80,7 @@ export const DateInput: React.FC<DateInputProps> = ({
                 disabled={disabled}
                 invalid={invalid}
                 ariaLabel={ariaLabel}
+                expandToViewport={true}
                 i18nStrings={datePickerStrings(
                     ariaLabel === "Date input" ? "date" : `date for ${ariaLabel}`
                 )}

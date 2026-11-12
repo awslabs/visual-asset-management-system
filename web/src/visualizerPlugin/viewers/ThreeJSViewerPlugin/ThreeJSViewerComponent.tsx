@@ -25,6 +25,12 @@ import {
     isApiRefusalError,
     streamResponseFailure,
 } from "../../core/streamFailure";
+import {
+    applySelectionHighlight,
+    createHighlightMaterial,
+    supportsWireframe,
+    syncSelectionHighlight,
+} from "./utils/selectionHighlight";
 
 /** Referenced files listed by name in the notice before the rest are counted. */
 const NOTICE_LISTED_FILES = 10;
@@ -212,59 +218,21 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         console.log(`Material library initialized with ${library.size} materials`);
     }, [sceneReady]);
 
-    // Handle highlighting at parent level to persist across tab switches
+    // Handle highlighting at parent level to persist across tab switches. Highlight clones are
+    // tracked by identity in utils/selectionHighlight.ts, so point clouds (no emissive) are
+    // highlighted and restored as meshes are (#1275).
     useEffect(() => {
         if (!viewerInstanceRef.current?.scene) return;
 
         const THREE = (window as any).THREE;
         if (!THREE) return;
 
-        const scene = viewerInstanceRef.current.scene;
-        const selectedUuids = new Set(selectedObjects.map((obj) => obj.uuid));
-
-        // Remove highlighting from deselected objects
-        scene.traverse((obj: any) => {
-            if (obj.material && !selectedUuids.has(obj.uuid)) {
-                // Check if this object has a highlight (green emissive)
-                if (obj.material.emissive && obj.material.emissive.getHex() === 0x4caf50) {
-                    // Find the material in the library and restore it
-                    Array.from(materialLibrary.values()).forEach((item) => {
-                        if (item.usedBy.has(obj.uuid)) {
-                            obj.material = item.material;
-                        }
-                    });
-                }
-            }
-        });
-
-        // Add highlighting to selected objects
-        selectedObjects.forEach((obj) => {
-            if (obj.material) {
-                // Find the base material from library
-                let baseMaterial: any = null;
-                Array.from(materialLibrary.values()).forEach((item) => {
-                    if (item.usedBy.has(obj.uuid)) {
-                        baseMaterial = item.material;
-                    }
-                });
-
-                if (baseMaterial) {
-                    // Create highlight material
-                    const highlightMaterial = baseMaterial.clone
-                        ? baseMaterial.clone()
-                        : new THREE.MeshStandardMaterial({
-                              color: baseMaterial.color,
-                              metalness: baseMaterial.metalness || 0.5,
-                              roughness: baseMaterial.roughness || 0.5,
-                              opacity: baseMaterial.opacity || 1.0,
-                              transparent: baseMaterial.transparent || false,
-                          });
-                    highlightMaterial.emissive = new THREE.Color(0x4caf50);
-                    highlightMaterial.emissiveIntensity = 0.5;
-                    obj.material = highlightMaterial;
-                }
-            }
-        });
+        syncSelectionHighlight(
+            THREE,
+            viewerInstanceRef.current.scene,
+            selectedObjects,
+            materialLibrary.values()
+        );
     }, [selectedObjects, materialLibrary]);
 
     // Re-lays out the loaded files whenever the toggle changes, and re-frames the camera so the row
@@ -945,7 +913,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         }
         mat.opacity = materialState.opacity;
         mat.transparent = materialState.transparent;
-        mat.wireframe = materialState.wireframe;
+        if (supportsWireframe(mat)) mat.wireframe = materialState.wireframe;
         mat.needsUpdate = true;
 
         if (viewerInstanceRef.current?.scene) {
@@ -956,16 +924,15 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     if (isSelected) {
                         if (materialState.color)
                             obj.material.color = new THREE.Color(materialState.color);
-                        obj.material.emissive = new THREE.Color(0x4caf50);
-                        obj.material.emissiveIntensity = 0.5;
                         if (obj.material.metalness !== undefined)
                             obj.material.metalness = materialState.metalness;
                         if (obj.material.roughness !== undefined)
                             obj.material.roughness = materialState.roughness;
                         obj.material.opacity = materialState.opacity;
                         obj.material.transparent = materialState.transparent;
-                        obj.material.wireframe = materialState.wireframe;
-                        obj.material.needsUpdate = true;
+                        if (supportsWireframe(obj.material))
+                            obj.material.wireframe = materialState.wireframe;
+                        applySelectionHighlight(THREE, obj.material);
                     }
                 }
             });
@@ -990,7 +957,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         if (original.roughness !== undefined) mat.roughness = original.roughness;
         mat.opacity = original.opacity;
         mat.transparent = original.transparent;
-        mat.wireframe = original.wireframe;
+        if (supportsWireframe(mat)) mat.wireframe = original.wireframe;
         mat.needsUpdate = true;
 
         if (viewerInstanceRef.current?.scene) {
@@ -999,16 +966,15 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     const isSelected = selectedObjects.some((sel) => sel.uuid === obj.uuid);
                     if (isSelected && obj.material) {
                         if (original.color) obj.material.color = original.color.clone();
-                        obj.material.emissive = new THREE.Color(0x4caf50);
-                        obj.material.emissiveIntensity = 0.5;
                         if (original.metalness !== undefined)
                             obj.material.metalness = original.metalness;
                         if (original.roughness !== undefined)
                             obj.material.roughness = original.roughness;
                         obj.material.opacity = original.opacity;
                         obj.material.transparent = original.transparent;
-                        obj.material.wireframe = original.wireframe;
-                        obj.material.needsUpdate = true;
+                        if (supportsWireframe(obj.material))
+                            obj.material.wireframe = original.wireframe;
+                        applySelectionHighlight(THREE, obj.material);
                     }
                 }
             });
@@ -1086,10 +1052,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
-            const highlightMaterial = item.material.clone();
-            highlightMaterial.emissive = new THREE.Color(0x4caf50);
-            highlightMaterial.emissiveIntensity = 0.5;
-            object.material = highlightMaterial;
+            object.material = createHighlightMaterial(THREE, item.material);
         } else {
             object.material = item.material;
         }
@@ -1132,10 +1095,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
-            const highlightMaterial = uniqueMaterial.clone();
-            highlightMaterial.emissive = new THREE.Color(0x4caf50);
-            highlightMaterial.emissiveIntensity = 0.5;
-            object.material = highlightMaterial;
+            object.material = createHighlightMaterial(THREE, uniqueMaterial);
         } else {
             object.material = uniqueMaterial;
         }
@@ -1181,10 +1141,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         if (object) {
             const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
             if (isSelected) {
-                const highlightMaterial = newMaterial.clone();
-                highlightMaterial.emissive = new THREE.Color(0x4caf50);
-                highlightMaterial.emissiveIntensity = 0.5;
-                object.material = highlightMaterial;
+                object.material = createHighlightMaterial(THREE, newMaterial);
             } else {
                 object.material = newMaterial;
             }
@@ -1315,7 +1272,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (original.roughness !== undefined) mat.roughness = original.roughness;
                 mat.opacity = original.opacity;
                 mat.transparent = original.transparent;
-                mat.wireframe = original.wireframe;
+                if (supportsWireframe(mat)) mat.wireframe = original.wireframe;
                 mat.needsUpdate = true;
             }
         });

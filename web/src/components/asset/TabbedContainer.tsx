@@ -25,6 +25,8 @@ interface TabbedContainerProps {
     assetVersionId?: string; // Optional version ID to filter files and metadata
     /** Bubbled-up notification when the user changes the file/folder selection. */
     onSelectedPathChange?: (path: string | null) => void;
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
+    onVersionsChanged?: () => void;
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -34,6 +36,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     filePathToNavigate,
     assetVersionId,
     onSelectedPathChange,
+    onVersionsChanged,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
@@ -127,6 +130,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "versions"}
+                                            onVersionsChanged={onVersionsChanged}
                                         />
                                     </Suspense>
                                 ),

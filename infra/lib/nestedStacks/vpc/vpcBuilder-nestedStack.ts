@@ -13,6 +13,7 @@ import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
+import { addonInterfaceEndpoints, addonNeedsPrivateSubnets } from "../addon/addonVpcEndpoints";
 
 export interface VPCBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -365,13 +366,16 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useNvidiaGr00t.enabled ||
                 (props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
                     props.config.app.pipelines.useGenAiCadStepAgent.runtime === "fargate") ||
-                props.config.app.pipelines.useImageTo3d?.enabled
+                props.config.app.pipelines.useImageTo3d?.enabled ||
+                addonNeedsPrivateSubnets(props.config)
             ) {
-                // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
-                // running in isolated subnets reaches AWS through the interface endpoints created
-                // below, so listing it would add public subnets and one NAT gateway per Availability
-                // Zone that nothing routes through. The CAD STEP agent counts only on its Fargate
-                // runtime: on AgentCore the agent container runs outside the VPC entirely.
+                // Only features whose compute is placed in PRIVATE subnets belong here: those
+                // pipelines, and an add-on that asks for private subnets (addonNeedsPrivateSubnets).
+                // A pipeline running in isolated subnets reaches AWS through the interface endpoints
+                // created below, so listing it would add public subnets and one NAT gateway per
+                // Availability Zone that nothing routes through. The CAD STEP agent counts only on
+                // its Fargate runtime: on AgentCore the agent container runs outside the VPC entirely.
+                // The isolated group stays first, so adding these groups keeps its subnet CIDRs.
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
             }
@@ -893,6 +897,20 @@ export class VPCBuilderNestedStack extends NestedStack {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.ECS_TELEMETRY,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            //Add-on Required Endpoints (an endpoint a block above already created is not repeated)
+            for (const endpoint of addonInterfaceEndpoints(props.config)) {
+                if (this.node.tryFindChild(endpoint.id)) {
+                    continue;
+                }
+                new ec2.InterfaceVpcEndpoint(this, endpoint.id, {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: endpoint.service,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

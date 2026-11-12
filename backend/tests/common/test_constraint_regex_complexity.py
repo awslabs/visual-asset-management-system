@@ -48,7 +48,8 @@ def _regex(value):
 
 
 # Every distinct criterion value the shipped permission templates and the seeded admin / read-only
-# constraints carry. Literals, one wildcard, and the two template placeholders.
+# constraints carry. Literals, one wildcard, the two route patterns of the read-only POST grants, and
+# the two template placeholders.
 SHIPPED_CRITERION_VALUES = [
     '.*',
     'GLOBAL',
@@ -60,6 +61,9 @@ SHIPPED_CRITERION_VALUES = [
     '/permanent',
     '/amplify-config',
     '/api/amplify-config',
+    '/addon/edh/admin',
+    '/addon/edh/catalog',
+    '/addon/edh/workstations',
     '/addon/physna/viewer',
     '/asset-links',
     '/assetIngestion',
@@ -77,7 +81,10 @@ SHIPPED_CRITERION_VALUES = [
     '/database',
     '/database/',
     '/databases',
-    '/download',
+    '/database/[^/]+/assets/[^/]+/download',
+    '/database/[^/]+/assets/[^/]+/export',
+    '/edh/admin',
+    '/edh/workstations',
     '/executions',
     '/execute',
     '/workflows/GLOBAL/',

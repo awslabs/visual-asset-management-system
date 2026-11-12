@@ -43,6 +43,7 @@ from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT, ApiRoute, _route_
 # Add-on routes are declared in common/addonApiRoutes.py; every name there is re-exported here.
 from common.addonApiRoutes import *  # noqa: F401,F403
 from common.addonApiRoutes import ADDON_ROUTES
+from common.addonFeatures import addon_feature_deployed
 
 # Routes a fork adds are declared in custom/customApiRoutes.py (fork-owned, shipped empty).
 from custom.customApiRoutes import CUSTOM_ROUTES
@@ -632,5 +633,14 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
 
 
 def get_public_api_routes() -> Tuple[ApiRoute, ...]:
-    """Return all externally reachable API routes (excludes internal cross-call routes)."""
-    return tuple(route for route in ALL_API_ROUTES if not route.internal)
+    """Return the API routes a client can reach on this deployment.
+
+    Internal cross-call routes are left out, and so is an add-on route whose add-on (or optional
+    add-on feature) the deployment did not enable (``ApiRoute.addon_feature``,
+    ``common/addonFeatures.py``): API Gateway serves no such route, so neither the route listing nor
+    the allowed-route check offers or evaluates it.
+    """
+    return tuple(
+        route for route in ALL_API_ROUTES
+        if not route.internal and addon_feature_deployed(route.addon_feature)
+    )

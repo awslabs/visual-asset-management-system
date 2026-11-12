@@ -28,10 +28,7 @@ import { downloadAsset } from "../../../../services/APIService";
 import Synonyms from "../../../../synonyms";
 import FileViewerModal from "../../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../../visualizerPlugin/core/types";
-import {
-    extensionOfFilename,
-    isExtensionComparableAsVersions,
-} from "../../../../visualizerPlugin/core/viewableExtensions";
+import { isFilenameComparableAsVersions } from "../../../../visualizerPlugin/core/viewableExtensions";
 import {
     ARCHIVED_TRANSFER_REASON,
     useAssetArchived,
@@ -130,7 +127,7 @@ export const FileVersionsList: React.FC = () => {
     const canCompareFile = (file: FileVersion): boolean =>
         viewerRegistryReady &&
         !file.isPermanentlyDeleted &&
-        isExtensionComparableAsVersions(extensionOfFilename(file.relativeKey));
+        isFilenameComparableAsVersions(file.relativeKey);
 
     const handleCompareFile = (file: FileVersion) => {
         if (!canCompareFile(file)) {

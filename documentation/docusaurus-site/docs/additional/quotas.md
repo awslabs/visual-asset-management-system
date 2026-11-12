@@ -1,6 +1,6 @@
 # Service Quotas and Limits
 
-This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration.
+This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration. An enabled add-on has limits of its own, listed on the add-on's page (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ---
 
@@ -88,6 +88,10 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | Data nodes                | N/A                | One per Availability Zone (2 or 3)                                                                  |
 | Master nodes              | N/A                | 3                                                                                                   |
 | Engine version            | Managed by AWS     | OpenSearch 3.x (OpenSearch 2.x in the AWS European Sovereign Cloud, which does not yet support 3.x) |
+
+### Amazon CloudWatch Logs Resource Policies
+
+An account holds at most 10 account-level CloudWatch Logs resource policies per Region (not adjustable). A deployment with OpenSearch Serverless adds none. A deployment with a provisioned OpenSearch domain adds one for the domain's logs, so at most 10 such deployments, fewer if other workloads in the account use these policies, fit in one Region. The orchestration bus audit log group uses a resource policy of its own, which does not count against this limit. List the account-level policies in a Region with `aws logs describe-resource-policies`.
 
 ---
 

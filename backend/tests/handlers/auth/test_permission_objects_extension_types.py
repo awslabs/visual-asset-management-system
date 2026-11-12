@@ -36,6 +36,7 @@ def _load_constants(custom_types=None, custom_fields=None):
         setattr(module, f"{prefix}_CONSTRAINT_OBJECT_TYPE_FIELDS", {})
         setattr(module, f"{prefix}_UNALLOWED_FILE_EXTENSIONS", [])
         setattr(module, f"{prefix}_UNALLOWED_MIME_TYPES", [])
+        setattr(module, f"{prefix}_LOG_SENSITIVE_KEYS", [])
     lanes["custom.customConstants"].CUSTOM_PERMISSION_CONSTRAINT_FIELDS = dict(custom_fields or {})
     lanes["custom.customConstants"].CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS = dict(custom_types or {})
     saved = {name: sys.modules.get(name) for name in lanes}

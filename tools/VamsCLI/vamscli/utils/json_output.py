@@ -5,6 +5,8 @@ All commands with --json-output parameter should use these utilities to prevent
 status messages and CLI formatting from polluting JSON output.
 """
 
+import contextlib
+import io
 import json
 import re
 import sys
@@ -169,6 +171,47 @@ def output_error(error: Exception, json_output: bool,
         click.secho(f"✗ {error_type}: {error}", fg='red', bold=True, err=True)
         if helpful_message:
             click.echo(helpful_message, err=True)
+
+
+def invoke_nested_command(ctx: click.Context, json_output: bool, command: click.Command,
+                          *, error_fields: Optional[Dict[str, Any]] = None, **params) -> Any:
+    """
+    Run another command from inside a command and return its result.
+
+    The nested command runs with json_output=True and its stdout captured, so nothing it prints
+    reaches this command's output, and stdout is restored on every path. When it fails through
+    output_error() (its error document, then sys.exit(1)), that failure is passed on: the error
+    document is written to stdout in JSON mode, or its message to stderr in CLI mode, and the exit
+    is re-raised, so the command ends with the nested command's error and exit code. Any other
+    exception propagates unchanged.
+
+    Args:
+        ctx: Click context of the running command
+        json_output: Whether the running command is in JSON mode
+        command: The Click command to run
+        error_fields: Fields added to a passed-on error document (existing keys are kept)
+        **params: The nested command's parameters, without json_output
+    """
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            return ctx.invoke(command, **params, json_output=True)
+    except SystemExit as exit_signal:
+        if exit_signal.code:
+            try:
+                error_data = json.loads(captured.getvalue())
+            except ValueError:
+                error_data = None
+            if not isinstance(error_data, dict) or 'error' not in error_data:
+                error_data = {"error": f"'{command.name}' failed", "error_type": "CommandError"}
+            for key, value in (error_fields or {}).items():
+                error_data.setdefault(key, value)
+            if json_output:
+                click.echo(json.dumps(error_data, indent=2))
+            else:
+                click.secho(f"✗ {error_data.get('error_type', 'Error')}: {error_data['error']}",
+                            fg='red', bold=True, err=True)
+        raise
 
 
 def output_status(message: str, json_output: bool) -> None:

@@ -78,36 +78,26 @@ def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurat
             "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports E57, PLY, LAZ, and LAS."
         )
 
-    # If input file is E57 or PLY, convert to LAZ
+    # Convert the input to LAZ (LAS 1.2 / point data record format 3). E57 and PLY always come here; a
+    # LAS/LAZ input comes here only when constructPipeline found a point data record format in its
+    # header that PotreeConverter cannot read (8 to 10, #1215), and every other LAS/LAZ goes straight
+    # to the POTREE stage.
     laz_filepath = None
-    if local_filename_lowered.endswith(ext.Extensions.E57) or local_filename_lowered.endswith(ext.Extensions.PLY):
-        pipeline_response = allconvert_pdalconversion_pipeline(
-            local_filepath, local_output_dir)
-        logger.info(f"Pipeline Response: {pipeline_response}")
+    pipeline_response = allconvert_pdalconversion_pipeline(
+        local_filepath, local_output_dir)
+    logger.info(f"Pipeline Response: {pipeline_response}")
 
-        # A non-zero converter exit status means no usable output was written; report it before
-        # anything is uploaded, with PDAL's own message so the run's failure names the cause.
-        if pipeline_response["returncode"] != 0:
-            return ext.error_response(stage, converter_failure_message(
-                local_filename_lowered, pipeline_response["returncode"], pipeline_response["converter_output"]))
+    # A non-zero converter exit status means no usable output was written; report it before
+    # anything is uploaded, with PDAL's own message so the run's failure names the cause.
+    if pipeline_response["returncode"] != 0:
+        return ext.error_response(stage, converter_failure_message(
+            local_filename_lowered, pipeline_response["returncode"], pipeline_response["converter_output"]))
 
-        # get las file for further pipeline steps
-        for file in pipeline_response["output_files"]:
-            if file.lower().endswith(ext.Extensions.LAZ) or file.lower().endswith(ext.Extensions.LAS):
-                laz_filepath = file
-                break
-    # A LAZ/LAS input needs no conversion, so it is never routed here: constructPipeline sends only
-    # PDAL_INPUT_EXTENSIONS (.e57, .ply) to this stage and gives LAZ/LAS straight to POTREE. Arriving
-    # here means the definition was built wrong, and it is reported rather than carried on with: this
-    # branch produced no converter output, so the upload loop below would dereference an unbound
-    # pipeline_response and end the container with an UnboundLocalError. Nothing above run() catches
-    # that, so the step would report nothing against its task token and wait out its full taskTimeout.
-    elif local_filename_lowered.endswith(ext.Extensions.LAZ) or local_filename_lowered.endswith(ext.Extensions.LAS):
-        return ext.error_response(stage,
-            "A LAZ/LAS input requires no PDAL conversion and must be sent to the POTREE stage "
-            "directly. Reaching the PDAL stage with one means the pipeline definition names the "
-            "wrong stage for this file type."
-        )
+    # get las file for further pipeline steps
+    for file in pipeline_response["output_files"]:
+        if file.lower().endswith(ext.Extensions.LAZ) or file.lower().endswith(ext.Extensions.LAS):
+            laz_filepath = file
+            break
 
     # If we were given another file or we could not convert, error
     if laz_filepath is None:

@@ -31,6 +31,7 @@ from .commands.user import user
 from .commands.roleUserConstraints import role
 from .commands.apiKey import api_key
 from .commands.compliance import compliance
+from .commands.addon import ADDON_COMMANDS
 from .commands.custom import CUSTOM_COMMANDS
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
@@ -228,6 +229,19 @@ cli.add_command(compliance)
 def version():
     """Show version information."""
     click.echo(f"VamsCLI version {get_version()}")
+
+
+# Commands the optional add-ons add (commands/addon/__init__.py). Registered after every core
+# command and before the custom commands, so a name that is already taken is refused rather than
+# replacing the command that holds it.
+for addon_command in ADDON_COMMANDS:
+    if addon_command.name in cli.commands:
+        raise RuntimeError(
+            f"vamscli: add-on command '{addon_command.name}' (vamscli/commands/addon) has the "
+            "name of a command that is already registered; core commands take precedence, so "
+            "rename the add-on command"
+        )
+    cli.add_command(addon_command)
 
 
 # Commands a fork adds (commands/custom/__init__.py, shipped empty). Registered after every core
