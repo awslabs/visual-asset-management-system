@@ -831,3 +831,49 @@ class TestRegistryKindIsEnforced:
         write_payload = parse(clients.module.messages()[1])[1]
         assert "itemCount" not in read_payload
         assert write_payload["itemCount"] == 4, "the switch covers reads and searches only"
+
+
+# ---------------------------------------------------------------------------------------------------
+# The 32 KB cap bounds the whole formatted record: prefix, payload and echo
+# ---------------------------------------------------------------------------------------------------
+
+def _record_bytes(message):
+    return len(message.encode("utf-8"))
+
+
+@pytest.mark.unit
+class TestWholeRecordCap:
+    def test_a_long_path_truncates_the_echo_first(self, clients):
+        path = "/database/db1/assets/" + "a" * 33000
+        auditLogging.log_action(api_event(path=path), "assetUpdate", changes={"assetName": "kept"})
+        message = clients.module.messages()[0]
+        assert _record_bytes(message) <= auditLogging.AUDIT_RECORD_MAX_BYTES
+        _, payload, echo = parse(message)
+        assert echo == auditLogging.AUDIT_ECHO_TRUNCATED
+        assert payload["changes"] == {"assetName": "kept"}, "payload values are cut only after the echo"
+        assert payload["truncated"] is True
+
+    def test_a_long_prefix_and_large_values_cut_the_payload_to_fit(self, clients):
+        roles = tuple("r" * 60 + str(index) for index in range(250))  # about 16 KB of prefix
+        changes = {f"field{index}": "v" * 1900 for index in range(12)}  # about 23 KB of values
+        auditLogging.log_action(api_event(roles=roles), "metadataUpdate", changes=changes)
+        message = clients.module.messages()[0]
+        assert _record_bytes(message) <= auditLogging.AUDIT_RECORD_MAX_BYTES
+        match, payload, _ = parse(message)
+        assert len(json.loads(match.group("roles"))) == 250, "the prefix is kept whole"
+        assert payload["truncated"] is True and payload["action"] == "metadataUpdate"
+        assert set(payload["changes"]) == set(changes)
+
+    def test_a_prefix_over_the_cap_cuts_the_record_with_the_marker(self, clients):
+        roles = tuple("r" * 60 + str(index) for index in range(600))  # about 40 KB of prefix
+        auditLogging.log_action(api_event(roles=roles), "assetUpdate")
+        message = clients.module.messages()[0]
+        assert _record_bytes(message) <= auditLogging.AUDIT_RECORD_MAX_BYTES
+        assert message.endswith(auditLogging.AUDIT_EVENT_TRUNCATION_MARKER)
+        assert message.startswith("[ACTIONS][type: assetUpdate] [user: alice] [roles: [")
+
+    def test_a_record_under_the_cap_is_unchanged(self, clients):
+        # Control: an ordinary record keeps its compact echo and no truncated flag.
+        auditLogging.log_action(api_event(), "assetUpdate", changes={"assetName": "x"})
+        _, payload, echo = parse(clients.module.messages()[0])
+        assert "truncated" not in payload and echo.startswith(' --- [event: {"requestContext"')

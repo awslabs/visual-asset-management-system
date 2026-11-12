@@ -1676,13 +1676,14 @@ def _cap_value(value: Any) -> Tuple[Any, bool]:
     return _cut_value(value), True
 
 
-def _cap_record(payload: Dict[str, Any], originals: Dict[str, Dict[str, Any]]) -> bool:
+def _cap_record(payload: Dict[str, Any], originals: Dict[str, Dict[str, Any]],
+                limit: int = AUDIT_RECORD_MAX_BYTES) -> bool:
     """
-    Bound a payload to AUDIT_RECORD_MAX_BYTES, in place. First the largest values of the value
+    Bound a payload to ``limit`` bytes of JSON text, in place. First the largest values of the value
     sections lose their preview (keeping the hash), then whole sections are replaced by their hash,
     then the sections and the extra ids are dropped. Returns True when anything was cut.
     """
-    if len(_serialize_json(payload)) <= AUDIT_RECORD_MAX_BYTES:
+    if len(_serialize_json(payload)) <= limit:
         return False
     # The running size is adjusted by each replacement's difference rather than re-serializing the
     # whole payload per field, so a record with thousands of fields stays cheap to bound.
@@ -1701,14 +1702,14 @@ def _cap_record(payload: Dict[str, Any], originals: Dict[str, Dict[str, Any]]) -
             break
         payload[section][key] = stub
         size += stub_size - value_size
-        if size <= AUDIT_RECORD_MAX_BYTES and len(_serialize_json(payload)) <= AUDIT_RECORD_MAX_BYTES:
+        if size <= limit and len(_serialize_json(payload)) <= limit:
             return True
     sections = sorted((len(_serialize_json(payload[section])), section)
                       for section in _VALUE_SECTIONS if section in originals)
     for _, section in reversed(sections):
         payload[section] = {"truncated": True, "sha256": audit_value_sha256(originals[section]),
                             "fieldCount": len(originals[section])}
-        if len(_serialize_json(payload)) <= AUDIT_RECORD_MAX_BYTES:
+        if len(_serialize_json(payload)) <= limit:
             return True
     for key in list(payload):
         if key in _VALUE_SECTIONS or key in AUDIT_ID_FIELDS:
@@ -1746,9 +1747,10 @@ def build_audit_payload(
     previous: Optional[Dict[str, Any]] = None,
     request_parameters: Optional[Dict[str, Any]] = None,
     details: Optional[Dict[str, Any]] = None,
+    max_bytes: int = AUDIT_RECORD_MAX_BYTES,
 ) -> Dict[str, Any]:
     """
-    Build a version 1 record payload. Keys that do not apply are left out, never written as null.
+    Build a version 1 record payload, its JSON text bounded to ``max_bytes``. Keys that do not apply are left out, never written as null.
 
     ``changes`` holds each field a write set with its new value, ``previous`` the prior values the
     handler already held, ``requestParameters`` what a read, search or download asked for (filters,
@@ -1813,7 +1815,7 @@ def build_audit_payload(
             truncated = truncated or cut
         payload[section] = capped_section
 
-    if _cap_record(payload, originals):
+    if _cap_record(payload, originals, max_bytes):
         truncated = True
     if truncated:
         payload["truncated"] = True
@@ -1840,6 +1842,44 @@ def _compact_echo(event: Any) -> str:
     if not echo_context:
         return ""
     return f" --- [event: {_serialize_json({'requestContext': echo_context})}]"
+
+
+# The echo an action record carries when its compact echo would take the record past
+# AUDIT_RECORD_MAX_BYTES.
+AUDIT_ECHO_TRUNCATED = ' --- [event: {"truncated": true}]'
+
+
+def _bounded_action_record(head: str, build_payload: Callable[[int], Dict[str, Any]], echo: str) -> str:
+    """
+    Assemble an action record (prefix segments, payload, echo) bounded to AUDIT_RECORD_MAX_BYTES as
+    a whole. The payload is built to fit beside the prefix; if the echo then takes the record over,
+    the echo is replaced by AUDIT_ECHO_TRUNCATED, and if it is still over, the payload's values are
+    cut further. A prefix too long to leave room (a caller with hundreds of long role names) cuts
+    the record itself, ending in AUDIT_EVENT_TRUNCATION_MARKER as a partial record.
+    """
+    head_bytes = _message_byte_length(head) + 1
+
+    def assemble(payload: Dict[str, Any], suffix: str) -> str:
+        return head + " " + _serialize_json(payload) + suffix
+
+    payload = build_payload(AUDIT_RECORD_MAX_BYTES - head_bytes)
+    record = assemble(payload, echo)
+    if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+        return record
+    if echo:
+        payload["truncated"] = True
+        echo = AUDIT_ECHO_TRUNCATED
+        record = assemble(payload, echo)
+        if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+            return record
+    payload = build_payload(AUDIT_RECORD_MAX_BYTES - head_bytes - _message_byte_length(echo))
+    payload["truncated"] = True
+    record = assemble(payload, echo)
+    if _message_byte_length(record) <= AUDIT_RECORD_MAX_BYTES:
+        return record
+    marker = AUDIT_EVENT_TRUNCATION_MARKER
+    keep = AUDIT_RECORD_MAX_BYTES - _message_byte_length(marker)
+    return record.encode("utf-8")[:keep].decode("utf-8", errors="ignore") + marker
 
 
 def _action_prefix(group: str, prefix_type: str, outcome: str) -> str:
@@ -1939,18 +1979,20 @@ def log_action(
             if value is not None:
                 all_ids[key] = value
 
-        payload = build_audit_payload(
-            action_name, actor=actor, request=request, outcome=outcome, reason=reason,
-            entity_type=entity_type or (audit_spec.entity_type if audit_spec else None),
-            entity_id=entity_id, ids=all_ids, bytes_count=bytes, file_count=file_count,
-            item_count=item_count, duration_ms=duration_ms, changes=changes, previous=previous,
-            request_parameters=request_parameters, details=details)
-
-        outcome_written = payload["outcome"]
+        outcome_written = outcome if outcome in AUDIT_OUTCOMES else OUTCOME_FAILED
         target_group = GROUP_AUTHORIZATION if outcome_written == OUTCOME_DENIED else group
-        message = _format_log_message(_action_prefix(group, prefix_type, outcome_written), user_context,
-                                      payload, target_group)
-        record = message + _compact_echo(event)
+        head = _format_log_message(_action_prefix(group, prefix_type, outcome_written), user_context,
+                                   None, target_group)
+
+        def build_payload(max_bytes: int) -> Dict[str, Any]:
+            return build_audit_payload(
+                action_name, actor=actor, request=request, outcome=outcome_written, reason=reason,
+                entity_type=entity_type or (audit_spec.entity_type if audit_spec else None),
+                entity_id=entity_id, ids=all_ids, bytes_count=bytes, file_count=file_count,
+                item_count=item_count, duration_ms=duration_ms, changes=changes, previous=previous,
+                request_parameters=request_parameters, details=details, max_bytes=max_bytes)
+
+        record = _bounded_action_record(head, build_payload, _compact_echo(event))
         _enqueue_records(ctx, target_group, [record], buffer=outcome_written == OUTCOME_SUCCESS)
     except Exception as e:
         # Silent failure - log locally but don't raise

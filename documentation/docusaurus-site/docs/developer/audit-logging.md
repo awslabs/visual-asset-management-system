@@ -141,7 +141,7 @@ The keys of the earlier orchestration and authorization records stay alongside t
 
 -   Every value section (`changes`, `previous`, `requestParameters`, `details`) passes through the same key-name redaction as the request echo (see [Automatic Data Masking](#automatic-data-masking)), so a credential or template body is written as `<redacted>`.
 -   A value whose JSON text is over 2 KB is replaced by `{"truncated": true, "sha256": "<hex>", "bytes": <size>, "preview": "<first characters>"}`. The SHA-256 is of the value's UTF-8 bytes for a string, and of its canonical JSON text (sorted keys, no spaces, ASCII) otherwise, so you can confirm a copy of the value you hold matches what was written.
--   A record is bounded to 32 KB: past it, the largest values lose their preview and keep their hash, then whole sections are replaced by `{"truncated": true, "sha256", "fieldCount"}`.
+-   A whole action record, prefix, payload and request echo together, is bounded to 32 KB. Past it the request echo is replaced first, by `--- [event: {"truncated": true}]`; then the largest values lose their preview and keep their hash, then whole sections are replaced by `{"truncated": true, "sha256", "fieldCount"}`. The payload then carries `"truncated": true`. A prefix that alone leaves no room (a caller with hundreds of long role names) cuts the record, which ends in ` ...[truncated]` and is read as a partial record.
 
 ### Delivery
 
