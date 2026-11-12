@@ -301,12 +301,35 @@ def _run_remote_body(fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict
         # the next request carries its own token.
         return _remote_not_authenticated("VAMS did not accept this sign-in (it may have expired)")
     except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
+        if _timed_out(exc):
+            # A request that ran into the HTTP timeout is answered like a call past its budget: a read
+            # may be narrowed and retried, while a non-read call may still have been carried out by the
+            # API, so its outcome is unknown and no retry is invited.
+            return _remote_timeout(fn.__name__)
         result = {"error": _scrub(str(exc)), "error_type": type(exc).__name__}
         fields = getattr(exc, "json_fields", None)
         if isinstance(fields, dict):
             for key, value in fields.items():
                 result.setdefault(key, value)
         return result
+
+
+def _timed_out(exc: BaseException) -> bool:
+    """Whether ``exc`` is, or was raised while handling, an HTTP request timeout.
+
+    The CLI turns a ``requests`` timeout into an ``APIError`` (and some client methods wrap that once
+    more), so the exception chain is walked rather than the outer type checked.
+    """
+    import requests
+
+    seen = 0
+    current: Optional[BaseException] = exc
+    while current is not None and seen < 10:
+        if isinstance(current, (requests.exceptions.Timeout, TimeoutError)):
+            return True
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return False
 
 
 # The read tool that shows whether a write, destructive or compute call took effect, by the first
@@ -339,6 +362,7 @@ _OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
     ("tag", "list_tags"),
     ("comment", "list_asset_comments"),
     ("subscri", "list_subscriptions"),
+    ("subscri", "check_subscription"),
     ("user_api_key", "list_user_api_keys"),
     ("api_key", "list_api_keys"),
     ("database", "get_database"),
@@ -347,8 +371,20 @@ _OUTCOME_CHECKS: Tuple[Tuple[str, str], ...] = (
 
 
 def outcome_check_tool(tool_name: str) -> Optional[str]:
-    """The read tool that shows whether a non-read call of ``tool_name`` took effect."""
-    return next((check for fragment, check in _OUTCOME_CHECKS if fragment in tool_name), None)
+    """The read tool that shows whether a non-read call of ``tool_name`` took effect.
+
+    The tool named is in every named tool set that holds ``tool_name``, so whichever set registered
+    the call also lists its check. Earlier entries of ``_OUTCOME_CHECKS`` win.
+    """
+    holding = [members for members in toolsets.TOOLSETS.values() if tool_name in members]
+    return next(
+        (
+            check
+            for fragment, check in _OUTCOME_CHECKS
+            if fragment in tool_name and all(check in members for members in holding)
+        ),
+        None,
+    )
 
 
 def _remote_timeout(tool_name: str) -> Dict[str, Any]:

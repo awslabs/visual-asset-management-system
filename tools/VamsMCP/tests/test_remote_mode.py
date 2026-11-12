@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 from unittest.mock import MagicMock
@@ -330,3 +331,30 @@ def test_an_auth_file_listing_the_web_applications_client_stops_the_server():
         RemoteAuthSettings.from_dict(data)
     data["audiences"] = ["client"]
     assert RemoteAuthSettings.from_dict(data).web_app_client_id == "webclient"
+
+
+@pytest.mark.parametrize("tool, arguments, outcome_unknown", [
+    ("create_folder", {"database_id": "d", "asset_id": "a", "folder_path": "x/"}, True),
+    ("delete_asset_metadata", {"database_id": "d", "asset_id": "a", "metadata_keys": ["k"]}, True),
+    ("list_databases", {}, False),
+])
+async def test_a_single_request_that_times_out_is_answered_by_tier(deployment, tmp_path, tool, arguments,
+                                                                     outcome_unknown):
+    """One API request that runs into the HTTP read timeout, well inside the call's budget."""
+    env = {"VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true", "VAMS_ENABLE_DESTRUCTIVE": "true"}
+    with remote_server_module(deployment.settings_dict("http://127.0.0.1:9/mcp"), tmp_path, env=env) as server:
+        identity = VerifiedIdentity(deployment.token("alice"), "alice", "c", None)
+        deployment.api_delay = 2
+        with request_context.acting_for(identity):
+            server.CLIENT.current().api.request_timeout = (5, 0.5)
+            result = await getattr(server, tool)(**arguments)
+        deployment.api_delay = 0
+        await asyncio.sleep(2.1)  # let the fake API's slow handler finish before it stops
+    text = json.dumps(result)
+    if outcome_unknown:
+        assert result["error_type"] == "ToolTimeout" and result["outcomeUnknown"] is True
+        assert result["checkWith"] in result["error"] and f"Do not call {tool} again" in result["error"]
+        assert "try again" not in text.lower() and "call the tool again" not in text
+    else:
+        assert result["error_type"] == "ToolTimeout" and "outcomeUnknown" not in result
+        assert "call the tool again" in result["error"]

@@ -124,3 +124,28 @@ def test_an_unknown_set_stops_the_server(monkeypatch):
     monkeypatch.setenv("VAMS_MCP_TOOLSETS", "consumer,everything")
     with pytest.raises(ConfigError, match="everything"):
         Config.from_env()
+
+
+@pytest.mark.parametrize("name", sorted(toolsets.TOOLSETS))
+async def test_every_outcome_check_is_a_read_tool_of_the_same_set(every_tool, name):
+    """A non-read call past its time budget names a read tool to check with; the connection must list it."""
+    from vams_mcp import server
+
+    wrong = {}
+    for tool in sorted(toolsets.TOOLSETS[name]):
+        if every_tool[tool].model_dump(by_alias=True)["annotations"]["readOnlyHint"]:
+            continue
+        check = server.outcome_check_tool(tool)
+        annotations = every_tool[check].model_dump(by_alias=True)["annotations"] if check in every_tool else {}
+        if check not in toolsets.TOOLSETS[name] or not annotations.get("readOnlyHint"):
+            wrong[tool] = check
+    assert wrong == {}
+
+
+def test_the_subscription_writes_are_checked_with_a_tool_of_the_operator_set():
+    from vams_mcp import server
+
+    for tool in ("create_subscription", "update_subscription", "delete_subscription", "unsubscribe"):
+        assert server.outcome_check_tool(tool) == "check_subscription"
+    # A tool in no named set (a fork's) takes the first match.
+    assert server.outcome_check_tool("custom_subscription_writer") == "list_subscriptions"
