@@ -148,6 +148,13 @@ export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
 export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
 export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
 
+// The Amazon Bedrock model the commercial partition uses when the GenAI 3D Metadata Labeling or the
+// GenAI CAD STEP agent pipeline names none. It is a commercial cross-Region inference profile, so the
+// restricted-partition templates ship the model id empty instead. Bedrock refuses a model whose
+// lifecycle status is LEGACY to an account that has not called it for 30 days, so this names an
+// ACTIVE model; the config templates and the ConfigBuilder presets carry the same id.
+export const GENAI_DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-sonnet-5-5";
+
 // The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
 // and they must nest so that the parent workflow is still waiting when the run reports its outcome:
 //
@@ -1529,7 +1536,7 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: true,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
-            bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            bedrockModelId: GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
             allowInternetResearch: true,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
@@ -1545,8 +1552,7 @@ export function getConfig(app: cdk.App): Config {
         const cad = config.app.pipelines.useGenAiCadStepAgent;
         if (cad.runtime == undefined) cad.runtime = "agentcore";
         if (cad.useCodeBuild == undefined) cad.useCodeBuild = true;
-        if (cad.bedrockModelId == undefined)
-            cad.bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+        if (cad.bedrockModelId == undefined) cad.bedrockModelId = GENAI_DEFAULT_BEDROCK_MODEL_ID;
         if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
         if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
         if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";

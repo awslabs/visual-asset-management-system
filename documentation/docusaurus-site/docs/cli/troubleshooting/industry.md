@@ -187,7 +187,7 @@ Large assemblies load GLB data into memory, and deep hierarchies with many compo
 
 **Resolution:**
 
-Break large assemblies into smaller sub-assemblies and pre-combine them, place `--local-path` on fast storage, and use `--keep-temp-files` so cached component GLBs are not re-downloaded on retry.
+Break large assemblies into smaller sub-assemblies and pre-combine them, and place `--local-path` on fast storage. Each run downloads every component GLB again into a new timestamped folder, so `--keep-temp-files` keeps a run's files for inspection but does not speed up a retry.
 
 :::tip
 For a reproducible baseline, validate the pipeline against a minimal BOM containing two or three components before scaling up to a full assembly.

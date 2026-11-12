@@ -12,7 +12,8 @@ instructions, in each MCP client the release supports (at least Kiro and Claude 
 2. A vamscli profile signed in to it as a user with read access (`vamscli setup` +
    `vamscli auth login`).
 3. The client configured with the README's `mcpServers` sample, including its `autoApprove` list,
-   with the gates off (reads only).
+   with the gates off (reads only). S6 needs `VAMS_ENABLE_WRITES=true` and a synthetic asset
+   holding a file it may move.
 4. Run each scenario in a **fresh session** started in a directory that is **not** a VAMS checkout,
    and once more inside a VAMS checkout (the repository's steering is then in the agent's context;
    the result must be the same).
@@ -31,6 +32,8 @@ use.
 | S3  | "Give me a download link for `<file name>` in that asset." (same session)       | `list_asset_files` (or `search_files`), `generate_download_url` | a presigned URL; the agent asks first or notes it is a credential |
 | S4  | "Which workflow run failed most recently, and why?"                             | `list_executions` (status FAILED), `get_execution_details`      | the execution id, its workflow, and the step error                |
 | S5  | Signed out (`vamscli auth logout` first): "List my VAMS databases."             | `vams_status` or any read tool, answered `NotAuthenticated`     | a request that the user sign in; no attempt to sign in            |
+| S6  | Writes on: "In asset `<asset name>`, rename `<file>` to `<new name>`."          | `move_file` (after `list_asset_files` or `get_file_info`)       | the new relative path; the file shown under it afterwards         |
+| S7  | "Which optional features does this VAMS deployment have enabled?"               | `list_features` (or `vams_status`)                              | the enabled feature switches and when they were recorded          |
 
 ## Pass criteria
 
@@ -43,6 +46,7 @@ A scenario **passes** when all of these hold:
     result was partial.
 -   S3: the agent did not generate URLs for files the user did not ask for.
 -   S5: the agent did not run `vamscli` itself; it relayed the sign-in step for the user.
+-   S6: the agent moved only the named file and did not use `copy_file` plus a delete.
 
 The release passes when every scenario passes in every supported client, inside and outside a VAMS
 checkout. Record each run (client and version, scenario, pass/fail, the tools called) in the review

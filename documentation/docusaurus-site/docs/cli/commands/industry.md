@@ -17,15 +17,15 @@ Assemble GLB geometry from a BOM JSON hierarchy. Parses a BOM file, resolves eac
 vamscli industry engineering bom bomassemble [OPTIONS]
 ```
 
-| Option                     | Type | Required | Description                                                                             |
-| -------------------------- | ---- | -------- | --------------------------------------------------------------------------------------- |
-| `-j`, `--json-file`        | TEXT | Yes      | Path to the BOM JSON file                                                               |
-| `-d`, `--database-id`      | TEXT | Yes      | Database ID containing the assets                                                       |
-| `--local-path`             | PATH | No       | Local path for temporary files (default: system temp)                                   |
-| `--keep-temp-files`        | Flag | No       | Keep temporary files after processing                                                   |
-| `--asset-create-name`      | TEXT | No       | Create a new asset with this name and upload all generated GLB files                    |
-| `--delete-temporary-files` | Flag | No       | Delete temp files after upload (default: true; applies only with `--asset-create-name`) |
-| `--json-output`            | Flag | No       | Output raw JSON response                                                                |
+| Option                                                     | Type | Required | Description                                                                           |
+| ---------------------------------------------------------- | ---- | -------- | ------------------------------------------------------------------------------------- |
+| `-j`, `--json-file`                                        | TEXT | Yes      | Path to the BOM JSON file                                                             |
+| `-d`, `--database-id`                                      | TEXT | Yes      | Database ID containing the assets                                                     |
+| `--local-path`                                             | PATH | No       | Local path for temporary files (default: system temp)                                 |
+| `--keep-temp-files`                                        | Flag | No       | Keep temporary files after processing                                                 |
+| `--asset-create-name`                                      | TEXT | No       | Create a new asset with this name and upload all generated GLB files                  |
+| `--delete-temporary-files` / `--no-delete-temporary-files` | Flag | No       | Delete temp files after upload (default: on; applies only with `--asset-create-name`) |
+| `--json-output`                                            | Flag | No       | Output raw JSON response                                                              |
 
 ### BOM JSON format
 
@@ -76,7 +76,7 @@ The `matrix` field is a 4x4 transform stored as 16 floats in column-major order.
 For each VAMS-stored source, `bomassemble` invokes `industry spatial glbassetcombine` to obtain that asset's combined GLB (including any of its own child assets) before applying the BOM node transforms. Source names in the BOM must match the VAMS asset names exactly.
 :::
 
-When `--asset-create-name` is provided, the command creates the new asset and uploads the assembled root GLB(s), the downloaded and intermediate component GLBs, and the original BOM JSON file. Temporary files are then removed unless `--keep-temp-files` is set or a `--local-path` was supplied.
+When `--asset-create-name` is provided, the command creates the new asset and uploads the assembled root GLB(s), the downloaded and intermediate component GLBs, and the original BOM JSON file. Temporary files are then removed unless `--keep-temp-files` or `--no-delete-temporary-files` is set or a `--local-path` was supplied. The result's `temporary_directory` names the run's folder whenever it is kept, and reads `deleted` otherwise.
 
 ### Examples
 
@@ -163,21 +163,21 @@ Combine multiple GLB files from an asset hierarchy into a single GLB file, apply
 vamscli industry spatial glbassetcombine [OPTIONS]
 ```
 
-| Option                              | Type | Required | Description                                                                             |
-| ----------------------------------- | ---- | -------- | --------------------------------------------------------------------------------------- |
-| `-d`, `--database-id`               | TEXT | Yes      | Database ID containing the root asset                                                   |
-| `-a`, `--asset-id`                  | TEXT | Yes      | Root asset ID to start the hierarchy from                                               |
-| `--include-only-primary-type-files` | Flag | No       | Include only files with `primaryType` set (default: false)                              |
-| `--no-file-metadata`                | Flag | No       | Exclude file metadata from the export (default: false)                                  |
-| `--no-asset-metadata`               | Flag | No       | Exclude asset metadata from the export (default: false)                                 |
-| `--fetch-entire-subtrees`           | Flag | No       | Fetch entire child relationship subtrees (default: true)                                |
-| `--include-parent-relationships`    | Flag | No       | Include parent relationships in the relationship data (default: false)                  |
-| `--local-path`                      | PATH | No       | Local path for temporary files (default: system temp)                                   |
-| `--asset-create-name`               | TEXT | No       | Create a new asset with the combined GLB                                                |
-| `--delete-temporary-files`          | Flag | No       | Delete temp files after upload (default: true; applies only with `--asset-create-name`) |
-| `--json-output`                     | Flag | No       | Output raw JSON response                                                                |
+| Option                                                     | Type | Required | Description                                                                           |
+| ---------------------------------------------------------- | ---- | -------- | ------------------------------------------------------------------------------------- |
+| `-d`, `--database-id`                                      | TEXT | Yes      | Database ID containing the root asset                                                 |
+| `-a`, `--asset-id`                                         | TEXT | Yes      | Root asset ID to start the hierarchy from                                             |
+| `--include-only-primary-type-files`                        | Flag | No       | Include only files with `primaryType` set (default: false)                            |
+| `--no-file-metadata`                                       | Flag | No       | Exclude file metadata from the export (default: false)                                |
+| `--no-asset-metadata`                                      | Flag | No       | Exclude asset metadata from the export (default: false)                               |
+| `--fetch-entire-subtrees`                                  | Flag | No       | Fetch entire child relationship subtrees (default: true)                              |
+| `--include-parent-relationships`                           | Flag | No       | Include parent relationships in the relationship data (default: false)                |
+| `--local-path`                                             | PATH | No       | Local path for temporary files (default: system temp)                                 |
+| `--asset-create-name`                                      | TEXT | No       | Create a new asset with the combined GLB                                              |
+| `--delete-temporary-files` / `--no-delete-temporary-files` | Flag | No       | Delete temp files after upload (default: on; applies only with `--asset-create-name`) |
+| `--json-output`                                            | Flag | No       | Output raw JSON response                                                              |
 
-The command exports the asset hierarchy (downloading `.glb` files), builds a complete transform tree containing a node for every asset, merges each asset's GLB meshes onto its node, and writes the combined GLB. With `--asset-create-name` it then creates a new asset and uploads the combined GLB and the export JSON.
+The command exports the asset hierarchy (downloading `.glb` files), builds a complete transform tree containing a node for every asset, merges each asset's GLB meshes onto its node, and writes the combined GLB. With `--asset-create-name` it then creates a new asset and uploads the combined GLB and the export JSON. Unless a `--local-path` was supplied, the temporary folder is removed at the end of the run; with `--asset-create-name`, `--no-delete-temporary-files` keeps it.
 
 :::note[At least one GLB required]
 The hierarchy must contain at least one GLB file. Assets without GLB files still receive an empty transform node so the parent-child structure is preserved, but the command fails if no GLB is found anywhere in the hierarchy.
