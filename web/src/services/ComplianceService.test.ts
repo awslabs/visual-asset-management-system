@@ -4,10 +4,11 @@
  */
 
 jest.mock("./apiClient", () => ({
+    ...jest.requireActual("./apiClient"),
     apiClient: { get: jest.fn(), post: jest.fn(), put: jest.fn(), del: jest.fn() },
 }));
 
-import { apiClient } from "./apiClient";
+import { apiClient, ApiError } from "./apiClient";
 import {
     awaitingReevaluationText,
     bindingResultText,
@@ -369,9 +370,10 @@ describe("paged listings", () => {
     });
 
     it("returns the backend error message as a failed tuple", async () => {
-        get.mockResolvedValue({ message: "Invalid pagination token error" });
+        // An invalid token is a 400: apiClient throws it with the API's message.
+        get.mockRejectedValue(new ApiError("Invalid pagination token", 400));
         const result = await fetchAuditLog({ startingToken: "garbage" });
-        expect(result).toEqual([false, "Invalid pagination token error"]);
+        expect(result).toEqual([false, "Invalid pagination token"]);
     });
 });
 

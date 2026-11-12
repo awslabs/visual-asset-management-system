@@ -873,10 +873,23 @@ const withFilters = (
     return query;
 };
 
-const responseErrored = (response: any): boolean =>
-    !!response?.message &&
-    typeof response.message === "string" &&
-    (response.message.includes("error") || response.message.includes("Error"));
+/**
+ * Whether an answer the API gave reports a failure. A non-2xx answer never gets here: `apiClient`
+ * throws it as an `ApiError` carrying the API's message (a refusal, a `409` while a binding change
+ * is applied, a validation error), and each function's `catch` returns that message. A 2xx answer
+ * fails only when it says so (`success: false`) or is not the JSON object every compliance route
+ * answers with. The message is never searched for "error": a success message repeats names the
+ * caller chose, such as a schema named `error-budget` (web/CLAUDE.md 4.1).
+ */
+const answerFailed = (response: any): boolean =>
+    response === null ||
+    typeof response !== "object" ||
+    Array.isArray(response) ||
+    response.success === false;
+
+/** The text of a failed answer: the API's message, else the function's own failure text. */
+const failureMessage = (response: any, fallback: string): string =>
+    typeof response?.message === "string" && response.message ? response.message : fallback;
 
 /** The suffix of an archived asset's database id, as the asset routes return its record. */
 export const ARCHIVED_DATABASE_ID_SUFFIX = "#deleted";
@@ -905,11 +918,8 @@ export const fetchComplianceSchemas = async (
             "compliance/schemas",
             databaseId ? { queryStringParameters: { databaseId } } : {}
         );
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch compliance schemas")];
         }
         return [true, response.schemas || response.Items || []];
     } catch (error: any) {
@@ -927,11 +937,8 @@ export const fetchComplianceSchemaListing = async (): Promise<
 > => {
     try {
         const response = await apiClient.get("compliance/schemas", {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch compliance schemas")];
         }
         return [
             true,
@@ -953,11 +960,8 @@ export const fetchComplianceSchema = async (
 ): Promise<[boolean, ComplianceSchema | string]> => {
     try {
         const response = await apiClient.get(`compliance/schemas/${schemaName}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch compliance schema")];
         }
         return [true, response];
     } catch (error: any) {
@@ -973,11 +977,8 @@ export const createComplianceSchema = async (
         const response = await apiClient.post("compliance/schemas", {
             body: schema,
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to create compliance schema")];
         }
         return [true, response];
     } catch (error: any) {
@@ -994,11 +995,8 @@ export const updateComplianceSchema = async (
         const response = await apiClient.put(`compliance/schemas/${schemaName}`, {
             body: schema,
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to update compliance schema")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1017,11 +1015,8 @@ export const evaluateAssetCompliance = async (
         const response = await apiClient.post(`compliance/evaluate/${databaseId}/${assetId}`, {
             body: {},
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to evaluate asset compliance")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1079,11 +1074,8 @@ export const evaluateDatabaseCompliance = async (
         const response = await apiClient.post(`compliance/evaluate/${databaseId}`, {
             body: sweepBody(startingToken),
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to evaluate the assets")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1101,11 +1093,8 @@ export const sweepSchema = async (
         const response = await apiClient.post(`compliance/sweep/${schemaName}`, {
             body: sweepBody(startingToken),
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to sweep schema")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1123,8 +1112,8 @@ export const fetchEvaluationHistory = async (
         const response = await apiClient.get(`compliance/evaluations/${databaseId}/${assetId}`, {
             queryStringParameters: pagingQuery(paging),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch evaluation history")];
         }
         return [
             true,
@@ -1145,11 +1134,8 @@ export const fetchComplianceState = async (
 ): Promise<[boolean, ComplianceState | string]> => {
     try {
         const response = await apiClient.get(`compliance/state/${databaseId}/${assetId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch compliance state")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1211,8 +1197,11 @@ export const fetchDatabaseComplianceOverview = async (
         const response = await apiClient.get(`compliance/state/${databaseId}`, {
             queryStringParameters: withFilters(pagingQuery(paging), { ...filters }),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [
+                false,
+                failureMessage(response, "Failed to fetch database compliance overview"),
+            ];
         }
         const { NextToken, ...overview } = response;
         return [
@@ -1250,8 +1239,8 @@ export const fetchQuarantinedAssets = async (
         const response = await apiClient.get("compliance/quarantine", {
             queryStringParameters: withFilters(pagingQuery(paging), { ...filters }),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch quarantined assets")];
         }
         return [
             true,
@@ -1281,11 +1270,8 @@ export const releaseFromQuarantine = async (
             `compliance/quarantine/${databaseId}/${assetId}/release`,
             { body: reason ? { reason } : {} }
         );
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to release from quarantine")];
         }
         return [true, response.message || "Released from quarantine"];
     } catch (error: any) {
@@ -1304,11 +1290,8 @@ export const grantException = async (
             `compliance/quarantine/${databaseId}/${assetId}/exception`,
             { body: { reason } }
         );
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to grant exception")];
         }
         return [true, response.message || "Exception granted"];
     } catch (error: any) {
@@ -1339,8 +1322,8 @@ export const revokeException = async (
             `compliance/quarantine/${databaseId}/${assetId}/exception`,
             {}
         );
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to revoke exception")];
         }
         return [
             true,
@@ -1383,11 +1366,8 @@ export const fetchCascades = async (
                 text: params?.text,
             }),
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch cascades")];
         }
         return [
             true,
@@ -1407,8 +1387,8 @@ export const fetchCascade = async (
 ): Promise<[boolean, CascadeRecord | string]> => {
     try {
         const response = await apiClient.get(`compliance/cascades/${cascadeId}`, {});
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch cascade")];
         }
         return [true, response];
     } catch (error: any) {
@@ -1429,8 +1409,8 @@ export const approveCascade = async (
         const response = await apiClient.post(`compliance/cascades/${cascadeId}/approve`, {
             body: reason === undefined ? {} : { reason },
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to approve cascade")];
         }
         return [
             true,
@@ -1454,8 +1434,8 @@ export const rejectCascade = async (
         const response = await apiClient.post(`compliance/cascades/${cascadeId}/reject`, {
             body: reason === undefined ? {} : { reason },
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to reject cascade")];
         }
         return [true, response.message || "Cascade rejected"];
     } catch (error: any) {
@@ -1474,11 +1454,8 @@ export const bindSchemaToDatabase = async (
         const response = await apiClient.put(`compliance/bind/${databaseId}`, {
             body: { schemaName },
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to bind schema to database")];
         }
         return [true, response.message || "Schema bound to database", response || undefined];
     } catch (error: any) {
@@ -1518,11 +1495,8 @@ export const unbindSchemaFromDatabase = async (
 ): Promise<[boolean, string, ComplianceBindingResult?]> => {
     try {
         const response = await apiClient.del(`compliance/bind/${databaseId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to unbind schema from database")];
         }
         return [true, response.message || "Schema unbound from database", response || undefined];
     } catch (error: any) {
@@ -1540,11 +1514,8 @@ export const bindSchemaToAsset = async (
         const response = await apiClient.put(`compliance/bind/${databaseId}/${assetId}`, {
             body: { schemaName },
         });
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to bind schema to asset")];
         }
         return [true, response.message || "Schema bound to asset"];
     } catch (error: any) {
@@ -1559,11 +1530,8 @@ export const unbindSchemaFromAsset = async (
 ): Promise<[boolean, string]> => {
     try {
         const response = await apiClient.del(`compliance/bind/${databaseId}/${assetId}`, {});
-        if (
-            response?.message &&
-            (response.message.includes("error") || response.message.includes("Error"))
-        ) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to unbind schema from asset")];
         }
         return [true, response.message || "Schema unbound from asset"];
     } catch (error: any) {
@@ -1603,8 +1571,8 @@ export const getDatabaseBindings = async (
         const response = await apiClient.get(`compliance/bind/${databaseId}`, {
             queryStringParameters: pagingQuery(paging),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to get database bindings")];
         }
         const { NextToken, ...bindings } = response;
         return [
@@ -1671,8 +1639,8 @@ export const fetchAssetAuditHistory = async (
         const response = await apiClient.get(`compliance/audit/${databaseId}/${assetId}`, {
             queryStringParameters: auditQuery(params),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch audit history")];
         }
         return [true, pagedEntries(response)];
     } catch (error: any) {
@@ -1688,8 +1656,8 @@ export const fetchAuditLog = async (
         const response = await apiClient.get("compliance/audit", {
             queryStringParameters: globalAuditQuery(params),
         });
-        if (responseErrored(response)) {
-            return [false, response.message];
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch audit log")];
         }
         return [true, pagedEntries(response)];
     } catch (error: any) {
