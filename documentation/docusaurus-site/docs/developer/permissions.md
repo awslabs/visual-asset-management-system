@@ -267,7 +267,7 @@ View-only access scoped to a single database. Can browse assets, view files, and
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
 -   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow GET only on `/auth/user/api-keys` (the user can view their own API keys but cannot create, extend, or delete them)
--   `api` (download) -- Allow POST on paths that start with `/database/` and end with `/download`: the file download request the file viewers and the download action make, a read whose body names the file and version. Both criteria are in `criteriaAnd`, so no write route under `/database` matches the grant
+-   `api` (download) -- Allow POST on the file download route (`route__path equals /database/[^/]+/assets/[^/]+/download`): the file download request the file viewers and the download action make, a read whose body names the file and version. The criterion is a full-path match on the request path, so no other route under `/database` matches the grant, including a write route whose last path parameter is set to `download`
 -   `api` (deny) -- Deny GET on paths ending in `/logs`, withholding the detailed execution-logs route that the broad `/workflows` GET allow would otherwise reach
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`

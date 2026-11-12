@@ -208,12 +208,14 @@ describe("seeded basicReadOnly api constraints", () => {
 });
 
 describe("seeded basicReadOnly file download grant", () => {
-    it("grants POST on paths that start with /database/ and end with /download, and nothing wider", () => {
+    it("grants POST on exactly the download route, and nothing wider", () => {
         const constraint = byId("allow_download_api");
         expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        // One full-path match: a starts_with /database/ + ends_with /download pair would also match
+        // POST routes whose last segment is a path parameter set to "download" (revertFileVersion,
+        // revertAssetVersion).
         expect(constraint.routeCriteriaAnd).toEqual([
-            { operator: "starts_with", value: "/database/" },
-            { operator: "ends_with", value: "/download" },
+            { operator: "equals", value: "/database/[^/]+/assets/[^/]+/download" },
         ]);
         // A route value in criteriaOr would be OR-joined after the AND list and widen the grant.
         expect(constraint.routeValuesOr).toEqual([]);
