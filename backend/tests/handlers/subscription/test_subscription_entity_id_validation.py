@@ -1,14 +1,18 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""entityId validation on the subscription write routes (#1197).
+"""entityId validation on the subscription write routes, and its listing (#1197).
 
 For ``entityName: "Asset"`` the ``entityId`` is an asset ID, so ``POST``, ``PUT`` and
 ``DELETE /subscriptions`` and ``DELETE /unsubscribe`` validate it with the asset ID rule
 (``ASSET_ID``) that asset creation and ``POST /check-subscription`` use. Every asset ID the
-asset API accepts, dotted, spaced or longer than 63 characters included, reaches the asset
-lookup and the subscription operation; an ID that rule refuses is answered 400 before any
-lookup. ``#`` stays refused, which keeps the ``entityName#entityId`` row key unambiguous.
+asset API accepts, dotted, spaced, longer than 63 characters or ending in ``#`` included,
+reaches the asset lookup and the subscription operation; an ID that rule refuses (``#``
+anywhere but the last character among them) is answered 400 before any lookup.
+
+A subscription row is keyed ``<entityName>#<entityId>``. ``entityName`` cannot contain ``#``
+(``OBJECT_NAME``), so ``GET /subscriptions`` splits the key at its first ``#`` and returns the
+rest whole as the entityId, whatever ``#`` it contains.
 """
 
 import json
@@ -27,10 +31,11 @@ ACCEPTED_IDS = [
     pytest.param("site 4.rev2", id="space-and-dot"),
     pytest.param("a" * 64, id="64-chars"),
     pytest.param("a" * 255, id="longest-asset-id"),
+    pytest.param("abc#", id="trailing-hash"),
 ]
 
 REFUSED_IDS = [
-    pytest.param("ab#c", id="hash"),
+    pytest.param("ab#c", id="hash-mid-string"),
     pytest.param("a/b", id="slash"),
     pytest.param("trailing.", id="trailing-dot"),
     pytest.param("trailing ", id="trailing-space"),
@@ -131,3 +136,70 @@ class TestSubscriptionEntityIdFollowsTheAssetIdRule:
         assert json.loads(response["body"])["message"].startswith("entityId ")
         assert lookup.calls == []
         assert downstream.bodies == []
+
+
+class StubScan:
+    """Stand-in for the dynamodb client's scan paginator, returning one fixed page."""
+
+    def __init__(self, items):
+        self.items = items
+
+    def get_paginator(self, operation):
+        assert operation == "scan"
+        return self
+
+    def paginate(self, **kwargs):
+        return self
+
+    def build_full_result(self):
+        return {"Items": self.items}
+
+
+def _row(entity_id):
+    # The key create_subscription writes: f'{entityName}#{entityId}'
+    return {
+        "eventName": {"S": "Asset Version Change"},
+        "entityName_entityId": {"S": f"Asset#{entity_id}"},
+        "subscribers": {"L": [{"S": "test-user@example.com"}]},
+    }
+
+
+def _list(monkeypatch, entity_ids):
+    monkeypatch.setattr(
+        subscriptionService, "request_to_claims", lambda event: {"tokens": ["test-user@example.com"]})
+    monkeypatch.setattr(subscriptionService, "CasbinEnforcer", AllowingEnforcer())
+    monkeypatch.setattr(subscriptionService, "get_asset_object_from_id", RecordingLookup())
+    monkeypatch.setattr(
+        subscriptionService, "dynamodb_client", StubScan([_row(i) for i in entity_ids]))
+    event = {
+        "requestContext": {"http": {"method": "GET", "path": "/subscriptions"}},
+        "queryStringParameters": {"maxItems": "10", "pageSize": "10", "startingToken": ""},
+    }
+    return subscriptionService.lambda_handler(event, None)
+
+
+@pytest.mark.unit
+class TestSubscriptionListingParsesEveryAssetId:
+
+    @pytest.mark.parametrize("entity_id", [
+        pytest.param("building-model", id="plain"),
+        pytest.param("smk.dotted.u2", id="dotted"),
+        pytest.param("abc#", id="trailing-hash"),
+        pytest.param("a#", id="shortest-trailing-hash"),
+        # Not writable through the API (the asset ID rule refuses it), but the parser
+        # still returns everything after the first '#' whole
+        pytest.param("ab#c", id="hash-mid-string"),
+    ])
+    def test_a_row_lists_with_its_entity_id_whole(self, monkeypatch, entity_id):
+        response = _list(monkeypatch, [entity_id])
+
+        assert response["statusCode"] == 200, response["body"]
+        items = json.loads(response["body"])["message"]["Items"]
+        assert [(i["entityName"], i["entityId"]) for i in items] == [("Asset", entity_id)]
+
+    def test_one_trailing_hash_row_does_not_break_the_listing_of_the_others(self, monkeypatch):
+        response = _list(monkeypatch, ["building-model", "abc#", "smk.dotted.u2"])
+
+        assert response["statusCode"] == 200, response["body"]
+        items = json.loads(response["body"])["message"]["Items"]
+        assert [i["entityId"] for i in items] == ["building-model", "abc#", "smk.dotted.u2"]
