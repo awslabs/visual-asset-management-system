@@ -345,6 +345,11 @@ is absent, so the callback cannot tell "omitted" from "explicitly asked for the 
 default profile points at, while still reporting success. A bare `ProfileManager()` or
 `APIClient(url)` has the same effect. Guarded by `tests/test_active_profile_resolution.py`.
 
+`APIClient(base_url, bearer_token=token)` (#1338) is the one client that reads no profile: a process
+that serves several users (a remote MCP server) builds one per request from the caller's own token,
+held in memory on that instance, never saved and never refreshed (a 401 or authorizer deny is raised
+after one send). CLI commands never use it. Guarded by `tests/test_api_client_injected_token.py`.
+
 A hint printed to the user names a command Click accepts. `--profile`, `--verbose` and `--version`
 are root-group options and go **before** the subcommand (`vamscli --profile <name> setup <url>`);
 token-override guidance names `auth set-override -u <user-id> --token-stdin` or
