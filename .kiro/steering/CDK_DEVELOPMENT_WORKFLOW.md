@@ -2537,6 +2537,12 @@ export function buildApiGatewayAuthorizerRestFunction(
     if (config.app.authProvider.useCognito.enabled) {
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Replaced at runtime
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Replaced at runtime
+        // Extra accepted app clients (#1328): emitted ONLY when listed, so a deployment without
+        // the option synthesizes the same authorizer
+        const extraClients = config.app.authProvider.useCognito.additionalTokenAudiences;
+        if (extraClients && extraClients.length > 0) {
+            environment.ADDITIONAL_APP_CLIENT_IDS = JSON.stringify(extraClients);
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled) {
@@ -2544,6 +2550,11 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
         environment.JWT_AUDIENCE =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+        // Extra accepted audiences (#1328), same rule
+        const extraAudiences = config.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences;
+        if (extraAudiences && extraAudiences.length > 0) {
+            environment.JWT_ADDITIONAL_AUDIENCES = JSON.stringify(extraAudiences);
+        }
     }
 
     const authorizerFunc = new lambda.Function(scope, name, {

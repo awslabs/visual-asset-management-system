@@ -450,7 +450,8 @@
                 "useOidc": false,
                 "useUserPasswordAuthFlow": false,
                 "credTokenTimeoutSeconds": 3600,
-                "retainLegacyGroupsAttribute": false
+                "retainLegacyGroupsAttribute": false,
+                "additionalTokenAudiences": []
             },
             "useExternalOAuthIdp": {
                 "enabled": false,
@@ -464,7 +465,8 @@
                 "idpAuthProviderAuthorizationEndpoint": null,
                 "idpAuthProviderDiscoveryEndpoint": null,
                 "lambdaAuthorizorJWTIssuerUrl": null,
-                "lambdaAuthorizorJWTAudience": null
+                "lambdaAuthorizorJWTAudience": null,
+                "additionalTokenAudiences": []
             }
         },
         "webUi": {
