@@ -326,6 +326,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
 -   **Uploads of files over 1 GiB** — An upload whose every file is over 1 GiB reports success with the files marked for asynchronous processing, instead of "No files were successfully uploaded" while the files land; `vamscli file upload` exits 0 and a workflow whose asset-file outputs are all over 1 GiB no longer fails at the write-back. (issue #1140)
 -   **Validation errors logged at WARNING** — The shared validation-error response logs a request refused with a 4xx at WARNING instead of ERROR, so it no longer adds an ERROR line for a request the caller got wrong; a 5xx stays at ERROR, and the audit entry and the response are unchanged. (issue #1304)
+-   **CLI sign-in names an IP restriction** — `vamscli auth login` reports a 403 from the API's authorizer on its version check as `Permission Denied`, says the API is reachable, and names the deployment's source IP restriction as the likely cause; it reported `API Unavailable`. (issue #1358)
 
 **Other changes:**
 
