@@ -107,7 +107,7 @@ flowchart LR
 
 ### Processing Steps
 
-1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket, then the files it references from the same asset: a glTF file's buffers and images, a USD layer's sublayers, references, payloads and asset-valued attributes such as texture paths (followed through each fetched layer), an OBJ file's material libraries and the texture maps they name, an FBX file's texture files, an `.lcc` scene's data files, and the chunk files of the level of detail an `.lcc2` scene is read at. A reference is fetched only when it is a relative path that stays inside the input's own asset; absolute paths, `..` segments that leave the asset, and URIs (`s3://`, `http(s)://`, `file:`) are skipped. At most 2,000 referenced files and 50 GiB are fetched, each checked against free disk space first. A skipped or missing reference is logged and does not fail the run.
+1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket, then the files it references from the same asset: a glTF file's buffers and images, a USD layer's sublayers, references, payloads and asset-valued attributes such as texture paths (followed through each fetched layer), an OBJ file's material libraries and the texture maps they name, an FBX file's texture files, an `.lcc` scene's data files, and the chunk files of the level of detail an `.lcc2` scene is read at. A reference is fetched only when it is a relative path that stays inside the input's own asset; absolute paths, `..` segments that leave the asset, and URIs (`s3://`, `http(s)://`, `file:`) are skipped. At most 2,000 referenced files and 50 GiB are fetched, each checked against free disk space first. A skipped or missing reference is logged and does not fail the run, but the preview is then incomplete: see [Incomplete previews](#incomplete-previews).
 2. **Load** -- A format-specific handler (mesh, point cloud, CAD, USD, Gaussian splat, or the built-in 3MF and COLLADA reader) loads the file into a PyVista PolyData object. The handler is chosen by extension, except that a `.ply` is routed by its header: splat properties to the splat handler, faces to the mesh handler, and vertices only to the point cloud handler.
 3. **Normalize** -- The pipeline turns the model Y-up from what the file or its format declares. LAS, LAZ, E57, PTX, PTS and PCD are Z-up and are rotated; FBX `UpAxis`, COLLADA `<up_axis>`, the USD stage up axis and the 3MF specification are applied; glTF is Y-up. Gaussian splat scenes are turned from the 3D Gaussian Splatting (COLMAP) Y-down convention. Other formats, STL included, render as authored.
 4. **Render** -- PyVista renders with headless off-screen rendering via Xvfb: a 36-frame orbit for an animated or `auto` output, or one front three-quarter view for a `jpg` or `png` output. A mesh is framed on its full bounds and a point cloud on its 2nd-98th percentile bounds, which ignores stray points. If the orbit fails, the pipeline falls back to the single still view.
@@ -127,6 +127,34 @@ The pipeline generates preview files with the following naming convention:
 GIF and PNG previews have a transparent background; a JPEG preview is composited onto white. A still shows the front three-quarter view, 45 degrees around the orbit and 25 degrees above it.
 
 These files are written to `outputS3AssetFilesPath`, which maps to the asset bucket. The relative subdirectory from the input path is preserved so the VAMS process-output step can locate and register the previews correctly.
+
+### Incomplete previews
+
+When any referenced file could not be fetched, the run still succeeds and writes its preview, and the job log says the preview is incomplete. After the download step the log carries one warning summary that gives the count and lists each skipped file, the file that names it, and the reason:
+
+-   **missing from the asset** -- the file is not in the input's asset (or could not be downloaded from it).
+-   **outside the asset** -- an absolute path, a URI scheme such as `http://` or `omniverse://`, or a `..` path that leaves the asset.
+-   **over the file, byte or disk budget** -- the fetch limits above were reached.
+
+The summary groups the skipped files by what their absence costs the preview:
+
+-   **Geometry layers** -- USD sublayers, references and payloads that name a USD layer (`.usd`, `.usda`, `.usdc`, `.usdz`). Part of the model is missing.
+-   **Data files** -- glTF buffers (`.bin`), the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene, and USD value clips (a `clips` set's asset paths and manifest). Geometry, points or animated geometry are missing.
+-   **Textures and other files** -- images, OBJ material libraries and other asset-valued attributes. Colour or detail may be missing.
+
+A composition arc to a file that is not a USD layer (a `.mtlx` material, for example) counts as a texture or other file. Two kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD layer or prim metadata (a component's `assetInfo` `identifier`, or a source-file path an exporter wrote into `customLayerData` or `customData`), and MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library. They are still looked up as before and appear in the log, but never make a preview incomplete.
+
+Once the preview has been written, the run's completion line reads, for example:
+
+```
+Preview generated, but incomplete: 2 referenced files could not be fetched (1 geometry layer, 0 data files, 1 texture/other file). See the job log for the list.
+```
+
+A run that fails after the fetch (for example because a missing glTF buffer leaves nothing to load) reports its failure as before; the skipped-files summary is still in its log.
+
+The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, data files, and textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset. A reference outside the asset is recorded by its reason and at most its bare file name; no bucket, host, port, share or folder is ever written. The full reference is in the job log.
+
+A run that fetched every referenced file ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
 
 :::note[Relative Path Preservation]
 If the input file is at `<assetId>/subfolder/model.glb`, the preview is written to `<assetId>/subfolder/model.glb.previewFile.gif`. The `assetId` is threaded through the pipeline from the workflow state to ensure correct path computation.

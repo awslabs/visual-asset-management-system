@@ -38,15 +38,20 @@ logger = get_logger()
 # writes a still otherwise; a named format applies to every input.
 OUTPUT_TYPE_AUTO = "auto"
 OUTPUT_TYPES = (OUTPUT_TYPE_AUTO, "gif", "jpg", "png")
+# The completion message of a run whose preview has everything it references. A run that skipped
+# referenced files completes with the incomplete-preview message instead (dependencies.IncompletePreview).
+SUCCESS_MESSAGE = "Preview 3D Thumbnail pipeline executed successfully."
 
 
 def hello():
     logger.info("Preview 3D Thumbnail Pipeline - Generates preview images from 3D files")
 
 
-def run(params: dict) -> PipelineExecutionParams:
+def run(params: dict, results_location: dict = None) -> PipelineExecutionParams:
     """
-    Core runner for Preview 3D Thumbnail Pipeline.
+    Core runner for Preview 3D Thumbnail Pipeline. ``results_location`` is the execution's results
+    folder (``{"bucketName", "objectDir"}``), where an incomplete preview's result document is written;
+    None when the launching Lambda named none.
     """
     # Convert input to data type
     definition = PipelineDefinition(**params)
@@ -105,6 +110,7 @@ def run(params: dict) -> PipelineExecutionParams:
             input_configuration,
             definition.localTest == "True",
             definition.assetId,
+            results_location=results_location,
         )
     except Exception as e:
         logger.exception(f"Unexpected error in preview pipeline: {e}")
@@ -154,6 +160,7 @@ def _run_preview_pipeline(
     inputParameters: dict = None,
     localTest: bool = False,
     assetId: str = "",
+    results_location: dict = None,
 ) -> PipelineStage:
     """
     Run the preview generation pipeline for a single stage, logging the run's compute resources,
@@ -167,7 +174,7 @@ def _run_preview_pipeline(
     timer = PhaseTimer()
     try:
         return _run_preview_stage(stage, inputMetadata, inputParameters, localTest, assetId,
-                                  budgets, timer)
+                                  budgets, timer, results_location)
     finally:
         logger.info(timer.summary())
 
@@ -180,6 +187,7 @@ def _run_preview_stage(
     assetId: str,
     budgets: "resources.Budgets",
     timer: PhaseTimer,
+    results_location: dict = None,
 ) -> PipelineStage:
     """
     1. Download input file from S3 (a line-oriented point cloud is streamed instead)
@@ -318,8 +326,11 @@ def _run_preview_stage(
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
-    # reference is skipped; the input still renders.
+    # reference is skipped; the input still renders, and the run reports the preview as incomplete.
+    incomplete = None
     if not localTest and not streamed and dependencies.has_references(ext):
+        fetch_report = dependencies.FetchReport()
+        fetch_error = None
         try:
             with timer.phase("fetch"):
                 dependencies.fetch_referenced_files(
@@ -330,9 +341,14 @@ def _run_preview_stage(
                     reference_root_key,
                     ext,
                     max_splats=budgets.splats,
+                    report=fetch_report,
                 )
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
+            fetch_error = e
+        incomplete = dependencies.incomplete_preview(fetch_report, fetch_error)
+        if incomplete is not None:
+            incomplete.log()
 
     # Load with appropriate handler, then bring the geometry within the render budgets
     try:
@@ -456,7 +472,34 @@ def _run_preview_stage(
         logger.exception(f"Failed to save/upload preview: {e}")
         return _error_response(stage, f"Failed to save/upload preview: {str(e)}")
 
+    if incomplete is not None:
+        _write_incomplete_result(
+            results_location, incomplete,
+            dependencies.relative_to_root(stage_input.objectKey, reference_root_key))
+        return _success_response(stage, incomplete.message())
     return _success_response(stage)
+
+
+def _write_incomplete_result(results_location: dict, incomplete, input_path: str):
+    """Write the incomplete preview's result document under the execution's results folder, where the
+    workflow's output step records it on the execution (Output Results). Best effort: a run with no
+    results location, or a write that fails, keeps its preview and its outcome; the job log still
+    carries the summary."""
+    if not results_location:
+        logger.info("No results location for this run; the incomplete-preview summary is in the job "
+                    "log only")
+        return
+    key = results_location["objectDir"] + dependencies.INCOMPLETE_RESULT_FILENAME
+    try:
+        body = dependencies.incomplete_result_document(incomplete, input_path)
+        if s3.put_json(results_location["bucketName"], key, body) is None:
+            logger.warning("Could not write the incomplete-preview result; the summary is in the job "
+                           "log")
+        else:
+            logger.info(f"Incomplete-preview result written: {dependencies.INCOMPLETE_RESULT_FILENAME}")
+    except Exception as e:
+        logger.warning(f"Could not write the incomplete-preview result ({type(e).__name__}); the "
+                       f"summary is in the job log")
 
 
 def _resolve_output_type(inputParametersObject: dict) -> str:
@@ -697,7 +740,7 @@ def _create_dir(parts: list) -> str:
 
 def _success_response(stage: PipelineStage, message=None) -> PipelineStage:
     if not message:
-        message = "Preview 3D Thumbnail pipeline executed successfully."
+        message = SUCCESS_MESSAGE
     logger.info(message)
     stage.status = PipelineStatus.COMPLETE
     return stage
