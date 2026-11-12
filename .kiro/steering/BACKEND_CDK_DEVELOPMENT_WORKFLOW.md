@@ -789,6 +789,18 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     effect without re-issuing a token. The value is informational for handlers and audit logs:
     `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
     authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
+-   **Accepted token audiences (#1337)**: the authorizer accepts a Cognito token issued to
+    `APP_CLIENT_ID` or to one of `ADDITIONAL_APP_CLIENT_IDS`, and an external IdP token whose
+    `aud` is `JWT_AUDIENCE` or one of `JWT_ADDITIONAL_AUDIENCES` (JSON arrays CDK sets only when
+    `app.authProvider.<provider>.additionalTokenAudiences` is non-empty; parsed fail-closed,
+    matched exactly). Signature, issuer, expiry and `token_use` checks never depend on the
+    audience, and the user's roles still decide. A token that names no user (a Cognito access
+    token without `username`, or an external token accepted only through an additional audience
+    whose identity is missing or equals its client id, or that carries a machine-token marker:
+    `gty` = `client-credentials`, `idtyp` = `app`, `preferred_username` starting `service-account-`)
+    is rejected. Primary-audience tokens are not checked, and the markers do not cover every IdP,
+    so only user sign-in clients may be listed. The accepted audience reaches the authorization
+    audit record as `tokenAudience`; it is not put in the authorizer context.
 -   **`claims_and_roles["authMethod"]`** is `"apiKey"` when the authorizer context carries
     `vams:authMethod = apiKey` and `"jwt"` otherwise (JWT callers and Lambda cross-calls alike).
     Handlers that mint or seed a credential refuse `"apiKey"` with 403 so one key cannot be chained

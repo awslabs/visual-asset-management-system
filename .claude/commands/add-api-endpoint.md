@@ -13,7 +13,7 @@ You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1:
 5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`; an add-on route registers from the add-on's own nested stack, see Fork mode "Which lane")
 6. **Frontend service** (`web/src/services/APIService.ts`) - API call method (if exposed to web UI)
 7. **CLI command** (`tools/VamsCLI/vamscli/`) - Endpoint constant + command (if applicable)
-8. **MCP server** (`tools/VamsMCP/vams_mcp/server.py`) - `@mcp.tool()` in the correct gate section, if agents should reach the endpoint (root `CLAUDE.md` Pattern 7)
+8. **MCP server** (`tools/VamsMCP/vams_mcp/server.py`) - `@mcp.tool(title=..., annotations=<tier constant>)` in the correct gate section, with an agent-facing description within the budget, if agents should reach the endpoint (root `CLAUDE.md` Pattern 7; `tools/VamsMCP/CLAUDE.md` Rules 11-14)
 9. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
 10. **Tests** - Unit tests for the handler
 
@@ -356,7 +356,7 @@ The MCP server and the two external connectors sit downstream of the CLI, and no
 
 **MCP server** — do this whenever a new `APIClient` method is something an agent should be able to call, or an existing one changed:
 
-1. Add an `@mcp.tool()` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly.
+1. Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly. `<CONST>` is the tier's constant from `vams_mcp/annotations.py` (`READ`, `WRITE`, `DESTRUCTIVE`, or `COMPUTE` / `DESTRUCTIVE_COMPUTE` for a tool that starts or stops billed compute). The docstring is the agent's description: line 1 says when to use the tool, then the parameters that matter, then what the result means; at most 1,200 characters, no handler rationale (that goes in a comment). Type a stable read result with a `vams_mcp/results.py` model, and never write an error that tells the agent to run a CLI (`tools/VamsMCP/CLAUDE.md` Rules 11-14).
 2. Forward every narrowing parameter the CLI command accepts — an omitted optional parameter silently pins the agent to the server default.
 3. Check pagination: `VamsClient.paginate()` is driven by the list field name the handler returns the list under, passed as `items_key` (in use today: `Items`, `items`, `versions` and `metadata`), and unwraps the legacy `message` envelope, so read the handler's response model and confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
 4. Add a unit test in `tools/VamsMCP/tests/` asserting the params that reach the `APIClient`, and add the tool to the `tools/VamsMCP/README.md` tool list (plus the `autoApprove` array of that README's sample host config if it is a safe read).
@@ -446,7 +446,7 @@ After creating all files, verify:
 -   [ ] Import statement in the api builder stack matches the export in the lambdaBuilder file
 -   [ ] `VAMS_API.yaml` AND `docs/api/{domain}.md` both updated
 -   [ ] CLI endpoint constant in `constants.py` (if CLI-exposed)
--   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a unit test and a `tools/VamsMCP/README.md` tool-list entry (if agent-exposed)
+-   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a title, its tier's annotation, an agent-facing description within the budget, a unit test and a `tools/VamsMCP/README.md` tool-list entry (if agent-exposed)
 -   [ ] MCP pagination `items_key` matches the handler's list field name
 -   [ ] Both external connectors validated if a CLI command name, flag, or `--json-output` key changed (Isaac Sim `vams_cli_service.py`, ArcGIS Pro `VamsCliService.cs` + `Models/VamsModels.cs`)
 
