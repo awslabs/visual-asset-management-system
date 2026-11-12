@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The authorization audit record names the accepted token audience (issue #1328).
+"""The authorization audit record names the accepted token audience.
 
 log_authorization_gateway records the Cognito app client id / external IdP audience a verified
 token was issued to, so a call made through an additional client (for example a remote MCP

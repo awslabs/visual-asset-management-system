@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The REST authorizer hands the accepted token audience to the audit record (issue #1328).
+"""The REST authorizer hands the accepted token audience to the audit record.
 
 A token issued to an additional app client (for example one registered for a remote MCP server)
 must be distinguishable from a web app call in the authorization audit record. The authorizer

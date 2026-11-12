@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Additional token audiences for the API authorizer (issue #1328).
+"""Additional token audiences for the API authorizer.
 
 The authorizer accepts tokens issued to the web app client (Cognito) or to the configured
 JWT_AUDIENCE (external IdP), plus an operator-configured list of extra audiences, for example an
@@ -103,7 +103,7 @@ class TestCognitoAudiences:
 
     @pytest.mark.parametrize("token_use", ["id", "access"])
     def test_another_client_is_denied_with_nothing_configured(self, cognito, token_use):
-        # Unset = the behaviour before #1328: only the web client is accepted.
+        # With nothing configured only the web client is accepted.
         assert core.verify_cognito_jwt(_cognito_token(token_use, client=MCP_CLIENT)) is None
 
     @pytest.mark.parametrize("token_use", ["id", "access"])

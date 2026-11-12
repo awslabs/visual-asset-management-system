@@ -4,7 +4,7 @@
  */
 
 /**
- * app.authProvider.<provider>.additionalTokenAudiences (#1328): extra token audiences the API
+ * app.authProvider.<provider>.additionalTokenAudiences: extra token audiences the API
  * authorizer accepts alongside the web app client (Cognito) or lambdaAuthorizorJWTAudience (external
  * IdP), for example an app client registered for a remote MCP server.
  *
@@ -177,6 +177,23 @@ describe("authorizer environment", () => {
         expect(env.ADDITIONAL_APP_CLIENT_IDS).toBeUndefined();
         expect(env.JWT_ADDITIONAL_AUDIENCES).toBeUndefined();
         expect(env.APP_CLIENT_ID).toBeDefined();
+    });
+
+    test("the shipped templates list empty audiences, which emit no variable", () => {
+        expect(commercialTemplate.app.authProvider.useCognito.additionalTokenAudiences).toEqual([]);
+        expect(
+            commercialTemplate.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences
+        ).toEqual([]);
+        const s = synthTemplate("commercial", {
+            mutate: (c) => {
+                c.app.authProvider.useCognito.additionalTokenAudiences = [];
+                c.app.authProvider.useExternalOAuthIdp.additionalTokenAudiences = [];
+            },
+            mutateKey: "explicit-empty-additional-token-audiences",
+        });
+        const env = lambdaByHandler(s, AUTHORIZER_HANDLER).properties.Environment.Variables;
+        expect(env.ADDITIONAL_APP_CLIENT_IDS).toBeUndefined();
+        expect(env.JWT_ADDITIONAL_AUDIENCES).toBeUndefined();
     });
 
     test("a configured Cognito list reaches the authorizer as JSON", () => {

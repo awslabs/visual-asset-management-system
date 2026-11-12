@@ -414,6 +414,7 @@ const COMMERCIAL: ConfigShape = {
                 useUserPasswordAuthFlow: false,
                 credTokenTimeoutSeconds: 3600,
                 retainLegacyGroupsAttribute: false,
+                additionalTokenAudiences: [],
             },
             useExternalOAuthIdp: {
                 enabled: false,
@@ -428,6 +429,7 @@ const COMMERCIAL: ConfigShape = {
                 idpAuthProviderDiscoveryEndpoint: null,
                 lambdaAuthorizorJWTIssuerUrl: null,
                 lambdaAuthorizorJWTAudience: null,
+                additionalTokenAudiences: [],
             },
         },
         webUi: {
