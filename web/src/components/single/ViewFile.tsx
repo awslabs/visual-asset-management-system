@@ -953,10 +953,16 @@ function ViewFileForAsset() {
                                     ariaLabel="Breadcrumbs"
                                 />
                                 <div>
-                                    {/* Main title and File/Preview buttons on same row */}
-                                    <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
+                                    {/* Main title and File/Preview buttons on same row; on a narrow
+                                        screen the title takes the full width and the buttons go below. */}
+                                    <Grid
+                                        gridDefinition={[
+                                            { colspan: { default: 12, s: 6 } },
+                                            { colspan: { default: 12, s: 6 } },
+                                        ]}
+                                    >
                                         <Box>
-                                            <h1 style={{ margin: "9px 0 0 0" }}>
+                                            <h1 className="viewfile-title">
                                                 {getHeaderText()}{" "}
                                                 {asset?.status === "archived" && (
                                                     <span
