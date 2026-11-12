@@ -242,6 +242,14 @@ export function globalLambdaEnvironmentsAndPermissions(
         ]);
     }
 
+    // Whether read actions (gets, lists, searches) write audit records (app.auditLogging.recordReads).
+    // customLogging/auditLogging.py records reads unless the value is "false", so a function
+    // without the variable keeps recording them.
+    lambdaFunction.addEnvironment(
+        "AUDIT_RECORD_READS",
+        config.app.auditLogging?.recordReads === false ? "false" : "true"
+    );
+
     // Optional default role granted to authenticated users with no assigned role
     // (used by the Casbin enforcer). Empty string disables the behavior.
     lambdaFunction.addEnvironment(
