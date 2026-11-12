@@ -5,14 +5,16 @@ import pytest
 import os
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
+import click
 from click.testing import CliRunner
 
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError
+    FileDownloadError, AssetAlreadyExistsError
 )
 from vamscli.utils.glb_combiner import GLBCombineError
+from vamscli.utils.json_output import output_error
 
 
 # File-level fixtures for spatial command testing
@@ -260,6 +262,76 @@ class TestSpatialGLBAssetCombineCommand:
             
             # Verify upload was called twice (GLB + JSON)
             assert mock_upload.call_count == 2
+
+
+def _fail_like_a_command(error):
+    """A nested command that fails the way a real command does in JSON mode."""
+    def command(**kwargs):
+        output_error(error, kwargs['json_output'])
+        raise click.ClickException(str(error))
+    return command
+
+
+class TestGLBAssetCombineNestedFailure:
+    """A failed nested export, asset creation or upload ends glbassetcombine with one error (#1349)."""
+
+    def _run(self, cli_runner, spatial_command_mocks, mock_export_result, extra_args,
+             export_side_effect=None, create_side_effect=None):
+        with spatial_command_mocks, \
+             patch('vamscli.commands.industry.spatial.glb.export_command',
+                   side_effect=export_side_effect, return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   return_value=('/tmp/test/root__COMBINED.glb', {'total_assets_processed': 2})), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   side_effect=create_side_effect, return_value={'assetId': 'new-asset-id'}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command', return_value={'success': True}), \
+             patch('builtins.open', create=True), \
+             patch('os.path.getsize', return_value=1024000), \
+             patch('tempfile.mkdtemp', return_value='/tmp/test'), \
+             patch('os.makedirs'), \
+             patch('shutil.rmtree'):
+            return cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+            ] + extra_args)
+
+    def test_json_output_writes_the_export_error_document(self, cli_runner, spatial_command_mocks,
+                                                          mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result, ['--json-output'],
+                           export_side_effect=_fail_like_a_command(AssetNotFoundError("Asset not found")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {'error': 'Asset not found', 'error_type': 'AssetNotFoundError'}
+
+    def test_json_output_writes_the_create_error_document(self, cli_runner, spatial_command_mocks,
+                                                          mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           create_side_effect=_fail_like_a_command(
+                               AssetAlreadyExistsError("Asset already exists")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Asset already exists', 'error_type': 'AssetAlreadyExistsError'}
+
+    def test_json_output_writes_an_error_document_for_a_create_exception(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           create_side_effect=KeyError('assetId'))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)['error_type'] == 'KeyError'
+
+    def test_text_mode_reports_the_create_error_on_stderr(self, cli_runner, spatial_command_mocks,
+                                                         mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model'],
+                           create_side_effect=_fail_like_a_command(
+                               AssetAlreadyExistsError("Asset already exists")))
+
+        assert result.exit_code == 1
+        assert '✗ AssetAlreadyExistsError: Asset already exists' in result.stderr
+        assert '"error"' not in result.stdout
 
 
 class TestGLBCombinerUtilities:

@@ -39,7 +39,9 @@ from datetime import datetime
 from .....utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
 # Import JSON output utilities
-from .....utils.json_output import output_status, output_result, output_error, output_info, output_warning
+from .....utils.json_output import (
+    output_status, output_result, output_error, output_info, output_warning, invoke_nested_command
+)
 
 # Import API client
 from .....utils.api_client import APIClient
@@ -47,7 +49,7 @@ from .....utils.api_client import APIClient
 # Import exceptions
 from .....utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, APIError
+    FileDownloadError, APIError, GlobalInfrastructureError
 )
 
 # Import GLB combining utilities
@@ -687,15 +689,6 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
             output_status(f"Creating new asset '{asset_create_name}'...", json_output)
             
             try:
-                # Suppress stdout during internal command calls to prevent multiple JSON outputs
-                import sys
-                from io import StringIO
-                
-                # Create asset (capture output if json_output mode)
-                if json_output:
-                    old_stdout = sys.stdout
-                    sys.stdout = StringIO()
-                
                 # Use json_input to ensure proper field names (assetName not name)
                 asset_create_data = {
                     'databaseId': database_id,
@@ -705,8 +698,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     'tags': []
                 }
                 
-                create_result = ctx.invoke(
-                    create_command,
+                create_result = invoke_nested_command(
+                    ctx, json_output, create_command,
                     database_id=database_id,
                     name=None,  # Not using individual params
                     description=None,
@@ -714,11 +707,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     tags=[],
                     bucket_key=None,
                     json_input=json.dumps(asset_create_data),  # Use JSON input for proper field names
-                    json_output=True  # Internal call uses JSON
                 )
-                
-                if json_output:
-                    sys.stdout = old_stdout
                 
                 new_asset_id = create_result['assetId']
                 
@@ -746,11 +735,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                 for glb_path in glb_files_to_upload:
                     output_status(f"Uploading {os.path.basename(glb_path)}...", json_output)
                     
-                    if json_output:
-                        sys.stdout = StringIO()
-                    
-                    ctx.invoke(
-                        upload_command,
+                    invoke_nested_command(
+                        ctx, json_output, upload_command,
                         files_or_directory=(glb_path,),
                         database_id=database_id,
                         asset_id=new_asset_id,
@@ -762,23 +748,16 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                         retry_attempts=3,
                         force_skip=False,
                         json_input=None,
-                        json_output=True,  # Internal call uses JSON
                         hide_progress=True  # Hide progress to avoid serialization issues
                     )
-                    
-                    if json_output:
-                        sys.stdout = old_stdout
                     
                     uploaded_files.append(os.path.basename(glb_path))
                 
                 # Upload BOM JSON file
                 output_status("Uploading BOM JSON file...", json_output)
                 
-                if json_output:
-                    sys.stdout = StringIO()
-                
-                ctx.invoke(
-                    upload_command,
+                invoke_nested_command(
+                    ctx, json_output, upload_command,
                     files_or_directory=(json_file,),
                     database_id=database_id,
                     asset_id=new_asset_id,
@@ -790,12 +769,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     retry_attempts=3,
                     force_skip=False,
                     json_input=None,
-                    json_output=True,  # Internal call uses JSON
                     hide_progress=True  # Hide progress to avoid serialization issues
                 )
-                
-                if json_output:
-                    sys.stdout = old_stdout
                 
                 uploaded_files.append(os.path.basename(json_file))
                 
@@ -813,8 +788,16 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     remove_run_temp_dir(base_temp_dir, json_output)
                     temp_dir = None
                 
+            except GlobalInfrastructureError:
+                raise
             except Exception as e:
-                output_warning(f"Failed to create/upload to new asset: {e}", json_output)
+                output_error(
+                    e,
+                    json_output,
+                    error_type="Asset Creation Error",
+                    helpful_message="The assembly finished, but creating the new asset or uploading its files failed."
+                )
+                raise click.ClickException(str(e))
         
         # Add new asset info to result
         if new_asset_info:
