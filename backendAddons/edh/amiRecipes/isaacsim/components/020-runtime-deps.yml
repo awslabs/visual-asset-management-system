@@ -35,20 +35,21 @@ phases:
                     - set -euxo pipefail
                     - |
                         if [ ! -x /usr/local/bin/aws ]; then
-                            # A run stopped part way leaves the extracted installer behind, which unzip would
-                            # otherwise stop on.
-                            rm -rf /tmp/awscliv2.zip /tmp/aws
+                            # The download unpacks in a new directory of the step's own, private to root, so
+                            # neither an installer left in /tmp by an earlier run nor a file another account
+                            # put there reaches the install, which runs as root.
+                            work="$(mktemp -d)"
+                            trap 'rm -rf -- "${work}"' EXIT
                             curl -fL --retry 5 --retry-delay 5 \
                                 https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
-                                -o /tmp/awscliv2.zip
-                            unzip -q /tmp/awscliv2.zip -d /tmp
+                                -o "${work}/awscliv2.zip"
+                            unzip -q "${work}/awscliv2.zip" -d "${work}"
                             # --update installs over an AWS CLI v2 already in /usr/local/aws-cli, which the
                             # installer otherwise refuses ("Found preexisting AWS CLI installation"), and installs
                             # as usual on a host without one. An installer that finds its own version already
                             # installed skips everything, the links in /usr/local/bin included, so they are made
                             # here as well.
-                            /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-                            rm -rf /tmp/awscliv2.zip /tmp/aws
+                            "${work}/aws/install" --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
                             mkdir -p /usr/local/bin
                             ln -sfn /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws
                             ln -sfn /usr/local/aws-cli/v2/current/bin/aws_completer /usr/local/bin/aws_completer

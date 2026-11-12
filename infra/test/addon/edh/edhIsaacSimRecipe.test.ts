@@ -2854,6 +2854,34 @@ describe("the headless script runner", () => {
         expect(run.rootMode).toBe("700");
     });
 
+    test("ignores a relative XDG_DATA_HOME, as the XDG specification requires, and uses the home's", () => {
+        const run = runRunner(["check.py"], {
+            prelude: ['cd "${HOME}"', "XDG_DATA_HOME=relative-data"],
+        });
+        expect(run.status).toBe(0);
+        expect(run.pythonArgs).toEqual(["check.py", "--portable-root", PORTABLE_ROOT]);
+        expect(run.rootMode).toBe("700");
+    });
+
+    test.each([
+        ["unset", "unset HOME"],
+        ["empty", "HOME="],
+        ["relative", "HOME=relative-home"],
+    ])("refuses with a clear message when HOME is %s, and runs nothing", (_case, line) => {
+        const run = runRunner(["check.py"], { prelude: [line] });
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain("HOME is not set to an absolute path");
+        expect(run.stderr).not.toContain("unbound variable");
+        expect(run.pythonArgs).toBeUndefined();
+    });
+
+    test("hands a caller's own portable root on before it needs HOME", () => {
+        const runner = installedScript("030-isaacsim.yml", "ISAACSIM_PYTHON");
+        const passThrough = runner.indexOf('exec /opt/isaacsim/python.sh "$@"\n');
+        expect(passThrough).toBeGreaterThan(-1);
+        expect(passThrough).toBeLessThan(runner.indexOf("HOME is not set to an absolute path"));
+    });
+
     test("keeps a portable root the caller names and makes none of its own", () => {
         const run = runRunner(["check.py", "--portable-root", "/srv/kit", "--steps", "3"]);
         expect(run.status).toBe(0);
@@ -3056,17 +3084,23 @@ function installAwsCli(host: { existing?: string; linkedFrom?: string; leftover?
         }
         const prelude = [
             `curl() { echo curl >> "${where}/downloads"; : > "\${@: -1}"; }`,
+            // unzip -q <archive> -d <directory>: the directory is the last argument, and one outside
+            // the scratch host is refused, so the step never unpacks on the machine running the tests.
             "unzip() {",
-            `    if [ -e "${where}/tmp/aws/install" ]; then`,
-            `        echo "replace ${where}/tmp/aws/install? (EOF or read error, treating as \\"[N]one\\" ...)" >&2`,
+            '    local into="${@: -1}"',
+            `    case "\${into}" in "${where}"/*) ;; *) echo "unzip into \${into}: outside the scratch host" >&2; return 1 ;; esac`,
+            '    if [ -e "${into}/aws/install" ]; then',
+            '        echo "replace ${into}/aws/install? (EOF or read error, treating as \\"[N]one\\" ...)" >&2',
             "        return 1",
             "    fi",
-            `    mkdir -p "${where}/tmp/aws" && cp -p "${where}/installer" "${where}/tmp/aws/install"`,
+            `    mkdir -p "\${into}/aws" && cp -p "${where}/installer" "\${into}/aws/install"`,
             "}",
         ];
         const step = localize(stepScript("020-runtime-deps.yml", "InstallAwsCli"));
         const result = spawnSync("bash", ["-c", `${prelude.join("\n")}\n${step}`], {
             encoding: "utf8",
+            // mktemp makes the step's working directory in the scratch host's /tmp.
+            env: { ...process.env, TMPDIR: `${where}/tmp` },
         });
         const bin = path.join(dir, "usr/local/bin/aws");
         const linked = fs.existsSync(bin);
@@ -3080,6 +3114,8 @@ function installAwsCli(host: { existing?: string; linkedFrom?: string; leftover?
             ).length,
             link: linked ? fs.readlinkSync(bin).split(where).join("") : undefined,
             version: linked ? spawnSync(bin, [], { encoding: "utf8" }).stdout.trim() : undefined,
+            // What the step left in the scratch host's /tmp.
+            tmpLeft: fs.readdirSync(path.join(dir, "tmp")).sort(),
         };
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -3129,6 +3165,19 @@ describe("the AWS CLI step", () => {
             output: "",
         });
         expect(run.version).toBe(`aws/${BUNDLED_AWS_CLI}`);
+        // The leftover in /tmp is never run, and the step's own working directory is gone.
+        expect(run.tmpLeft).toEqual(["aws"]);
+    });
+
+    test("downloads and unpacks in a new private directory, not under fixed names in /tmp", () => {
+        const step = stepScript("020-runtime-deps.yml", "InstallAwsCli");
+        expect(step).toContain('work="$(mktemp -d)"');
+        expect(step).toContain('"${work}/aws/install"');
+        expect(step).not.toContain("/tmp/aws");
+        expect(step).not.toContain("/tmp/awscliv2.zip");
+        const run = installAwsCli();
+        expect(run.status).toBe(0);
+        expect(run.tmpLeft).toEqual([]);
     });
 
     test("leaves a host that already has /usr/local/bin/aws as it is, without a download", () => {

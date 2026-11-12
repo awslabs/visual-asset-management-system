@@ -165,7 +165,17 @@ phases:
                                     ;;
                             esac
                         done
-                        ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/ov/isaacsim-portable"
+                        # A relative XDG_DATA_HOME is invalid and ignored, as the XDG base directory
+                        # specification says; without an absolute data directory there is no root to use.
+                        if [ -n "${XDG_DATA_HOME:-}" ] && [ "${XDG_DATA_HOME#/}" != "${XDG_DATA_HOME}" ]; then
+                            DATA_HOME="${XDG_DATA_HOME}"
+                        elif [ -n "${HOME:-}" ] && [ "${HOME#/}" != "${HOME}" ]; then
+                            DATA_HOME="${HOME}/.local/share"
+                        else
+                            echo "vams-isaacsim-python: HOME is not set to an absolute path; pass --portable-root <directory> to name a portable root" >&2
+                            exit 1
+                        fi
+                        ROOT="${DATA_HOME}/ov/isaacsim-portable"
                         # Kit loads the Python modules and shader binaries it caches here, so the root is
                         # created private to the user and used only when it is the user's own directory.
                         if ! (umask 077 && mkdir -p -- "${ROOT}") || [ -L "${ROOT}" ] || [ ! -d "${ROOT}" ] || [ ! -O "${ROOT}" ]; then
