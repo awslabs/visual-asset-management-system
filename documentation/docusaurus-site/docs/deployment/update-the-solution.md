@@ -789,6 +789,43 @@ Before v2.6.7, AWS Lambda recursive loop detection could stop the bucket-sync La
 -   **The dead-letter queue keeps messages for 14 days.** For files that went missing from search earlier than that, run the [Reindex utility](../developer/utilities/reindex.md).
 -   **No other action is needed.** The update changes one Lambda setting in place and adds the alarms; no resource is replaced.
 
+### v2.6.7 and later: let read-only roles open files in the viewers
+
+From v2.6.7 the `database-readonly` and `global-readonly` permission templates and the seeded `basicReadOnly` role grant `POST` on `/database/{databaseId}/assets/{assetId}/download`, the request the file viewers and the download action make. Without it, a read-only user can open only the streaming Three.js viewer, and every other viewer reports that the file failed to download.
+
+-   **`basicReadOnly` needs no action.** The update rewrites the default constraints and adds the grant.
+-   **A role imported from `database-readonly.json` or `global-readonly.json` before v2.6.7 keeps the constraints it was imported with**, so it does not get the grant. The same applies to a role you built by hand whose users should view files. Add the one constraint by importing a template that holds only it. Save the following as `download-grant.json`, set `ROLE_NAME` to the role's name, and import it:
+
+    ```json
+    {
+        "variableValues": { "ROLE_NAME": "<role name>" },
+        "constraints": [
+            {
+                "name": "{{ROLE_NAME}}-api-routes-download",
+                "description": "Allow requesting a file download, which the file viewers and the download action use; the request is a POST because its body names the file and version",
+                "objectType": "api",
+                "criteriaAnd": [
+                    {
+                        "field": "route__path",
+                        "operator": "equals",
+                        "value": "/database/[^/]+/assets/[^/]+/download"
+                    }
+                ],
+                "criteriaOr": [],
+                "groupPermissions": [{ "action": "POST", "type": "allow" }]
+            }
+        ]
+    }
+    ```
+
+    ```bash
+    vamscli role constraint template import -j download-grant.json
+    ```
+
+    Repeat for each role, changing `ROLE_NAME`. The constraint grants only the download route. Which files a user can download still follows the role's asset constraints: a `database-readonly` role downloads only from its own database.
+
+-   **Do not re-import the whole template into an existing role.** Each import creates new constraint identifiers, so every constraint the role already holds would be added a second time.
+
 ### v2.6 to v2.7
 
 v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer, a GPU pipeline, or a pipeline with `useCodeBuild: true`, a fork that references the moved names, and scripts that call the API directly.

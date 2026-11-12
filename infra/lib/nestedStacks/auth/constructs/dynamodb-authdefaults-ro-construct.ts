@@ -905,26 +905,10 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: `0_${roleNameIDClean}_api_paths_download`,
                                 },
                                 operator: {
-                                    S: "starts_with",
+                                    S: "equals",
                                 },
                                 value: {
-                                    S: "/database/",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `1_${roleNameIDClean}_api_paths_download`,
-                                },
-                                operator: {
-                                    S: "ends_with",
-                                },
-                                value: {
-                                    S: "/download",
+                                    S: "/database/[^/]+/assets/[^/]+/download", // Exactly the download route; a prefix/suffix pair would also match write routes ending in a path parameter
                                 },
                             },
                         },

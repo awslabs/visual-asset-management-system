@@ -19,7 +19,7 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 2. **Every role needs web, API, AND data constraints.** Without all three, users either can't see pages (no web), can't call APIs (no api), or can't access data (no entity constraints). All three layers must be present.
 
-3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`, and the file download `POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use. These use POST for request bodies but don't mutate data. Grant the download as its own constraint with `starts_with /database/` and `ends_with /download` both in `criteriaAnd`; a `/database` prefix on the general POST list would open every write route under it.
+3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`, and the file download `POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use. These use POST for request bodies but don't mutate data. Grant the download as its own constraint with one criterion, `route__path equals /database/[^/]+/assets/[^/]+/download`. A prefix/suffix pair (`starts_with /database/` + `ends_with /download`) also matches POST routes whose last segment is a path parameter set to `download` (`revertFileVersion/{versionId}`, `revertAssetVersion/{assetVersionId}`), because Tier 1 evaluates the request path; a `/database` prefix on the general POST list would open every write route under it.
 
 4. **Deny always wins.** Casbin policy effect: `e = some(where (p.eft == allow)) && !some(where (p.eft == deny))`. If any deny constraint matches, access is denied regardless of allow rules.
 
@@ -236,7 +236,7 @@ Read paths (GET): `/secure-config`, `/amplify-config`, `/auth/routes`, `/asset-l
 
 Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin only), `/unsubscribe`
 
-Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`, and the file download (`starts_with /database/` + `ends_with /download`, in one constraint's `criteriaAnd`)
+Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`, and the file download (`route__path equals /database/[^/]+/assets/[^/]+/download`, a constraint of its own)
 
 Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 

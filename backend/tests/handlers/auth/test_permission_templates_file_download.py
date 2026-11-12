@@ -14,7 +14,10 @@ Each template is run through the import's own substitution and conversion (``sub
 ``build_constraint_data``) and then through the real policy generation and Casbin evaluation, with only
 the two table reads stubbed. ``READ_ONLY_POST_ROUTES`` records every POST route a read-only template
 reaches, so a criterion that widens the grant past the download route fails here as well as one that
-misses it.
+misses it. Tier 1 evaluates the request path with the caller's parameter values, so each route is
+probed twice: with every parameter filled, and with its last parameter set to ``download``, the value
+that would carry a write route ending in a parameter (``revertFileVersion/{versionId}``,
+``revertAssetVersion/{assetVersionId}``) past a suffix match on ``/download``.
 """
 
 import json
@@ -31,11 +34,14 @@ from backend.backend.common.apiRoutes import (  # noqa: E402
     API_AUTH_ROUTES,
     API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET,
+    API_REVERT_ASSET_VERSION,
+    API_REVERT_FILE_VERSION,
     API_SEARCH,
     API_SEARCH_SIMPLE,
     POST,
 )
 from backend.backend.handlers.auth import authConstraintsTemplateService as svc  # noqa: E402
+from backend.backend.handlers.auth import routes as routes_module  # noqa: E402
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 TEMPLATES_DIR = REPO_ROOT / "documentation" / "permissionsTemplates"
@@ -90,9 +96,20 @@ def _api_request(path):
     return {"object__type": "api", "route__path": path}
 
 
-def _concrete_path(route_path):
-    """The route template with each ``{parameter}`` segment filled, as a request carries it."""
+def _concrete_path(route_path, last_parameter=None):
+    """The route template with each ``{parameter}`` segment filled, as a request carries it.
+
+    ``last_parameter`` sets the value of the route's final segment when that segment is a parameter.
+    """
+    if last_parameter is not None and re.search(r"/\{[^/{}]+\}$", route_path):
+        route_path = re.sub(r"\{[^/{}]+\}$", last_parameter, route_path)
     return re.sub(r"\{[^/{}]+\}", "probe-id", route_path)
+
+
+def _probe_paths(route_path):
+    """Every concrete path a route is probed with: all parameters filled, then the last one
+    set to ``download``."""
+    return {_concrete_path(route_path), _concrete_path(route_path, last_parameter="download")}
 
 
 def _download_path():
@@ -145,12 +162,32 @@ class TestTemplatesGrantTheFileDownload:
             self, template_enforcer, template_name):
         enforcer = template_enforcer(_stored_constraints(template_name))
         allowed = {
-            route for route in ALL_API_ROUTES
-            if POST in route.methods and enforcer.enforce(_api_request(_concrete_path(route.path)), POST)
+            (route, path) for route in ALL_API_ROUTES if POST in route.methods
+            for path in _probe_paths(route.path)
+            if enforcer.enforce(_api_request(path), POST)
         }
-        assert allowed == READ_ONLY_POST_ROUTES, (
-            f"{template_name}: unexpected {sorted(r.path for r in allowed - READ_ONLY_POST_ROUTES)}, "
-            f"missing {sorted(r.path for r in READ_ONLY_POST_ROUTES - allowed)}")
+        expected = {(route, path) for route in READ_ONLY_POST_ROUTES for path in _probe_paths(route.path)}
+        assert allowed == expected, (
+            f"{template_name}: unexpected {sorted(p for _r, p in allowed - expected)}, "
+            f"missing {sorted(p for _r, p in expected - allowed)}")
+
+    @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
+    @pytest.mark.parametrize("route", [API_REVERT_FILE_VERSION, API_REVERT_ASSET_VERSION],
+                             ids=["revertFileVersion", "revertAssetVersion"])
+    def test_a_write_route_whose_last_parameter_is_download_is_denied(
+            self, template_enforcer, template_name, route):
+        enforcer = template_enforcer(_stored_constraints(template_name))
+        path = _concrete_path(route.path.replace("{databaseId}", DATABASE_ID), last_parameter="download")
+        assert path.endswith("/download"), path
+        assert enforcer.enforce(_api_request(path), POST) is False, path
+
+    @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
+    def test_the_route_listing_reports_the_download_as_allowed(self, template_enforcer, template_name):
+        """``/auth/routes/api/allowed`` probes each route with a placeholder segment; the web app
+        shows the download from that answer."""
+        enforcer = template_enforcer(_stored_constraints(template_name))
+        probe = routes_module._route_probe_path(API_DOWNLOAD_ASSET.path)
+        assert enforcer.enforce(_api_request(probe), POST) is True, probe
 
     @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
     def test_a_read_only_template_role_reads_the_asset_it_downloads(self, template_enforcer, template_name):
@@ -174,6 +211,7 @@ class TestTheDownloadGrantCanFail:
     @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
     def test_the_download_constraint_does_not_reach_a_sibling_write_route(self, template_enforcer, template_name):
         enforcer = template_enforcer(_stored_constraints(template_name))
-        for suffix in ("createFolder", "copyFile", "download/extra", "downloads"):
+        for suffix in ("createFolder", "copyFile", "download/extra", "downloads", "download\n",
+                       "extra/download", "revertFileVersion/download", "revertAssetVersion/download"):
             path = f"/database/{DATABASE_ID}/assets/probe-id/{suffix}"
             assert enforcer.enforce(_api_request(path), POST) is False, path
