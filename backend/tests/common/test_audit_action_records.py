@@ -905,3 +905,59 @@ class TestCredentialFieldRedaction:
         auditLogging.log_action(api_event(), "assetUpdate", changes=ordinary)
         _, payload, _ = parse(clients.module.messages()[0])
         assert payload["changes"] == ordinary
+
+
+# ---------------------------------------------------------------------------------------------------
+# app.auditLogging.recordReads, delivered as AUDIT_RECORD_READS
+# ---------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRecordReadsSwitch:
+    READS = (("assetGet", "/database/db1/assets/a1", "GET"), ("assetList", "/database/db1/assets", "GET"),
+             ("search", "/search", "POST"))
+
+    def _write_reads(self, clients):
+        for action, path, method in self.READS:
+            auditLogging.log_action(api_event(path=path, method=method), action, item_count=3)
+        return [parse(message)[1]["action"] for message in clients.module.messages()]
+
+    @pytest.mark.parametrize("value", [None, "true", "TRUE", "", "yes"])
+    def test_reads_are_recorded_unless_the_switch_is_false(self, clients, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("AUDIT_RECORD_READS", raising=False)
+        else:
+            monkeypatch.setenv("AUDIT_RECORD_READS", value)
+        assert self._write_reads(clients) == ["assetGet", "assetList", "search"]
+
+    @pytest.mark.parametrize("value", ["false", "False", " false "])
+    def test_false_turns_read_and_search_records_off(self, clients, monkeypatch, value):
+        monkeypatch.setenv("AUDIT_RECORD_READS", value)
+        assert self._write_reads(clients) == []
+
+    def test_writes_downloads_and_exports_are_recorded_when_reads_are_off(self, clients, monkeypatch):
+        monkeypatch.setenv("AUDIT_RECORD_READS", "false")
+        auditLogging.log_action(api_event(), "assetUpdate", changes={"assetName": "x"})
+        auditLogging.log_action(api_event(path="/database/db1/assets/a1/export", method="POST"), "assetExport")
+        auditLogging.log_action(api_event(path="/database/db1/assets/a1/download", method="POST"), "fileDownload")
+        actions = [parse(message)[1]["action"] for message in clients.module.messages()]
+        assert actions == ["assetUpdate", "assetExport", "fileDownload"]
+
+    def test_legacy_download_records_are_kept_when_reads_are_off(self, clients, monkeypatch):
+        monkeypatch.setenv("AUDIT_RECORD_READS", "false")
+        auditLogging.log_file_download(api_event(path="/database/db1/assets/a1/download", method="POST"),
+                                       "db1", "a1", "f.glb")
+        assert len(clients.module.messages(group_name("auditFileDownload"))) == 1
+
+    def test_denied_and_failed_reads_are_recorded_when_reads_are_off(self, clients, monkeypatch):
+        monkeypatch.setenv("AUDIT_RECORD_READS", "false")
+        auditLogging.log_action(api_event(method="GET"), "assetGet", outcome="denied", reason="forbidden")
+        auditLogging.log_action(api_event(method="GET"), "assetGet", outcome="failed", reason="notFound")
+        outcomes = [parse(message)[1]["outcome"] for message in clients.module.messages()]
+        assert outcomes == ["denied", "failed"]
+
+    def test_the_route_default_read_is_switched_off_too(self, clients, monkeypatch):
+        monkeypatch.setenv("AUDIT_RECORD_READS", "false")
+        event = api_event(path="/database/db1/assets/a1", method="GET")
+        with auditLogging.audit_request(event, LAMBDA_CONTEXT):
+            auditLogging.log_action(event, asset_id="a1")
+        assert clients.flush.calls == [] and clients.module.calls == []

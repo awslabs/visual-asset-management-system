@@ -22,6 +22,7 @@ import contextvars
 import functools
 import hashlib
 import json
+import os
 import re
 import threading
 import uuid
@@ -1254,6 +1255,18 @@ _WRITE_ONLY_SECTIONS = ("changes", "previous")
 # to drop the field from read and search records.
 AUDIT_READ_ITEM_COUNT = True
 
+# Whether read and search actions write records: the deployment's app.auditLogging.recordReads,
+# set on every Lambda by CDK as this environment variable. Only "false" turns them off, so a function
+# deployed without the variable keeps recording reads. Downloads and exports are recorded either way.
+AUDIT_RECORD_READS_ENV = "AUDIT_RECORD_READS"
+_READ_SWITCH_KINDS = frozenset({KIND_READ, KIND_SEARCH})
+
+
+def audit_records_reads() -> bool:
+    """Whether this deployment records read and search actions (read on each call)."""
+    return os.environ.get(AUDIT_RECORD_READS_ENV, "").strip().lower() != "false"
+
+
 # The record sections whose values are what a write wrote or a read asked for.
 _VALUE_SECTIONS = ("changes", "previous", "requestParameters", "details")
 
@@ -1958,6 +1971,9 @@ def log_action(
         group = audit_spec.group if audit_spec else GROUP_ACTIONS
         prefix_type = (audit_spec.legacy_type or audit_spec.action) if audit_spec else action_name
         kind = audit_spec.kind if audit_spec else None
+        if kind in _READ_SWITCH_KINDS and outcome == OUTCOME_SUCCESS and not audit_records_reads():
+            # The deployment turned read records off; a denied or failed read is still recorded.
+            return
         if kind in _REQUEST_ONLY_KINDS:
             # A read, search or download records what was asked, never what was written or returned.
             passed = [name for name, value in (("changes", changes), ("previous", previous)) if value]
