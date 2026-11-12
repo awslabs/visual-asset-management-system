@@ -86,7 +86,7 @@ describe("lambdaSubnets and the VPC that VAMS creates", () => {
             mutateKey: "edhWorkstationsPrivateSubnets",
         });
         privateAllLambdas = synthTemplate("commercial", {
-            mutate: (c: any) => {
+            mutate: (c: Parameters<typeof enableEdhPrivateSubnets>[0]) => {
                 enableEdhPrivateSubnets(c);
                 c.app.useGlobalVpc.useForAllLambdas = true;
             },
