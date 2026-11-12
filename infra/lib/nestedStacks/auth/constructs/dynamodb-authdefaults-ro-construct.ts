@@ -1488,6 +1488,84 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "api",
                 },
             },
+            // Last of the core items: the custom resource ids are index-based, so a core item
+            // added here moves no earlier core resource (only the add-on items after it).
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_export_api`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_export_api`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_api_paths_export`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/database/",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_api_paths_export`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/export",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow POST on the asset export route for basic user read only - the export lists the asset tree, its metadata and its files and can sign download links for them; the request body carries the export options and it changes nothing",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-export-api`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-export-api`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
             ...addonReadOnlyDefaultConstraints(props.config, roleName, roleNameIDClean),
         ];
 

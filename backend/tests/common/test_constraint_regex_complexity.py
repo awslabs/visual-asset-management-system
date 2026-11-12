@@ -82,6 +82,7 @@ SHIPPED_CRITERION_VALUES = [
     '/edh/admin',
     '/edh/workstations',
     '/executions',
+    '/export',
     '/ingest-asset',
     '/metadata',
     '/metadataschema',

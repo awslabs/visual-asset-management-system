@@ -128,6 +128,17 @@
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
+            "name": "{{ROLE_NAME}}-api-routes-export",
+            "description": "Allow requesting an asset export, which lists the asset tree, its metadata and its files and can sign download links for them; the request is a POST because its body carries the export options, and it changes nothing",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
+                { "field": "route__path", "operator": "ends_with", "value": "/export" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
             "name": "{{ROLE_NAME}}-databases",
             "description": "Allow read access to all databases",
             "objectType": "database",

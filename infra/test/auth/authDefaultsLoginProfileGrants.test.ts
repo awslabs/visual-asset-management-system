@@ -235,3 +235,23 @@ describe("seeded basicReadOnly file download grant", () => {
         ]);
     });
 });
+
+describe("seeded basicReadOnly asset export grant", () => {
+    it("grants POST on paths that start with /database/ and end with /export, and nothing wider", () => {
+        // POST /database/{databaseId}/assets/{assetId}/export is a read carried in a POST body (the
+        // export options), so the role's GET constraint does not reach it.
+        const constraint = byId("allow_export_api");
+        expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        expect(constraint.routeCriteriaAnd).toEqual([
+            { operator: "starts_with", value: "/database/" },
+            { operator: "ends_with", value: "/export" },
+        ]);
+        expect(constraint.routeValuesOr).toEqual([]);
+    });
+
+    it("is the last core constraint, so adding it moved no earlier core custom resource", () => {
+        // The seed custom resource ids are index-based; the add-on items follow the core items.
+        const ids = constraints.map((c) => c.id);
+        expect(ids[ids.length - 1]).toEqual("allow_export_api");
+    });
+});
