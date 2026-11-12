@@ -545,9 +545,6 @@ def Xform "{name}" (
 _COMPONENT_PAYLOAD = """#usda 1.0
 (
     subLayers = [@./{name}.geom.usd@]
-    customLayerData = {{
-        asset sourceFile = @/authoring/machine/{name}.ma@
-    }}
 )
 """
 _COMPONENT_GEOM = """#usda 1.0
@@ -594,9 +591,8 @@ class TestUsdMetadataIsNotAGeometryLayer:
             f"assets/{n}/{f}" for n in ("Ball", "Cup")
             for f in (f"{n}.usd", f"{n}_payload.usd", f"{n}.geom.usd", f"tex/{n}.png"))
         # The fetch itself is unchanged: the identifier is still looked up (and is not in the asset at
-        # the path it resolves to), and the absolute customLayerData path is still refused.
+        # the path it resolves to).
         assert "assets/Ball/assets/Ball/Ball.usd" in report.missing
-        assert "/authoring/machine/Ball.ma" in report.rejected
         assert dependencies.incomplete_preview(report) is None
 
     def test_one_missing_component_layer_is_one_geometry_layer(self, tmp_path):
@@ -759,6 +755,139 @@ class TestDataFiles:
         bucket.put("xid/scan/meta.lcc", json.dumps({"version": "x"}))
         bucket.put("xid/scan/index.bin", b"i")
         incomplete = dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/scan/meta.lcc", ".lcc"))
-        assert set(_entries(incomplete.data_files)) == {"scan/data.bin", "scan/shcoef.bin",
-                                                         "scan/environment.bin"}
+        expected = {"scan/data.bin", "scan/shcoef.bin", "scan/environment.bin"}
+        assert set(_entries(incomplete.data_files)) == expected
         assert incomplete.other_files == [] and incomplete.geometry_layers == []
+
+
+# --------------------------------------------------------------------------------------------------
+# Value clips, non-USD composition targets, and what the classification reads
+# --------------------------------------------------------------------------------------------------
+
+_CLIPPED_ROOT = """#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World" (
+    assetInfo = {
+        asset identifier = @World.usd@
+    }
+)
+{
+    def Xform "Animated" (
+        clips = {
+            dictionary default = {
+                asset[] assetPaths = [@./clips/clip.0001.usd@, @./clips/clip.0002.usd@]
+                asset manifestAssetPath = @./clips/manifest.usda@
+                string primPath = "/Model"
+                double2[] active = [(0, 0), (10, 1)]
+            }
+        }
+    )
+    {
+    }
+    def Material "Look" (
+        references = @./looks/look.mtlx@
+    )
+    {
+    }
+    def Xform "Part" (
+        references = @./parts/part.usda@
+    )
+    {
+    }
+}
+"""
+
+
+@pytest.mark.unit
+@requires_real("pxr")
+class TestUsdClipsAndNonLayerTargets:
+    def _incomplete(self, tmp_path, present=()):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/World.usda", _CLIPPED_ROOT)
+        for path in present:
+            bucket.put("xid/" + path, "#usda 1.0\n")
+        return dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/World.usda", ".usda"))
+
+    def test_a_missing_value_clip_is_a_data_file_and_the_identifier_is_not_reported(self, tmp_path):
+        incomplete = self._incomplete(tmp_path, present=("looks/look.mtlx", "parts/part.usda"))
+        assert _entries(incomplete.data_files) == {
+            "clips/clip.0001.usd": "missing from the asset",
+            "clips/clip.0002.usd": "missing from the asset",
+            "clips/manifest.usda": "missing from the asset",
+        }
+        assert incomplete.geometry_layers == [] and incomplete.other_files == []
+
+    def test_a_missing_non_usd_composition_target_is_not_a_geometry_layer(self, tmp_path):
+        incomplete = self._incomplete(tmp_path, present=(
+            "clips/clip.0001.usd", "clips/clip.0002.usd", "clips/manifest.usda", "parts/part.usda"))
+        assert incomplete.geometry_layers == [] and incomplete.data_files == []
+        assert _entries(incomplete.other_files) == {"looks/look.mtlx": "missing from the asset"}
+
+    def test_a_missing_usd_composition_target_is_a_geometry_layer(self, tmp_path):
+        incomplete = self._incomplete(tmp_path, present=(
+            "clips/clip.0001.usd", "clips/clip.0002.usd", "clips/manifest.usda", "looks/look.mtlx"))
+        assert _entries(incomplete.geometry_layers) == {"parts/part.usda": "missing from the asset"}
+        assert incomplete.data_files == [] and incomplete.other_files == []
+
+    def test_any_other_metadata_asset_path_is_reported(self, tmp_path):
+        """Only the assetInfo identifier is left out; an asset path in other metadata is reported."""
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/root.usda", '#usda 1.0\n(\n    customLayerData = {\n'
+                                    '        asset sourceFile = @./source/root.ma@\n    }\n)\n')
+        incomplete = dependencies.incomplete_preview(_fetch(tmp_path, bucket, "xid/root.usda", ".usda"))
+        assert _entries(incomplete.other_files) == {"source/root.ma": "missing from the asset"}
+
+    def test_a_complete_clipped_stage_is_not_incomplete(self, tmp_path):
+        assert self._incomplete(tmp_path, present=(
+            "clips/clip.0001.usd", "clips/clip.0002.usd", "clips/manifest.usda", "looks/look.mtlx",
+            "parts/part.usda")) is None
+
+
+_ANIMATED_LAYER = """#usda 1.0
+def Mesh "Mesh"
+{
+    int[] faceVertexCounts = [3]
+    int[] faceVertexIndices = [0, 1, 2]
+    point3f[] points.timeSamples = {
+        0: [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+        1: [(0, 0, 1), (1, 0, 1), (0, 1, 1)],
+        2: [(0, 0, 2), (1, 0, 2), (0, 1, 2)],
+    }
+    asset info:texture.timeSamples = {
+        0: @./tex/a.png@,
+        1: @./tex/b.png@,
+    }
+    asset info:fallback = @./tex/c.png@
+}
+"""
+
+
+@pytest.mark.unit
+@requires_real("pxr")
+class TestTheClassificationReadsOnlyAssetAttributes:
+    def test_non_asset_time_samples_are_never_read(self, tmp_path, monkeypatch):
+        from pxr import Sdf
+
+        path = tmp_path / "anim.usda"
+        path.write_text(_ANIMATED_LAYER)
+        layer = Sdf.Layer.FindOrOpen(str(path))
+        queried = []
+        original = Sdf.Layer.QueryTimeSample
+
+        class SpyLayer:
+            """The opened layer, recording each time-sample read."""
+
+            def __getattr__(self, name):
+                return getattr(layer, name)
+
+            def QueryTimeSample(self, spec_path, time):
+                queried.append(str(spec_path))
+                return original(layer, spec_path, time)
+
+        monkeypatch.setattr(Sdf.Layer, "FindOrOpen", staticmethod(lambda p: SpyLayer()))
+        kinds = dependencies._usd_reference_kinds(str(path))
+        assert kinds["attributes"] == {"./tex/a.png", "./tex/b.png", "./tex/c.png"}
+        assert queried and all(p.endswith(".info:texture") for p in queried)
+        assert not any("points" in p for p in queried)

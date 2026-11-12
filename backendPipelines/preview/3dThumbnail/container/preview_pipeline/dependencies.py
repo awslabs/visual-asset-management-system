@@ -58,10 +58,10 @@ class FetchLimits:
 # What a referenced file is to the preview, which decides how its absence is reported. A collector
 # names the kind with each reference; one that names none is classified by the target's extension.
 KIND_GEOMETRY_LAYER = "geometryLayer"   # a USD sublayer, reference or payload: geometry is missing
-KIND_DATA_FILE = "dataFile"             # a glTF buffer, LCC data or chunk file: geometry/points missing
+KIND_DATA_FILE = "dataFile"  # a glTF buffer, LCC data or chunk file, a USD value clip: geometry/points missing
 KIND_TEXTURE_OR_OTHER = "textureOrOther"  # a texture, material or other asset-valued attribute
-# Asset paths that load nothing (a USD ``assetInfo`` identifier and other metadata): still fetched as
-# before, but a missing one removes nothing from the preview, so it is not reported.
+# A USD ``assetInfo`` identifier, which names the asset and loads nothing: still fetched as before, but
+# a missing one removes nothing from the preview, so it is not reported.
 KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
 # file of the asset: still looked up as before, not reported.
@@ -300,41 +300,80 @@ def _asset_values(value) -> List[str]:
         return []
 
 
-def _usd_reference_kinds(path: str) -> Optional[tuple]:
-    """(composition arcs, asset-valued attribute paths) authored in one layer, as authored, or None
-    when the layer cannot be read for it. Anything else ``ExtractExternalReferences`` returns is
-    metadata (an ``assetInfo`` identifier, say), which loads nothing."""
+def _usd_reference_kinds(path: str) -> Optional[dict]:
+    """The authored asset paths of one layer that decide a reference's kind, as authored, or None when
+    the layer cannot be read for it:
+
+    - ``composition``: its composition arcs (sublayers, references, payloads, variants included);
+    - ``attributes``: the values of its ``asset`` and ``asset[]`` attributes (defaults and time
+      samples). Only attributes of those types are read, so a layer's geometry and animation samples
+      are never loaded for this;
+    - ``clips``: its value-clip asset paths (``clips`` ``assetPaths`` and ``manifestAssetPath``, and the
+      older ``clipAssetPaths`` / ``clipManifestAssetPath``);
+    - ``identifiers``: the ``assetInfo`` ``identifier`` of its prims, which names the asset and loads
+      nothing.
+    """
     from pxr import Sdf
 
     try:
         layer = Sdf.Layer.FindOrOpen(path)
         if layer is None:
             return None
-        composition = {str(value) for value in layer.GetCompositionAssetDependencies()}
-        attribute_assets = set()
+        asset_types = (Sdf.ValueTypeNames.Asset, Sdf.ValueTypeNames.AssetArray)
+        found = {"composition": {str(value) for value in layer.GetCompositionAssetDependencies()},
+                 "attributes": set(), "clips": set(), "identifiers": set()}
 
         def visit(spec_path):
             spec = layer.GetObjectAtPath(spec_path)
-            if not isinstance(spec, Sdf.AttributeSpec):
-                return
-            if spec.HasDefaultValue():
-                attribute_assets.update(_asset_values(spec.default))
-            for time in layer.ListTimeSamplesForPath(spec_path):
-                attribute_assets.update(_asset_values(layer.QueryTimeSample(spec_path, time)))
+            if isinstance(spec, Sdf.AttributeSpec):
+                if spec.typeName not in asset_types:
+                    return
+                if spec.HasDefaultValue():
+                    found["attributes"].update(_asset_values(spec.default))
+                for time in layer.ListTimeSamplesForPath(spec_path):
+                    found["attributes"].update(_asset_values(layer.QueryTimeSample(spec_path, time)))
+            elif isinstance(spec, Sdf.PrimSpec):
+                info = spec.assetInfo or {}
+                identifier = info.get("identifier") if hasattr(info, "get") else None
+                found["identifiers"].update(_asset_values(identifier))
+                clips = spec.GetInfo("clips") if spec.HasInfo("clips") else {}
+                for clip_set in (clips.values() if hasattr(clips, "values") else []):
+                    if hasattr(clip_set, "get"):
+                        found["clips"].update(_asset_values(clip_set.get("assetPaths")))
+                        found["clips"].update(_asset_values(clip_set.get("manifestAssetPath")))
+                for key in ("clipAssetPaths", "clipManifestAssetPath"):
+                    if spec.HasInfo(key):
+                        found["clips"].update(_asset_values(spec.GetInfo(key)))
 
         layer.Traverse(Sdf.Path.absoluteRootPath, visit)
-        return composition, attribute_assets
+        return found
     except Exception as e:
         logger.info(f"  Could not classify the references in {os.path.basename(path)} "
                     f"({type(e).__name__}); classifying them by extension")
         return None
 
 
+def _usd_reference_kind(value: str, kinds: Optional[dict]) -> str:
+    """The kind of one reference a USD layer names. A composition arc to a USD layer is a geometry
+    layer, and to any other file (a ``.mtlx`` material, say) a texture or other file; a value clip is a
+    data file (a missing clip drops animated geometry); an ``assetInfo`` identifier is metadata; and
+    any other asset path (an attribute such as a texture) is a texture or other file."""
+    if kinds is None:
+        return ""
+    if value in kinds["composition"]:
+        return KIND_GEOMETRY_LAYER if is_geometry_layer(value) else KIND_TEXTURE_OR_OTHER
+    if value in kinds["clips"]:
+        return KIND_DATA_FILE
+    if value in kinds["attributes"]:
+        return KIND_TEXTURE_OR_OTHER
+    if value in kinds["identifiers"]:
+        return KIND_METADATA
+    return KIND_TEXTURE_OR_OTHER
+
+
 def _usd_references(path: str) -> List[tuple]:
-    """Sublayers, references, payloads and asset-valued attribute paths authored in one layer, each
-    with its kind: a composition arc is a geometry layer, an asset-valued attribute (a texture) is a
-    texture or other file, and an asset path in metadata (an ``assetInfo`` identifier) loads nothing.
-    Which references are fetched does not depend on the kind."""
+    """Sublayers, references, payloads and the other asset paths authored in one layer, each with its
+    kind (``_usd_reference_kind``). Which references are fetched does not depend on the kind."""
     from pxr import UsdUtils
 
     sublayers, references, payloads = UsdUtils.ExtractExternalReferences(path)
@@ -344,15 +383,9 @@ def _usd_references(path: str) -> List[tuple]:
         for value in values:
             value = str(value)
             if arc != "reference":
-                kind = KIND_GEOMETRY_LAYER
-            elif kinds is None:
-                kind = ""
-            elif value in kinds[0]:
-                kind = KIND_GEOMETRY_LAYER
-            elif value in kinds[1]:
-                kind = KIND_TEXTURE_OR_OTHER
+                kind = KIND_GEOMETRY_LAYER if is_geometry_layer(value) else KIND_TEXTURE_OR_OTHER
             else:
-                kind = KIND_METADATA
+                kind = _usd_reference_kind(value, kinds)
             if "<UDIM>" in value.upper():
                 logger.info(f"  Not fetching UDIM texture set: {value}")
                 continue
@@ -592,7 +625,7 @@ class IncompletePreview:
     other_files: List[SkippedReference]
     not_followed: List[SkippedReference]
     fetch_error: str = ""
-    # glTF buffers and LCC data or chunk files: their absence drops geometry or points.
+    # glTF buffers, LCC data or chunk files and USD value clips: their absence drops geometry or points.
     data_files: List[SkippedReference] = field(default_factory=list)
 
     @property

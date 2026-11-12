@@ -138,11 +138,11 @@ When any referenced file could not be fetched, the run still succeeds and writes
 
 The summary groups the skipped files by what their absence costs the preview:
 
--   **Geometry layers** -- USD sublayers, references and payloads. Part of the model is missing.
--   **Data files** -- glTF buffers (`.bin`) and the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene. Geometry or points are missing.
+-   **Geometry layers** -- USD sublayers, references and payloads that name a USD layer (`.usd`, `.usda`, `.usdc`, `.usdz`). Part of the model is missing.
+-   **Data files** -- glTF buffers (`.bin`), the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene, and USD value clips (a `clips` set's asset paths and manifest). Geometry, points or animated geometry are missing.
 -   **Textures and other files** -- images, OBJ material libraries and other asset-valued attributes. Colour or detail may be missing.
 
-Two kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD metadata, such as a component's `assetInfo` `identifier`, and MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library. They are still looked up as before and appear in the log, but never make a preview incomplete.
+A composition arc to a file that is not a USD layer (a `.mtlx` material, for example) counts as a texture or other file. Two kinds of reference are not counted, because their absence removes nothing from the preview: a USD component's `assetInfo` `identifier`, and MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library. They are still looked up as before and appear in the log, but never make a preview incomplete.
 
 Once the preview has been written, the run's completion line reads, for example:
 
