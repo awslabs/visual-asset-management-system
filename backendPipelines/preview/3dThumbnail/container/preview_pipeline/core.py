@@ -38,6 +38,9 @@ logger = get_logger()
 # writes a still otherwise; a named format applies to every input.
 OUTPUT_TYPE_AUTO = "auto"
 OUTPUT_TYPES = (OUTPUT_TYPE_AUTO, "gif", "jpg", "png")
+# The completion message of a run whose preview has everything it references. A run that skipped
+# referenced files completes with the incomplete-preview message instead (dependencies.IncompletePreview).
+SUCCESS_MESSAGE = "Preview 3D Thumbnail pipeline executed successfully."
 
 
 def hello():
@@ -318,8 +321,11 @@ def _run_preview_stage(
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
-    # reference is skipped; the input still renders.
+    # reference is skipped; the input still renders, and the run reports the preview as incomplete.
+    incomplete = None
     if not localTest and not streamed and dependencies.has_references(ext):
+        fetch_report = dependencies.FetchReport()
+        fetch_error = None
         try:
             with timer.phase("fetch"):
                 dependencies.fetch_referenced_files(
@@ -330,9 +336,14 @@ def _run_preview_stage(
                     reference_root_key,
                     ext,
                     max_splats=budgets.splats,
+                    report=fetch_report,
                 )
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
+            fetch_error = e
+        incomplete = dependencies.incomplete_preview(fetch_report, fetch_error)
+        if incomplete is not None:
+            incomplete.log()
 
     # Load with appropriate handler, then bring the geometry within the render budgets
     try:
@@ -456,6 +467,8 @@ def _run_preview_stage(
         logger.exception(f"Failed to save/upload preview: {e}")
         return _error_response(stage, f"Failed to save/upload preview: {str(e)}")
 
+    if incomplete is not None:
+        return _success_response(stage, incomplete.message())
     return _success_response(stage)
 
 
@@ -697,7 +710,7 @@ def _create_dir(parts: list) -> str:
 
 def _success_response(stage: PipelineStage, message=None) -> PipelineStage:
     if not message:
-        message = "Preview 3D Thumbnail pipeline executed successfully."
+        message = SUCCESS_MESSAGE
     logger.info(message)
     stage.status = PipelineStatus.COMPLETE
     return stage

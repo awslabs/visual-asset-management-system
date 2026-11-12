@@ -15,7 +15,9 @@ URI schemes (``s3:``, ``http(s):``, ``file:``, ``anon:``, a Windows drive), cont
 over-long values are rejected. The fetch is bounded by a file count, a byte total (each object's size
 is read with HeadObject before it is downloaded and checked against free disk) and a recursion depth
 for formats whose fetched files reference further files. A rejected, missing or over-budget
-reference is logged and skipped; it never fails the run.
+reference is logged and skipped; it never fails the run. A run that skipped any is reported as an
+incomplete preview (``IncompletePreview``): one summary in the job log that lists each skipped file with
+its reason, separating the geometry layers a USD stage composes from textures, materials and data files.
 """
 
 import json
@@ -54,12 +56,44 @@ class FetchLimits:
 
 
 @dataclass
+class SkippedReference:
+    """One referenced file that was not fetched: as the referring file names it (a rejected reference)
+    or as its path inside the asset, the referring file's path, and why it was skipped."""
+    reference: str
+    reason: str
+    referrer: str = ""
+
+    @property
+    def is_geometry_layer(self) -> bool:
+        return is_geometry_layer(self.reference)
+
+
+@dataclass
 class FetchReport:
     fetched: List[str] = field(default_factory=list)
     rejected: List[str] = field(default_factory=list)
     missing: List[str] = field(default_factory=list)
     skipped_for_budget: List[str] = field(default_factory=list)
     total_bytes: int = 0
+    # Every entry of rejected, missing and skipped_for_budget, in fetch order, with its reason.
+    skipped: List[SkippedReference] = field(default_factory=list)
+    # Fetched files whose own references were not read (unreadable, or past the depth limit), with why.
+    not_followed: List[SkippedReference] = field(default_factory=list)
+
+
+# USD layer files: a skipped sublayer, reference or payload naming one drops geometry from the stage.
+# An asset-valued attribute (a texture) is a reference too, so the target's extension decides.
+_GEOMETRY_LAYER_EXTENSIONS = _USD_LAYER_EXTENSIONS | {".usdz"}
+
+
+def is_geometry_layer(reference: str) -> bool:
+    """True when ``reference`` names a USD layer, whose absence drops geometry from the preview. Any
+    other referenced file (a texture, an OBJ material library, a glTF buffer, a splat data file) is a
+    texture, material or data file."""
+    if not isinstance(reference, str):
+        return False
+    path = reference.strip().replace("\\", "/").split("[", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    return posixpath.splitext(path.rstrip("/"))[1].lower() in _GEOMETRY_LAYER_EXTENSIONS
 
 
 # --------------------------------------------------------------------------------------------------
@@ -126,6 +160,34 @@ def resolve_reference(reference, referrer_dir: str = "", percent_encoded: bool =
     if joined in (".", "..") or joined.startswith(("/", "../")):
         return None
     return joined
+
+
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def rejection_reason(reference, percent_encoded: bool = False) -> str:
+    """Why ``resolve_reference`` refused ``reference``, for the incomplete-preview summary. It only
+    explains a refusal; whether a reference is accepted is decided by ``resolve_reference`` alone."""
+    if not isinstance(reference, str):
+        return "not a file path"
+    value = (unquote(reference) if percent_encoded else reference).strip()
+    if not value:
+        return "an empty path"
+    if len(value) > MAX_REFERENCE_LENGTH:
+        return f"longer than {MAX_REFERENCE_LENGTH} characters"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return "contains control characters"
+    if value.startswith("`"):
+        return "an expression, not a file path"
+    if _WINDOWS_DRIVE.match(value):
+        return "outside the asset (absolute path)"
+    if _SCHEME.match(value):
+        return "outside the asset (URI scheme)"
+    if value.replace("\\", "/").startswith("/"):
+        return "outside the asset (absolute path)"
+    if ".." in value.replace("\\", "/").split("/"):
+        return "outside the asset ('..' escape)"
+    return "outside the asset"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -305,16 +367,18 @@ def has_references(ext: str) -> bool:
 
 def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, local_root: str,
                            root_key: str, ext: str, limits: Optional[FetchLimits] = None,
-                           max_splats: Optional[int] = None) -> FetchReport:
+                           max_splats: Optional[int] = None,
+                           report: Optional[FetchReport] = None) -> FetchReport:
     """Fetch every accepted file the input references, transitively, into ``local_root``.
 
     ``local_input_path`` is the input already downloaded at its root-relative path under
     ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
     references resolve locally exactly as they do in the asset. ``max_splats`` is the splat budget an
-    ``.lcc2`` scene's level of detail is chosen for.
+    ``.lcc2`` scene's level of detail is chosen for. A caller-supplied ``report`` is filled in place,
+    so what was recorded before an unexpected error is still there when the call raises.
     """
     limits = limits or FetchLimits()
-    report = FetchReport()
+    report = report if report is not None else FetchReport()
     if not has_references(ext):
         return report
 
@@ -322,6 +386,10 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
     seen = {input_rel}
     queue = deque([(local_input_path, input_rel, ext.lower(), 0)])
     budget_logged = False
+
+    def skip(kind: List[str], name: str, reason: str, referrer: str):
+        kind.append(name)
+        report.skipped.append(SkippedReference(name, reason, referrer))
 
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
@@ -335,6 +403,8 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                 references = collector(local_path)
         except Exception as e:
             logger.warning(f"Could not read the references in {rel_path}: {e}")
+            report.not_followed.append(SkippedReference(
+                rel_path, f"its references could not be read ({type(e).__name__})"))
             continue
         referrer_dir = posixpath.dirname(rel_path)
         for raw, percent_encoded in references:
@@ -343,7 +413,9 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
             if relative is None or target is None:
                 logger.warning(f"  Skipping reference in {rel_path}: not a path inside the asset: "
                                f"{raw!r}")
-                report.rejected.append(raw)
+                reason = (rejection_reason(raw, percent_encoded) if relative is None
+                          else "outside the asset")
+                skip(report.rejected, raw, reason, rel_path)
                 continue
             if relative in seen:
                 continue
@@ -353,27 +425,30 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                     logger.warning(f"  Referenced-file limit reached ({limits.max_files} files); "
                                    f"further references are skipped")
                     budget_logged = True
-                report.skipped_for_budget.append(relative)
+                skip(report.skipped_for_budget, relative,
+                     f"over the file budget ({limits.max_files} files)", rel_path)
                 continue
             key = root_key + relative
             size = s3.head_object_size(bucket, key)
             if size is None:
                 logger.warning(f"  Referenced file not found in the asset: {relative}")
-                report.missing.append(relative)
+                skip(report.missing, relative, "missing from the asset", rel_path)
                 continue
             if report.total_bytes + size > limits.max_total_bytes:
                 logger.warning(f"  Skipping {relative} ({size} bytes): referenced files would exceed "
                                f"{limits.max_total_bytes} bytes")
-                report.skipped_for_budget.append(relative)
+                skip(report.skipped_for_budget, relative,
+                     f"over the byte budget ({limits.max_total_bytes} bytes)", rel_path)
                 continue
             free = shutil.disk_usage(local_root).free
             if size + limits.disk_headroom_bytes > free:
                 logger.warning(f"  Skipping {relative} ({size} bytes): {free} bytes of disk free")
-                report.skipped_for_budget.append(relative)
+                skip(report.skipped_for_budget, relative,
+                     f"over the disk budget ({size} bytes, {free} bytes free)", rel_path)
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             if s3.download(bucket, key, target) is None:
-                report.missing.append(relative)
+                skip(report.missing, relative, "could not be downloaded from the asset", rel_path)
                 continue
             report.fetched.append(relative)
             report.total_bytes += size
@@ -384,9 +459,98 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                 else:
                     logger.warning(f"  Not following references in {relative}: depth limit "
                                    f"{limits.max_depth} reached")
+                    report.not_followed.append(SkippedReference(
+                        relative, f"its references were not read (depth limit {limits.max_depth})"))
 
     logger.info(f"Referenced files: {len(report.fetched)} fetched ({report.total_bytes} bytes), "
                 f"{len(report.rejected)} rejected, {len(report.missing)} missing, "
                 f"{len(report.skipped_for_budget)} skipped for the budget")
     return report
 
+
+# --------------------------------------------------------------------------------------------------
+# Incomplete preview
+# --------------------------------------------------------------------------------------------------
+
+# Entries listed per group in the summary; a scene that names thousands of missing files keeps its
+# summary bounded, with the count of the rest.
+MAX_SUMMARY_ENTRIES = 200
+
+
+@dataclass
+class IncompletePreview:
+    """What a run's preview is missing because referenced files were not fetched."""
+    geometry_layers: List[SkippedReference]
+    other_files: List[SkippedReference]
+    not_followed: List[SkippedReference]
+    fetch_error: str = ""
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.geometry_layers) + len(self.other_files)
+
+    def message(self) -> str:
+        """The run's completion message for an incomplete preview."""
+        if self.skipped_count:
+            geometry = len(self.geometry_layers)
+            other = len(self.other_files)
+            return (f"Preview generated, but incomplete: {self.skipped_count} referenced "
+                    f"{_plural(self.skipped_count, 'file', 'files')} could not be fetched "
+                    f"({geometry} geometry {_plural(geometry, 'layer', 'layers')}, "
+                    f"{other} {_plural(other, 'texture/other file', 'textures/other files')}). "
+                    f"See the job log for the list.")
+        return ("Preview generated, but it may be incomplete: not every referenced file could be "
+                "read. See the job log for the details.")
+
+    def log(self):
+        """One WARNING summary: the count, then each skipped file with its reason, geometry layers
+        first. Every listed name is quoted with repr, so a reference cannot forge a log line."""
+        logger.warning(f"Incomplete preview: {self.message()}")
+        _log_group("Geometry layers not fetched (their geometry is missing from the preview)",
+                   self.geometry_layers)
+        _log_group("Textures, materials and data files not fetched (colour or detail may be "
+                   "missing from the preview)", self.other_files)
+        _log_group("Fetched files whose own references were not followed", self.not_followed)
+        if self.fetch_error:
+            logger.warning(f"  The referenced-file fetch stopped early ({self.fetch_error}); "
+                           f"files it had not reached were not fetched.")
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    return one if count == 1 else many
+
+
+def _log_group(title: str, entries: List[SkippedReference]):
+    if not entries:
+        return
+    logger.warning(f"  {title}: {len(entries)}")
+    for entry in entries[:MAX_SUMMARY_ENTRIES]:
+        where = f" (named in {entry.referrer!r})" if entry.referrer else ""
+        logger.warning(f"    {entry.reference!r}{where}: {entry.reason}")
+    if len(entries) > MAX_SUMMARY_ENTRIES:
+        logger.warning(f"    ... and {len(entries) - MAX_SUMMARY_ENTRIES} more")
+
+
+def incomplete_preview(report: Optional[FetchReport],
+                       fetch_error: Optional[BaseException] = None) -> Optional[IncompletePreview]:
+    """The incomplete-preview summary of a fetch, or None when every referenced file was fetched.
+
+    A reference skipped more than once (the same name in several layers) is counted once per reason.
+    ``fetch_error`` is the exception that ended the fetch early, if one did.
+    """
+    report = report or FetchReport()
+    unique: List[SkippedReference] = []
+    keys = set()
+    for entry in report.skipped:
+        key = (entry.reference, entry.reason)
+        if key not in keys:
+            keys.add(key)
+            unique.append(entry)
+    if not unique and not report.not_followed and fetch_error is None:
+        return None
+    return IncompletePreview(
+        geometry_layers=[entry for entry in unique if entry.is_geometry_layer],
+        other_files=[entry for entry in unique if not entry.is_geometry_layer],
+        not_followed=list(report.not_followed),
+        fetch_error=type(fetch_error).__name__ if fetch_error is not None else "",
+    )
