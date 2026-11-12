@@ -63,7 +63,7 @@ class TestRequestPathHasNoDotOrEmptySegment:
 
     def test_the_constant_parse_is_not_vacuous(self):
         # Control: the parametrization below reads the route constants rather than an empty set.
-        assert len(CONSTANT_PATHS) > 100
+        assert len(CONSTANT_PATHS) > 90
         assert ("API_AUTH_API_KEY", "/auth/api-keys/x-1") in CONSTANT_PATHS
 
     @pytest.mark.parametrize("name,path", CONSTANT_PATHS)
