@@ -761,3 +761,36 @@ class TestProbeDenialMarker:
         messages = [entry["message"] for entry in probe_env["recorder"].accepted_events]
         assert len(messages) == 1
         assert not re.match(PROBE_RECORD_PATTERN, messages[0])
+
+
+@pytest.mark.unit
+class TestProbeDenialsThatCannotBeWritten:
+    """Denials the flush cannot hand to the writer are reported as undelivered, not dropped."""
+
+    def test_denials_whose_log_group_does_not_resolve_are_reported(self):
+        reported = []
+        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), MagicMock(), "GET /auth/routes/api/allowed")
+        batch._denials = [({"route__path": "/a"}, "GET"), ({"route__path": "/b"}, "GET")]
+        with patch.object(routes_module, "get_log_group_name", side_effect=KeyError("not published")), \
+                patch.object(routes_module.auditLogging, "format_authorization_denial_record",
+                             real_audit.format_authorization_denial_record, create=True), \
+                patch.object(routes_module.auditLogging, "report_undelivered_audit_records", create=True,
+                             side_effect=lambda key, reason, records: reported.append((key, reason, records))):
+            batch.flush()
+        assert len(reported) == 1
+        key, reason, records = reported[0]
+        assert key is routes_module.ResourceKeys.AUDIT_LOG_AUTHORIZATION
+        assert reason == "unexpectedError"
+        assert len(records) == 2
+        assert all(record.startswith("[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed]")
+                   for record in records)
+
+    def test_a_written_batch_is_not_reported_again(self, probe_env):
+        reported = []
+        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), MagicMock(), "GET /auth/routes/api/allowed")
+        batch._denials = [({"route__path": "/a"}, "GET")]
+        with patch.object(routes_module.auditLogging, "report_undelivered_audit_records", create=True,
+                          side_effect=lambda key, reason, records: reported.append(records)):
+            batch.flush()
+        assert len(probe_env["recorder"].accepted_events) == 1
+        assert reported == []

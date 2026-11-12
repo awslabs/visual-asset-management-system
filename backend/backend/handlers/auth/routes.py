@@ -138,7 +138,10 @@ class _DenialAuditBatch:
         denials, self._denials = self._denials, []
         if not denials:
             return
+        # Records not yet handed to the writer; the writer reports the ones it cannot deliver.
+        pending = [None] * len(denials)
         try:
+            pending = [self._denial_record(obj, act) for obj, act in denials]
             log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
             audit_event = {
                 'requestContext': {'authorizer': {'jwt': {'claims': {'sub': self._user}}}}
@@ -148,22 +151,27 @@ class _DenialAuditBatch:
             event_overhead = AUDIT_EVENT_OVERHEAD_BYTES + len(
                 f" --- [event: {json.dumps(audit_event)}]".encode('utf-8')
             )
+            batches = []
             batch = []
             batch_bytes = 0
-            for obj, act in denials:
-                record = self._denial_record(obj, act)
+            for record in pending:
                 record_bytes = len(record.encode('utf-8')) + event_overhead
                 if batch and (len(batch) >= AUDIT_BATCH_MAX_EVENTS
                               or batch_bytes + record_bytes > AUDIT_BATCH_MAX_BYTES):
-                    auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                    batches.append(batch)
                     batch = []
                     batch_bytes = 0
                 batch.append(record)
                 batch_bytes += record_bytes
             if batch:
+                batches.append(batch)
+            for batch in batches:
                 auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                pending = pending[len(batch):]
         except Exception as e:
             logger.exception(f"Failed to write authorization denial audit records: {e}")
+            auditLogging.report_undelivered_audit_records(
+                ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", pending)
 
 
 def check_web_routes(event):

@@ -6,7 +6,9 @@ Audit Logging Module for VAMS
 
 This module provides functions to log audit events to CloudWatch Log Groups.
 All functions implement silent failure - if logging fails, the error is logged
-locally but the lambda execution continues without disruption.
+locally but the lambda execution continues without disruption. An entry that
+cannot be delivered to its audit log group is written to the function's own log
+as one auditFallback line and counted in the VAMS/Audit AuditWriteFailures metric.
 """
 
 import contextlib
@@ -63,8 +65,8 @@ _PREFIX_UNSAFE_CHARS = re.compile(
 
 # The log stream this container has created in each audit log group. The stream name is the current
 # date, so an entry ages out at the day boundary and CreateLogStream -- an account-wide 50 TPS
-# quota -- is called once per group per day instead of once per audit write. A failed write drops
-# the entry, so a stream that went away is created again by the write after it.
+# quota -- is called once per group per day instead of once per audit write. A failed write reports its
+# entries as undelivered, and a stream that went away is created again by the write after it.
 _created_log_streams: Dict[str, str] = {}
 
 # The nine audit log groups, resolved once per container at import (Rule 10) rather than on each
@@ -87,14 +89,34 @@ _AUDIT_LOG_GROUP_KEYS = (
 
 _audit_log_group_names: Dict[str, Optional[str]] = {}
 
+# The audit log type (the parameter key's last segment, e.g. auditActions) of each resolved log
+# group name, so an entry that cannot be delivered is reported under the type it was meant for.
+_audit_log_types_by_name: Dict[str, str] = {}
+
+# An entry that cannot be delivered to its audit log group is written to the function's own log
+# instead, as one JSON line marked auditFallback, and counted in this CloudWatch embedded metric
+# format metric. The metric is extracted from the function log, so it needs no permission beyond
+# the function's own log delivery.
+AUDIT_METRIC_NAMESPACE = "VAMS/Audit"
+AUDIT_METRIC_WRITE_FAILURES = "AuditWriteFailures"
+AUDIT_METRIC_DIMENSION = "AuditLogType"
+
+
+def _audit_log_type(key) -> str:
+    """The audit log type a resource key names, e.g. auditActions."""
+    return key.param_key.rsplit("/", 1)[-1]
+
 
 def _resolve_audit_log_group(key) -> Optional[str]:
     """Resolve one audit log-group name, returning None instead of raising."""
     try:
-        return get_log_group_name(key)
+        name = get_log_group_name(key)
     except Exception as e:
         logger.error(f"Audit log group name not resolved for {key.param_key}: {e}")
         return None
+    if name:
+        _audit_log_types_by_name[name] = _audit_log_type(key)
+    return name
 
 
 for _key in _AUDIT_LOG_GROUP_KEYS:
@@ -115,6 +137,104 @@ def _audit_log_group(key) -> Optional[str]:
     if name:
         _audit_log_group_names[key.param_key] = name
     return name
+
+
+def _write_function_log_line(line: str) -> None:
+    """One line on standard output, which Lambda delivers to the function's own log group."""
+    print(line, flush=True)
+
+
+def _fallback_record(record: Optional[str]) -> Optional[str]:
+    """
+    Cap an undelivered entry so its fallback line stays inside the per-event budget once the
+    entry is written as a JSON string (quotes and backslashes are escaped there).
+    """
+    if record is None:
+        return None
+    record = _truncate_message(record)
+    budget = AUDIT_EVENT_MAX_MESSAGE_BYTES
+    marker = AUDIT_EVENT_TRUNCATION_MARKER
+    for _ in range(4):
+        size = len(_serialize_json(record))
+        if size <= budget:
+            return record
+        keep = max(0, int(len(record) * budget / size) - len(marker) - 64)
+        record = record[:keep] + marker
+    # Every character escapes to at most six, so this always fits.
+    return record[:budget // 6 - len(marker)] + marker
+
+
+def report_undelivered_audit_records(log_type: Any, reason: str, records: List[Optional[str]]) -> None:
+    """
+    Write audit entries that did not reach their audit log group to the function's own log, one
+    JSON line per entry marked auditFallback, and count them in the AuditWriteFailures metric
+    (one embedded-metric line per call). Never raises.
+
+    Args:
+        log_type: The audit log type (e.g. "auditActions"), or the ResourceKeys entry it comes from
+        reason: Why the entries were not delivered, e.g. "putLogEventsFailed"
+        records: The entries as they would have been written; None for an entry not formatted
+    """
+    try:
+        if not records:
+            return
+        if not isinstance(log_type, str):
+            log_type = _audit_log_type(log_type)
+        for record in records:
+            _write_function_log_line(_serialize_json({
+                "auditFallback": True,
+                "logGroupKey": log_type,
+                "reason": reason,
+                "record": _fallback_record(record),
+            }))
+        _write_function_log_line(_serialize_json({
+            "_aws": {
+                "Timestamp": int(utc_now().timestamp() * 1000),
+                "CloudWatchMetrics": [{
+                    "Namespace": AUDIT_METRIC_NAMESPACE,
+                    "Dimensions": [[AUDIT_METRIC_DIMENSION]],
+                    "Metrics": [{"Name": AUDIT_METRIC_WRITE_FAILURES, "Unit": "Count"}],
+                }],
+            },
+            AUDIT_METRIC_DIMENSION: log_type,
+            AUDIT_METRIC_WRITE_FAILURES: len(records),
+            "reason": reason,
+        }))
+    except Exception as e:
+        try:
+            logger.error(f"Failed to report {len(records)} undelivered audit entries: {e}")
+        except Exception:
+            pass
+
+
+def _event_suffix(event: Optional[Dict[str, Any]]) -> str:
+    """The ` --- [event: ...]` echo appended to an entry: the masked event as ASCII JSON."""
+    masked_event = mask_sensitive_data(event) if event else {}
+    return f" --- [event: {_serialize_json(masked_event)}]" if masked_event else ""
+
+
+def _report_unresolved_log_group(key, messages: List[str], event: Optional[Dict[str, Any]]) -> None:
+    """Report entries whose audit log group name did not resolve."""
+    logger.error(f"{key.env_var_names[0]} resource name not resolved")
+    try:
+        suffix = _event_suffix(event)
+    except Exception:
+        suffix = ""
+    report_undelivered_audit_records(key, "logGroupUnresolved", [message + suffix for message in messages])
+
+
+def _write_audit_entry(key, event_type: str, user_context: Dict[str, Any], custom_data: Any,
+                       event: Optional[Dict[str, Any]]) -> None:
+    """
+    Format one audit entry and write it to the audit log group `key` names, or report it as
+    undelivered when that name does not resolve.
+    """
+    message = _format_log_message(event_type, user_context, custom_data, _audit_log_type(key))
+    log_group_name = _audit_log_group(key)
+    if not log_group_name:
+        _report_unresolved_log_group(key, [message], event)
+        return
+    _write_to_cloudwatch(log_group_name, message, event)
 
 
 def _extract_user_context(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,7 +312,8 @@ def _serialize_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
-def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_data: Any) -> str:
+def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_data: Any,
+                        log_type: str = "unknown") -> str:
     """
     Format the audit log message with event type, user context, and custom data.
 
@@ -205,6 +326,7 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
         event_type: The type of event (e.g., "[AUTHENTICATION]"), built with _event_type
         user_context: Dictionary with user, roles, and mfaEnabled
         custom_data: Additional data to include in the log
+        log_type: The audit log type the record is for, named if formatting fails
 
     Returns:
         Formatted log message string
@@ -230,7 +352,10 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
         return " ".join(message_parts)
     except Exception as e:
         logger.exception(f"Failed to format log message: {e}")
-        return f"{event_type} [ERROR: Failed to format message]"
+        message = f"{event_type} [ERROR: Failed to format message]"
+        # The marker record is still written; what it lost is reported here.
+        report_undelivered_audit_records(log_type, "formatFailed", [message])
+        return message
 
 
 def _event_type(*segments: Tuple[str, Any]) -> str:
@@ -373,16 +498,27 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
         messages: The formatted log messages
         event: The original event (for masking sensitive data; appended to each entry)
     """
+    log_type = _audit_log_types_by_name.get(log_group_name, "unknown")
+    # What is reported as undelivered if the write stops before any batch is sent.
+    records = list(messages)
     try:
+        event_suffix = _event_suffix(event)
+
+        # What the entries after the first carry: the echo itself while replicating it stays inside
+        # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
+        following_suffix = event_suffix
+        if (event_suffix and len(messages) > 1
+                and _message_byte_length(event_suffix) * len(messages)
+                > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
+            following_suffix = AUDIT_EVENT_ECHO_REFERENCE
+
+        records = [message + (event_suffix if index == 0 else following_suffix)
+                   for index, message in enumerate(messages)]
+
         if not cloudwatch_logs:
             logger.error("CloudWatch Logs client not initialized, cannot write audit log")
+            report_undelivered_audit_records(log_type, "clientUnavailable", records)
             return
-
-        # Mask sensitive data from the event before logging
-        if event:
-            masked_event = mask_sensitive_data(event)
-        else:
-            masked_event = {}
 
         # Create log stream name based on current date
         log_stream_name = utc_now().strftime("%Y/%m/%d")
@@ -399,29 +535,18 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                 pass
             except Exception as e:
                 logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
+                report_undelivered_audit_records(log_type, "createLogStreamFailed", records)
                 return
             _created_log_streams[log_group_name] = log_stream_name
 
-        #Add event at the end of each message.
-        event_suffix = f" --- [event: {_serialize_json(masked_event)}]" if masked_event else ""
-
-        # What the entries after the first carry: the echo itself while replicating it stays inside
-        # AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES, a reference to the first entry's copy beyond that.
-        following_suffix = event_suffix
-        if (event_suffix and len(messages) > 1
-                and _message_byte_length(event_suffix) * len(messages)
-                > AUDIT_BATCH_ECHO_MAX_TOTAL_BYTES):
-            following_suffix = AUDIT_EVENT_ECHO_REFERENCE
-
         timestamp = int(utc_now().timestamp() * 1000)
-        prepared_events = []
-        for index, message in enumerate(messages):
-            suffix = event_suffix if index == 0 else following_suffix
-            prepared_events.append(_prepare_log_event(timestamp, message + suffix))
+        batches = _chunk_log_events([_prepare_log_event(timestamp, record) for record in records])
+        # From here each batch reports its own entries if its write fails.
+        records = []
 
         # Write to CloudWatch, one call per batch inside the PutLogEvents budgets. Each batch
         # is attempted on its own so a rejected batch does not take the ones after it with it.
-        for batch in _chunk_log_events(prepared_events):
+        for batch in batches:
             try:
                 cloudwatch_logs.put_log_events(
                     logGroupName=log_group_name,
@@ -429,17 +554,20 @@ def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[
                     logEvents=batch
                 )
             except Exception as e:
-                # The stream may have gone away under the entry recorded above, so the entry is
-                # dropped and the write after this one creates the stream again.
+                # The stream may have gone away under the entry recorded above, so the entry goes
+                # to the function log instead and the write after this one creates the stream again.
                 _created_log_streams.pop(log_group_name, None)
                 logger.exception(
                     f"Failed to write {len(batch)} audit entries to CloudWatch log group "
                     f"{log_group_name}: {e}"
                 )
+                report_undelivered_audit_records(
+                    log_type, "putLogEventsFailed", [log_event["message"] for log_event in batch])
 
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to write audit log to CloudWatch log group {log_group_name}: {e}")
+        report_undelivered_audit_records(log_type, "unexpectedError", records)
 
 
 def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: Optional[Any] = None) -> None:
@@ -452,20 +580,14 @@ def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: 
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHENTICATION)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHENTICATION resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHENTICATION", None), ("authenticated", authenticated))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHENTICATION, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authentication audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHENTICATION, "unexpectedError", [None])
 
 
 # Authorization entries collected inside deferred_authorization_audit(), as (log group, message, event)
@@ -487,7 +609,11 @@ def _write_deferred_authorization_entries(entries: List[Tuple[str, str, Dict[str
     run_messages: List[str] = []
     run_event: Dict[str, Any] = {}
     for log_group_name, message, event in entries:
-        key = (log_group_name, json.dumps(event, sort_keys=True, default=str))
+        try:
+            key = (log_group_name, json.dumps(event, sort_keys=True, default=str))
+        except Exception:
+            # An event that cannot be serialized is grouped by identity instead.
+            key = (log_group_name, id(event))
         if run_messages and key != run_key:
             _write_batch_to_cloudwatch(run_key[0], run_messages, run_event)
             run_messages = []
@@ -521,6 +647,8 @@ def deferred_authorization_audit() -> Iterator[None]:
         except Exception as e:
             # Silent failure - log locally but don't raise
             logger.exception(f"Failed to write {len(entries)} deferred authorization audit entries: {e}")
+            report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError",
+                                             [message for _, message, _ in entries])
 
 
 def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
@@ -533,11 +661,6 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
-            return
-        
         # Extract user context from claims_and_roles
         user_context = {
             "user": claims_and_roles.get("tokens", ["UNKNOWN"])[0] if claims_and_roles.get("tokens") else "UNKNOWN",
@@ -546,7 +669,8 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         }
         
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
-        message = _format_log_message(event_type, user_context, custom_data)
+        message = _format_log_message(event_type, user_context, custom_data,
+                                      _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
         
         # Create a minimal mock event for CloudWatch logging
         mock_event = {
@@ -560,7 +684,12 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
                 }
             }
         }
-        
+
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        if not log_group_name:
+            _report_unresolved_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION, [message], mock_event)
+            return
+
         pending = _deferred_authorization_entries.get()
         if pending is not None:
             pending.append((log_group_name, message, mock_event))
@@ -571,6 +700,7 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])
 
 
 def format_authorization_denial_record(claims_and_roles: Dict[str, Any], probe_endpoint: str,
@@ -595,7 +725,8 @@ def format_authorization_denial_record(claims_and_roles: Dict[str, Any], probe_e
     }
     event_type = (_event_type(("AUTHORIZATION", None), ("authorized", False)) + " "
                   + _event_type(("probe", probe_endpoint)))
-    return _format_log_message(event_type, user_context, custom_data)
+    return _format_log_message(event_type, user_context, custom_data,
+                               _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
 
 
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
@@ -608,20 +739,14 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])
 
 
 def log_file_upload(
@@ -646,11 +771,6 @@ def log_file_upload(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEUPLOAD)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_FILEUPLOAD resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = "[FILEUPLOAD]"
         
@@ -668,13 +788,12 @@ def log_file_upload(
         if custom_data:
             upload_data["customData"] = custom_data
         
-        message = _format_log_message(event_type, user_context, upload_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEUPLOAD, event_type, user_context, upload_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log file upload audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_FILEUPLOAD, "unexpectedError", [None])
 
 
 def log_file_download(
@@ -695,11 +814,6 @@ def log_file_download(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = "[FILEDOWNLOAD]"
         
@@ -713,13 +827,12 @@ def log_file_download(
         if custom_data:
             download_data["customData"] = custom_data
         
-        message = _format_log_message(event_type, user_context, download_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, event_type, user_context, download_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log file download audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, "unexpectedError", [None])
 
 
 def log_file_download_bulk(
@@ -739,16 +852,12 @@ def log_file_download_bulk(
         file_entries: List of dicts with 'filePath' and optional 'versionId'
         custom_data_base: Data common to every entry (e.g. downloadType)
     """
+    messages: List[str] = []
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
-            return
-
         user_context = _extract_user_context(event)
         event_type = "[FILEDOWNLOAD]"
+        log_type = _audit_log_type(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
 
-        messages = []
         for entry in file_entries:
             download_data = {
                 "databaseId": database_id,
@@ -760,13 +869,20 @@ def log_file_download_bulk(
                 custom_data["versionId"] = entry.get("versionId")
             if custom_data:
                 download_data["customData"] = custom_data
-            messages.append(_format_log_message(event_type, user_context, download_data))
+            messages.append(_format_log_message(event_type, user_context, download_data, log_type))
+
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
+        if not log_group_name:
+            _report_unresolved_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, messages, event)
+            return
 
         _write_batch_to_cloudwatch(log_group_name, messages, event)
 
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log bulk file download audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD, "unexpectedError",
+                                         messages or [None])
 
 
 def log_file_download_streamed(
@@ -787,11 +903,6 @@ def log_file_download_streamed(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_FILEDOWNLOAD_STREAMED resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = "[FILEDOWNLOAD-STREAMED]"
         
@@ -805,13 +916,12 @@ def log_file_download_streamed(
         if custom_data:
             download_data["customData"] = custom_data
         
-        message = _format_log_message(event_type, user_context, download_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED, event_type, user_context, download_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log streamed file download audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED, "unexpectedError", [None])
 
 
 def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
@@ -824,20 +934,14 @@ def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Opti
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHOTHER)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHOTHER resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHOTHER", None), ("type", secondary_type))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHOTHER, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log auth other audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHOTHER, "unexpectedError", [None])
 
 
 def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
@@ -850,20 +954,14 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHCHANGES)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHCHANGES resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHCHANGES", None), ("type", secondary_type))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHCHANGES, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log auth changes audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHCHANGES, "unexpectedError", [None])
 
 
 def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
@@ -876,20 +974,14 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_ACTIONS)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_ACTIONS resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("ACTIONS", None), ("type", secondary_type))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_ACTIONS, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log actions audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_ACTIONS, "unexpectedError", [None])
 
 
 def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
@@ -902,20 +994,14 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_ERRORS)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_ERRORS resource name not resolved")
-            return
-        
         user_context = _extract_user_context(event)
         event_type = _event_type(("ERRORS", None), ("type", secondary_type))
-        message = _format_log_message(event_type, user_context, custom_data)
-        
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_ERRORS, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log errors audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_ERRORS, "unexpectedError", [None])
 
 
 def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None,
@@ -946,11 +1032,6 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         token_audience: Accepted audience of the verified token (optional, successes only)
     """
     try:
-        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
-        if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
-            return
-        
         # Extract ONLY safe user context
         user_context = {
             "user": "unknown",
@@ -978,9 +1059,9 @@ def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_r
         }
         if authorized and token_audience:
             custom_data["tokenAudience"] = str(token_audience)
-        message = _format_log_message(event_type, user_context, custom_data)
-        _write_to_cloudwatch(log_group_name, message, event)
+        _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization gateway audit event: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])

@@ -2565,6 +2565,7 @@ Write audit records only through the `log_*` functions in `customLogging/auditLo
 
 -   **Prefix values are encoded.** Every value placed inside a `[...]` segment passes through `_encode_prefix_value` (the roles list through `_encode_roles`, the leading segments through `_event_type`): `[`, `]`, `\`, CR, LF, every other C0/C1 control and the bidirectional and zero-width characters are written as `\uXXXX`. A value made of the characters `userid_pattern` admits is written unchanged. A record that needs an extra segment (the permission-check probe marker) gets a formatter in `auditLogging.py` (`format_authorization_denial_record`) rather than an f-string at the call site.
 -   **Payload and echo are single-line ASCII JSON** (`json.dumps(..., ensure_ascii=True, default=str)`), so a value JSON cannot encode is written as its string form instead of dropping the record.
+-   **An entry is never silently dropped.** A write path that cannot deliver an entry calls `report_undelivered_audit_records(log_type, reason, records)`, which writes each entry to the function's own log as an `auditFallback` JSON line and emits the `VAMS/Audit` `AuditWriteFailures` embedded metric (dimension `AuditLogType`). It never raises, adds nothing to the success path and needs no new IAM.
 
 ### **Response Model Conversion Pattern**
 

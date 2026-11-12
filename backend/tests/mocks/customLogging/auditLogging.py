@@ -27,6 +27,7 @@ def _noop(*args, **kwargs):
 log_authentication = _noop
 log_authorization = _noop
 log_authorization_api = _noop
+report_undelivered_audit_records = _noop
 
 
 def format_authorization_denial_record(claims_and_roles, probe_endpoint, custom_data):

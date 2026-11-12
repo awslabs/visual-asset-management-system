@@ -426,7 +426,49 @@ VAMS audit logs can be forwarded to Security Information and Event Management (S
 
 ## Monitoring Audit Logging Health
 
-Check Lambda Amazon CloudWatch logs for these error patterns to verify audit logging is functioning correctly:
+An entry that cannot be written to its audit log group is not dropped. The Lambda function that produced it writes the entry, exactly as it would have been written (masked event echo included, capped at the same 255 KB as an audit event), to its own log group (`/aws/lambda/<function name>`) as one JSON line:
+
+```json
+{"auditFallback": true, "logGroupKey": "auditActions", "reason": "putLogEventsFailed", "record": "[ACTIONS][type: assetCreate] [user: john.doe] ..."}
+```
+
+`logGroupKey` names the audit log group the entry was meant for (`auditAuthentication`, `auditAuthorization`, `auditFileUpload`, `auditFileDownload`, `auditFileDownloadStreamed`, `auditAuthOther`, `auditAuthChanges`, `auditActions`, `auditErrors`). `reason` is one of:
+
+| Reason                  | What happened                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `putLogEventsFailed`    | Amazon CloudWatch Logs refused or did not answer the write (throttling, a missing log group or stream, an IAM or AWS KMS denial). |
+| `createLogStreamFailed` | The day's log stream could not be created.                                                                                        |
+| `clientUnavailable`     | The Amazon CloudWatch Logs client could not be created when the function started.                                                 |
+| `logGroupUnresolved`    | The audit log group name could not be read from AWS Systems Manager Parameter Store.                                              |
+| `formatFailed`          | The entry could not be formatted; a `[ERROR: Failed to format message]` entry was written in its place.                          |
+| `unexpectedError`       | Any other failure. `record` is `null` when the entry was never formatted.                                                        |
+
+The same write also emits an Amazon CloudWatch [embedded metric format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html) line, which CloudWatch turns into the metric `AuditWriteFailures` in the namespace `VAMS/Audit`, with the dimension `AuditLogType` set to the `logGroupKey` value and the number of entries lost as its value. The metric is extracted from the function's own log, so it needs no permission beyond the function's log delivery. A healthy deployment emits no data points.
+
+Alarm on the metric for each audit log type you depend on, for example the authorization log:
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name vams-audit-authorization-write-failures \
+  --namespace VAMS/Audit --metric-name AuditWriteFailures \
+  --dimensions Name=AuditLogType,Value=auditAuthorization \
+  --statistic Sum --period 300 --evaluation-periods 1 \
+  --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold \
+  --treat-missing-data notBreaching \
+  --alarm-actions <your SNS topic ARN>
+```
+
+To alarm on every audit log type at once, base the alarm on the Metrics Insights query `SELECT SUM(AuditWriteFailures) FROM SCHEMA("VAMS/Audit", AuditLogType)`. To recover the entries themselves, query the Lambda function log groups with Amazon CloudWatch Logs Insights:
+
+```text
+fields @timestamp, logGroupKey, reason, record
+| filter @message like /"auditFallback": true/
+| sort @timestamp desc
+```
+
+Entries recovered this way live in the function log group, under its retention and encryption settings rather than the audit log group's; give the function log groups the same read restrictions as the audit log groups.
+
+The functions also log these error lines when an audit write fails:
 
 ```text
 Failed to write audit log to CloudWatch log group
@@ -437,7 +479,7 @@ CloudWatch Logs client not initialized
 ```
 
 :::tip[Set Up Alarms]
-Create Amazon CloudWatch alarms on the patterns above to detect audit logging failures. While the silent failure pattern prevents API disruption, you should monitor for gaps in the audit trail.
+Alarm on `AuditWriteFailures`. While the silent failure pattern prevents API disruption, you should know when an entry reached only the function log.
 :::
 
 ## Security Best Practices
@@ -509,23 +551,23 @@ All audit logging functions implement a consistent silent failure pattern with t
 1. **Try-except wrapper** -- Each logging function is wrapped in a top-level `try-except` block that catches all exceptions.
 2. **Local logging** -- When audit logging fails, the error is logged to the Lambda function's standard Amazon CloudWatch log stream using the `safeLogger` module.
 3. **No re-raise** -- Exceptions are caught but never re-raised, ensuring the calling handler continues execution.
-4. **Graceful degradation** -- The application continues processing the API request even if the audit trail has a gap.
+4. **The entry is kept** -- An entry that did not reach its audit log group is written to the function's own log as an `auditFallback` line and counted in the `AuditWriteFailures` metric (see [Monitoring Audit Logging Health](#monitoring-audit-logging-health)). Nothing is added to a successful write.
 
 ### Error Scenarios Handled
 
 The following failure scenarios are handled silently without disrupting Lambda execution:
 
 -   Amazon CloudWatch Logs client initialization failure (for example, missing IAM permissions at cold start)
--   Log group name resolution failure -- an unreachable AWS Systems Manager Parameter Store, a missing `cloudwatchLogGroups/*` parameter, or an unset `VAMS_RESOURCE_PARAM_PREFIX` (the function logs the failure and returns without writing)
+-   Log group name resolution failure -- an unreachable AWS Systems Manager Parameter Store, a missing `cloudwatchLogGroups/*` parameter, or an unset `VAMS_RESOURCE_PARAM_PREFIX` (the function logs the failure and writes the entry to its own log instead)
 -   Log group does not exist in Amazon CloudWatch
 -   Log stream creation failure
 -   Network timeouts when writing to Amazon CloudWatch
 -   IAM permission errors on `logs:PutLogEvents`
--   Invalid or non-serializable data formats in the `custom_data` parameter
+-   Invalid or non-serializable data formats in the `custom_data` parameter (a value JSON cannot encode is written as its string form)
 
 ### Monitoring for Failures
 
-While silent failure prevents API disruption, you should monitor for audit logging issues. Check Lambda Amazon CloudWatch logs for these error patterns:
+While silent failure prevents API disruption, you should monitor for audit logging issues. Alarm on the `AuditWriteFailures` metric in the `VAMS/Audit` namespace and recover lost entries from the function logs, as [Monitoring Audit Logging Health](#monitoring-audit-logging-health) describes. The error lines below accompany each failure:
 
 ```text
 Failed to write audit log to CloudWatch log group
@@ -571,7 +613,7 @@ The API Gateway authorizer runs before normal request processing and handles raw
 -   Amazon CloudWatch logs are immutable once written and cannot be modified after creation.
 -   Log stream names use a date-based format (`YYYY/MM/DD`) for chronological organization.
 -   Each log entry includes a millisecond-precision timestamp for chronological ordering.
--   The silent failure design ensures no API disruption due to logging errors, though gaps in the audit trail should be monitored.
+-   The silent failure design ensures no API disruption due to logging errors; an entry that cannot be written to its audit log group is kept in the function log and counted in the `AuditWriteFailures` metric, which should be alarmed on.
 
 ### Privacy and Data Protection
 
@@ -606,13 +648,14 @@ If audit events are not appearing in the expected log groups:
 1. Verify the Lambda function has `VAMS_RESOURCE_PARAM_PREFIX` set by checking the function configuration in the AWS Management Console.
 2. Confirm the nine `cloudwatchLogGroups/*` parameters exist beneath that prefix in AWS Systems Manager Parameter Store and that the execution role can read them (`ssm:GetParametersByPath`).
 3. Confirm IAM permissions for `logs:CreateLogStream` and `logs:PutLogEvents` are present on the Lambda execution role.
-4. Check the Lambda function's standard Amazon CloudWatch log stream for audit logging error messages.
+4. Check the Lambda function's standard Amazon CloudWatch log stream for audit logging error messages and `auditFallback` lines; the `reason` of a fallback line says why the entry was not written.
 5. Ensure the audit log group exists in the correct AWS Region.
 
 ### Performance Impact
 
 -   Audit logging is synchronous but lightweight, with minimal latency impact (under 50 milliseconds per log entry).
 -   The silent failure pattern prevents any cascading impact on API response times.
+-   Reporting an entry that could not be written adds two lines to the function log and nothing to a successful write.
 -   Amazon CloudWatch Logs uses batched writes internally, optimizing throughput for high-volume scenarios.
 
 ## Next Steps
