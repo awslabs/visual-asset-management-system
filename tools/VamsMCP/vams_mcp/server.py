@@ -87,7 +87,7 @@ except ConfigError as exc:
 SERVER_INSTRUCTIONS_MAX_CHARS = 2000
 SERVER_INSTRUCTIONS = """\
 VAMS (Visual Asset Management System) stores 3D, point-cloud, image and other files as ASSETS \
-inside DATABASES, runs processing WORKFLOWS (made of pipelines) on them, and records each run as an \
+inside DATABASES, runs WORKFLOWS (made of pipelines) on them, and records each run as an \
 EXECUTION. These tools call the VAMS API as the signed-in user; that user's permissions bound every \
 answer, and a 403 means this user may not do it.
 
@@ -98,8 +98,8 @@ in the shared "GLOBAL" catalog.
 Start points:
 - Find assets: search_assets (by name, text or metadata), or list_databases then list_assets.
 - Then: get_asset -> list_asset_files / get_asset_metadata / list_asset_versions.
-- Download: generate_download_url (one file) returns a presigned URL; only when a download was asked.
-- Runs: list_executions (newest first, 90-day window by default) -> get_execution_details -> \
+- Download: generate_download_url, only when a download was asked.
+- Runs: list_executions (newest first, last 90 days) -> get_execution_details -> \
 get_execution_logs.
 - vams_status says who is signed in, which deployment, and which tool tiers are on.
 
@@ -112,7 +112,8 @@ the user to sign in (user_action says how) and stop; do not try to sign in yours
 
 Use these tools, not shell commands, the vamscli CLI or the VAMS source code, to answer questions \
 about this deployment. If no tool covers what is asked, say so plainly instead of working around it. \
-Create, update and delete tools exist only when the operator enabled them; tools that start compute \
+Uploads, sync and user, role or constraint administration have no tools: the user runs them in the \
+vamscli CLI. Create, update and delete tools exist only when the operator enabled them; tools that start compute \
 (execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
 """
 
@@ -355,6 +356,11 @@ def _paginate_with_page_metadata(
     return result
 
 
+def _tag_body(names: Dict[str, Any], database_id: Optional[str]) -> Dict[str, Any]:
+    """The flat object the tag and tag-type write routes take: a database_id scopes it, none is global."""
+    return {**names, **({"databaseId": database_id} if database_id else {})}
+
+
 # =========================================================================
 # READ / SEARCH TOOLS (always available)
 # =========================================================================
@@ -396,6 +402,21 @@ def vams_status() -> results.Status:
             "when VAMS refuses the renewal."
         )
     return status
+
+
+@mcp.tool(title="List feature switches", annotations=READ)
+@tool_result
+def list_features() -> results.Features:
+    """Use to see the deployment's enabled feature switches (`enabled`), as of `fetched_at` (the
+    last sign-in)."""
+    snapshot = CLIENT.feature_switches()
+    result: Dict[str, Any] = {key: snapshot[key] for key in ("enabled", "total", "fetched_at")}
+    if not snapshot["has_feature_switches"]:
+        result["note"] = (
+            "The sign-in holds no feature switches, so none are known (not: none are enabled). "
+            "Ask the user to sign in again to record them."
+        )
+    return result
 
 
 @mcp.tool(title="List my allowed API routes", annotations=READ)
@@ -479,7 +500,7 @@ def list_assets(
     by name use search_assets. Rows: databaseId, assetId, assetName, description, tags, status.
     include_archived adds archived assets.
 
-    BOUNDED: a large deployment holds more assets than one walk returns. `truncated` means rows were
+    BOUNDED: `truncated` means rows were
     not seen; pass `NextToken` as `starting_token` to continue. Do not report an asset count, or
     conclude an asset does not exist, from a truncated result."""
     endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
@@ -513,7 +534,7 @@ def list_asset_files(
     """Use to see an asset's files and folders. Rows: fileName, relativePath (the file_key other tools
     take), isFolder, size, versionId, isArchived.
 
-    BOUNDED: an asset can hold thousands of files. `truncated` means files were not seen; pass
+    BOUNDED: `truncated` means files were not seen; pass
     `NextToken` as `starting_token` to continue. Never report a file count, or answer "file X is not
     in this asset", from a truncated result; use search_files() to test for one file.
     include_archived also finds an ARCHIVED asset, whose files are all archived."""
@@ -528,6 +549,26 @@ def list_asset_files(
         items_key="items",
         starting_token=starting_token,
     )
+
+
+@mcp.tool(title="Get file info", annotations=READ)
+@tool_result
+def get_file_info(
+    database_id: str,
+    asset_id: str,
+    file_key: str,
+    include_versions: bool = False,
+    include_archived: bool = False,
+) -> results.FileInfo:
+    """Use to read one file by file_key: size, contentType, lastModified, isArchived, primaryType,
+    previewFile. include_versions adds its versions; include_archived finds an archived asset's file."""
+    params: Dict[str, Any] = {
+        "filePath": file_key,
+        "includeVersions": "true" if include_versions else "false",
+    }
+    if include_archived:
+        params["showArchived"] = "true"
+    return CLIENT.api.get_file_info(database_id, asset_id, params)
 
 
 @mcp.tool(title="Get asset metadata", annotations=READ)
@@ -641,6 +682,67 @@ def get_asset_links(
     return CLIENT.api.get_asset_links_for_asset(
         database_id, asset_id, child_tree_view=child_tree_view, show_archived=include_archived
     )
+
+
+# Smaller than the CLI's defaults (100 assets, 2000 files): an export page carries every file's and
+# asset's metadata, and the whole page lands in the agent's context.
+EXPORT_DEFAULT_MAX_ASSETS = 25
+EXPORT_DEFAULT_MAX_FILES = 500
+
+
+@mcp.tool(title="Export asset tree", annotations=READ)
+@tool_result
+def export_asset(
+    database_id: str,
+    asset_id: str,
+    max_assets: int = EXPORT_DEFAULT_MAX_ASSETS,
+    max_files: int = EXPORT_DEFAULT_MAX_FILES,
+    starting_token: Optional[str] = None,
+    fetch_relationships: bool = True,
+    fetch_entire_subtrees: bool = False,
+    include_parent_relationships: bool = False,
+    include_archived_files: bool = False,
+    include_folder_files: bool = False,
+    include_only_primary_type_files: bool = False,
+    file_extensions: Optional[List[str]] = None,
+    include_asset_metadata: bool = True,
+    include_file_metadata: bool = True,
+    include_asset_link_metadata: bool = True,
+) -> results.AssetExport:
+    """Use to read an asset and its child assets in one call: `assets` (metadata, files),
+    `relationships`, `totalAssetsInTree`. One child level unless fetch_entire_subtrees;
+    fetch_relationships=False: the asset alone.
+    ONE PAGE per call: `truncated` + `NextToken` mean more; pass it as `starting_token` (an asset with
+    files_truncated continues there)."""
+    params: Dict[str, Any] = {
+        "generatePresignedUrls": False,
+        "includeFolderFiles": include_folder_files,
+        "includeOnlyPrimaryTypeFiles": include_only_primary_type_files,
+        "includeFileMetadata": include_file_metadata,
+        "includeAssetLinkMetadata": include_asset_link_metadata,
+        "includeAssetMetadata": include_asset_metadata,
+        "fetchAssetRelationships": fetch_relationships,
+        "fetchEntireChildrenSubtrees": fetch_entire_subtrees,
+        "includeParentRelationships": include_parent_relationships,
+        "includeArchivedFiles": include_archived_files,
+        "maxAssets": max_assets,
+        "maxFiles": max_files,
+    }
+    if file_extensions:
+        # The handler matches extensions with their leading dot, lower-cased, as the CLI sends them.
+        params["fileExtensions"] = [
+            (ext if ext.startswith(".") else f".{ext}").lower() for ext in (e.strip() for e in file_extensions)
+        ]
+    if starting_token:
+        params["startingToken"] = starting_token
+    result = CLIENT.api.export_asset(database_id, asset_id, params)
+    if isinstance(result, dict) and result.get("NextToken"):
+        result["truncated"] = True
+        result["note"] = (
+            f"One page of the export: {result.get('assetsInThisPage', len(result.get('assets') or []))} of "
+            f"{result.get('totalAssetsInTree')} asset(s). Call again with starting_token=NextToken for the rest."
+        )
+    return result
 
 
 def _escape_query_string_value(value: str) -> str:
@@ -1525,7 +1627,7 @@ def list_api_keys(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """Use to audit every user's API keys (admin scope). Key INVENTORY only: apiKeyId, apiKeyName,
-    userId, expiry, enabled. Not in the README's `autoApprove` sample: it maps who holds access.
+    userId, expiry, enabled.
     BOUNDED: `truncated` means rows were not seen; pass `NextToken` as `starting_token` to continue.
     Never report a count from a truncated result."""
     return CLIENT.paginate(
@@ -1635,6 +1737,110 @@ if CONFIG.enable_writes:
             payload["versionAlias"] = version_alias
         return CLIENT.api.create_asset_version(database_id, asset_id, payload)
 
+    @mcp.tool(title="Move file", annotations=WRITE)
+    @tool_result
+    def move_file(database_id: str, asset_id: str, source_path: str, destination_path: str) -> Dict[str, Any]:
+        """Use to move or rename a file inside its asset (relativePaths). Returns affectedFiles."""
+        return CLIENT.api.move_file(
+            database_id, asset_id, {"sourcePath": source_path, "destinationPath": destination_path}
+        )
+
+    @mcp.tool(title="Copy file", annotations=WRITE)
+    @tool_result
+    def copy_file(
+        database_id: str,
+        asset_id: str,
+        source_path: str,
+        destination_path: str,
+        destination_asset_id: Optional[str] = None,
+        destination_database_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Use to copy a file within its asset or into destination_asset_id (destination_database_id
+        defaults to the source's). Returns affectedFiles."""
+        payload: Dict[str, Any] = {"sourcePath": source_path, "destinationPath": destination_path}
+        if destination_asset_id:
+            payload["destinationAssetId"] = destination_asset_id
+        if destination_database_id:
+            payload["destinationDatabaseId"] = destination_database_id
+        return CLIENT.api.copy_file(database_id, asset_id, payload)
+
+    @mcp.tool(title="Link assets", annotations=WRITE)
+    @tool_result
+    def create_asset_link(
+        from_database_id: str,
+        from_asset_id: str,
+        to_database_id: str,
+        to_asset_id: str,
+        relationship_type: str,
+        alias_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Use to link two assets: relationship_type 'related' or 'parentChild' (from = parent; cycles
+        refused; alias_id adds a second parentChild link). Returns assetLinkId."""
+        payload: Dict[str, Any] = {
+            "fromAssetId": from_asset_id,
+            "fromAssetDatabaseId": from_database_id,
+            "toAssetId": to_asset_id,
+            "toAssetDatabaseId": to_database_id,
+            "relationshipType": relationship_type,
+            "tags": tags or [],
+        }
+        if alias_id:
+            payload["assetLinkAliasId"] = alias_id
+        return CLIENT.api.create_asset_link(payload)
+
+    # ---------------------------------------------------------------------
+    # Tag / tag-type writes
+    # ---------------------------------------------------------------------
+
+    @mcp.tool(title="Create tag", annotations=WRITE)
+    @tool_result
+    def create_tag(
+        tag_name: str, description: str, tag_type_name: str, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to create a tag of an existing tag type; database_id scopes it (omit: global). Relay
+        `warnings`."""
+        return CLIENT.api.create_tags(
+            _tag_body({"tagName": tag_name, "description": description, "tagTypeName": tag_type_name}, database_id)
+        )
+
+    @mcp.tool(title="Update tag", annotations=WRITE)
+    @tool_result
+    def update_tag(
+        tag_name: str, description: str, tag_type_name: str, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to change a tag's description or tag type; both are REPLACED, so resend the kept one
+        (list_tags)."""
+        return CLIENT.api.update_tags(
+            _tag_body({"tagName": tag_name, "description": description, "tagTypeName": tag_type_name}, database_id)
+        )
+
+    @mcp.tool(title="Create tag type", annotations=WRITE)
+    @tool_result
+    def create_tag_type(
+        tag_type_name: str, description: str, required: bool = False, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to create a tag type (tag group); required=True makes assets need one of its tags."""
+        return CLIENT.api.create_tag_types(
+            _tag_body(
+                {"tagTypeName": tag_type_name, "description": description, "required": "True" if required else "False"},
+                database_id,
+            )
+        )
+
+    @mcp.tool(title="Update tag type", annotations=WRITE)
+    @tool_result
+    def update_tag_type(
+        tag_type_name: str, description: str, required: bool, database_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Use to change a tag type's description and required flag; both are REPLACED."""
+        return CLIENT.api.update_tag_types(
+            _tag_body(
+                {"tagTypeName": tag_type_name, "description": description, "required": "True" if required else "False"},
+                database_id,
+            )
+        )
+
 
     # ---------------------------------------------------------------------
     # Pipeline / workflow / execution writes
@@ -1683,9 +1889,8 @@ if CONFIG.enable_writes:
         database_id: str, pipeline_id: str, template_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Use to change a pipeline template; only fields in `body` change; create_pipeline_template's rules
-        apply. System pipelines (isSystem) are read-only except their enabled flag and their templates'
-        configBody,
-        tagSchema and webFormJson; any other change is a 400."""
+        apply. System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(CLIENT.api.update_pipeline_template(database_id, pipeline_id, template_id, body))
 
     @mcp.tool(title="Replace template tag schema", annotations=WRITE)
@@ -1695,8 +1900,8 @@ if CONFIG.enable_writes:
     ) -> Dict[str, Any]:
         """Use to REPLACE a template's whole tag schema. Entries carry only tagKey, type, required, default,
         label, description and enumValues; any other key is rejected.
-        System pipelines (isSystem) are read-only except their enabled flag and their templates' configBody,
-        tagSchema and webFormJson; any other change is a 400."""
+        System pipelines (isSystem) are read-only except enabled and the templates' configBody,
+        tagSchema and webFormJson (400 otherwise)."""
         return CLIENT.unwrap_message(
             CLIENT.api.set_pipeline_template_tag_schema(
                 database_id, pipeline_id, template_id, fields
@@ -1965,6 +2170,50 @@ if CONFIG.enable_destructive:
         """Use only when asked to PERMANENTLY delete a database. Irreversible; refused while it holds
         assets, workflows or pipelines."""
         return CLIENT.api.delete_database(database_id)
+
+    @mcp.tool(title="Archive file", annotations=DESTRUCTIVE)
+    @tool_result
+    def archive_file(database_id: str, asset_id: str, file_key: str, is_prefix: bool = False) -> Dict[str, Any]:
+        """Use to archive (soft-delete) a file (is_prefix: a whole folder). Reversible via
+        unarchive_file."""
+        return CLIENT.api.archive_file(database_id, asset_id, {"filePath": file_key, "isPrefix": is_prefix})
+
+    @mcp.tool(title="Unarchive file", annotations=DESTRUCTIVE)
+    @tool_result
+    def unarchive_file(database_id: str, asset_id: str, file_key: str) -> Dict[str, Any]:
+        """Use to restore an archived file."""
+        return CLIENT.api.unarchive_file(database_id, asset_id, {"filePath": file_key})
+
+    @mcp.tool(title="Delete file permanently", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_file(database_id: str, asset_id: str, file_key: str, is_prefix: bool = False) -> Dict[str, Any]:
+        """Use only when asked to PERMANENTLY delete a file with all versions (is_prefix: a whole folder).
+        Irreversible; archive_file() is reversible."""
+        # `confirmPermanentDelete` is required to be true by the delete route itself (it refuses any
+        # other value), so it is part of the request contract, not an interlock to surface. The
+        # controls on this tool are the destructive gate, its name, and this docstring.
+        return CLIENT.api.delete_file(
+            database_id, asset_id, {"filePath": file_key, "isPrefix": is_prefix, "confirmPermanentDelete": True}
+        )
+
+    @mcp.tool(title="Delete asset link", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_asset_link(asset_link_id: str) -> Dict[str, Any]:
+        """Use to remove an asset link (assetLinkId from get_asset_links); the assets stay. Not
+        reversible."""
+        return CLIENT.api.delete_asset_link(asset_link_id)
+
+    @mcp.tool(title="Delete tag", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_tag(tag_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """Use only when asked to delete a tag (database_id: a database's). Not reversible."""
+        return CLIENT.api.delete_tag(tag_name, database_id=database_id)
+
+    @mcp.tool(title="Delete tag type", annotations=DESTRUCTIVE)
+    @tool_result
+    def delete_tag_type(tag_type_name: str, database_id: Optional[str] = None) -> Dict[str, Any]:
+        """Use only when asked to delete a tag type; refused while tags use it. Not reversible."""
+        return CLIENT.api.delete_tag_type(tag_type_name, database_id=database_id)
 
     # ---------------------------------------------------------------------
     # Pipeline / workflow / execution deletes

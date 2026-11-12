@@ -113,6 +113,7 @@ secrets** — just the command:
             "disabled": false,
             "autoApprove": [
                 "vams_status",
+                "list_features",
                 "list_allowed_api_routes",
                 "list_api_routes",
                 "list_constraint_permission_objects",
@@ -122,12 +123,14 @@ secrets** — just the command:
                 "list_assets",
                 "get_asset",
                 "list_asset_files",
+                "get_file_info",
                 "get_asset_metadata",
                 "get_database_metadata",
                 "list_asset_versions",
                 "get_asset_version",
                 "get_asset_history",
                 "get_asset_links",
+                "export_asset",
                 "search_assets",
                 "search_files",
                 "get_search_fields",
@@ -175,15 +178,44 @@ which a base URL that names no deployed stage also produces) and, when known,
 report the `requestId` to the VAMS administrator, who finds the rule that matched
 in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
 
+File uploads, `vamscli sync`, and user, role and constraint administration have no
+tools: they stay in the CLI, and the server's instructions tell the agent so.
+`tests/api_coverage.py` records, for every `APIClient` method of the CLI, the tools that
+call it, or why none does, or that it is not exposed yet.
+
 ### Read / search (always available)
 
-`vams_status`, `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
-`list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
-`list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
-`list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
+`vams_status`, `list_features`, `list_allowed_api_routes`, `list_api_routes`,
+`list_constraint_permission_objects`, `list_databases`, `get_database`, `list_buckets`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_asset_metadata`,
+`get_database_metadata`, `list_asset_versions`, `get_asset_version`, `get_asset_history`,
+`get_asset_links`, `export_asset`,
 `search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
+
+`list_features` returns the deployment's enabled feature switches (`enabled`, `total`) and
+`fetched_at`, the sign-in that recorded them: the same snapshot `vams_status` reports, read
+from the profile without a request. A switch an administrator changes later appears after
+the user signs in again. A profile whose sign-in recorded no switches answers with an empty
+list and a `note` saying none are known.
+
+`get_file_info` reads one file by `file_key` (its `relativePath`): size, content type,
+last-modified time, archive state, `primaryType`, preview file and how its current version
+was made (`changeSource`). `include_versions` adds the file's versions, and
+`include_archived` reads a file of an archived asset.
+
+`export_asset` returns an asset and its child assets in one call: each asset's metadata
+and files, the parent/child `relationships` and `totalAssetsInTree`. It takes the export
+route's own filters (`fetch_relationships`, `fetch_entire_subtrees`,
+`include_parent_relationships`, `include_archived_files`, `include_folder_files`,
+`include_only_primary_type_files`, `file_extensions`, and the three `include_*_metadata`
+switches) and reads ONE page per call: `max_assets` (default 25, at most 1000) and
+`max_files` (default 500 across the page's assets, at most 10000), smaller defaults than the
+CLI's because the whole page lands in the agent's context. A result with `NextToken` is
+marked `truncated` with a `note`; pass the token back as `starting_token`. An asset holding
+more files than the page allows reports `files_truncated` and continues on the next page.
+It never requests presigned URLs; use `generate_download_urls_bulk` for downloads.
 
 `list_tags` and `list_tag_types` accept an optional `database` (return ONLY that
 database's tags/tag types — global ones are not included) and `scope` (`global`
@@ -221,9 +253,9 @@ means unknown rather than not subscribed.
 `get_api_key` (any user's keys) and `get_user_api_key` (the caller's own) return
 key METADATA only — name, the user the key acts as, expiry, enabled state. The
 key value is shown once at creation and never again, and the stored hash is
-stripped by the handler, so nothing usable as a credential is returned. There is
-no list tool for API keys, so the `api_key_id` comes from `vamscli api-key list`
-or `vamscli api-key user list`.
+stripped by the handler, so nothing usable as a credential is returned. The
+`api_key_id` comes from `list_api_keys` (every user's keys, admin scope) or
+`list_user_api_keys` (the caller's own).
 
 `list_workflow_triggers` is paged: the endpoint serves one bounded page and the
 tool walks it, so the result carries `truncated` and `NextToken` like every other
@@ -375,6 +407,27 @@ paginated request per hit, so its `size` is clamped to 25; use
 `create_database`, `create_asset`, `update_asset`, `set_asset_metadata`,
 `create_folder`, `create_asset_version`.
 
+Files and links: `move_file`, `copy_file`, `create_asset_link`.
+
+`move_file` moves or renames a file inside its asset; `copy_file` copies one within
+the asset, or into `destination_asset_id` (in `destination_database_id`, which defaults
+to the source database). Both take relative paths and return `affectedFiles`.
+`create_asset_link` links two assets: `relationship_type` is `related` or
+`parentChild` (the `from` asset is the parent; a link that would close a cycle is
+refused), `alias_id` (parentChild only) allows another link between the same pair,
+and `tags` labels the link. It returns the `assetLinkId` that `delete_asset_link`
+takes; `get_asset_links` lists an asset's links with their ids.
+
+Tags and tag types: `create_tag`, `update_tag`, `create_tag_type`, `update_tag_type`.
+
+Each takes `database_id` to address a tag or tag type scoped to one database; without
+it the tool acts on the global one. A tag needs an existing tag type. `update_tag`
+replaces both the description and the tag type, and `update_tag_type` both the
+description and `required`, so send the current value of the field you keep (from
+`list_tags` / `list_tag_types`). A tag type with `required` true makes asset creation and
+updates in its scope require one of its tags, once the type has any. A successful tag save can carry `warnings` (for example, a
+name that now exists both globally and in a database); relay them.
+
 Pipelines, workflows, and executions: `create_pipeline`, `update_pipeline`,
 `create_pipeline_template`, `update_pipeline_template`,
 `set_pipeline_template_tag_schema`, `create_workflow`, `update_workflow`,
@@ -470,6 +523,16 @@ its next call.
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
+
+Files, links and tags: `archive_file`, `unarchive_file`, `delete_file`,
+`delete_asset_link`, `delete_tag`, `delete_tag_type`.
+
+`archive_file` is the soft delete: the file is hidden and can be restored with
+`unarchive_file`. `delete_file` PERMANENTLY removes the file and every one of its
+versions, and is not reversible. Both take `is_prefix` to act on every file under a
+folder path. `delete_asset_link` removes the link, not the assets.
+`delete_tag` and `delete_tag_type` remove the definition (pass `database_id` for a
+database's own); a tag type that tags still use is refused.
 
 Pipelines, workflows, and executions: `archive_pipeline`, `unarchive_pipeline`,
 `archive_workflow`, `unarchive_workflow`, `delete_pipeline_template`,

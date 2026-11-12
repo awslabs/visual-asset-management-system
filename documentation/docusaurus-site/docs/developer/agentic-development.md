@@ -83,18 +83,18 @@ The steering documents enforce consistent patterns across the codebase. The foll
 
 Adding a new API endpoint in VAMS requires coordinated changes across as many as ten files, spanning the backend, infrastructure, front end, client tooling, and documentation. The root `CLAUDE.md` defines this pattern explicitly:
 
-| Step | File                                                          | Action                                                           |
-| ---- | ------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 1    | `backend/backend/common/apiRoutes.py`                         | Define the route constant and add it to its category group array |
-| 2    | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement                 |
-| 3    | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic v1)                     |
-| 4    | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with environment variables, permissions, VPC config |
-| 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route                               |
-| 6    | `web/src/services/APIService.ts`                              | Add API call method                                              |
-| 7    | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command, and the endpoint path to `constants.py`         |
-| 8    | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it                  |
-| 9    | `documentation/VAMS_API.yaml`                                 | Add the path and its component schemas to the OpenAPI spec       |
-| 10   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add the human-readable endpoint reference                        |
+| Step | File                                                          | Action                                                                                                              |
+| ---- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1    | `backend/backend/common/apiRoutes.py`                         | Define the route constant and add it to its category group array                                                    |
+| 2    | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement                                                                    |
+| 3    | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic v1)                                                                        |
+| 4    | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with environment variables, permissions, VPC config                                                    |
+| 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route                                                                                  |
+| 6    | `web/src/services/APIService.ts`                              | Add API call method                                                                                                 |
+| 7    | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command, and the endpoint path to `constants.py`                                                            |
+| 8    | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it, and record the CLI method in `tools/VamsMCP/tests/api_coverage.py` |
+| 9    | `documentation/VAMS_API.yaml`                                 | Add the path and its component schemas to the OpenAPI spec                                                          |
+| 10   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add the human-readable endpoint reference                                                                           |
 
 Without steering documents, an AI agent might create a handler without the corresponding API Gateway route (resulting in dead code), add a route without a handler (resulting in 500 errors), or stop at the backend and leave the client tooling and documentation describing an API that no longer matches the deployment.
 
