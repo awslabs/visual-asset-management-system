@@ -107,7 +107,7 @@ class TestTheLauncherInstallsTheVersion:
             main_body = handle.read().split("def main():", 1)[1]
         export = main_body.index("os.environ[INPUT_VERSION_ENV]")
         check = main_body.index("vams_s3.input_version_missing_cause(")
-        assert export < check < main_body.index("subprocess.run(")
+        assert export < check < main_body.index("run_streaming(")
 
 
 @pytest.mark.unit

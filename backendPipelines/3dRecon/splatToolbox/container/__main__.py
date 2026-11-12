@@ -298,15 +298,61 @@ def extract_within_limits(archive, extractall, *args, **kwargs):
 FAILURE_CAUSE_MAX_LENGTH = 256
 
 
-def failure_cause(error) -> str:
+def failure_cause(error, gpu_out_of_memory=False) -> str:
     """The `SendTaskFailure` cause for a failed `main.py` run, within the length the peer pipelines use.
 
     Carries the exit status rather than the launched command: the command is the launcher source, which
-    would fill the whole cause and leave the status out of it.
+    would fill the whole cause and leave the status out of it. A run whose output reported a GPU
+    out-of-memory error says so, with the model and Gaussian cap it trained with.
     """
-    cause = ("Pipeline execution failed with exit status "
-             f"{getattr(error, 'returncode', 'unknown')}")
+    status = getattr(error, 'returncode', 'unknown')
+    if gpu_out_of_memory:
+        cause = (f"The GPU ran out of memory during training (exit status {status}, model "
+                 f"{os.environ.get('MODEL', 'splatfacto')}, NUM_GAUSSIANS "
+                 f"{os.environ.get('NUM_GAUSSIANS', 'unset')}). Lower NUM_GAUSSIANS (splatfacto-mcmc), "
+                 f"use fewer or smaller images, or a GPU with more memory.")
+    else:
+        cause = f"Pipeline execution failed with exit status {status}"
     return cause[:FAILURE_CAUSE_MAX_LENGTH]
+
+
+# What PyTorch and CUDA print when a GPU allocation fails. The training step runs under `main.py`, so
+# its output reaches the job log through the launcher's.
+GPU_OUT_OF_MEMORY_MARKERS = (b"CUDA out of memory", b"torch.OutOfMemoryError", b"CUDA error: out of memory")
+
+
+def run_streaming(command, cwd, env, out=None) -> tuple:
+    """Run ``command`` with its output and errors copied to ``out`` line by line as they arrive.
+
+    Returns (exit status, whether a line reported a GPU out-of-memory error). Lines are copied as bytes,
+    so progress output and text in any encoding reach the job log unchanged.
+    """
+    out = out if out is not None else sys.stdout.buffer
+    sys.stdout.flush()
+    gpu_out_of_memory = False
+    process = subprocess.Popen(command, cwd=cwd, env=env,  # nosemgrep: dangerous-subprocess-use-audit
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for line in process.stdout:
+        out.write(line)
+        out.flush()
+        if not gpu_out_of_memory and any(marker in line for marker in GPU_OUT_OF_MEMORY_MARKERS):
+            gpu_out_of_memory = True
+    process.stdout.close()
+    return process.wait(), gpu_out_of_memory
+
+
+def gaussian_cap_cause(value):
+    """Why a NUM_GAUSSIANS setting cannot cap training, or None when it can or is not set.
+
+    `main.py` reads the value with `int()` only when training starts, after camera reconstruction, so a
+    value it cannot read is refused before the run starts instead.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.isdigit() and int(text) > 0:
+        return None
+    return f"NUM_GAUSSIANS must be a positive whole number of Gaussians, not {text[:40]!r}"
 
 
 # `main.py` extracts the input archive through `zipfile.ZipFile.extractall`, at more than one site and
@@ -512,6 +558,18 @@ def main():
 
     # Set config parameters from metadata and parameters (metadata takes priority)
     set_config_parameters(input_parameters_obj, metadata_config)
+
+    # A Gaussian cap main.py cannot read would otherwise fail the run only after camera reconstruction.
+    gaussian_cap_failure = gaussian_cap_cause(os.environ.get('NUM_GAUSSIANS'))
+    if gaussian_cap_failure:
+        print(gaussian_cap_failure)
+        if pipeline_def.get('externalSfnTaskToken'):
+            sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'),
+                                      config=retry_config)
+            sfn_client.send_task_failure(taskToken=pipeline_def['externalSfnTaskToken'],
+                                         error='Pipeline Failure',
+                                         cause=gaussian_cap_failure[:FAILURE_CAUSE_MAX_LENGTH])
+        sys.exit(1)
     
     # Extract the input file information from the first stage
     if not pipeline_def.get('stages') or len(pipeline_def['stages']) == 0:
@@ -600,14 +658,15 @@ def main():
     env['PYTHONPATH'] = '/opt/ml/code'
     
     # Call the existing main.py from the directory, under the archive extraction limits
+    gpu_out_of_memory = False
     try:
         print("Starting main.py with real-time output...")
         launcher = _GUARDED_MAIN_LAUNCHER.format(
             entry_path=os.path.abspath(__file__), script_path='main.py')
-        result = subprocess.run([sys.executable, '-c', launcher], # nosemgrep: dangerous-subprocess-use-audit
-                              cwd='/opt/ml/code',
-                              env=env,
-                              check=True)
+        returncode, gpu_out_of_memory = run_streaming([sys.executable, '-c', launcher],
+                                                      cwd='/opt/ml/code', env=env)
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, 'main.py')
         print("Pipeline completed successfully")
 
         # A zero exit status does not mean the run uploaded anything (see missing_output_cause)
@@ -651,7 +710,7 @@ def main():
             sfn_client.send_task_failure(
                 taskToken=task_token,
                 error='Pipeline Failure',
-                cause=failure_cause(e)
+                cause=failure_cause(e, gpu_out_of_memory)
             )
             print("Failure callback sent")
         

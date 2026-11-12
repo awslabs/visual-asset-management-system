@@ -105,27 +105,28 @@ Parameters are supplied through the selected configuration template's `configBod
 override). Only keys the container recognizes take effect; an unrecognized key is skipped and reported
 on the container's own log line.
 
-Four of them are declared as template tags, so the execute form renders a field for each and the value
+Five of them are declared as template tags, so the execute form renders a field for each and the value
 is substituted into the body at launch. The **Template tag** column names that field's tag key; a row
 with `--` is not tag-backed and is set by editing the configuration body.
 
-| Parameter                  | Template tag         | Description                                                          | Default          |
-| :------------------------- | :------------------- | :------------------------------------------------------------------- | :--------------- |
-| `MODEL`                    | --                   | Splatting model type (for example `splatfacto`, `splatfacto-big`)    | `splatfacto`     |
-| `MAX_STEPS`                | --                   | Number of training iterations                                        | `15000`          |
-| `RECON_SOFTWARE_NAME`      | --                   | Reconstruction software (`colmap`, `glomap`, `hloc`, `map_anything`) | `glomap`         |
-| `SPHERICAL_CAMERA`         | --                   | Treat the input as a 360/spherical capture                           | `False`          |
-| `REMOVE_BACKGROUND`        | --                   | Enable background removal from input images                          | `False`          |
-| `ENABLE_SPZ`               | --                   | Export the compressed SPZ splat format                               | `True`           |
-| `ENABLE_SOG`               | --                   | Export the SOG splat format                                          | `True`           |
-| `RUN_RECON`                | `RUN_RECON`          | Recover camera poses from the input capture before training          | `True`           |
-| `RUN_TRAIN`                | `RUN_TRAIN`          | Train the splat model                                                | `True`           |
-| `CROP_OUTPUT_BOUNDS`       | `CROP_OUTPUT_BOUNDS` | Trim the exported splat to the reconstructed scene bounds            | `False`          |
-| `CROP_MODE`                | `CROP_MODE`          | How the crop bounds are computed (`rigid_body`, `environment`)       | Set per template |
-| `BACKGROUND_REMOVAL_MODEL` | --                   | Segmentation model used for background and human-subject removal     | `u2net`          |
-| `REMOVE_OBJECT`            | --                   | Remove the objects named by `OBJECT_REMOVAL_OBJECTS` from the input  | `False`          |
-| `OBJECT_REMOVAL_ACTION`    | --                   | `remove` masks the object out; `erase` inpaints it with SDXL         | `erase`          |
-| `OBJECT_REMOVAL_OBJECTS`   | --                   | Objects the object-removal step targets                              | `['human']`      |
+| Parameter                  | Template tag         | Description                                                                                          | Default                                                                |
+| :------------------------- | :------------------- | :--------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------- |
+| `MODEL`                    | --                   | Splatting model type (for example `splatfacto-mcmc`, `splatfacto`, `splatfacto-big`)                 | `splatfacto-mcmc` in both templates; `splatfacto` when a body omits it |
+| `NUM_GAUSSIANS`            | `NUM_GAUSSIANS`      | Most Gaussians `splatfacto-mcmc` keeps while training; bounds GPU memory ([GPU memory](#gpu-memory)) | `3000000`                                                              |
+| `MAX_STEPS`                | --                   | Number of training iterations                                                                        | `15000`                                                                |
+| `RECON_SOFTWARE_NAME`      | --                   | Reconstruction software (`colmap`, `glomap`, `hloc`, `map_anything`)                                 | `glomap`                                                               |
+| `SPHERICAL_CAMERA`         | --                   | Treat the input as a 360/spherical capture                                                           | `False`                                                                |
+| `REMOVE_BACKGROUND`        | --                   | Enable background removal from input images                                                          | `False`                                                                |
+| `ENABLE_SPZ`               | --                   | Export the compressed SPZ splat format                                                               | `True`                                                                 |
+| `ENABLE_SOG`               | --                   | Export the SOG splat format                                                                          | `True`                                                                 |
+| `RUN_RECON`                | `RUN_RECON`          | Recover camera poses from the input capture before training                                          | `True`                                                                 |
+| `RUN_TRAIN`                | `RUN_TRAIN`          | Train the splat model                                                                                | `True`                                                                 |
+| `CROP_OUTPUT_BOUNDS`       | `CROP_OUTPUT_BOUNDS` | Trim the exported splat to the reconstructed scene bounds                                            | `False`                                                                |
+| `CROP_MODE`                | `CROP_MODE`          | How the crop bounds are computed (`rigid_body`, `environment`)                                       | Set per template                                                       |
+| `BACKGROUND_REMOVAL_MODEL` | --                   | Segmentation model used for background and human-subject removal                                     | `u2net`                                                                |
+| `REMOVE_OBJECT`            | --                   | Remove the objects named by `OBJECT_REMOVAL_OBJECTS` from the input                                  | `False`                                                                |
+| `OBJECT_REMOVAL_ACTION`    | --                   | `remove` masks the object out; `erase` inpaints it with SDXL                                         | `erase`                                                                |
+| `OBJECT_REMOVAL_OBJECTS`   | --                   | Objects the object-removal step targets                                                              | `['human']`                                                            |
 
 Clearing `RUN_RECON` reuses camera poses from an earlier run, and clearing `RUN_TRAIN` exports from an
 already-trained model. Both read that run's archive from the input, so neither applies to a fresh
@@ -134,11 +135,13 @@ capture.
 ### Template configuration body
 
 The **Objects (standard capture)** template's body. Each placeholder is resolved from its form field at
-launch. A boolean tag renders a JSON `true` or `false` and its placeholder therefore carries no quotes,
-while `CROP_MODE` renders text and sits inside the string it fills:
+launch. A boolean tag renders a JSON `true` or `false` and an integer tag a JSON number, so their
+placeholders carry no quotes, while `CROP_MODE` renders text and sits inside the string it fills:
 
 ```json
 {
+    "MODEL": "splatfacto-mcmc",
+    "NUM_GAUSSIANS": {{NUM_GAUSSIANS}},
     "RUN_RECON": {{RUN_RECON}},
     "RUN_TRAIN": {{RUN_TRAIN}},
     "CROP_OUTPUT_BOUNDS": {{CROP_OUTPUT_BOUNDS}},
@@ -149,11 +152,34 @@ while `CROP_MODE` renders text and sits inside the string it fills:
 :::note
 The pipeline ships two templates — **Objects (standard capture)** for standard object captures, and
 **Environments (360 / spherical capture)**, which additionally sets `SPHERICAL_CAMERA`. Both declare
-the same four template tags and differ in the `CROP_MODE` default: `rigid_body` for Objects, which
+the same five template tags and differ in the `CROP_MODE` default: `rigid_body` for Objects, which
 fits a tight box around a single object, and `environment` for Environments, which keeps the
 surrounding scene. Both also allow a per-run configuration edit, so any parameter above can be set on
 the execute form, tag-backed or not.
 :::
+
+### GPU memory
+
+The GPU memory a training run needs grows with the number of Gaussians the model holds, and the
+pipeline's instances (`g5.4xlarge`, `g5.8xlarge`, `g6.4xlarge`, `g6.8xlarge`) each carry one 24 GB
+GPU. The `splatfacto` model adds Gaussians until its last densification step without a bound: a
+165-photo capture of 18 MP photos, trained at the 3840 x 2880 resolution cap, reached 8.3 million
+Gaussians at step 14,000 of 15,000 and ran out of GPU memory after about 70 minutes of training. Both
+templates therefore train `splatfacto-mcmc`, which keeps at most `NUM_GAUSSIANS` Gaussians (3,000,000
+by default).
+
+-   **Out of GPU memory.** The execution fails with `The GPU ran out of memory during training`, naming
+    the model and the cap it trained with. Lower **Maximum number of Gaussians** on the execute form,
+    use fewer or smaller photos, or run on a GPU with more memory.
+-   **More detail.** On a GPU with more memory, raise **Maximum number of Gaussians**.
+-   **Another model.** Set `MODEL` in the configuration body. `NUM_GAUSSIANS` caps only
+    `splatfacto-mcmc`. A run that resumes training or exports from an earlier run's archive sets
+    `MODEL` to the model that archive was trained with.
+
+When a run reconstructs camera poses, the input images are first scaled down to at most 3840 pixels on
+the long side (`AUTOSCALE_DATASET`, on by default), and further when the toolbox estimates that the
+image set does not fit the GPU. A `NUM_GAUSSIANS` value that is not a positive whole number fails the
+execution before camera reconstruction starts.
 
 ## Prerequisites
 

@@ -526,7 +526,7 @@ class TestRejectionReportsTheTaskToken:
         source = _entry_point_source()
         failure_branch = source[source.index("except subprocess.CalledProcessError"):]
         assert failure_branch.index("send_task_failure(") < failure_branch.index("sys.exit(1)")
-        assert "cause=failure_cause(e)" in failure_branch
+        assert "cause=failure_cause(e, gpu_out_of_memory)" in failure_branch
 
 
 @pytest.mark.unit
@@ -538,8 +538,8 @@ class TestGuardedLauncherIsWhatRunsMainPy:
     def test_the_entry_point_launches_main_py_through_the_guarded_launcher(self, main_module):
         source = _entry_point_source()
         assert "_GUARDED_MAIN_LAUNCHER.format(" in source
-        assert "subprocess.run([sys.executable, '-c', launcher]" in source
-        assert "subprocess.run([sys.executable, 'main.py']" not in source
+        assert "run_streaming([sys.executable, '-c', launcher]" in source
+        assert "[sys.executable, 'main.py']" not in source
 
     def test_the_launcher_routes_extraction_through_the_limits(self, main_module):
         launcher = main_module._GUARDED_MAIN_LAUNCHER.format(
