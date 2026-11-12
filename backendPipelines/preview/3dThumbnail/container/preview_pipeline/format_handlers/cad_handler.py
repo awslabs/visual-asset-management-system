@@ -80,7 +80,25 @@ def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
         from OCP.TopLoc import TopLoc_Location
 
         parts = [(read_step_shape(file_path), TopLoc_Location(), None, {})]
-    return tessellate_parts(parts, limit)
+    return _content_alone(parts, *_tessellate(parts, limit), max_triangles)
+
+
+def _content_alone(parts, mesh, part_points, max_triangles):
+    """``mesh`` or, when it holds environment geometry that encloses its content
+    (``scene_parts.without_enclosure``), the content's parts tessellated again on their own. The linear
+    deflection follows the bounding-box diagonal of what is tessellated, so the content then comes out
+    as fine as from a file holding it alone, not as coarse as the enclosure's size made it."""
+    if scene_parts.without_enclosure(mesh) is mesh:
+        return mesh
+    screen = scene_parts.enclosure_screen(scene_parts.part_bounds(mesh))
+    placed = [index for index, count in enumerate(part_points) if count > 0]
+    content = [parts[placed[row]] for row in np.flatnonzero(screen[2])]
+    logger.info(f"Tessellating the {len(content)} part(s) inside the enclosure on their own")
+    from OCP.BRepTools import BRepTools
+
+    for shape, _, _, _ in content:
+        BRepTools.Clean_s(shape)  # mesh afresh, not by refining the scene-sized triangulation
+    return tessellate_parts(content, SceneLimit("STEP assembly", max_triangles))
 
 
 def assembly_occurrences(file_path: str, max_occurrences: int) -> int:
@@ -318,6 +336,12 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
     """One PolyData of every face of every part, each part placed by its location, with per-cell RGB
     when any colour is set. A part instanced several times is meshed once (the mesh lives on the
     shared shape) and its triangles are placed per instance, until ``limit`` is reached."""
+    return _tessellate(parts, limit)[0]
+
+
+def _tessellate(parts, limit: SceneLimit = None):
+    """``tessellate_parts``' PolyData and the points placed for each part, in the order of ``parts``
+    (shorter when ``limit`` stopped the walk)."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.TopoDS import TopoDS
 
@@ -366,4 +390,4 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
     scene_parts.record_parts(mesh, part_points)
     logger.info(f"Tessellated CAD model: {len(vertices)} vertices, {len(triangles)} faces"
                 f"{', coloured' if coloured else ''}")
-    return mesh
+    return mesh, part_points
