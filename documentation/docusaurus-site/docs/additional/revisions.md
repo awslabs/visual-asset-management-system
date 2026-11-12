@@ -320,6 +320,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Metadata table value column** — The File Attributes and File Metadata tables in the file details panel keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. (issue #1307)
 -   **Reindex utility exit code** — `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, when the Lambda function raises or reaches its own time limit, and when the reindexer answers with an error status, and `2` when a synchronous invocation times out and the outcome is unverified, instead of exiting `0` in each case. (issue #1296)
 -   **Asset header after a version change** — Current Last Version and the version selector in the asset header follow a version created, reverted to, edited, archived or unarchived on the Versions tab at once, instead of keeping the previous version until the page reloads. (issue #1311)
+-   **Locked Database filter label** — On a database's search page the locked Database filter names the database it is locked to, instead of reading "All databases". (issue #1253)
 
 **Other changes:**
 

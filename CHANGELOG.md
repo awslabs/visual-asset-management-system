@@ -387,6 +387,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** File details panel: the **File Attributes** and **File Metadata** tables keep a readable value column in a narrow panel; the table has a minimum width and scrolls sideways instead of squeezing the value column to one character. ([#1307](https://github.com/awslabs/visual-asset-management-system/issues/1307))
 -   **Infra** `reindex_utility.py` exits `1` when the reindexer reports failed records, errors or an index clear that did not finish, when the Lambda function raises or reaches its own time limit, and when the reindexer answers with an error status, instead of exiting `0` with "Reindexing completed successfully", and exits `2` when a synchronous invocation times out and the outcome is unverified. ([#1296](https://github.com/awslabs/visual-asset-management-system/issues/1296))
 -   **Web** Asset page: **Current Last Version** in the header and the header's version selector follow a change made on the **Versions** tab (a version created, reverted to, edited, archived or unarchived) at once, instead of keeping the previous version until the page reloads. ([#1311](https://github.com/awslabs/visual-asset-management-system/issues/1311))
+-   **Web** Search page: on a database's search page the locked **Database** filter names that database instead of reading "All databases"; a Database filter with a selection names it too. ([#1253](https://github.com/awslabs/visual-asset-management-system/issues/1253))
 
 ### Chores
 

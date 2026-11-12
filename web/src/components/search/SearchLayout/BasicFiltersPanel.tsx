@@ -27,6 +27,23 @@ const sortOptionsByLabel = <T extends { label?: string; value?: string }>(opts: 
         })
     );
 
+/**
+ * The options a multiselect filter shows as selected. The multiselects write `values`; a filter set
+ * elsewhere with a single `value` (the Database filter a database's search page locks, #1253) shows
+ * that value rather than the "All" placeholder.
+ */
+export const selectedOptionsOf = (
+    filter: { value?: unknown; values?: string[] } | null | undefined
+): Array<{ label: string; value: string }> => {
+    const values =
+        filter?.values && filter.values.length > 0
+            ? filter.values
+            : typeof filter?.value === "string" && filter.value !== "" && filter.value !== "all"
+            ? [filter.value]
+            : [];
+    return values.map((val) => ({ label: val, value: val }));
+};
+
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
@@ -193,33 +210,10 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
     })();
 
     // Get selected options for each filter
-    const selectedDatabases = filters.str_databaseid?.values
-        ? filters.str_databaseid.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
-
-    const selectedAssetTypes = filters.str_assettype?.values
-        ? filters.str_assettype.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
-
-    const selectedFileTypes = filters.str_fileext?.values
-        ? filters.str_fileext.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
-
-    const selectedTags = filters.list_tags?.values
-        ? filters.list_tags.values.map((val) => ({
-              label: val,
-              value: val,
-          }))
-        : [];
+    const selectedDatabases = selectedOptionsOf(filters.str_databaseid);
+    const selectedAssetTypes = selectedOptionsOf(filters.str_assettype);
+    const selectedFileTypes = selectedOptionsOf(filters.str_fileext);
+    const selectedTags = selectedOptionsOf(filters.list_tags);
 
     return (
         <ExpandableSection
@@ -284,7 +278,13 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             }
                         }}
                         options={databaseOptions}
-                        placeholder={`All ${Synonyms.databases}`}
+                        // The trigger always shows its placeholder: with a selection it names the
+                        // selection rather than reading "All databases" (#1253).
+                        placeholder={
+                            selectedDatabases.length > 0
+                                ? selectedDatabases.map((option) => option.label).join(", ")
+                                : `All ${Synonyms.databases}`
+                        }
                         disabled={databaseLocked}
                         readOnly={loading}
                         filteringType="auto"
