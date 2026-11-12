@@ -13,6 +13,7 @@ from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
     FileDownloadError, AssetAlreadyExistsError, PermissionDeniedError, FileUploadError
 )
+from vamscli.utils.global_exceptions import _global_error_data
 from vamscli.utils.glb_combiner import GLBCombineError
 from vamscli.utils.json_output import output_error
 
@@ -316,7 +317,8 @@ class TestBOMCommands:
                 
                 with patch.object(glbassetcombine, 'callback', return_value=mock_glbassetcombine_result), \
                      patch.object(create_command, 'callback', return_value={'assetId': 'new-asset-123'}), \
-                     patch.object(upload_command, 'callback', return_value=None), \
+                     patch.object(upload_command, 'callback',
+                                  return_value={'overall_success': True}), \
                      patch('vamscli.utils.glb_combiner.read_glb_file', return_value=mock_glb_data), \
                      patch('vamscli.utils.glb_combiner.write_glb_file'):
                     
@@ -677,7 +679,8 @@ def _run_bomassemble_with_asset_creation(cli_runner, bom_command_mocks, sample_b
                               side_effect=combine_side_effect, return_value=glbassetcombine_result), \
                  patch.object(create_command, 'callback',
                               side_effect=create_side_effect, return_value={'assetId': 'new-asset-123'}), \
-                 patch.object(upload_command, 'callback', side_effect=upload_side_effect, return_value=None), \
+                 patch.object(upload_command, 'callback', side_effect=upload_side_effect,
+                              return_value={'overall_success': True}), \
                  patch('vamscli.utils.glb_combiner.read_glb_file', return_value=mock_glb_data), \
                  patch('vamscli.utils.glb_combiner.write_glb_file'), \
                  patch('os.path.exists', return_value=True), \
@@ -730,6 +733,45 @@ class TestBOMAssembleAssetCreationFailure:
         assert json.loads(result.stdout) == {
             'error': 'Upload failed: timeout', 'error_type': 'FileUploadError',
             'createdAssetId': 'new-asset-123'}
+
+    def test_json_output_reports_an_upload_that_stored_nothing(
+            self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
+        # Under another command, `file upload` returns overall_success: false instead of exiting 1
+        failed_upload = {'overall_success': False, 'failed_files': 1, 'sequence_results': [
+            {'sequence_number': 1, 'successful_files': 0, 'failed_files': ['test_combined.glb']}]}
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result,
+            ['--json-output'], upload_side_effect=lambda **kwargs: failed_upload)
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed for: test_combined.glb', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-123'}
+
+    def test_text_mode_reports_an_upload_that_stored_nothing(
+            self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
+        failed_upload = {'overall_success': False, 'failed_files': 1, 'sequence_results': [
+            {'sequence_number': 1, 'successful_files': 0, 'failed_files': ['test_combined.glb']}]}
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result, [],
+            upload_side_effect=lambda **kwargs: failed_upload)
+
+        assert result.exit_code == 1
+        assert 'BOM assembly completed successfully' not in result.stdout
+        assert '✗ Asset Creation Error: Upload failed for: test_combined.glb' in result.stderr
+        assert 'Asset new-asset-123 was created before the failure' in result.stderr
+
+    def test_global_error_after_create_keeps_the_created_asset_id(
+            self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result,
+            ['--json-output'], upload_side_effect=PermissionDeniedError("Access forbidden"))
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, PermissionDeniedError)
+        document = _global_error_data("Permission Denied", str(result.exception),
+                                      exc=result.exception)
+        assert document['createdAssetId'] == 'new-asset-123'
 
     def test_text_mode_names_the_created_asset_before_the_uploads(
             self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):

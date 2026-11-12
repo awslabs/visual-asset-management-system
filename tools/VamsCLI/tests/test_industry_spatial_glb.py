@@ -11,8 +11,9 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, AssetAlreadyExistsError, FileUploadError
+    FileDownloadError, AssetAlreadyExistsError, FileUploadError, PermissionDeniedError
 )
+from vamscli.utils.global_exceptions import _global_error_data
 from vamscli.utils.glb_combiner import GLBCombineError
 from vamscli.utils.json_output import output_error
 
@@ -238,7 +239,7 @@ class TestSpatialGLBAssetCombineCommand:
             )
             
             mock_create.return_value = {'assetId': 'new-asset-id'}
-            mock_upload.return_value = {'success': True}
+            mock_upload.return_value = {'overall_success': True}
             
             with patch('builtins.open', create=True):
                 with patch('os.path.getsize', return_value=1024000):
@@ -285,7 +286,7 @@ class TestGLBAssetCombineNestedFailure:
              patch('vamscli.commands.industry.spatial.glb.create_command',
                    side_effect=create_side_effect, return_value={'assetId': 'new-asset-id'}), \
              patch('vamscli.commands.industry.spatial.glb.upload_command',
-                   side_effect=upload_side_effect, return_value={'success': True}), \
+                   side_effect=upload_side_effect, return_value={'overall_success': True}), \
              patch('builtins.open', create=True), \
              patch('os.path.getsize', return_value=1024000), \
              patch('tempfile.mkdtemp', return_value='/tmp/test'), \
@@ -334,6 +335,33 @@ class TestGLBAssetCombineNestedFailure:
             'error': 'Upload failed: timeout', 'error_type': 'FileUploadError',
             'createdAssetId': 'new-asset-id'}
 
+    def test_json_output_reports_an_upload_that_stored_nothing(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        # Under another command, `file upload` returns overall_success: false instead of exiting 1
+        failed_upload = {'overall_success': False, 'failed_files': 1, 'sequence_results': [
+            {'sequence_number': 1, 'successful_files': 0, 'failed_files': ['root__COMBINED.glb']}]}
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=lambda **kwargs: failed_upload)
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed for: root__COMBINED.glb', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-id'}
+
+    def test_global_error_after_create_keeps_the_created_asset_id(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=PermissionDeniedError("Access forbidden"))
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, PermissionDeniedError)
+        document = _global_error_data("Permission Denied", str(result.exception),
+                                      exc=result.exception)
+        assert document['createdAssetId'] == 'new-asset-id'
+        assert document['error_type'] == 'PermissionDeniedError'
+
     def test_text_mode_reports_the_create_error_on_stderr(self, cli_runner, spatial_command_mocks,
                                                          mock_export_result):
         result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
@@ -344,6 +372,45 @@ class TestGLBAssetCombineNestedFailure:
         assert result.exit_code == 1
         assert '✗ AssetAlreadyExistsError: Asset already exists' in result.stderr
         assert '"error"' not in result.stdout
+
+
+class TestGLBAssetCombineUploadRefused:
+    """A role that can create assets but not upload files: the real `file upload` runs (#1349)."""
+
+    def test_can_create_but_not_upload_exits_1_and_names_the_asset(
+            self, cli_runner, spatial_command_mocks, mock_export_result, tmp_path, monkeypatch):
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        def write_combined_glb(export_result, temp_dir, root_name, json_output, failed_operations):
+            path = os.path.join(temp_dir, f"{root_name}__COMBINED.glb")
+            with open(path, 'wb') as f:
+                f.write(b'glb')
+            return path, {'total_assets_processed': 2, 'total_glbs_combined': 1}
+
+        with spatial_command_mocks as mocks, \
+             patch('vamscli.commands.file.APIClient', return_value=mocks['api_client']), \
+             patch('vamscli.commands.file.get_profile_manager_from_context',
+                   return_value=mocks['profile_manager']), \
+             patch('vamscli.commands.industry.spatial.glb.export_command',
+                   return_value=mock_export_result), \
+             patch('vamscli.commands.industry.spatial.glb.process_and_combine_glbs',
+                   side_effect=write_combined_glb), \
+             patch('vamscli.commands.industry.spatial.glb.create_command',
+                   return_value={'assetId': 'new-asset-id'}):
+            mocks['api_client'].get_database.return_value = {'databaseId': 'test-db'}
+            mocks['api_client'].initialize_upload.side_effect = PermissionDeniedError(
+                "Access forbidden. Not authorized to upload")
+            result = cli_runner.invoke(cli, [
+                'industry', 'spatial', 'glbassetcombine', '-d', 'test-db', '-a', 'root-asset',
+                '--asset-create-name', 'Combined Model', '--json-output'
+            ])
+
+        assert result.exit_code == 1, result.output
+        document = json.loads(result.stdout)
+        assert document['error_type'] == 'FileUploadError'
+        assert document['error'] == 'Upload failed for: /Root Asset__COMBINED.glb'
+        assert document['createdAssetId'] == 'new-asset-id'
+        mocks['api_client'].initialize_upload.assert_called()
 
 
 class TestGLBCombinerUtilities:
