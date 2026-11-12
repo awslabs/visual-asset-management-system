@@ -283,8 +283,8 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
         # Use glbassetcombine to get the combined GLB for this asset
         # This handles any child assets and combines them with proper transforms
         try:
-            combine_result = ctx.invoke(
-                glbassetcombine,
+            combine_result = invoke_nested_command(
+                ctx, json_output, glbassetcombine,
                 database_id=database_id,
                 asset_id=asset_id,
                 local_path=str(asset_temp_dir),
@@ -295,7 +295,6 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
                 include_parent_relationships=False,
                 asset_create_name=None,  # Don't create new asset
                 delete_temporary_files=False,  # Keep files for BOM assembly
-                json_output=True  # Suppress CLI output
             )
         except click.ClickException as e:
             output_warning(f"glbassetcombine Click exception for {source_name}: {e.message}", json_output)
@@ -688,6 +687,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
         if asset_create_name:
             output_status(f"Creating new asset '{asset_create_name}'...", json_output)
             
+            new_asset_id = None
             try:
                 # Use json_input to ensure proper field names (assetName not name)
                 asset_create_data = {
@@ -710,6 +710,9 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                 )
                 
                 new_asset_id = create_result['assetId']
+                # Name the new asset now: if an upload fails, running the command again creates another
+                output_status(f"Created asset {new_asset_id}", json_output)
+                created = {'createdAssetId': new_asset_id}
                 
                 # Collect all GLB files to upload
                 glb_files_to_upload = []
@@ -736,7 +739,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     output_status(f"Uploading {os.path.basename(glb_path)}...", json_output)
                     
                     invoke_nested_command(
-                        ctx, json_output, upload_command,
+                        ctx, json_output, upload_command, error_fields=created,
                         files_or_directory=(glb_path,),
                         database_id=database_id,
                         asset_id=new_asset_id,
@@ -757,7 +760,7 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                 output_status("Uploading BOM JSON file...", json_output)
                 
                 invoke_nested_command(
-                    ctx, json_output, upload_command,
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(json_file,),
                     database_id=database_id,
                     asset_id=new_asset_id,
@@ -788,14 +791,20 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     remove_run_temp_dir(base_temp_dir, json_output)
                     temp_dir = None
                 
+            # shortcut: a global error (expired sign-in, web ACL block) after the asset exists reaches
+            # the global handler without createdAssetId; the CLI-mode "Created asset" line still names it
             except GlobalInfrastructureError:
                 raise
             except Exception as e:
+                if new_asset_id:
+                    e.json_fields = {**(getattr(e, 'json_fields', None) or {}), 'createdAssetId': new_asset_id}
                 output_error(
                     e,
                     json_output,
                     error_type="Asset Creation Error",
-                    helpful_message="The assembly finished, but creating the new asset or uploading its files failed."
+                    helpful_message="The assembly finished, but creating the new asset or uploading its files failed." + (
+                        f" Asset {new_asset_id} was created before the failure; running this command"
+                        " again creates another asset." if new_asset_id else "")
                 )
                 raise click.ClickException(str(e))
         

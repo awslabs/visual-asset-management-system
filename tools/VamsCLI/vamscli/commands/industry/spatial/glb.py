@@ -302,6 +302,7 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         if asset_create_name:
             output_status(f"Creating new asset '{asset_create_name}'...", json_output)
             
+            new_asset_id = None
             try:
                 create_result = invoke_nested_command(
                     ctx, json_output, create_command,
@@ -312,12 +313,15 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
                 )
                 
                 new_asset_id = create_result['assetId']
+                # Name the new asset now: if an upload fails, running the command again creates another
+                output_status(f"Created asset {new_asset_id}", json_output)
+                created = {'createdAssetId': new_asset_id}
                 
                 # Upload combined GLB
                 output_status("Uploading combined GLB...", json_output)
                 
                 invoke_nested_command(
-                    ctx, json_output, upload_command,
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(combined_glb_path,),
                     database_id=database_id,
                     asset_id=new_asset_id,
@@ -328,7 +332,7 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
                 output_status("Uploading export JSON...", json_output)
                 
                 invoke_nested_command(
-                    ctx, json_output, upload_command,
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(json_path,),
                     database_id=database_id,
                     asset_id=new_asset_id,
@@ -351,14 +355,20 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
                     shutil.rmtree(temp_dir)
                     temp_dir = None
                 
+            # shortcut: a global error (expired sign-in, web ACL block) after the asset exists reaches
+            # the global handler without createdAssetId; the CLI-mode "Created asset" line still names it
             except GlobalInfrastructureError:
                 raise
             except Exception as e:
+                if new_asset_id:
+                    e.json_fields = {**(getattr(e, 'json_fields', None) or {}), 'createdAssetId': new_asset_id}
                 output_error(
                     e,
                     json_output,
                     error_type="Asset Creation Error",
-                    helpful_message="The combined GLB was built, but creating the new asset or uploading its files failed."
+                    helpful_message="The combined GLB was built, but creating the new asset or uploading its files failed." + (
+                        f" Asset {new_asset_id} was created before the failure; running this command"
+                        " again creates another asset." if new_asset_id else "")
                 )
                 raise click.ClickException(str(e))
         

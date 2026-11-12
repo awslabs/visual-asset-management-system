@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, AssetAlreadyExistsError
+    FileDownloadError, AssetAlreadyExistsError, FileUploadError
 )
 from vamscli.utils.glb_combiner import GLBCombineError
 from vamscli.utils.json_output import output_error
@@ -276,7 +276,7 @@ class TestGLBAssetCombineNestedFailure:
     """A failed nested export, asset creation or upload ends glbassetcombine with one error (#1349)."""
 
     def _run(self, cli_runner, spatial_command_mocks, mock_export_result, extra_args,
-             export_side_effect=None, create_side_effect=None):
+             export_side_effect=None, create_side_effect=None, upload_side_effect=None):
         with spatial_command_mocks, \
              patch('vamscli.commands.industry.spatial.glb.export_command',
                    side_effect=export_side_effect, return_value=mock_export_result), \
@@ -284,7 +284,8 @@ class TestGLBAssetCombineNestedFailure:
                    return_value=('/tmp/test/root__COMBINED.glb', {'total_assets_processed': 2})), \
              patch('vamscli.commands.industry.spatial.glb.create_command',
                    side_effect=create_side_effect, return_value={'assetId': 'new-asset-id'}), \
-             patch('vamscli.commands.industry.spatial.glb.upload_command', return_value={'success': True}), \
+             patch('vamscli.commands.industry.spatial.glb.upload_command',
+                   side_effect=upload_side_effect, return_value={'success': True}), \
              patch('builtins.open', create=True), \
              patch('os.path.getsize', return_value=1024000), \
              patch('tempfile.mkdtemp', return_value='/tmp/test'), \
@@ -321,6 +322,17 @@ class TestGLBAssetCombineNestedFailure:
 
         assert result.exit_code == 1
         assert json.loads(result.stdout)['error_type'] == 'KeyError'
+
+    def test_json_output_names_the_created_asset_when_an_upload_fails(
+            self, cli_runner, spatial_command_mocks, mock_export_result):
+        result = self._run(cli_runner, spatial_command_mocks, mock_export_result,
+                           ['--asset-create-name', 'Combined Model', '--json-output'],
+                           upload_side_effect=_fail_like_a_command(FileUploadError("Upload failed: timeout")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed: timeout', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-id'}
 
     def test_text_mode_reports_the_create_error_on_stderr(self, cli_runner, spatial_command_mocks,
                                                          mock_export_result):

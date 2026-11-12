@@ -174,6 +174,8 @@ vamscli industry engineering bom bomassemble \
   --asset-create-name "Engine Assembly v2"
 ```
 
+If the new asset was created before the failure, the command names it: `Created asset <id>` in text mode, and `createdAssetId` in the `--json-output` error document. Running the command again creates a second asset, so remove that asset or upload the missing files to it instead. The same applies to `vamscli industry spatial glbassetcombine --asset-create-name`.
+
 ### Memory or Slow Processing
 
 **Symptoms:**

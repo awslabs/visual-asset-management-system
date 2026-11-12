@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, AssetAlreadyExistsError, PermissionDeniedError
+    FileDownloadError, AssetAlreadyExistsError, PermissionDeniedError, FileUploadError
 )
 from vamscli.utils.glb_combiner import GLBCombineError
 from vamscli.utils.json_output import output_error
@@ -650,8 +650,10 @@ def _fail_like_a_command(error):
 
 def _run_bomassemble_with_asset_creation(cli_runner, bom_command_mocks, sample_bom_json,
                                          glbassetcombine_result, extra_args,
-                                         create_side_effect=None, upload_side_effect=None):
-    """Run bomassemble --asset-create-name with the nested create and upload callbacks patched."""
+                                         create_side_effect=None, upload_side_effect=None,
+                                         combine_side_effect=None, create_asset=True):
+    """Run bomassemble (with --asset-create-name unless create_asset is False) with the nested
+    glbassetcombine, create and upload callbacks patched."""
     from vamscli.commands.industry.spatial.glb import glbassetcombine
     from vamscli.commands.assets import create as create_command
     from vamscli.commands.file import upload as upload_command
@@ -671,7 +673,8 @@ def _run_bomassemble_with_asset_creation(cli_runner, bom_command_mocks, sample_b
             json.dump(sample_bom_json, f)
             json_file = f.name
         try:
-            with patch.object(glbassetcombine, 'callback', return_value=glbassetcombine_result), \
+            with patch.object(glbassetcombine, 'callback',
+                              side_effect=combine_side_effect, return_value=glbassetcombine_result), \
                  patch.object(create_command, 'callback',
                               side_effect=create_side_effect, return_value={'assetId': 'new-asset-123'}), \
                  patch.object(upload_command, 'callback', side_effect=upload_side_effect, return_value=None), \
@@ -684,12 +687,12 @@ def _run_bomassemble_with_asset_creation(cli_runner, bom_command_mocks, sample_b
                  patch('os.listdir', return_value=['test_combined.glb']), \
                  patch('shutil.rmtree'), \
                  patch('pathlib.Path.mkdir'):
+                create_args = ['--asset-create-name', 'Test Engine Assembly'] if create_asset else []
                 return cli_runner.invoke(cli, [
                     'industry', 'engineering', 'bom', 'bomassemble',
                     '--json-file', json_file,
                     '--database-id', 'test-db',
-                    '--asset-create-name', 'Test Engine Assembly',
-                ] + extra_args)
+                ] + create_args + extra_args)
         finally:
             os.unlink(json_file)
 
@@ -714,7 +717,29 @@ class TestBOMAssembleAssetCreationFailure:
             upload_side_effect=OSError("disk read failed"))
 
         assert result.exit_code == 1
-        assert json.loads(result.stdout) == {'error': 'disk read failed', 'error_type': 'OSError'}
+        assert json.loads(result.stdout) == {
+            'error': 'disk read failed', 'error_type': 'OSError', 'createdAssetId': 'new-asset-123'}
+
+    def test_json_output_names_the_created_asset_when_an_upload_fails(
+            self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result, ['--json-output'],
+            upload_side_effect=_fail_like_a_command(FileUploadError("Upload failed: timeout")))
+
+        assert result.exit_code == 1
+        assert json.loads(result.stdout) == {
+            'error': 'Upload failed: timeout', 'error_type': 'FileUploadError',
+            'createdAssetId': 'new-asset-123'}
+
+    def test_text_mode_names_the_created_asset_before_the_uploads(
+            self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result, [],
+            upload_side_effect=OSError("disk read failed"))
+
+        assert result.exit_code == 1
+        assert 'Created asset new-asset-123' in result.stdout
+        assert 'Asset new-asset-123 was created before the failure' in result.stderr
 
     def test_permission_denial_reaches_the_global_handler(
             self, cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result):
@@ -750,6 +775,38 @@ class TestBOMAssembleAssetCreationFailure:
         assert result.exit_code == 0
         assert 'New Asset Created' in result.stdout
         assert '"assetId"' not in result.stdout
+
+
+class TestBOMAssembleOneJSONDocument:
+    """bomassemble keeps the output of its inner glbassetcombine calls out of its own (#1359)."""
+
+    @staticmethod
+    def combine_that_prints(glbassetcombine_result):
+        def callback(**kwargs):
+            click.echo(json.dumps({'status': 'success', 'asset': kwargs['asset_id']}, indent=2))
+            return glbassetcombine_result
+        return callback
+
+    def test_json_output_is_one_document(self, cli_runner, bom_command_mocks, sample_bom_json,
+                                         mock_glbassetcombine_result):
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result, ['--json-output'],
+            combine_side_effect=self.combine_that_prints(mock_glbassetcombine_result), create_asset=False)
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data['status'] == 'success'
+        assert data['assemblies']
+
+    def test_text_mode_prints_no_inner_json(self, cli_runner, bom_command_mocks, sample_bom_json,
+                                            mock_glbassetcombine_result):
+        result = _run_bomassemble_with_asset_creation(
+            cli_runner, bom_command_mocks, sample_bom_json, mock_glbassetcombine_result, [],
+            combine_side_effect=self.combine_that_prints(mock_glbassetcombine_result), create_asset=False)
+
+        assert result.exit_code == 0, result.output
+        assert 'BOM assembly completed successfully' in result.stdout
+        assert '"asset"' not in result.stdout
 
 
 class TestBOMUtilityFunctions:

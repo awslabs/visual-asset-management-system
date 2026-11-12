@@ -174,7 +174,7 @@ def output_error(error: Exception, json_output: bool,
 
 
 def invoke_nested_command(ctx: click.Context, json_output: bool, command: click.Command,
-                          **params) -> Any:
+                          *, error_fields: Optional[Dict[str, Any]] = None, **params) -> Any:
     """
     Run another command from inside a command and return its result.
 
@@ -189,6 +189,7 @@ def invoke_nested_command(ctx: click.Context, json_output: bool, command: click.
         ctx: Click context of the running command
         json_output: Whether the running command is in JSON mode
         command: The Click command to run
+        error_fields: Fields added to a passed-on error document (existing keys are kept)
         **params: The nested command's parameters, without json_output
     """
     captured = io.StringIO()
@@ -203,6 +204,8 @@ def invoke_nested_command(ctx: click.Context, json_output: bool, command: click.
                 error_data = None
             if not isinstance(error_data, dict) or 'error' not in error_data:
                 error_data = {"error": f"'{command.name}' failed", "error_type": "CommandError"}
+            for key, value in (error_fields or {}).items():
+                error_data.setdefault(key, value)
             if json_output:
                 click.echo(json.dumps(error_data, indent=2))
             else:
