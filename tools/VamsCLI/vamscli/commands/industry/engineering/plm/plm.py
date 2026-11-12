@@ -13,7 +13,7 @@ import io
 import sys
 import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, local
 from .....utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from .....utils.api_client import APIClient
 from .....utils.json_output import output_status, output_result, output_error, output_warning, output_info
@@ -147,19 +147,6 @@ def sanitize_asset_id(asset_id: str) -> str:
         sanitized = sanitized[:254].rstrip(". ")
 
     return sanitized
-
-
-def suppress_output(func):
-    """
-    Thread-safe decorator to suppress stdout and stderr for a function.
-    
-    Uses contextlib.redirect_stdout/stderr which are thread-safe and properly
-    handle nested redirections without race conditions.
-    """
-    def wrapper(*args, **kwargs):
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return func(*args, **kwargs)
-    return wrapper
 
 
 @contextlib.contextmanager
@@ -400,6 +387,66 @@ def create_single_metadata(
         return (False, str(e))
 
 
+# Per-thread routing of sys.stdout and sys.stderr for the Phase 2 pool. The streams are
+# process-wide, so route_thread_output() replaces them once, on the thread that runs the pool,
+# and a worker inside discard_thread_output() has its own writes dropped.
+_thread_output = local()
+
+
+class _ThreadRoutedStream:
+    """Stands in for sys.stdout or sys.stderr while a worker pool runs.
+
+    Writes from a thread inside discard_thread_output() go to that thread's throwaway buffer;
+    every other thread (the progress bar, the summaries, the other workers) writes to the stream
+    this one replaced.
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def _target(self):
+        sink = getattr(_thread_output, 'sink', None)
+        return self._stream if sink is None else sink
+
+    def write(self, text):
+        return self._target().write(text)
+
+    def flush(self):
+        self._target().flush()
+
+    def __getattr__(self, name):
+        # No `buffer`: Click writes straight to a stream's binary buffer when it finds one (a
+        # Windows console, a stream with an ASCII encoding), which would bypass the routing.
+        if name == 'buffer':
+            raise AttributeError(name)
+        return getattr(self._target(), name)
+
+
+@contextlib.contextmanager
+def route_thread_output():
+    """Route sys.stdout and sys.stderr per thread around a worker pool, then restore them.
+
+    Entered on the thread that runs the pool, so both streams are replaced once before the
+    workers start and restored after they finish, whatever the workers did.
+    """
+    saved = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _ThreadRoutedStream(saved[0]), _ThreadRoutedStream(saved[1])
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = saved
+
+
+@contextlib.contextmanager
+def discard_thread_output():
+    """Drop what this thread writes to sys.stdout and sys.stderr inside route_thread_output()."""
+    _thread_output.sink = io.StringIO()
+    try:
+        yield
+    finally:
+        _thread_output.sink = None
+
+
 def upload_single_files(
     ctx: click.Context,
     database_id: str,
@@ -448,8 +495,8 @@ def upload_single_files(
                         
                         if file_basename == geometry_basename:
                             try:
-                                # Suppress file upload output (has its own progress bar)
-                                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                                # Drop file upload output (it prints its own status and result)
+                                with discard_thread_output():
                                     result = ctx.invoke(
                                         file_upload,
                                         files_or_directory=[file_path],
@@ -457,6 +504,7 @@ def upload_single_files(
                                         asset_id=asset_id,
                                         directory=None,
                                         json_input=None,
+                                        hide_progress=True,
                                     )
                                 if result.get("overall_success", False):
                                     uploaded_geometry += 1
@@ -471,8 +519,8 @@ def upload_single_files(
                 xml_file_path = xml_mapping_info.get('xml_file')
                 if xml_file_path and xml_file_path.exists():
                     try:
-                        # Suppress file upload output
-                        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        # Drop file upload output
+                        with discard_thread_output():
                             result = ctx.invoke(
                                 file_upload,
                                 files_or_directory=[str(xml_file_path)],
@@ -480,6 +528,7 @@ def upload_single_files(
                                 asset_id=asset_id,
                                 directory=None,
                                 json_input=None,
+                                hide_progress=True,
                             )
                         if result.get("overall_success", False):
                             uploaded_xml = 1
@@ -982,18 +1031,19 @@ def import_plmxml(
     if not json_output:
         click.secho(f"\n⚡ Phase 2: Processing metadata/files/links (max {max_workers} workers)...", fg="cyan", bold=True, err=True)
     
-    parallel_stats = process_parallel_operations(
-        ctx,
-        global_components,
-        global_relationships,
-        database_id,
-        plmxml_dir,
-        max_workers,
-        json_output,
-        asset_stats['failed_items'],
-        xml_file_mapping,
-        upload_xml
-    )
+    with route_thread_output():
+        parallel_stats = process_parallel_operations(
+            ctx,
+            global_components,
+            global_relationships,
+            database_id,
+            plmxml_dir,
+            max_workers,
+            json_output,
+            asset_stats['failed_items'],
+            xml_file_mapping,
+            upload_xml
+        )
     phase2_duration = time.time() - phase2_start
     
     if not json_output:

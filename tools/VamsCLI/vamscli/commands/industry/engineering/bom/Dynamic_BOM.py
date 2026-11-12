@@ -543,8 +543,9 @@ def combine_bom_hierarchy_optimized(ctx: click.Context,
               help='[OPTIONAL] Keep temporary files after processing')
 @click.option('--asset-create-name',
               help='[OPTIONAL] Create new asset with this name and upload all generated GLB files')
-@click.option('--delete-temporary-files', is_flag=True, default=True,
-              help='[OPTIONAL, default: True] Delete temp files after upload (only with --asset-create-name)')
+@click.option('--delete-temporary-files/--no-delete-temporary-files', default=True,
+              help='[OPTIONAL, default: on] Delete temp files after upload (only with --asset-create-name); '
+                   '--no-delete-temporary-files keeps them')
 @click.option('--json-output', is_flag=True,
               help='[OPTIONAL] Output JSON')
 @click.pass_context
@@ -570,9 +571,9 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     Asset Creation:
     - Use --asset-create-name to create a new asset
     - Uploads all assembled root GLBs
-    - Uploads all downloaded/cached component GLBs
+    - Uploads all downloaded and intermediate component GLBs
     - Uploads the original BOM JSON file
-    - Use --delete-temporary-files to clean up after upload (default: True)
+    - Temp files are deleted after upload; --no-delete-temporary-files keeps them
     
     Examples:
         # Basic assembly
@@ -597,6 +598,10 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     
     temp_dir = None
     base_temp_dir = None
+    
+    # --no-delete-temporary-files keeps the files after the upload, as --keep-temp-files does
+    if asset_create_name and not delete_temporary_files:
+        keep_temp_files = True
     
     try:
         # Step 1: Parse BOM JSON
@@ -677,7 +682,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
             'total_sources': len(sources),
             'root_nodes_processed': len(results),
             'assemblies': results,
-            'temporary_directory': temp_dir if keep_temp_files else 'deleted',
+            # The run's folder stays with --keep-temp-files, and always under a --local-path
+            'temporary_directory': temp_dir if keep_temp_files or local_path else 'deleted',
             'optimization': 'tree-first approach (optimized)'
         }
         
