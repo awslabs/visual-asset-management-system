@@ -1,5 +1,18 @@
 /* ViewFile specific styles for horizontal splitter and scrolling */
 
+/* The page heading is a raw h1 inside a Cloudscape Box, which sets a fixed body line-height
+   (20px) that the h1 inherited at its larger font size, so a long file name wrapping onto a second
+   line overlapped the first (#1360). Use Cloudscape's h1 metrics, as a Header variant="h1" does,
+   and let a name with no spaces break anywhere instead of overflowing. */
+.viewfile-title {
+    margin: 9px 0 0 0;
+    font-size: var(--font-size-heading-xl-wvkbur, 24px);
+    line-height: var(--line-height-heading-xl-hko6p0, 30px);
+    font-weight: var(--font-weight-heading-xl-u3m4we, 700);
+    letter-spacing: var(--letter-spacing-heading-xl-ckkb6u, -0.02em);
+    overflow-wrap: anywhere;
+}
+
 .viewfile-splitter {
     height: 100%;
 }
