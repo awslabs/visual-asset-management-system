@@ -54,7 +54,10 @@ const EDH_CLUSTER_TAG_KEY = "edh:ClusterId";
 const EDH_NODE_TYPE_TAG_KEY = "edh:NodeType";
 const EDH_DESKTOP_NODE_TYPE = "dcv_node";
 
-/** VPC placement shared by every add-on Lambda: isolated subnets behind the add-on security group. */
+/**
+ * VPC placement shared by every add-on Lambda: the subnets of the tier `lambdaSubnets` names (isolated by
+ * default, private for an internet-facing EDH load balancer) behind the add-on security group.
+ */
 export interface EdhLambdaNetwork {
     vpc: ec2.IVpc;
     subnets: ec2.ISubnet[];
@@ -654,8 +657,10 @@ export const EDH_ROOT_KEY_SYNC_MAX_EVENT_AGE = Duration.minutes(15);
  *
  * It calls no EDH route, only AWS Systems Manager, Amazon EC2, AWS Secrets Manager and Amazon DynamoDB, so it
  * follows VAMS's deployment-wide rule: in the VPC, behind the add-on security group, only with
- * `useGlobalVpc.enabled` and `useForAllLambdas`. There the core SSM and Secrets Manager interface endpoints,
- * the add-on's EC2 endpoint and the DynamoDB gateway endpoint carry its calls (with `addVpcEndpoints`).
+ * `useGlobalVpc.enabled` and `useForAllLambdas`. There it runs in the isolated subnets whatever
+ * `lambdaSubnets` says (the stack passes it an isolated-subnet network), and the core SSM and Secrets Manager
+ * interface endpoints, the add-on's EC2 endpoint and the DynamoDB gateway endpoint carry its calls (with
+ * `addVpcEndpoints`).
  *
  * It generates an RSA key pair for each run with `cryptography`, which the base layer does not carry, so it
  * alone carries the add-on's own layer of `cryptography`, `cffi` and `pycparser`
