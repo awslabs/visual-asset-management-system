@@ -86,7 +86,7 @@ POST /subscriptions
 ```
 
 :::note[Subscriber email resolution]
-VAMS resolves each subscriber's email from their user profile. If a subscriber does not have a valid email in their profile, and their user ID is not in email format, the request is rejected.
+VAMS resolves each subscriber's email from their user profile, which the web app records at the user's first sign-in. When the profile has no email and the deployment uses Amazon Cognito, VAMS uses the `email` attribute of the subscriber's Cognito user, so a user created through the API can be subscribed before they sign in. This lookup is skipped when Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`), because VAMS creates no Amazon Cognito VPC endpoint; there, such a user can be subscribed after their first sign-in. If neither has an email, and the user ID is not in email format, the request is rejected.
 :::
 
 ### Response

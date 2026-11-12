@@ -309,6 +309,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             this,
             lambdaCommonBaseLayer,
             storageResources,
+            authResources,
             config,
             vpc,
             subnets,

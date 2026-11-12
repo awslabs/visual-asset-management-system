@@ -201,7 +201,7 @@ vamscli subscription create -i my-asset -s reviewer@example.com
 vamscli subscription create -i my-asset -s reviewer@example.com -s lead@example.com
 ```
 
-Each subscriber must have a usable email address on their user profile; a subscriber without one is rejected.
+Each subscriber must have a usable email address: the one on their user profile, or, with Amazon Cognito and Lambda functions outside the VPC, the email of their Cognito user (so a user created with `vamscli user cognito create` can be subscribed before they sign in). A subscriber without one is rejected.
 
 ---
 

@@ -25,11 +25,13 @@ import {
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 
 export function buildSubscriptionService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -59,6 +61,24 @@ export function buildSubscriptionService(
                 : undefined,
         environment: {},
     });
+
+    // A subscriber who has not signed in to the web app has no user profile yet; the function
+    // reads that user's email from the Cognito user pool instead. Only outside the VPC: VAMS
+    // creates no Cognito interface endpoint, so in the VPC the call could only time out (the
+    // same placement rule as isCognitoMfaCheckEnabled). shortcut: in the VPC an API-created user
+    // still needs one web sign-in before they can be subscribed; lift this when VAMS creates a
+    // Cognito endpoint.
+    const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    if (config.app.authProvider.useCognito.enabled && authResources?.cognito?.userPool && !inVpc) {
+        fun.addEnvironment("USER_POOL_ID", authResources.cognito.userPoolId);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["cognito-idp:AdminGetUser"],
+                resources: [authResources.cognito.userPool.userPoolArn],
+            })
+        );
+    }
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
