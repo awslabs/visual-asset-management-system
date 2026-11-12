@@ -94,7 +94,7 @@ if [ "$EXECUTE" -eq 1 ] && [ "$CONFIG_DRY_RUN" -eq 0 ]; then
     REAL_RUN=1
 fi
 if [ "$REAL_RUN" -eq 1 ]; then
-    echo "Mode: EXECUTE (rows are deleted and Bedrock-billed executions launched; the account id is confirmed first)"
+    echo "Mode: EXECUTE (rows may be deleted and Bedrock-billed executions launched; the account id is confirmed first)"
 elif [ "$EXECUTE" -eq 1 ]; then
     echo "Mode: DRY RUN (\"dry_run\" is true in $CONFIG_FILE, so --execute applies nothing; set it to false for a real run)"
 else
@@ -115,8 +115,14 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "Next steps:"
         echo "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
         echo "     the workflows it lists as referencing a retired pipeline"
-        echo "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL \\"
-        echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+        # The migration's closing summary says when vectorBackfill was skipped on purpose.
+        if grep -q "vectorBackfill: skipped: vector search is not enabled" "$LOG_FILE"; then
+            echo "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
+            echo "     is nothing to watch"
+        else
+            echo "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL \\"
+            echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+        fi
         echo "  3. Confirm the trigger cleanup took effect: re-run with --steps orphanedTriggers (without --execute)"
         echo "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
         echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"

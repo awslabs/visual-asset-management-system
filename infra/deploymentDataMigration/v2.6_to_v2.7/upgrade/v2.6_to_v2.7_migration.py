@@ -22,7 +22,10 @@ The v2.7 release introduces:
      ``vectorReindexer`` Lambda, which enumerates the latest live version of every file and enqueues
      one system-workflow execution per file, paced by ``app.vectorSearch.indexingConcurrency``.
      ``--clear-vectors`` deletes every stored vector first (``operation: both``); the default
-     (``operation: enqueue``) leaves existing vectors in place and re-embeds every file.
+     (``operation: enqueue``) leaves existing vectors in place and re-embeds every file. The step
+     reads the deployment's VECTORSEARCH feature switch first: without it vector search is off and
+     the step is skipped (exit 0), so the step also embeds the existing files on a 2.7 deployment
+     whose vector search is turned on later.
   3. Executions of the retired workflows that were RUNNING during the deploy lose their inner state
      machine and stay RUNNING until the workflow task times out (18 000 s for GenAI labeling, 900 s
      for CAD/Mesh extraction), then turn FAILED. User workflows that reference a retired pipeline id
@@ -71,7 +74,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 import boto3
 from botocore.config import Config
@@ -137,12 +140,14 @@ def confirm_migration_target(
     gated_summary: str,
     confirm_account: Optional[str],
     args_dry_run: Optional[bool] = None,
+    step_plan: Optional[List[str]] = None,
 ) -> bool:
     """Echo the resolved target and, for a gated run, require the operator to confirm the account.
 
     ``dry_run`` is the effective mode (the command line or the config can each force a dry run);
     ``args_dry_run`` is what the command line alone said, so the echo can name the config when it is the
-    config that kept an ``--execute`` run dry. It defaults to ``dry_run``.
+    config that kept an ``--execute`` run dry. It defaults to ``dry_run``. ``step_plan`` lists the steps
+    this run takes, each with the reason it is skipped when it will be (printed as ``Steps:``).
 
     Returns True to proceed, False to refuse.
 
@@ -193,6 +198,8 @@ def confirm_migration_target(
     logger.info(f"  Caller:       {caller_arn or 'UNRESOLVED'}")
     logger.info(f"  Profile:      {profile or 'none (ambient credentials)'}")
     logger.info(f"  SSM prefix:   {base_param_prefix or 'not configured'}")
+    if step_plan:
+        logger.info(f"  Steps:        {', '.join(step_plan)}")
     if not dry_run:
         dry_run_note = ""
     elif args_dry_run:
@@ -503,6 +510,128 @@ def run_orphaned_triggers_step(config: dict, args, base_param_prefix, profile, r
 
 
 #######################
+# Deployment state: vector search
+#######################
+
+# The app feature switch the core stack writes to the app feature table when app.vectorSearch.enabled
+# resolves true (infra/common/vamsAppFeatures.ts VAMS_APP_FEATURES.VECTORSEARCH). A deploy replaces
+# the table's rows, so the row is absent on a deployment with vector search off.
+VECTOR_SEARCH_FEATURE = 'VECTORSEARCH'
+# The table's partition key (one row per enabled feature).
+APP_FEATURE_KEY = 'featureName'
+
+VECTOR_BACKFILL_SKIP_MESSAGE = ("Vector search is not enabled on this deployment, so there is nothing to "
+                                "re-index; vectorBackfill skipped.")
+VECTOR_BACKFILL_SKIPPED_OUTCOME = 'skipped: vector search is not enabled'
+
+
+class VectorSearchState(NamedTuple):
+    """What the deployment says about vector search, read once per run and shared by every step that
+    depends on it.
+
+    ``enabled``: the VECTORSEARCH feature switch row is present. ``reindexer_function``: the
+    vectorReindexer name published under the SSM prefix, or None when none is published (or no
+    prefix is configured). ``error``: why the state could not be read; when set, ``enabled`` is None
+    and no step may treat vector search as off."""
+    enabled: Optional[bool]
+    reindexer_function: Optional[str]
+    error: Optional[str] = None
+
+
+class VectorBackfillPlan(NamedTuple):
+    """``action`` is 'run' (with ``function_name``), 'skip' or 'error' (with ``reason``)."""
+    action: str
+    function_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class StepResult(NamedTuple):
+    """A step's exit code and the outcome the run's closing summary prints for it."""
+    rc: int
+    outcome: str
+
+
+def read_vector_search_state(config: dict, base_param_prefix: Optional[str], profile: Optional[str],
+                             region: Optional[str]) -> VectorSearchState:
+    """Read whether vector search is on, from the deployment itself (read-only).
+
+    The app feature table's name is resolved like every other name (the
+    ``app_feature_enabled_storage_table_name`` override, else the SSM prefix); its VECTORSEARCH row is
+    read with a consistent GetItem. ``reindexer_function`` is the vectorReindexer name the prefix
+    publishes; the ``vector_reindexer_function_name`` override is not part of the state (a step that
+    invokes the reindexer applies it). Each way the state can fail to be read returns an ``error``
+    naming it: no prefix or override, SSM unreadable, a prefix that publishes no app feature table
+    (usually a wrong prefix), or the table unreadable. A missing vectorReindexer parameter is not an
+    error here: whether it matters depends on the switch, which is the caller's decision."""
+    lookup = (SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+              if base_param_prefix else None)
+    override = config.get('app_feature_enabled_storage_table_name')
+    try:
+        if not _is_unset(override):
+            feature_table = str(override)
+        elif lookup is None:
+            return VectorSearchState(None, None, (
+                "resource_names_ssm_param_prefix is not set, so the app feature table that holds the "
+                "VECTORSEARCH feature switch cannot be resolved. Set the prefix from the core stack "
+                "output ResourceNamesSSMParamPrefixOutput."))
+        else:
+            feature_table = lookup.resolve(ResourceParamKeys.APP_FEATURE_ENABLED_STORAGE_TABLE)
+        reindexer = None
+        if lookup is not None:
+            try:
+                reindexer = lookup.resolve(ResourceParamKeys.VECTOR_REINDEXER_FUNCTION)
+            except KeyError:
+                reindexer = None
+    except KeyError:
+        return VectorSearchState(None, None, (
+            f"no app feature table name is published under {base_param_prefix} (SSM key "
+            f"{ResourceParamKeys.APP_FEATURE_ENABLED_STORAGE_TABLE}). Check the prefix against the core "
+            "stack output ResourceNamesSSMParamPrefixOutput."))
+    except Exception as e:
+        return VectorSearchState(None, None, (
+            f"the SSM parameters under {base_param_prefix} could not be read ({e})."))
+
+    try:
+        dynamodb = _session(profile, region).client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
+        response = dynamodb.get_item(TableName=feature_table,
+                                     Key={APP_FEATURE_KEY: {'S': VECTOR_SEARCH_FEATURE}},
+                                     ConsistentRead=True)
+    except Exception as e:
+        return VectorSearchState(None, None, (
+            f"the app feature table {feature_table} could not be read ({e})."))
+    return VectorSearchState('Item' in response, reindexer)
+
+
+def plan_vector_backfill(state: VectorSearchState, config: dict) -> VectorBackfillPlan:
+    """Decide the vectorBackfill step from the deployment's state.
+
+    Switch absent: skip, whether or not a vectorReindexer is published (the reindexer may exist for
+    another reason, and with vector search off there is nothing to re-index); the
+    ``vector_reindexer_function_name`` override is not used. Switch present: run on the override when
+    it is set, else on the published reindexer; neither is an inconsistent deployment and an error. A
+    state that could not be read is an error, never a skip."""
+    if state.error:
+        return VectorBackfillPlan('error', reason=(
+            f"Cannot tell whether vector search is enabled on this deployment: {state.error} "
+            "vectorBackfill did not run."))
+    if not state.enabled:
+        return VectorBackfillPlan('skip')
+    override = config.get('vector_reindexer_function_name')
+    if not _is_unset(override):
+        return VectorBackfillPlan('run', function_name=str(override))
+    if not state.reindexer_function:
+        source = ("no resource_names_ssm_param_prefix is configured to resolve the vectorReindexer from"
+                  if _is_unset(config.get('resource_names_ssm_param_prefix'))
+                  else f"no vectorReindexer function is published (SSM key "
+                       f"{ResourceParamKeys.VECTOR_REINDEXER_FUNCTION})")
+        return VectorBackfillPlan('error', reason=(
+            "Vector search is enabled on this deployment (the VECTORSEARCH feature switch is set), but "
+            f"{source}. Redeploy so the search stack publishes it, or set vector_reindexer_function_name "
+            "in the config. vectorBackfill did not run."))
+    return VectorBackfillPlan('run', function_name=state.reindexer_function)
+
+
+#######################
 # STEP: vectorBackfill
 #######################
 
@@ -547,9 +676,10 @@ def invoke_vector_reindexer(lambda_client, function_name: str, payload: Dict,
         error_message = e.response['Error']['Message']
         logger.error(f"AWS Error ({error_code}): {error_message}")
         if error_code == 'ResourceNotFoundException':
-            logger.error(f"Lambda function '{function_name}' not found. The vectorReindexer exists "
-                         "only when app.vectorSearch.enabled is true; check the SSM parameter "
-                         "lambdaFunctions/vectorReindexer under the deployment's resourceNames prefix.")
+            logger.error(f"Lambda function '{function_name}' not found. Check the SSM parameter "
+                         "lambdaFunctions/vectorReindexer under the deployment's resourceNames prefix "
+                         "and the vector_reindexer_function_name override, then redeploy if the "
+                         "parameter names a function that no longer exists.")
         elif error_code == 'AccessDeniedException':
             logger.error(f"Access denied. Ensure your IAM principal has lambda:InvokeFunction on the "
                          f"function '{function_name}' (the vectorReindexer name published at "
@@ -662,35 +792,33 @@ def describe_vector_backfill_result(result: Dict, function_name: str, clear_vect
 
 
 def run_vector_backfill_step(config: dict, args, base_param_prefix, profile, region, dry_run,
-                             clear_vectors: bool, explicit: bool) -> int:
-    """Invoke the deployed vectorReindexer to (clear and) re-embed every latest live file.
+                             clear_vectors: bool,
+                             state: Optional[VectorSearchState] = None) -> StepResult:
+    """Invoke the deployed vectorReindexer to (clear and) re-embed every latest live file, or skip it.
 
-    ``explicit`` is True when ``--steps vectorBackfill`` named this step. The vectorReindexer is
-    published to SSM only when app.vectorSearch.enabled is true, so on a deployment without it an
-    explicit run is an error (return 1) while ``--steps all`` skips the step with a warning (0). The
-    same rule applies when nothing can resolve the name at all (no SSM prefix and no explicit
-    override): SsmResourceLookup raises KeyError for the first case, make_resolver ValueError for the
-    second."""
-    try:
-        resolve = make_resolver(config, base_param_prefix, profile, region)
-        function_name = resolve('vector_reindexer_function_name',
-                                ResourceParamKeys.VECTOR_REINDEXER_FUNCTION)
-    except (KeyError, ValueError) as e:
-        message = ("No vectorReindexer function is published for this deployment (SSM key "
-                   "lambdaFunctions/vectorReindexer) or its name cannot be resolved. The function "
-                   "exists only when app.vectorSearch.enabled is true; enable vector search and "
-                   "redeploy, or set vector_reindexer_function_name explicitly in the config.")
-        if explicit:
-            logger.error(message)
-            logger.error(str(e))
-            return 1
-        logger.warning(message)
-        logger.warning(str(e))
-        logger.warning("Skipping the vectorBackfill step.")
-        return 0
-    except Exception as e:
-        logger.error(f"Failed resolving the vectorReindexer function name: {e}")
-        return 1
+    Whether to run is decided from the deployment itself (``read_vector_search_state``): with the
+    VECTORSEARCH feature switch absent, vector search is off and there is nothing to re-index, so the
+    step is skipped and succeeds - under ``--steps all`` and ``--steps vectorBackfill`` alike, and
+    whether or not a vectorReindexer is published. With the switch set, the step runs on the published
+    reindexer (or the ``vector_reindexer_function_name`` override); a switch set with no reindexer to
+    invoke, or a state that cannot be read, is an error and nothing is skipped. ``state`` is the state
+    main() already read for the run's plan; it is read here when not given.
+
+    The step runs on any 2.7 deployment, as often as needed: on an upgrade, and when vector search is
+    turned on later (or off and on again), the reindexer enumerates the files as they are then."""
+    if state is None:
+        state = read_vector_search_state(config, base_param_prefix, profile, region)
+    plan = plan_vector_backfill(state, config)
+    if plan.action == 'skip':
+        logger.info(VECTOR_BACKFILL_SKIP_MESSAGE)
+        if not _is_unset(config.get('vector_reindexer_function_name')):
+            logger.info("vector_reindexer_function_name is set in the config but is not used while vector "
+                        "search is not enabled.")
+        return StepResult(0, VECTOR_BACKFILL_SKIPPED_OUTCOME)
+    if plan.action == 'error':
+        logger.error(plan.reason)
+        return StepResult(1, f"failed: {plan.reason}")
+    function_name = plan.function_name
 
     limit = args.limit if args.limit is not None else config.get('limit')
     invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
@@ -709,8 +837,11 @@ def run_vector_backfill_step(config: dict, args, base_param_prefix, profile, reg
 
     if result.get('timeout'):
         # The reindexer self-continues; a timed-out client read is not a failed backfill.
-        return 0
-    return 1 if 'error' in result else 0
+        return StepResult(0, "completed: the invocation timed out on the client; the reindexer "
+                             "continues in the background")
+    if 'error' in result:
+        return StepResult(1, f"failed: {result.get('error')}")
+    return StepResult(0, "completed (dry run: nothing launched)" if dry_run else "completed")
 
 
 #######################
@@ -933,6 +1064,16 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
     return ', '.join(parts[:-1]) + ' and ' + parts[-1]
 
 
+def print_run_summary(outcomes: List[Tuple[str, str]], dry_run: bool) -> None:
+    """The run's closing summary: one line per selected step with its outcome. A step skipped on
+    purpose says why (``vectorBackfill: skipped: vector search is not enabled``)."""
+    logger.info("")
+    logger.info(f"##### MIGRATION SUMMARY{' (DRY RUN)' if dry_run else ''} #####")
+    for step, outcome in outcomes:
+        logger.info(f"  {step}: {outcome}")
+    logger.info("############################")
+
+
 def _account_id(value: str) -> str:
     """argparse type for --confirm-account: exactly twelve digits."""
     if len(value) != 12 or not value.isdigit():
@@ -975,6 +1116,9 @@ Notes:
     is refused.
   - Run after the v2.7 CDK deploy: the deploy archives the retired built-ins (orphanedTriggers relies
     on it), creates the vector table and index, and publishes the vectorReindexer function name to SSM.
+  - vectorBackfill reads the deployment's VECTORSEARCH feature switch first. Without it, vector search is
+    off, the step is skipped (exit 0) and the summary says so; with it, a missing vectorReindexer is an
+    error. Run --steps vectorBackfill again on any 2.7 deployment after turning vector search on.
   - vectorBackfill finishes when the reindexer has ENQUEUED the work; the executions it launches run on
     afterwards. The summary prints how to watch them.
   - --clear-vectors defaults to FALSE: the default re-embeds every latest file in place. Pass it only
@@ -1042,7 +1186,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     if _is_unset(base_param_prefix):
         base_param_prefix = None
 
-    # Echo the resolved target before touching anything. The shipped config template leaves
+    # Whether vector search is on decides whether vectorBackfill runs, so it is read before the plan is
+    # printed and before the account gate names what the run bills. The read only reads (SSM and one
+    # DynamoDB GetItem); nothing is deleted or launched before the target is echoed and confirmed.
+    vector_state = None
+    vector_plan = None
+    if run_vector_backfill:
+        vector_state = read_vector_search_state(config, base_param_prefix, profile, region)
+        vector_plan = plan_vector_backfill(vector_state, config)
+    backfills_vectors = run_vector_backfill and vector_plan.action == 'run'
+
+    step_plan = []
+    if run_orphaned_triggers:
+        step_plan.append('orphanedTriggers')
+    if run_vector_backfill:
+        if vector_plan.action == 'skip':
+            step_plan.append(f"vectorBackfill ({VECTOR_BACKFILL_SKIPPED_OUTCOME})")
+        elif vector_plan.action == 'error':
+            step_plan.append("vectorBackfill (fails: the vector search state is inconsistent or unreadable)")
+        else:
+            step_plan.append('vectorBackfill')
+    if run_retirement_report:
+        step_plan.append('systemPipelineRetirement')
+
+    # Echo the resolved target before anything is deleted or billed. The shipped config template leaves
     # aws_profile and aws_region null, so boto3 falls back to the ambient environment, and the SSM
     # prefix is /{configName}-{baseStackName}-{region}/resourceNames with no account in it. Two
     # deployments in different accounts that share a config name, stack name and Region therefore
@@ -1052,45 +1219,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The gate covers every step that deletes or bills: orphanedTriggers deletes rows, and a real
     # vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the
     # stored vectors first. systemPipelineRetirement only reads.
-    clears_vectors = run_vector_backfill and clear_vectors
+    clears_vectors = backfills_vectors and clear_vectors
     if not confirm_migration_target(
         profile=profile,
         region=region,
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_orphaned_triggers or run_vector_backfill,
-        gated_summary=_gated_summary(run_orphaned_triggers, run_vector_backfill, clears_vectors),
+        gated=run_orphaned_triggers or backfills_vectors,
+        gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors),
         confirm_account=args.confirm_account,
+        step_plan=step_plan,
     ):
         return 1
 
     exit_code = 0
+    outcomes: List[Tuple[str, str]] = []
+
+    def _record(step: str, rc: int) -> None:
+        outcomes.append((step, "completed" if rc == 0 else f"failed (exit {rc})"))
 
     if run_orphaned_triggers:
         logger.info("")
         logger.info("##### STEP: Orphaned workflow-trigger cleanup #####")
         rc = run_orphaned_triggers_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('orphanedTriggers', rc)
         if rc != 0:
             exit_code = rc
 
     if run_vector_backfill:
         logger.info("")
         logger.info("##### STEP: Vector index backfill #####")
-        rc = run_vector_backfill_step(config, args, base_param_prefix, profile, region, dry_run,
-                                      clear_vectors=clear_vectors,
-                                      explicit=(args.steps == 'vectorBackfill'))
-        if rc != 0:
-            exit_code = rc
+        result = run_vector_backfill_step(config, args, base_param_prefix, profile, region, dry_run,
+                                          clear_vectors=clear_vectors, state=vector_state)
+        outcomes.append(('vectorBackfill', result.outcome))
+        if result.rc != 0:
+            exit_code = result.rc
 
     if run_retirement_report:
         logger.info("")
         logger.info("##### STEP: System-pipeline retirement report #####")
         rc = run_system_pipeline_retirement_step(config, args, base_param_prefix, profile, region,
                                                  dry_run)
+        _record('systemPipelineRetirement', rc)
         if rc != 0:
             exit_code = rc
 
+    print_run_summary(outcomes, dry_run)
     return exit_code
 
 

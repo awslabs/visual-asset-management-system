@@ -73,7 +73,7 @@ try { $ConfigDryRun = ((Get-Content -Raw -Path $ConfigFile | ConvertFrom-Json).d
 $RealRun = $Execute -and -not $ConfigDryRun
 if ($Execute) { $ExtraArgs += "--execute" }
 if ($RealRun) {
-    Write-Host "Mode: EXECUTE (rows are deleted and Bedrock-billed executions launched; the account id is confirmed first)" -ForegroundColor Yellow
+    Write-Host "Mode: EXECUTE (rows may be deleted and Bedrock-billed executions launched; the account id is confirmed first)" -ForegroundColor Yellow
 } elseif ($Execute) {
     Write-Host "Mode: DRY RUN (`"dry_run`" is true in $ConfigFile, so -Execute applies nothing; set it to false for a real run)" -ForegroundColor Yellow
 } else {
@@ -93,8 +93,10 @@ if ($ExtraArgs.Count -gt 0) { Write-Host "Extra arguments: $($ExtraArgs -join ' 
 
 try {
     & $PythonCmd v2.6_to_v2.7_migration.py --config $ConfigFile @ExtraArgs 2>&1 | Tee-Object -FilePath $LogFile
+    # The migration's own exit code, passed through on failure.
+    $MigrationStatus = $LASTEXITCODE
 
-    if ($LASTEXITCODE -eq 0) {
+    if ($MigrationStatus -eq 0) {
         Write-Host ""
         Write-Host "Migration completed successfully." -ForegroundColor Green
         Write-Host ""
@@ -102,8 +104,14 @@ try {
             Write-Host "Next steps:" -ForegroundColor Yellow
             Write-Host "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
             Write-Host "     the workflows it lists as referencing a retired pipeline"
-            Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
-            Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+            # The migration's closing summary says when vectorBackfill was skipped on purpose.
+            if (Select-String -Path $LogFile -SimpleMatch -Quiet -Pattern "vectorBackfill: skipped: vector search is not enabled") {
+                Write-Host "  2. The vector backfill was skipped: vector search is not enabled on this deployment, so there"
+                Write-Host "     is nothing to watch"
+            } else {
+                Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
+                Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+            }
             Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
             Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
@@ -112,8 +120,9 @@ try {
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."
         }
     } else {
-        Write-Error "Migration failed. Check the logs for details."
-        exit 1
+        Write-Host "Migration failed. Check the logs for details." -ForegroundColor Red
+        Write-Host "Log file: $LogFile"
+        exit $MigrationStatus
     }
 } catch {
     Write-Error "Error running migration: $_"

@@ -71,7 +71,8 @@ function runWrapper(
     migration: ReleaseMigration,
     stubExit: number,
     args: string[] = [],
-    configBody = "{}"
+    configBody = "{}",
+    stubOutput = "stub migration output"
 ): { status: number; stdout: string } {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-migration-wrapper-"));
     try {
@@ -85,7 +86,7 @@ function runWrapper(
             'for arg in "$@"; do',
             '    if [ "$arg" = "-c" ]; then exit 0; fi',
             "done",
-            'echo "stub migration output"',
+            `echo ${JSON.stringify(stubOutput)}`,
             `exit ${stubExit}`,
             "",
         ].join("\n");
@@ -156,6 +157,28 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
         expect(stdout).toContain('"dry_run" is true in');
         expect(stdout).toContain("This was a dry run");
         expect(stdout).not.toContain("Watch the vector backfill");
+    });
+
+    it("names no vector backfill to watch when the migration skipped it", () => {
+        // The closing summary line the migration prints for a deployment without vector search.
+        const skipped = "  vectorBackfill: skipped: vector search is not enabled";
+        expect(readMigrationFile(CURRENT, CURRENT.script)).toContain(
+            "'skipped: vector search is not enabled'"
+        );
+        const { status, stdout } = runWrapper(CURRENT, 0, ["--execute"], "{}", skipped);
+        expect(status).toBe(0);
+        expect(stdout).toContain("Mode: EXECUTE");
+        expect(stdout).toContain("The vector backfill was skipped");
+        expect(stdout).not.toContain("Watch the vector backfill");
+    });
+
+    it("keeps the PowerShell wrapper's skip footer on the same summary line", () => {
+        const script = readMigrationFile(CURRENT, "run_migration.ps1");
+        expect(script).toContain(
+            'Select-String -Path $LogFile -SimpleMatch -Quiet -Pattern "vectorBackfill: skipped: vector search is not enabled"'
+        );
+        expect(script).toMatch(/\$MigrationStatus = \$LASTEXITCODE/);
+        expect(script).toMatch(/exit \$MigrationStatus/);
     });
 
     it("keeps the PowerShell wrapper's mode on the same rule", () => {
