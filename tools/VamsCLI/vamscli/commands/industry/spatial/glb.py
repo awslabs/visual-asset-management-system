@@ -174,8 +174,9 @@ def format_combine_result(data: Dict[str, Any]) -> str:
               help='[OPTIONAL, default: False] Include parent relationships')
 @click.option('--asset-create-name',
               help='[OPTIONAL] Create new asset with combined GLB')
-@click.option('--delete-temporary-files', is_flag=True, default=True,
-              help='[OPTIONAL, default: True] Delete temp files after upload (only with --asset-create-name)')
+@click.option('--delete-temporary-files/--no-delete-temporary-files', default=True,
+              help='[OPTIONAL, default: on] Delete temp files after upload (only with --asset-create-name); '
+                   '--no-delete-temporary-files keeps them')
 @click.option('--json-output', is_flag=True,
               help='[OPTIONAL] Output as JSON')
 @click.pass_context
@@ -441,8 +442,9 @@ def glbassetcombine(ctx, database_id, asset_id, local_path,
         raise click.ClickException(str(e))
     
     finally:
-        # Cleanup temp directory if not deleted and not user-provided
-        if temp_dir and not local_path and os.path.exists(temp_dir):
+        # Cleanup temp directory unless user-provided or kept with --no-delete-temporary-files
+        keep_files = local_path or (asset_create_name and not delete_temporary_files)
+        if temp_dir and not keep_files and os.path.exists(temp_dir):
             try:
                 shutil.rmtree(temp_dir)
             except Exception:
