@@ -62,7 +62,7 @@ import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../../helper/security";
 export interface EdhWorkstationsBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
-    /** Subnets with egress; the AMI build instance runs here by default. */
+    /** Subnets with egress; the AMI build instance runs here by default, and with `lambdaSubnets` "private" the Lambdas that call EDH. */
     privateSubnets: ec2.ISubnet[];
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
@@ -125,10 +125,28 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                   )
                 : undefined;
 
+        // The Lambdas that call EDH run in the subnet tier lambdaSubnets names: isolated by default, or
+        // private, whose NAT gateways reach an internet-facing EDH load balancer.
+        const inPrivateSubnets = edhConfig.lambdaSubnets === "private";
+        if (inPrivateSubnets && props.privateSubnets.length === 0) {
+            throw new Error(
+                'Configuration Error: app.addons.useEdhWorkstations.lambdaSubnets is "private", but the ' +
+                    "VAMS VPC has no private subnets to place the add-on's Lambdas in. For an imported VPC, " +
+                    "list private subnets that route through a NAT gateway in " +
+                    'app.useGlobalVpc.optionalExternalPrivateSubnetIds, or set lambdaSubnets to "isolated".'
+            );
+        }
         const network: EdhLambdaNetwork = {
             vpc: props.vpc,
-            subnets: props.isolatedSubnets,
+            subnets: inPrivateSubnets ? props.privateSubnets : props.isolatedSubnets,
             securityGroup: this.lambdaSecurityGroup,
+        };
+        // The root key sync calls no EDH route, only AWS APIs through the VPC endpoints, so it stays in
+        // the isolated subnets whatever lambdaSubnets says (it runs in the VPC only under
+        // useForAllLambdas).
+        const rootKeySyncNetwork: EdhLambdaNetwork = {
+            ...network,
+            subnets: props.isolatedSubnets,
         };
         const secrets: EdhLambdaSecrets = { rootKeySecret, caBundleSecret };
 
@@ -748,7 +766,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 syncLayer.layer,
                 props.storageResources,
                 props.config,
-                network,
+                rootKeySyncNetwork,
                 secrets
             );
             tableNameReaders.push(syncFunction);

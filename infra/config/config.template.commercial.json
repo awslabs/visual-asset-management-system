@@ -394,6 +394,7 @@
                 "edhApiCaBundleSecretArn": "",
                 "edhApiTlsServerName": "",
                 "edhClusterId": "",
+                "lambdaSubnets": "isolated",
                 "edhRootKeyAutoSync": true,
                 "autoProvisionUsers": true,
                 "edhAllowedInstanceTypes": [],

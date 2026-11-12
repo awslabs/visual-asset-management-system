@@ -19,7 +19,9 @@
  *   * the Lambdas are in the VPC because the ADD-ON is enabled, not because
  *     `useGlobalVpc.useForAllLambdas` is — the templates leave that false, and the AddonBuilder
  *     placeholder Lambda staying out of the VPC is the control that proves it. The root key sync,
- *     which calls no EDH route, follows the deployment-wide rule instead (`edhRootKeySync.test.ts`);
+ *     which calls no EDH route, follows the deployment-wide rule instead (`edhRootKeySync.test.ts`).
+ *     They run in the isolated subnets by default and in the private subnets with `lambdaSubnets`
+ *     "private" (`edhPrivateSubnetVpc.test.ts` covers the VPC that setting builds);
  *   * a Lambda is API-facing exactly when the REST API holds an invoke permission on it; every API-facing
  *     Lambda finishes inside the API Gateway integration timeout, so a request the gateway has already
  *     answered with 504 does not keep running against EDH, and every other Lambda (the launch worker; the
@@ -82,13 +84,14 @@ import {
     edhFunctions,
     enableEdh,
     enableEdhAmiBuilds,
+    enableEdhPrivateSubnets,
     inEdhStack,
 } from "./support/edhSynth";
 
-// A full-app synth is ~20 s and this file needs eleven of them (two templates, stock + hybrid, and the
+// A full-app synth is ~20 s and this file needs twelve of them (two templates, stock + hybrid, and the
 // commercial hybrid on a non-default EDH port, on an explicit :443, with a CA bundle, with AMI
-// builds on, with AMI builds on and a non-default session secret prefix, and with VPC endpoints on
-// both with and without AMI builds).
+// builds on, with AMI builds on and a non-default session secret prefix, with VPC endpoints on
+// both with and without AMI builds, and with lambdaSubnets private).
 jest.setTimeout(600_000);
 
 const EDH_TEMPLATES: TemplateName[] = ["commercial", "govcloud"];
@@ -237,6 +240,38 @@ describe("EDH add-on Lambdas", () => {
             expect(placeholder[0].properties.VpcConfig).toBeUndefined();
         }
     );
+
+    test("commercial: with lambdaSubnets private, every add-on Lambda that calls EDH is in a Private subnet behind the add-on security group", () => {
+        const s = synthTemplate("commercial", {
+            mutate: enableEdhPrivateSubnets,
+            mutateKey: "edhWorkstationsPrivateSubnets",
+        });
+        const fns = edhClientFunctions(s);
+        // Without this the loop below is satisfied by an empty set.
+        expect(fns.length).toBeGreaterThan(0);
+        for (const fn of fns) {
+            const vpcConfig = fn.properties.VpcConfig;
+            expect(vpcConfig).toBeDefined();
+            expect(vpcConfig.SubnetIds.length).toBeGreaterThan(0);
+            for (const subnetId of vpcConfig.SubnetIds) {
+                const subnet = resolveReference(s, fn.stack, subnetId);
+                expect(subnet?.type).toBe("AWS::EC2::Subnet");
+                expect([handlerOf(fn), subnet?.properties.Tags]).toEqual([
+                    handlerOf(fn),
+                    expect.arrayContaining([{ Key: "aws-cdk:subnet-type", Value: "Private" }]),
+                ]);
+            }
+            expect(SynthResult.flatten(vpcConfig.SecurityGroupIds)).toContain(
+                "EdhAddonLambdaSecurityGroup"
+            );
+        }
+        // The root key sync calls no EDH route; with useForAllLambdas false it stays out of the VPC.
+        const sync = edhFunctions(s).filter(
+            (fn) => handlerOf(fn) === "handlers.addon.edh.edhRootKeySync.lambda_handler"
+        );
+        expect(sync).toHaveLength(1);
+        expect(sync[0].properties.VpcConfig).toBeUndefined();
+    });
 
     test.each(EDH_TEMPLATES)(
         "%s: the service runs inside the gateway timeout and the launch worker for six minutes",
