@@ -405,13 +405,18 @@ paginated request per hit, so its `size` is clamped to 25; use
 
 `search_nlp` is the natural-language search: the query is embedded with the
 deployment's Amazon Bedrock model and ranked against the vector index, with or
-without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). It takes
+without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). The tool
+is registered on every deployment and does not read the switch itself: where vector
+search is off the route does not exist, and the call returns an `APIError` result
+(`No deployed API route matches POST …/search/nlp (HTTP 403)…`) instead of hits. It takes
 `database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`
 (validated against the indexed class ids, which the docstring lists),
 `file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
 and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
 means the total is a lower bound, and every total that is not zero is one,
-because the vector index uses approximate nearest-neighbour search.
+because the vector index uses approximate nearest-neighbour search, as is a zero
+total when `nlp.truncated` is `true` (a filled window, an unsearched database, or a
+database the caller may open only in part).
 `metadata_query`, `geo_search` and `tags` are
 OpenSearch-only constraints: without OpenSearch they are ignored and reported as
 the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a

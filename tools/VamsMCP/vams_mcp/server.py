@@ -986,17 +986,18 @@ def search_nlp(
     tags: Optional[List[str]] = None,
     include_segments: bool = True,
 ) -> results.NlpSearchResult:
-    """Use to find files or assets by meaning (the vector index; needs the VECTORSEARCH switch, not
+    """Use to find files or assets by meaning (vector index; needs the VECTORSEARCH switch, not
     OpenSearch). Each call embeds `query` with Amazon Bedrock and is billed.
 
     query: 1..1000 characters. database_ids: at most 100 ids. entity_type: "file" or "asset" (each
-    asset's best file). size: 1..100; there is no offset paging, so narrow the filters instead.
+    asset's best file). size: 1..100; no offset paging, so narrow the filters instead.
     file_classes: image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud,
-    splat, ifc, other. metadata_query, geo_search and tags need OpenSearch (otherwise ignored with a
+    splat, ifc, other. metadata_query, geo_search and tags need OpenSearch (else ignored with a
     warning). include_segments=False matches whole-file vectors only.
 
     Every `total` that is not zero is a LOWER BOUND (`relation` "gte"; report `total_display`):
-    approximate nearest-neighbour search can miss weak matches. `warnings`: truncated:window,
+    approximate nearest-neighbour search can miss weak matches; so is zero when nlp.truncated.
+    `warnings`: truncated:window,
     truncated:targets, databases:none_accessible (no readable database, not "no match"),
     opensearch:fields_ignored, opensearch:enrichment_failed, segments:window_full. A 503: retry later."""
     request = _build_nlp_search_request(
