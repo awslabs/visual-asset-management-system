@@ -79,6 +79,7 @@ export const DateInput: React.FC<DateInputProps> = ({
                 disabled={disabled}
                 invalid={invalid}
                 ariaLabel={ariaLabel}
+                expandToViewport={true}
             />
         </FormField>
     );

@@ -292,5 +292,126 @@ class TestIndustryCommandHierarchy:
         assert 'import' in result.output
 
 
+PLMXML_TWO_PARTS_WITH_GEOMETRY = """<?xml version="1.0" encoding="utf-8"?>
+<PLMXML xmlns="http://www.plmxml.org/Schemas/PLMXMLSchema">
+  <Product id="p1" productId="PARTA" name="Part A"/>
+  <Product id="p2" productId="PARTB" name="Part B"/>
+  <ProductRevision id="r1" masterRef="#p1" revision="A" name="Part A">
+    <AssociatedDataSet role="IMAN_Rendering" dataSetRef="#ds1"/>
+  </ProductRevision>
+  <ProductRevision id="r2" masterRef="#p2" revision="A" name="Part B">
+    <AssociatedDataSet role="IMAN_Rendering" dataSetRef="#ds2"/>
+  </ProductRevision>
+  <DataSet id="ds1" memberRefs="#f1"/>
+  <DataSet id="ds2" memberRefs="#f2"/>
+  <ExternalFile id="f1" locationRef="geometry/part_a.jt"/>
+  <ExternalFile id="f2" locationRef="geometry/part_b.jt"/>
+  <Occurrence id="o1" instancedRef="#r1"/>
+  <Occurrence id="o2" instancedRef="#r2" parentRef="#o1"/>
+</PLMXML>
+"""
+
+
+class TestIndustryPLMImportOverlappingUploads:
+    """Overlapping geometry uploads in Phase 2 leave the process streams in place."""
+
+    # The import drives these commands through ctx.invoke.
+    INVOKED_MODULES = ('assets', 'asset_links', 'search')
+
+    @pytest.fixture
+    def plm_mocks(self, generic_command_mocks):
+        from contextlib import ExitStack
+        from itertools import count
+
+        with generic_command_mocks('industry.engineering.plm.plm') as mocks, ExitStack() as stack:
+            for module in self.INVOKED_MODULES:
+                stack.enter_context(patch(f'vamscli.commands.{module}.APIClient',
+                                          return_value=mocks['api_client']))
+                stack.enter_context(patch(
+                    f'vamscli.commands.{module}.get_profile_manager_from_context',
+                    return_value=mocks['profile_manager']))
+            mocks['profile_manager'].has_feature_switch.return_value = False
+            asset_ids = count(1)
+            api = mocks['api_client']
+            api.search_simple.return_value = {'hits': {'hits': [], 'total': {'value': 0}}}
+            api.create_asset.side_effect = lambda data: {'assetId': f'asset-{next(asset_ids)}',
+                                                         'message': 'Asset created'}
+            api.create_asset_link.return_value = {'assetLinkId': 'link-1',
+                                                  'message': 'Link created'}
+            yield mocks
+
+    @pytest.fixture
+    def plm_dir(self, tmp_path):
+        plm_dir = tmp_path / 'plm_data'
+        (plm_dir / 'geometry').mkdir(parents=True)
+        (plm_dir / 'assembly.xml').write_text(PLMXML_TWO_PARTS_WITH_GEOMETRY)
+        (plm_dir / 'geometry' / 'part_a.jt').write_bytes(b'a')
+        (plm_dir / 'geometry' / 'part_b.jt').write_bytes(b'b')
+        return plm_dir
+
+    @staticmethod
+    def overlapping_upload():
+        """A stand-in for `file upload` whose two calls overlap and finish in start order.
+
+        The part_a upload starts first and returns while the part_b upload is still running,
+        the order in which per-call stream swaps restore a discarded buffer.
+        """
+        import threading
+        import click
+
+        a_started, b_started, a_left = threading.Event(), threading.Event(), threading.Event()
+
+        class UploadResult(dict):
+            def get(self, key, default=None):
+                # upload_single_files reads the result after the nested call has returned
+                if self.part == 'part_a':
+                    a_left.set()
+                return super().get(key, default)
+
+        def upload(**kwargs):
+            part = Path(kwargs['files_or_directory'][0]).stem
+            click.echo(f'nested upload output {part}')
+            click.echo(f'nested upload output {part}', err=True)
+            if part == 'part_a':
+                a_started.set()
+                b_started.wait(5)
+            else:
+                a_started.wait(5)
+                b_started.set()
+                a_left.wait(5)
+            result = UploadResult(overall_success=True)
+            result.part = part
+            return result
+
+        return upload
+
+    def test_summaries_reach_stderr_after_overlapping_uploads(self, cli_runner, plm_mocks, plm_dir):
+        from vamscli.commands.file import upload as file_upload
+
+        with patch.object(file_upload, 'callback', self.overlapping_upload()):
+            result = cli_runner.invoke(cli, [
+                'industry', 'engineering', 'plm', 'plmxml', 'import',
+                '-d', 'test-database', '--plmxml-dir', str(plm_dir), '--max-workers', '8'
+            ])
+
+        assert result.exit_code == 0, result.output
+        assert 'Files: 2 uploaded' in result.stderr
+        assert 'Geometry Files Uploaded: 2' in result.stderr
+        assert 'nested upload output' not in result.output
+
+    def test_json_output_after_overlapping_uploads(self, cli_runner, plm_mocks, plm_dir):
+        from vamscli.commands.file import upload as file_upload
+
+        with patch.object(file_upload, 'callback', self.overlapping_upload()):
+            result = cli_runner.invoke(cli, [
+                'industry', 'engineering', 'plm', 'plmxml', 'import', '-d', 'test-database',
+                '--plmxml-dir', str(plm_dir), '--max-workers', '8', '--json-output'
+            ])
+
+        assert result.exit_code == 0, result.output
+        assert 'nested upload output' not in result.stderr
+        assert '"geometry_files_uploaded": 2' in result.stdout
+
+
 if __name__ == '__main__':
     pytest.main([__file__])
