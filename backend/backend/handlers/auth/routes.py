@@ -142,7 +142,15 @@ class _DenialAuditBatch:
         pending = [None] * len(denials)
         try:
             pending = [self._denial_record(obj, act) for obj, act in denials]
-            log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            try:
+                log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            except Exception as e:
+                logger.error(f"AUDIT_LOG_AUTHORIZATION resource name not resolved: {e}")
+                log_group_name = None
+            if not log_group_name:
+                auditLogging.report_undelivered_audit_records(
+                    ResourceKeys.AUDIT_LOG_AUTHORIZATION, "logGroupUnresolved", pending)
+                return
             audit_event = {
                 'requestContext': {'authorizer': {'jwt': {'claims': {'sub': self._user}}}}
             }

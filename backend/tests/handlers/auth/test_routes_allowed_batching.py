@@ -780,7 +780,7 @@ class TestProbeDenialsThatCannotBeWritten:
         assert len(reported) == 1
         key, reason, records = reported[0]
         assert key is routes_module.ResourceKeys.AUDIT_LOG_AUTHORIZATION
-        assert reason == "unexpectedError"
+        assert reason == "logGroupUnresolved"
         assert len(records) == 2
         assert all(record.startswith("[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed]")
                    for record in records)
