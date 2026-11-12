@@ -14,21 +14,21 @@ Add-ons are different from **custom** code. Custom code is what an organization 
 VAMS core is general-purpose visual asset management built on the tier-1 AWS services listed below. Upstream functionality is built as an add-on when any of these holds:
 
 -   **It integrates an external solution**, a product or service that is deployed and run outside VAMS, from a vendor or from AWS.
--   **It depends on an AWS service outside tier 1**, such as Amazon OpenSearch Service.
+-   **It depends on an AWS service outside the tier-1 set**, such as Amazon OpenSearch Service.
 -   **It implements a use-case lens for an industry**: data models, workflows, pages or rules built for one industry's use case rather than for visual asset management in general.
 
 The tier-1 services are Amazon S3, Amazon DynamoDB, Amazon API Gateway, AWS Lambda, AWS Identity and Access Management (IAM), Amazon Cognito, Amazon CloudFront, Application Load Balancer, Amazon Route 53, Amazon Virtual Private Cloud (Amazon VPC) and its endpoints, AWS CloudFormation, AWS Key Management Service (AWS KMS), AWS Step Functions, Amazon EventBridge, Amazon Simple Queue Service (Amazon SQS), Amazon Simple Notification Service (Amazon SNS), AWS Secrets Manager, AWS Systems Manager Parameter Store, Amazon CloudWatch, AWS CloudTrail, AWS WAF and AWS Certificate Manager.
 
-These are not add-ons, even when they call an AWS service outside tier 1 or a vendor's service:
+These are not add-ons, even when they call an AWS service outside the tier-1 set or a vendor's service:
 
 -   **Viewers.** Each viewer is a plugin with its own `enabled` flag. A licensed viewer, or a viewer that belongs to an add-on, is listed in `addonViewerConfig.json` ([Viewer Plugins](../additional/viewer-plugins.md)).
--   **Processing pipelines.** Each pipeline deploys from its own nested stack and is turned on by its own `app.pipelines.*` setting ([Pipeline System Overview](../pipelines/overview.md)).
+-   **Processing pipelines.** Each pipeline deploys from its own nested stack and is turned on by its own `app.pipelines.*` setting. The pipeline system that runs them is part of this exception, including the AWS Batch and Amazon SageMaker jobs a workflow can stop and the AWS Deadline Cloud execution type (`app.pipelines.deadlineCloudExecutionTypeEnabled`) ([Pipeline System Overview](../pipelines/overview.md)).
 -   **Settings that point core at a deployment's own resources**, such as an external OAuth, SAML or OIDC identity provider, existing asset buckets, a VPC or a KMS key.
 -   **Client-side connectors** in `tools/ExternalIntegrations/`, such as the ArcGIS Pro connector and the Isaac Sim integration. They run inside the external application, call VAMS through the CLI, and deploy nothing.
 
 Every add-on has an on/off setting in the deployment configuration and is off by default.
 
-Two core features run on AWS services outside tier 1 and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), and the maps on Amazon Location Service (`app.useLocationService`). New functionality that needs either service is an add-on.
+Two core features run on AWS services outside the tier-1 set and are the exceptions to this rule: search and indexing on Amazon OpenSearch Service (`app.openSearch`), and the maps on Amazon Location Service (`app.useLocationService`). New functionality that needs either service is an add-on.
 
 ## Current add-ons
 
