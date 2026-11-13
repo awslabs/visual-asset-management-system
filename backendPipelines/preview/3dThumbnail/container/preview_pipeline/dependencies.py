@@ -441,22 +441,21 @@ def _fbx_references(path: str) -> List[tuple]:
     return references
 
 
-# The data files an XGRIDS LCC scene (``meta.lcc``) reads beside it; ``environment`` may name another.
-_LCC_SIBLINGS = ("data.bin", "index.bin", "shcoef.bin", "environment.bin")
-
-
 def _lcc_references(path: str) -> List[tuple]:
-    """The data files beside an LCC scene description, plus the environment file its JSON names."""
-    references = [(name, False, KIND_DATA_FILE) for name in _LCC_SIBLINGS]
+    """The data files beside an LCC scene description that the converter reads for it
+    (``lcc_meta.lcc_data_files``): ``index.bin`` and ``data.bin``, and ``shcoef.bin`` only for a scene
+    with spherical harmonics. ``environment.bin`` is never read for a thumbnail, so it is not fetched.
+    A description that is not JSON names the two files every scene needs; the converter then refuses
+    it."""
+    from .format_handlers import lcc_meta
+
+    meta = None
     try:
         with open(path, "rb") as handle:
             meta = json.loads(handle.read(_JSON_SCAN_LIMIT).decode("utf-8", errors="replace"))
-        environment = meta.get("environment") if isinstance(meta, dict) else None
-        if isinstance(environment, str) and (environment, False, KIND_DATA_FILE) not in references:
-            references.append((environment, False, KIND_DATA_FILE))
     except (OSError, ValueError):
         pass
-    return references
+    return [(name, False, KIND_DATA_FILE) for name in lcc_meta.lcc_data_files(meta)]
 
 
 def _lcc2_references(path: str, max_splats: Optional[int] = None) -> List[tuple]:
