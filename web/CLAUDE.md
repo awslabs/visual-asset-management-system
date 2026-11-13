@@ -101,6 +101,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
@@ -122,9 +123,54 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                              #   Compliance tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
+      compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                              #   rules: "Add rule" for all six types, the pipeline-rule input-file
+                              #   selector (mode / globs / explicit paths), the metadata-rule scope
+                              #   form (scope select, include/exclude paths, link direction + type),
+                              #   typed checks for fileStructure / versionCoverage / assetAttributes)
+                              #   + complianceSchemaRules.ts (pure pipelineRef fields/validation,
+                              #   rule-draft round-trip, example rule per type, metadata-scope
+                              #   switching/validation and check validators carrying the API's messages);
+                              #   ReasonModal.tsx (Cloudscape modal collecting a reason: mandatory to
+                              #   grant a quarantine exception or release from quarantine, `optional`
+                              #   to approve or reject a cascade); complianceStateBadge.tsx
+                              #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                              #   `exception` renders as info/blue; schemaSourceLabel says a binding is
+                              #   inherited or set on the asset; EvaluationErrorIndicator flags a
+                              #   record whose lastEvaluationStatus is `error`);
+                              #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
+                              #   version and rule results, opened from the database overview);
+                              #   ExecutionFailureReasons.tsx (a failed pipeline rule's execution failure
+                              #   reason, under the rule result, the asset tab's state and the quarantine
+                              #   reason; the API returns it only to a caller who may read the execution);
+                              #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
+                              #   and the database overview); bindingConfirmations.ts (what the
+                              #   confirmations of a database binding's Bind, Change and Remove say,
+                              #   shared by the database overview and the database editor);
+                              #   cascadeNodes.tsx (a cascade's node outcomes:
+                              #   cascadeProgress counts only verdict nodes as evaluated and the skipped ones
+                              #   by reason, CascadeNodeList / CascadeNodesModal list each node's outcome, the
+                              #   nodes the API returns only, paged and sorted in the browser;
+                              #   cascadeUnauthorizedNodes reads the API's
+                              #   unauthorizedNodes count, shown as "N nodes you cannot access", never named);
+                              #   rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                              #   compliance tables pin their inline-link Actions column last and wrap the rest);
+                              #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
+                              #   useUrlFilters(keys, pageRoute): a page reads and writes only its own
+                              #   route's URL, so a hash change to another page is not followed;
+                              #   useLatestRequest: every compliance page/dialog load drops a response that
+                              #   arrives after a later load began); listingStates.tsx (what an empty
+                              #   page of a compliance listing says: nothing recorded, nothing matches the
+                              #   filters, the page's rows not the reader's, or the end of the walk; and
+                              #   ListingLoadFailed + loadFailureMessage for a load that failed; the
+                              #   asset Compliance tab's state section shows loadFailureMessage in an
+                              #   inline error with Retry and clears the state read before);
+                              #   BreakableIdentifier.tsx (<wbr> at `_` and
+                              #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -135,7 +181,12 @@ web/
                                 #   one file / many) to workflow input files
                                 #   executionLinks.ts — workflow-execution provenance → execution
                                 #   detail route + the Tier-1 route the link is gated on
-      list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
+      list/                   # TableList.tsx (the standard list page: search + refresh left, filters
+                              #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
+                              #   toolbar for a page with its own Table, 7.6); tableSorting.ts (column
+                              #   comparators byText/byDate/byNumber, useSortedItems for a page the server
+                              #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
+      loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -147,6 +198,24 @@ web/
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
       Subscription/ Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      # A record action on them or on the asset Compliance tab (release, exception grant/revoke,
+      # Evaluate, bind/change/remove, cascade approve/reject) re-reads what the page shows after
+      # its outcome, success OR refusal (`finishAction`), and keeps the refusal in its own alert
+      # (`actionError`), apart from the load error each re-read clears (D162). A database binding
+      # change answers 202 and is applied in the background (D161): DatabaseCompliance.tsx shows
+      # the binding read's `apply` (short status label + ProgressBar), re-reads the binding with
+      # `bindingApplyPollDelay` backoff while it is `applying`, disables Bind/Change/Remove and
+      # Evaluate All while it is applying or stalled, and offers Resume (the same request) to a
+      # caller with the route for a stalled one; the API decides each request. Its evaluations
+      # phase (`evaluationStatus` queueing/stalled) shows its own line and holds no control.
+      # Bind, Change and Remove each open a confirmation first (bindingConfirmations.ts). Each
+      # page's toolbar is ListToolbar (7.6); every sortable column sorts, the server-paged lists
+      # the page shown (useSortedItems), the schemas page its whole list (useBrowserPagedItems).
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
@@ -171,7 +240,8 @@ web/
       utils/                  # utils.ts fileSize.ts
 
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/Navigation.tsx   # Left sidebar navigation
 
     utils/
@@ -266,6 +336,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — compliance schemas, bindings, evaluations, quarantine, cascades, audit trail (paged listings return `nextToken`)
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 -   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
@@ -871,6 +942,33 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 
 A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do: without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
+### 7.6 List Toolbar: Search, Refresh and Filters
+
+Every list page lays out the toolbar it passes as the Cloudscape Table's `filter` the same way: **the search field on the left with the refresh button right next to it, and the filter drop-downs aligned to the right of the table.** When the filters do not fit beside the search (on a narrow screen, or a page with many filters such as the compliance Audit Log), they wrap onto a line of their own and stay aligned to the right. The refresh is an icon button whose `ariaLabel` names what it reloads; it sits in the toolbar, not in the header actions, and a list without a search keeps it at the toolbar's left.
+
+`components/list/TableList.tsx` lays out its own filter slot this way. A page with its own `Table` uses `components/list/ListToolbar.tsx`, which has the same layout and keeps a wrapped filter line at the right:
+
+```tsx
+<Table
+    filter={
+        <ListToolbar
+            search={<TextFilterInput value={filters.text} onCommit={...} ariaLabel="Search ..." />}
+            onRefresh={loadData}
+            refreshing={loading}
+            refreshLabel={`Refresh quarantined ${Synonyms.assets}`}
+            filters={<DatabaseFilter value={filters.databaseId} onChange={...} />}
+        />
+    }
+    items={sortedItems}
+    {...sortingProps}
+/>
+```
+
+**Column sorting.** A column that offers sorting must sort. Wire `sortingColumn`, `sortingDescending` and `onSortingChange` with `components/list/tableSorting.ts`, or remove the column's `sortingField`. Keep the `sortingField` (the table matches the sorted column by it) and give the column a `sortingComparator` from the same module, so a date sorts by its value (`byDate`), a status by the label it shows (`byText` over the label) and text with case ignored and its numbers by value (`byText`).
+
+-   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
+-   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -1318,6 +1416,9 @@ When in doubt about patterns, reference these well-structured files:
 | Synonyms config      | `src/synonyms.tsx`                                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
+| List page and table  | `src/components/list/TableList.tsx`               |
+| List toolbar         | `src/components/list/ListToolbar.tsx`             |
+| Column sorting       | `src/components/list/tableSorting.ts`             |
 
 ---
 
@@ -1361,9 +1462,10 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per section 7.6
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add navigation item in `src/layout/Navigation.tsx`
 
 ### Adding a new API call
 
