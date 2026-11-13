@@ -8,7 +8,7 @@ You are scaffolding a new VAMS processing pipeline. Follow `backendPipelines/CLA
 
 ### Step 1: Gather Requirements
 
-**Which lane.** Pipelines are not add-ons: an upstream pipeline uses the core steps below. A pipeline that integrates an external solution, such as a vendor's processing service, is still added as a pipeline, gated by its own `app.pipelines.*` switch; the add-on lane (`documentation/docusaurus-site/docs/developer/addons-overview.md`) is for the integrations under `infra/lib/nestedStacks/addon/` and the add-on viewers. A fork follows fork mode.
+**Which lane.** Pipelines are not add-ons: an upstream pipeline uses the core steps below. A pipeline that integrates an external solution, such as a vendor's processing service, is still added as a pipeline, gated by its own `app.pipelines.*` switch; the add-on lane (root `CLAUDE.md` "Core, add-on and custom", `documentation/docusaurus-site/docs/developer/addons-overview.md`) is for the functionality that rule classifies as an add-on, built under `infra/lib/nestedStacks/addon/`, and the add-on viewers. A fork follows fork mode.
 
 **Fork mode.** Steps 5–8 below edit core files (`pipelineBuilder-nestedStack.ts`, `vpcBuilder-nestedStack.ts`, `config.ts` and the config templates), which conflict on every upstream merge. When the pipeline is being added in a **fork** of VAMS rather than contributed upstream, prefer an approach that edits none of them: deploy the pipeline as its own stack and register it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges` in `deployment/configuration-reference.md`), which resolves the orchestration bus, workflow role and `vamsSchema` import function from SSM at its own deploy time. The custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam: it does not depend on the stack that builds the `vamsSchema` import function, and a Batch/ECS/Fargate pipeline also needs the core VPC builder condition blocks (Step 7). See `documentation/docusaurus-site/docs/developer/customizing-vams.md`. The backend layout, `assetId` threading and output-path rules apply unchanged.
 
@@ -408,6 +408,7 @@ After creating all files, verify:
 -   [ ] Step Functions state machine references correct Lambda ARNs
 -   [ ] Container Dockerfile builds successfully
 -   [ ] Container Dockerfile drops to a non-root `USER`, and every `COPY` of source that user reads is followed on the next line by `RUN chmod -R a+rX <path>` (`COPY --chown` alone is not sufficient)
+-   [ ] Before `USER`, the Dockerfile gives that user every folder the container writes at run time, including the working directory of each subprocess it starts (upstream tools write relative to it). A working directory that holds root-owned upstream sources gets the user's group and mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`) rather than a `chown`; see `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes"
 -   [ ] Config flag name matches between config.json, config templates, config.ts interface, and the pipelineBuilder check
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts

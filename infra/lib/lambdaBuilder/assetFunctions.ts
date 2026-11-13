@@ -46,14 +46,6 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
-/**
- * Auxiliary-bucket prefix the asset export service stages an over-size export payload under
- * before handing back a presigned URL for it. Mirrors EXPORT_STAGING_PREFIX in
- * backend/backend/handlers/assets/assetExportService.py — the export function's S3 grant is
- * scoped to this prefix, so the two values move together.
- */
-export const ASSET_EXPORT_STAGING_PREFIX = "assetExports/";
-
 export function buildCreateAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -630,7 +622,7 @@ export function buildAssetExportService(
         new iam.PolicyStatement({
             actions: ["s3:PutObject", "s3:GetObject"],
             resources: [
-                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${ASSET_EXPORT_STAGING_PREFIX}*`,
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${Config.ASSET_EXPORT_STAGING_PREFIX}*`,
             ],
         })
     );

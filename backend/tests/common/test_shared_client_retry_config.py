@@ -112,6 +112,10 @@ DELIBERATE_DEPARTURES = {
     # Best-effort Location Service key lookup on the /secure-config path: bounded so a VPC with no
     # route to the service degrades to an empty map URL inside the API Gateway integration timeout.
     ("handlers/config/configService.py", "geo_lookup_config"),
+    # The audit flush client writes a request's buffered audit records before the response: bounded
+    # timeouts and three attempts under the flush deadline; a record it cannot confirm goes to the
+    # function log as an undelivered record instead of holding the response.
+    ("customLogging/auditLogging.py", "flush_client_config"),
 }
 
 

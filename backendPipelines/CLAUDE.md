@@ -149,7 +149,7 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 -   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
--   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
 
 ## Parsing XML From Uploaded Files
@@ -443,6 +443,15 @@ manifest inputFiles[].versionId
     development image's parsing (`backendPipelines/tests/fixtures/pre994/`, blob ids pinned in
     `test_pipeline_input_version_upgrade_window.py`, which also fails a new `StageInput.versionId`
     image that is not listed).
+-   **Another launch value for a strict-dataclass image goes in that same second element**, never in
+    the definition, and the element then always carries `inputVersions` (`{}` without a version): an
+    image built since the field passes the element through `apply_input_versions`, which refuses a
+    document without that key and ignores any other. 3dThumbnail carries its execution results folder
+    this way, `{"inputVersions": {...}, "outputResults": {"bucketName", "objectDir"}}`, read by
+    `objects.results_location`; an older image ignores it and an older Lambda's command names none.
+    `preview/3dThumbnail/lambda/tests/test_thumbnail_results_location.py` feeds the new command to
+    both older images (`fixtures/pre994/` and `fixtures/pre1415/`, the latter the image's `objects.py`
+    at development 8cddbe3f6, blob id pinned there).
 -   **A version deleted after launch fails the run** naming the file and the version (`NoSuchVersion`/`NoSuchKey`,
     or a bare 404 or 405 on a HEAD); any other error keeps its own message. Never fall back to the current object.
 -   **Only the selected input.** Files the input references (glTF buffers, OBJ materials, splat chunks, USD
@@ -1346,6 +1355,35 @@ files. `COPY --chown=<user>` is NOT sufficient — it makes the file readable by
 mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfile` and
 `conversion/coordinateTransform/container/Dockerfile`.
 
+## A Non-Root Container Owns Every Folder It Writes, Including Its Subprocesses' Working Directory
+
+The read bits above are half of the non-root rule. The other half: before `USER`, the Dockerfile
+gives that user every folder the container writes at run time. That covers the entrypoint's own
+output folders and the working directory of every subprocess it starts, because upstream tools write
+relative to it, both into folders they create there and as plain files. Folders under `/tmp` and
+`$HOME` are fine (Ubuntu's `/tmp` is `1777`; the image creates `$HOME` for the user). A folder the
+base image copied root-owned is not. When that folder also holds upstream sources the user must not
+change, do not `chown` it: give it the user's group and mode `1775` (`chgrp <group> <dir> && chmod
+1775 <dir>`, the `/tmp` model), so the user can create entries in it while the sticky bit stops it
+renaming or deleting the root-owned ones. A write the base image cannot hold fails only at run time:
+the image builds green and the job starts before the `PermissionError: [Errno 13]`.
+
+The Isaac Lab image is the example (#1312). `__main__.py` runs Isaac Lab's `train.py` and `play.py`
+with `cwd=/workspace/isaaclab`, which `nvcr.io/nvidia/isaac-lab:2.3.0` copies root-owned `0755`.
+Hydra creates its run folder at `outputs/<date>/<time>` relative to that directory, `train.py` writes
+its run under `logs/<library>/...`, and the AutoMate tasks download their asset JSON and meshes into
+`./` while the environment is built. The image creates `logs` and `outputs` for the user and makes
+`/workspace/isaaclab` itself group `vams`, mode `1775`; `isaaclab.sh`, `scripts/` and `source/` stay
+root-owned. Paths a tool derives from an input count too: `play.py` writes its video beside the
+`--checkpoint` it is given (rl_games and skrl one folder above it), so the container downloads the
+policy two folders below its owned log root (`EVALUATION_POLICY_PATH`) and creates that folder first.
+`simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py` reads the working
+directory from the pipeline's own `subprocess.run` call, parses the Dockerfile's `mkdir`, `chown`,
+`chgrp` and `chmod` lines before `USER`, and fails when a write is not possible as the runtime user,
+when the working directory is group-writable without the sticky bit, or when the Dockerfile's
+`ISAAC_LAB_VERSION` differs from the Isaac Lab release the modelled write paths were read from. Copy
+it for a new container that runs an upstream tool as a non-root user.
+
 ## Adding a New Processing Pipeline
 
 **In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
@@ -1460,6 +1498,10 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
    `COPY` preserves the build host's umask, and a hardened host's root-owned `600`/`640` files raise
    `PermissionError` at import under the non-root user, invisible to the build. See
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
+   Before `USER` it also gives that user every folder it writes at run time, including the working
+   directory of each subprocess it starts (a working directory that holds root-owned upstream
+   sources becomes the user's group with mode `1775`, not `chown`ed). See
+   [A Non-Root Container Owns Every Folder It Writes](#a-non-root-container-owns-every-folder-it-writes-including-its-subprocesses-working-directory).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
    `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
