@@ -287,6 +287,20 @@ class TestUploadStatusRoute:
         assert response["statusCode"] == 404
         assert json.loads(response["body"]) == {"message": "Upload not found"}
 
+    def test_a_read_records_its_request_and_a_refusal_records_nothing(self, uploads, monkeypatch):
+        # Audit contract: a read records what was asked, after it succeeded.
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/big.e57"], False)
+        recorder = MagicMock()
+        monkeypatch.setattr(uf, "log_action", recorder)
+        assert _get(monkeypatch, uploads)["statusCode"] == 200
+        recorder.assert_called_once()
+        assert recorder.call_args.args[1] == "uploadStatusGet"
+        assert recorder.call_args.kwargs == {"database_id": DB, "asset_id": ASSET,
+                                             "request_parameters": {"uploadId": UPLOAD}}
+        recorder.reset_mock()
+        assert _get(monkeypatch, uploads, obj=False)["statusCode"] == 404
+        recorder.assert_not_called()
+
     def test_the_object_check_runs_before_the_record_is_read(self, uploads, monkeypatch):
         table = MagicMock()
         _get(monkeypatch, table, obj=False)

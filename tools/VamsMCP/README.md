@@ -123,7 +123,6 @@ secrets** — just the command:
                 "list_assets",
                 "get_asset",
                 "list_asset_files",
-                "get_upload_status",
                 "get_file_info",
                 "get_asset_metadata",
                 "get_database_metadata",
@@ -188,7 +187,7 @@ call it, or why none does, or that it is not exposed yet.
 
 `vams_status`, `list_features`, `list_allowed_api_routes`, `list_api_routes`,
 `list_constraint_permission_objects`, `list_databases`, `get_database`, `list_buckets`,
-`list_assets`, `get_asset`, `list_asset_files`, `get_upload_status`, `get_file_info`, `get_asset_metadata`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_asset_metadata`,
 `get_database_metadata`, `list_asset_versions`, `get_asset_version`, `get_asset_history`,
 `get_asset_links`, `export_asset`,
 `search_assets`, `search_files`, `get_search_fields`, `list_workflows`,

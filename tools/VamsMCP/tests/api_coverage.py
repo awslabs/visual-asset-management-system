@@ -203,6 +203,7 @@ EXCLUDED = {
     # --- Upload ---
     "initialize_upload": _UPLOAD,
     "complete_upload": _UPLOAD,
+    "get_upload_status": "the status of a CLI upload's files over 1 GiB; vamscli file upload reports it",
     # --- Administration ---
     "list_cognito_users": _ADMIN,
     "create_cognito_user": _ADMIN,

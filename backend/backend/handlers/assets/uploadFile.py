@@ -45,7 +45,7 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload, audited_handler
+from customLogging.auditLogging import audited_handler, log_action, log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
@@ -2967,7 +2967,10 @@ def get_upload_status(event):
         Key={'uploadId': request_model.uploadId, 'assetId': request_model.assetId}).get('Item')
     if not record or record.get('databaseId') != request_model.databaseId:
         return not_found
-    return success(body=UploadStatusResponseModel(**uploadStatus.status_view(record)).dict())
+    body = UploadStatusResponseModel(**uploadStatus.status_view(record)).dict()
+    log_action(event, "uploadStatusGet", database_id=request_model.databaseId,
+               asset_id=request_model.assetId, request_parameters={"uploadId": request_model.uploadId})
+    return success(body=body)
 
 
 #######################

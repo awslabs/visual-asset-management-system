@@ -69,7 +69,7 @@ from common.s3MetadataKeys import (
     replace_metadata_copy_args,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import audited_handler, log_file_upload
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="LargeObjectCopy")
@@ -989,6 +989,7 @@ def output_step(event, context=None):
     raise ValueError("Unknown output step operation")
 
 
+@audited_handler
 def lambda_handler(event, context):
     event = event or {}
     if event.get("action") == loc.ACTION_OUTPUT_STEP:
