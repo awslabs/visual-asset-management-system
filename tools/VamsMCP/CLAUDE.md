@@ -96,6 +96,9 @@ tools/VamsMCP/
     test_remote_auth.py      # TokenVerifier rules (Cognito, external IdP, keys) and the auth file
     test_remote_mode.py      # remote start-up rules, per-request client, CLI log silenced, budget
     test_setup_remote.py     # `vams-mcp setup-remote`
+    test_search_nlp_remote.py
+                             # search_nlp in the consumer and operator sets only; in remote mode each
+                             # user's token reaches /search/nlp, and an error never shows it
     api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
                              # it, an exclusion with its reason, or a not-yet-exposed gap (Rule 15)
     test_api_coverage.py     # the manifest against APIClient and the tools' client.api calls
