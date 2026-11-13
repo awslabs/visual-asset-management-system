@@ -12,6 +12,7 @@ import {
     openFileManager,
     selectTreePath,
     signInAs,
+    treeNode,
 } from "./support/fixtures";
 
 /**
@@ -402,19 +403,36 @@ test.describe("Download as Zip", () => {
 
         await openFileManager(page, ref!.databaseId, ref!.assetId);
         await page.getByText("Show archived files").click();
+        // The tree reloads with the archived files. Select only once it lists the archived one and
+        // its requests are done, so the reload cannot replace the selection, or the Export menu,
+        // under the clicks below (#1125 D32).
+        const archivedName = ref!.archivedKey.split("/").filter(Boolean).pop()!;
+        await expect(treeNode(page, archivedName)).toBeVisible({ timeout: 60_000 });
+        await page.waitForLoadState("networkidle").catch(() => undefined);
         // A selection with a folder (here the asset root) offers Export > Download as Zip.
         await selectTreePath(page, ref!.rootName);
         await selectTreePath(page, ref!.archivedKey, { modifiers: ["Control"] });
+        const row = (name: string) => treeNode(page, name).locator("xpath=..");
+        await expect(row(ref!.rootName)).toHaveClass(/\bselected\b/);
+        await expect(row(archivedName)).toHaveClass(/\bselected\b/);
         const exportButton = page.getByRole("button", { name: "Export" }).first();
         await expect(exportButton).toBeVisible({ timeout: 30_000 });
-        await exportButton.click();
-        const zipItem = page.getByRole("menuitem", { name: /Download as Zip/ });
-        test.skip(
-            (await zipItem.getAttribute("aria-disabled")) === "true",
-            "The role may not create zip downloads"
-        );
-        await zipItem.click();
         const dialog = page.getByRole("dialog").filter({ hasText: "Download as Zip" });
+        // Open the menu and pick the item, locating it afresh on each attempt: the menu re-renders
+        // while the selection's state settles, so a handle taken earlier can be detached.
+        let disabled = false;
+        await expect(async () => {
+            const zipItem = page.getByRole("menuitem", { name: /Download as Zip/ });
+            if (!(await zipItem.isVisible())) await exportButton.click();
+            await expect(zipItem).toBeVisible({ timeout: 5_000 });
+            if ((await zipItem.getAttribute("aria-disabled")) === "true") {
+                disabled = true;
+                return;
+            }
+            await zipItem.click({ timeout: 5_000 });
+            await expect(dialog).toBeVisible({ timeout: 5_000 });
+        }).toPass({ timeout: 45_000 });
+        test.skip(disabled, "The role may not create zip downloads");
         await expect(dialog.getByText("This selection can't be downloaded as a zip")).toBeVisible();
         await expect(dialog.getByRole("list", { name: "Archived or deleted items" })).toContainText(
             ref!.archivedKey
