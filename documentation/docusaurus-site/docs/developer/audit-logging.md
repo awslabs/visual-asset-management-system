@@ -66,7 +66,7 @@ A data-level denial inside a handler records the action and the object that was 
 
 A data-level check made outside an audit context (a worker thread) keeps the earlier record: `{"action": <method>, "obj": ...}` and an echo of the user ID only (`{"requestContext": {"authorizer": {"jwt": {"claims": {"sub": ...}}}}}`).
 
-**Behavior change to review ([#1434](https://github.com/awslabs/visual-asset-management-system/issues/1434)).** Before v2.7.0 the API-level authorization record and the error records echoed the full masked request, body included, and the authorization payload's `action` was the HTTP method. A SIEM parser that read request body fields from those echoes must read the [action record](#action-records) of the same `request.requestId` instead, and one that read the method from `action` must read `legacy.action` (or `request.method`).
+**Behavior change to review ([#1434](https://github.com/awslabs/visual-asset-management-system/issues/1434)).** Before v2.7.0 the API-level authorization record, the API authorizer's own authorization record, the error records and the auth change and auth other records echoed the full masked request (the authorizer's record its request headers and `methodArn`), body included, and the authorization payload's `action` was the HTTP method. A SIEM parser that read request body or header fields from those echoes must read the [action record](#action-records) of the same `request.requestId` instead, and one that read the method from `action` must read `legacy.action` (or `request.method`).
 
 #### Permission Probe Records
 
