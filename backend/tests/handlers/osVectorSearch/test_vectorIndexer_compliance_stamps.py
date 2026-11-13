@@ -48,7 +48,8 @@ def _stamp_record(module, source, database_key="db1"):
              "lastChangeSource": {"S": source}, "lastChangeAt": {"S": "2026-03-01T12:00:01+00:00"},
              "lastChangeRecordedAt": {"S": "2026-03-01T12:00:02.000001+00:00"}, **STAMPS[source]}
     return {"eventSource": "aws:dynamodb", "eventName": "MODIFY",
-            "eventSourceARN": f"arn:aws:dynamodb:us-east-1:1:table/{module.asset_storage_table_name}/stream/x",
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:1:table/" + module.asset_storage_table_name
+                              + "/stream/x",
             "dynamodb": {"Keys": keys, "NewImage": image, "SequenceNumber": "7"}}
 
 
