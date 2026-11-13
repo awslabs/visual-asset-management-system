@@ -351,8 +351,9 @@ def _request_path(endpoint: str) -> str:
     """The endpoint as it is joined onto the base URL, refused before any request when its path has an
     empty, '.' or '..' segment, a control character, '?' or '#', raw or percent-encoded where
     decoding applies: the join drops an empty segment, resolves a dot segment (requests decodes an
-    encoded dot first) and removes some control characters, and a '?' or '#' ends the path, so a
-    path value carrying one would address another route. Query parameters go in `params`."""
+    encoded dot first) and changes a path that contains a control character, and a '?' or '#' ends
+    the path, so a path value carrying one would address another route. Query parameters go in
+    `params`."""
     path = endpoint.lstrip('/')
     if '?' in path or '#' in path:
         raise InvalidRequestPathError(
@@ -1624,7 +1625,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def revert_file_version(self, database_id: str, asset_id: str, version_id: str, revert_data: Dict[str, Any]) -> Dict[str, Any]:
         """Revert a file to a previous version."""
         try:
-            endpoint = route_path(API_REVERT_FILE_VERSION, databaseId=database_id, assetId=asset_id, versionId=version_id)
+            endpoint = route_path(
+                API_REVERT_FILE_VERSION, databaseId=database_id, assetId=asset_id, versionId=version_id)
             response = self.post(endpoint, data=revert_data, include_auth=True)
             return response.json()
             
@@ -2499,7 +2501,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = route_path(API_REVERT_ASSET_VERSION, 
+            endpoint = route_path(
+                API_REVERT_ASSET_VERSION,
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
@@ -2640,7 +2643,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = route_path(API_GET_ASSET_VERSION, 
+            endpoint = route_path(
+                API_GET_ASSET_VERSION,
                 databaseId=database_id, 
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
@@ -2695,7 +2699,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = route_path(API_ASSET_VERSION_BY_ID, 
+            endpoint = route_path(
+                API_ASSET_VERSION_BY_ID,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2749,7 +2754,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = route_path(API_ASSET_VERSION_ARCHIVE, 
+            endpoint = route_path(
+                API_ASSET_VERSION_ARCHIVE,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -2803,7 +2809,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             APIError: When API call fails
         """
         try:
-            endpoint = route_path(API_ASSET_VERSION_UNARCHIVE, 
+            endpoint = route_path(
+                API_ASSET_VERSION_UNARCHIVE,
                 databaseId=database_id,
                 assetId=asset_id,
                 assetVersionId=asset_version_id
@@ -3783,7 +3790,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AuthenticationError: When authentication fails
         """
         try:
-            endpoint = route_path(API_METADATA_SCHEMA_BY_ID, 
+            endpoint = route_path(
+                API_METADATA_SCHEMA_BY_ID,
                 databaseId=database_id,
                 metadataSchemaId=metadata_schema_id
             )
@@ -3938,7 +3946,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import MetadataSchemaDeletionError, MetadataSchemaNotFoundError
 
-        endpoint = route_path(API_METADATA_SCHEMA_BY_ID, 
+        endpoint = route_path(
+            API_METADATA_SCHEMA_BY_ID,
             databaseId=database_id,
             metadataSchemaId=metadata_schema_id
         )
@@ -4503,7 +4512,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def get_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Get a template (config body rehydrated). GET .../templates/{templateId}."""
         try:
-            endpoint = route_path(API_PIPELINE_TEMPLATE, 
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4543,7 +4553,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                  body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a template. PUT .../templates/{templateId}."""
         try:
-            endpoint = route_path(API_PIPELINE_TEMPLATE, 
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -4562,7 +4573,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_pipeline_template(self, database_id: str, pipeline_id: str, template_id: str) -> Dict[str, Any]:
         """Delete a template. DELETE .../templates/{templateId}."""
         try:
-            endpoint = route_path(API_PIPELINE_TEMPLATE, 
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4582,7 +4594,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                          template_id: str) -> Dict[str, Any]:
         """Get a template's tag schema. GET .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = route_path(API_PIPELINE_TEMPLATE_TAG_SCHEMA, 
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE_TAG_SCHEMA,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
@@ -4600,7 +4613,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                                          fields: list) -> Dict[str, Any]:
         """Set (replace) a template's tag schema. PUT .../templates/{templateId}/tagSchema."""
         try:
-            endpoint = route_path(API_PIPELINE_TEMPLATE_TAG_SCHEMA, 
+            endpoint = route_path(
+                API_PIPELINE_TEMPLATE_TAG_SCHEMA,
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
             return self._pwe_request('PUT', endpoint, data={'fields': fields})
         except requests.exceptions.HTTPError as e:
@@ -4741,7 +4755,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         trigger.
         """
         try:
-            endpoint = route_path(API_WORKFLOW_TRIGGER, 
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=trigger_type)
             return self._pwe_request('GET', endpoint)
@@ -4760,7 +4775,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                              body: Dict[str, Any]) -> Dict[str, Any]:
         """Set (create/replace) a workflow trigger. PUT .../triggers/{triggerType}."""
         try:
-            endpoint = route_path(API_WORKFLOW_TRIGGER, 
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=trigger_type)
             return self._pwe_request('PUT', endpoint, data=body)
@@ -4780,7 +4796,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     def delete_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
         """Delete a workflow trigger. DELETE .../triggers/{triggerType}."""
         try:
-            endpoint = route_path(API_WORKFLOW_TRIGGER, 
+            endpoint = route_path(
+                API_WORKFLOW_TRIGGER,
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=trigger_type)
             return self._pwe_request('DELETE', endpoint)
@@ -4801,7 +4818,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                          body: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a workflow (asset-less, multi-file). POST /workflows/{workflowDatabaseId}/{workflowId}/execute."""
         try:
-            endpoint = route_path(API_EXECUTE_WORKFLOW, 
+            endpoint = route_path(
+                API_EXECUTE_WORKFLOW,
                 workflowDatabaseId=workflow_database_id, workflowId=workflow_id)
             return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
@@ -6773,7 +6791,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = route_path(API_COMMENTS_ASSET_VERSION, 
+        endpoint = route_path(
+            API_COMMENTS_ASSET_VERSION,
             assetId=asset_id, assetVersionId=asset_version_id)
         params = self._comment_pagination_params(max_items, page_size, starting_token)
         if show_archived:

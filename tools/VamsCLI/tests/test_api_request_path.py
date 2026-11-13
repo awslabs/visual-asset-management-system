@@ -1,8 +1,8 @@
 """`_make_request` refuses a request path that would address another route before anything is sent.
 
-`_make_request` joins the endpoint onto the base URL. The join resolves a '.' or '..' segment, drops
-an empty one and removes tab, LF and CR, requests decodes a percent-encoded dot before sending, and a
-'?' or '#' ends the path. So a path value of any method carrying such a segment or character would
+`_make_request` joins the endpoint onto the base URL. The join resolves a '.' or '..' segment and drops
+an empty one, requests decodes a percent-encoded dot before sending, and a '?' or '#' ends the path.
+So a path value of any method carrying such a segment or character would
 address another route (an API key's among them). Such a path raises `InvalidRequestPathError` before
 any request, whichever method built it. `route_path` puts each value into its own segment, so a '/',
 '?', '#' or '%' in a value is sent percent-encoded to the route the method names.
@@ -162,8 +162,8 @@ def _refusal(error):
 
 
 class TestRequestPathHasNoControlCharacter:
-    """The join removes tab, LF and CR before it resolves dot segments, so `.<TAB>.` would be sent as
-    `..`; every control character is refused, raw or percent-encoded."""
+    """A request path that contains a control character, raw or percent-encoded, is refused before
+    anything is sent."""
 
     @pytest.mark.parametrize("verb", ["GET", "PUT", "DELETE"])
     @pytest.mark.parametrize(
@@ -302,7 +302,7 @@ class TestPathValueStaysInItsOwnSegment:
     def test_the_ratchet_sees_the_package(self):
         # Control: the walk above reads the client and finds its route_path calls.
         source = (Path(constants.__file__).parent / "utils" / "api_client.py").read_text(encoding="utf-8")
-        assert len(re.findall(r"\broute_path\(API_", source)) > 90
+        assert len(re.findall(r"\broute_path\(\s*API_", source)) > 90
 
 
 class TestAssetIdEndingInHash:
