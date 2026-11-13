@@ -736,8 +736,8 @@ aws bedrock get-foundation-model --region <region> \
   --model-identifier anthropic.claude-sonnet-5-5 --query modelDetails.modelLifecycle
 ```
 
--   **Commercial (`aws`):** a `global.` profile routes requests to any commercial Region. A geographic profile (`us.`, `eu.`, `apac.`) keeps inference inside that geography. A plain foundation-model id runs in the deployment Region only.
--   **AWS GovCloud (US) (`aws-us-gov`):** use a `us-gov.` inference profile or a foundation-model id offered in `us-gov-west-1`. Configuration validation rejects the commercial `global.` and `us.` prefixes. The pipeline cannot run in `us-gov-east-1`, which has no Amazon Rekognition.
+-   **Commercial (`aws`):** a `global.` profile routes requests to any commercial Region, and a plain foundation-model id runs in the deployment Region only. A geographic profile (`us.`, `eu.`, `apac.`) keeps inference inside that geography, but the pipeline can refuse it (below).
+-   **AWS GovCloud (US) (`aws-us-gov`):** use a foundation-model id offered on demand in `us-gov-west-1`; the pipeline can refuse a `us-gov.` inference profile (below). Configuration validation rejects the commercial `global.` and `us.` prefixes. The pipeline cannot run in `us-gov-east-1`, which has no Amazon Rekognition.
 -   **AWS European Sovereign Cloud (`aws-eusc`):** the pipeline cannot run in this partition, which has no Amazon Rekognition.
 
 Choose a `global.` profile or a foundation-model id offered on demand in the deployment Region. The pipeline's IAM grant covers the model in the deployment Region and the global profile's model only, so a geographic profile (`us.`, `eu.`, `apac.`, `us-gov.`) can be refused when a request is routed to another Region ([#1390](https://github.com/awslabs/visual-asset-management-system/issues/1390)).

@@ -430,7 +430,7 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 
 **Cause:**
 
-A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue before v2.6.7, AWS Lambda recursive loop detection caused this in the commercial partition under sustained parallel uploads; the bucket-sync Lambda's `RecursiveInvocationsDropped` metric is above zero when that was the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue in the commercial partition and the AWS European Sovereign Cloud, AWS Lambda recursive loop detection is a cause when the bucket-sync Lambda's recursive loop setting is not `Allow`; its `RecursiveInvocationsDropped` metric is above zero when that is the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
