@@ -131,6 +131,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: A fork that adds routes in `backend/backend/custom/customApiRoutes.py` must give each route-method an entry in `backend/backend/custom/customAuditActions.py` (an action, or an exemption with a reason); otherwise `tests/common/test_audit_registry.py` fails after the upgrade. ([#1433](https://github.com/awslabs/visual-asset-management-system/issues/1433))
     -   Note: A write record now carries the values it wrote (descriptions, comment text, metadata values, subscriber IDs), after the existing credential redaction, so review who can read the actions log group. The records of roles, user roles, constraints, API keys and Amazon Cognito users keep their current shape for now. ([#1433](https://github.com/awslabs/visual-asset-management-system/issues/1433))
     -   Note: A fork's own Lambda entrypoints under `backend/backend/handlers/` must open the request audit context (`@audited_handler`), or be listed with a reason in `AUDIT_ENTRYPOINT_EXEMPT`; the registry test fails otherwise. ([#1433](https://github.com/awslabs/visual-asset-management-system/issues/1433))
+-   **Backend/Audit** The allowed authorization record of an API call is written with the request's other audit records when the handler returns, so a request no longer pays a separate audit write for it; authorization denials are still written at once and the record itself is unchanged. ([#1434](https://github.com/awslabs/visual-asset-management-system/issues/1434))
 
 ### Bug Fixes
 
