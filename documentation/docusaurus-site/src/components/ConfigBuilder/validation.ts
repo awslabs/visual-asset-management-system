@@ -781,6 +781,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         fieldPaths: ["app.pipelines.useGenAiCadStepAgent.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
+    {
+        id: "vpc-required-pipelines-use-zip-downloads",
+        label: "pipelines.useZipDownloads",
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useZipDownloads.enabled"),
+    },
     ...ADDON_VPC_REQUIRING_FEATURES,
 ];
 
@@ -3464,6 +3470,77 @@ const CORE_RULES: Rule[] = [
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
 
+    // ----- Download as Zip
+    // (config.ts: "app.pipelines.useZipDownloads.<key> must be a whole number of",
+    // "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16", "is not an AWS Fargate memory size") -----
+    {
+        id: "zip-downloads-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.pipelines.useZipDownloads.enabled must be true or false.",
+    },
+    {
+        id: "zip-downloads-use-codebuild-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.useCodeBuild"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.useCodeBuild");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message: "app.pipelines.useZipDownloads.useCodeBuild must be true or false.",
+    },
+    ...(
+        [
+            ["maxFilesPerRequest", 1, 1000000, "files"],
+            ["maxTotalBytesPerRequest", 1, 5497558138880, "bytes"],
+            ["maxActiveRequestsPerUser", 1, 100, "jobs"],
+            ["computeVcpu", 4, 16, "vCPU"],
+            ["computeMemoryGiB", 8, 120, "GiB"],
+        ] as Array<[string, number, number, string]>
+    ).map(([key, min, max, unit]) => ({
+        id: `zip-downloads-${key}-range`,
+        severity: "error" as const,
+        fieldPaths: [`app.pipelines.useZipDownloads.${key}`],
+        appliesWhen: (c: ConfigShape) => {
+            const value = g(c, `app.pipelines.useZipDownloads.${key}`);
+            if (value === undefined || value === null || value === "") return false;
+            const n = Number(value);
+            return !Number.isInteger(n) || n < min || n > max;
+        },
+        message: `app.pipelines.useZipDownloads.${key} must be a whole number of ${unit} between ${min} and ${max}.`,
+    })),
+    {
+        id: "zip-downloads-compute-vcpu",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useZipDownloads.computeVcpu"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useZipDownloads.computeVcpu");
+            if (value === undefined || value === null || value === "") return false;
+            return ![4, 8, 16].includes(Number(value));
+        },
+        message: "app.pipelines.useZipDownloads.computeVcpu must be 4, 8 or 16.",
+    },
+    {
+        id: "zip-downloads-compute-fargate-size",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useZipDownloads.computeVcpu",
+            "app.pipelines.useZipDownloads.computeMemoryGiB",
+        ],
+        appliesWhen: (c) => {
+            const vcpu = Number(g(c, "app.pipelines.useZipDownloads.computeVcpu") ?? 16);
+            const memoryGiB = Number(g(c, "app.pipelines.useZipDownloads.computeMemoryGiB") ?? 32);
+            if (![4, 8, 16].includes(vcpu)) return false;
+            return !isFargateCpuMemory(vcpu, memoryGiB);
+        },
+        message:
+            "app.pipelines.useZipDownloads.computeMemoryGiB is not an AWS Fargate memory size for the vCPU: 4 vCPU " +
+            "takes 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps.",
+    },
     // ----- Compliance default schema
     // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
     // `defaultAsset` metadata schema") -----

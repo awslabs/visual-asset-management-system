@@ -107,6 +107,11 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
+                    "value": "/zipdownloads"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
                     "value": "/compliance"
                 }
             ],
@@ -531,6 +536,16 @@
                     "type": "allow"
                 }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My Download Queue)",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-compliance-schemas",

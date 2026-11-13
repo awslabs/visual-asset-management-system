@@ -11,7 +11,7 @@ import {
     ButtonDropdown,
 } from "@cloudscape-design/components";
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
 import {
     ARCHIVED_TRANSFER_REASON,
@@ -58,6 +58,16 @@ import {
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 import AutomationActions from "./AutomationActions";
 import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
+import CreateZipDownloadModal from "../../zipDownloads/CreateZipDownloadModal";
+import {
+    assetDownloadQueueLink,
+    buildZipSelection,
+    DOWNLOAD_QUEUE_TAB_LABEL,
+    isZipDownloadsEnabled,
+    ZIP_ROUTES,
+    ZipSelectableItem,
+    ZipSelectionResult,
+} from "../../zipDownloads/zipDownloads";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
@@ -66,6 +76,7 @@ import { FileManagerContext } from "./FileTreeView";
 export function FileDetailsPanel({}: FileInfoPanelProps) {
     const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
     const navigate = useNavigate();
+    const location = useLocation();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
     const [asset, setAsset] = useState<any>(null);
@@ -101,6 +112,77 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         canCallRoute("POST", "/uploads"),
         `Your role does not allow uploading files to this ${Synonyms.asset}.`
     );
+
+    // Download as Zip: offered in every Export menu when the deployment has the feature and the
+    // asset can be transferred at all (the API refuses a non-distributable or archived asset), and
+    // greyed with its reason while the role may not create a zip download.
+    const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
+    const offerZipDownload = zipDownloadsEnabled && !transfersUnavailable;
+    const zipDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        !!permissionsFailed,
+        canCallRoute("POST", ZIP_ROUTES.asset),
+        `Your role does not allow creating zip downloads for this ${Synonyms.asset}.`
+    );
+    const zipMenuItem = (emptyReason?: string) => ({
+        id: "download-zip",
+        text: "Download as Zip",
+        iconName: "download" as const,
+        disabled: !!(zipDisabledReason || emptyReason),
+        disabledReason: zipDisabledReason || emptyReason,
+    });
+    const [zipSelection, setZipSelection] = useState<ZipSelectionResult | null>(null);
+    const [zipCreatedName, setZipCreatedName] = useState<string | null>(null);
+    const openZipDownload = (items: ZipSelectableItem[]) => {
+        setZipCreatedName(null);
+        setZipSelection(buildZipSelection(items));
+    };
+    const zipModal =
+        offerZipDownload && zipSelection ? (
+            <CreateZipDownloadModal
+                visible={!!zipSelection}
+                onDismiss={() => setZipSelection(null)}
+                databaseId={databaseId || ""}
+                assetId={assetId || ""}
+                assetName={asset?.assetName}
+                selection={zipSelection}
+                initialAssetVersionId={state.assetVersionId}
+                onCreated={(job) => {
+                    setZipSelection(null);
+                    setZipCreatedName(job?.archiveFileName || "Your archive");
+                }}
+            />
+        ) : null;
+    const zipCreatedAlert = zipCreatedName ? (
+        <Alert
+            type="success"
+            dismissible
+            dismissAriaLabel="Dismiss zip download message"
+            onDismiss={() => setZipCreatedName(null)}
+            statusIconAriaLabel="Success"
+            action={
+                // The asset's own Download Queue tab. The panel sits on that asset's page, so the
+                // link only changes `?tab=` (keeping the file selection and version) and the page
+                // switches tabs without remounting. My Download Queue stays in the profile menu.
+                <Button
+                    onClick={() =>
+                        navigate(
+                            assetDownloadQueueLink(
+                                databaseId || "",
+                                assetId || "",
+                                location.search
+                            ),
+                            { state: location.state }
+                        )
+                    }
+                >
+                    {`View ${DOWNLOAD_QUEUE_TAB_LABEL}`}
+                </Button>
+            }
+        >
+            {`${zipCreatedName} is being prepared.`}
+        </Alert>
+    ) : null;
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -494,6 +576,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     assetVersionId={state.assetVersionId}
                     initialMode={modalInitialMode}
                 />
+                {zipModal}
 
                 <div className="file-info-panel">
                     <AssetDeleteModal
@@ -576,6 +659,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         </div>
                         <div className="file-actions">
                             <SpaceBetween direction="horizontal" size="xs">
+                                {/* A selection with folders has no per-file actions, but it can
+                                    still be archived as one zip download. */}
+                                {hasSelectedFolders && offerZipDownload && (
+                                    <ButtonDropdown
+                                        items={[zipMenuItem()]}
+                                        onItemClick={({ detail }) => {
+                                            if (detail.id === "download-zip") {
+                                                openZipDownload(selectedItems);
+                                            }
+                                        }}
+                                    >
+                                        Export
+                                    </ButtonDropdown>
+                                )}
                                 {!hasSelectedFolders && (
                                     <>
                                         {/* Check if all files are archived */}
@@ -667,6 +764,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                                 text: "Download Files",
                                                                 iconName: "download",
                                                             },
+                                                            ...(offerZipDownload
+                                                                ? [zipMenuItem()]
+                                                                : []),
                                                             {
                                                                 id: "share",
                                                                 text: "Share File(s) URL",
@@ -677,6 +777,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                             switch (detail.id) {
                                                                 case "download":
                                                                     handleMultiFileDownload();
+                                                                    break;
+                                                                case "download-zip":
+                                                                    openZipDownload(selectedItems);
                                                                     break;
                                                                 case "share":
                                                                     setShowShareUrlsModal(true);
@@ -706,6 +809,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
 
                     <div className="multi-select-info">
+                        {zipCreatedAlert}
                         {/* Viewer entry points for the multi-file selection. Each is gated by ITS OWN
                             path: the eye needs ONE visualize viewer that renders every selected file
                             (never a compare-only one), the compare icon needs ONE compare viewer that
@@ -913,6 +1017,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 assetVersionId={state.assetVersionId}
                 initialMode={modalInitialMode}
             />
+            {zipModal}
 
             <div className="file-info-panel">
                 <CreateFolderModal
@@ -1193,6 +1298,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 iconName: "download",
                                                 disabled: !hasFolderContent(selectedItem),
                                             },
+                                            ...(offerZipDownload
+                                                ? [
+                                                      zipMenuItem(
+                                                          hasFolderContent(selectedItem)
+                                                              ? undefined
+                                                              : "This folder has no files."
+                                                      ),
+                                                  ]
+                                                : []),
                                             {
                                                 id: "share-folder",
                                                 text: "Share Files URL",
@@ -1201,7 +1315,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             },
                                         ]}
                                         onItemClick={({ detail }) => {
-                                            if (detail.id === "download-folder") {
+                                            if (detail.id === "download-zip") {
+                                                openZipDownload([selectedItem]);
+                                            } else if (detail.id === "download-folder") {
                                                 navigate(
                                                     `/databases/${databaseId}/assets/${assetId}/download`,
                                                     {
@@ -1318,6 +1434,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                         text: "Download File",
                                                         iconName: "download",
                                                     },
+                                                    ...(offerZipDownload ? [zipMenuItem()] : []),
                                                     {
                                                         id: "share",
                                                         text: "Share File URL",
@@ -1328,6 +1445,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     switch (detail.id) {
                                                         case "download":
                                                             handleDownload();
+                                                            break;
+                                                        case "download-zip":
+                                                            openZipDownload([selectedItem]);
                                                             break;
                                                         case "share":
                                                             setShowShareUrlsModal(true);
@@ -1361,6 +1481,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }`}
                 >
                     <div className="file-info-content">
+                        {zipCreatedAlert}
                         {downloadError && (
                             <Alert
                                 type="error"

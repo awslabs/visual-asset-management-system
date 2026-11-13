@@ -48,8 +48,17 @@ The core groups are registered in `main.py` via `cli.add_command()`:
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
 search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+zip-download
 compliance
 ```
+
+`zip-download` (`create`, `list`, `get`, `download`, `cancel`, `delete`) drives the Download as Zip API. It is
+gated on `FEATURE_ZIPDOWNLOADS` from the profile's feature switches first and the API's 404 body second, and
+raises `ZipDownloadDisabledError` (`Zip downloads are not available for this deployment`). `download` streams the
+archive from the URL route and never prints the URL. `list --all-users` (with `-d`/`-a`) calls the all-users list route. MCP mirrors it as `list_zip_downloads`
+(`all_users=True` for the all-users route) and `get_zip_download` (read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
+`cancel_zip_download` and `delete_zip_download` (destructive tier). Command file
+`vamscli/commands/zip_download.py`, helpers `vamscli/utils/zip_downloads.py`.
 
 The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands and MCP Tools](#add-on-commands-and-mcp-tools).
 

@@ -33,8 +33,52 @@ from common.s3PathPatterns import (
 
 logger = safeLogger()
 
-# ASL schema version stamped in the definition Comment field.
-ASL_SCHEMA_VERSION = 1
+# ASL schema version stamped in the definition Comment field. 2 adds the wait for large outputs after
+# the process-output state (AwaitOutputIngestion + FinalizeOutputs).
+ASL_SCHEMA_VERSION = 2
+
+# Default maximum wait for large outputs. Mirrors common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS
+# (this module keeps its import-free contract; a unit test pins the two equal).
+DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS = 48
+
+# State ids of the large-output wait (fixed: they appear once per definition).
+INGESTION_CHOICE_STATE_ID = "OutputIngestionPending"
+AWAIT_INGESTION_STATE_ID = "AwaitOutputIngestion"
+INGESTION_TIMEOUT_STATE_ID = "OutputIngestionTimedOut"
+FINALIZE_OUTPUTS_STATE_ID = "FinalizeOutputs"
+WORKFLOW_SUCCEEDED_STATE_ID = "WorkflowSucceeded"
+INGESTION_TIMEOUT_ERROR = "OutputIngestionTimeout"
+
+# Lambda throttling on the output states (process-output, the ingestion wait, finalize) waits for
+# capacity with long jittered backoff instead of failing the run, whose error handler
+# would then cancel the run's copies. A throttled invoke never ran the handler, so retrying it repeats
+# nothing. It is listed first: Step Functions uses the first retrier whose errors match. The copy
+# engine's tasks use the same values (infra assetFunctions.ts THROTTLE_RETRY). With full
+# jitter each delay is uniform between 0 and its computed value (10 s doubling to a 300 s cap), so 99
+# attempts wait about 4 hours on average and at most about 7.9 hours.
+THROTTLE_RETRIER = {
+    "ErrorEquals": ["Lambda.TooManyRequestsException"],
+    "IntervalSeconds": 10,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 99,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
+# The output step states (process-output, the ingestion wait, finalize) raise
+# LargeObjectCopyEngineBusy (common.largeObjectCopy) when the copy engine was still throttled after
+# the invocation's own waiting. That is not a failure: the state is retried, so a throttle slows the
+# run and never ends it FAILED while its copies are alive. Bounded; the wait state's own timeout
+# (the maximum output-ingestion wait) is unchanged, and an exhausted retry goes to the usual Catch.
+ENGINE_BUSY_ERROR = "LargeObjectCopyEngineBusy"
+ENGINE_BUSY_RETRIER = {
+    "ErrorEquals": [ENGINE_BUSY_ERROR],
+    "IntervalSeconds": 30,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 8,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
 
 # Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
 # argument: the single quote closes the intrinsic's string literal, the braces are its
@@ -84,7 +128,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                           interim_tracking_function,
                           error_handler_function,
                           aws_partition="aws",
-                          job_names=None):
+                          job_names=None,
+                          max_output_ingestion_wait_hours=DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS):
     """
     Generate the ASL workflow definition for a workflow.
     Uses the builder pattern from stepfunctions_builder to dispatch
@@ -101,6 +146,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         aws_partition: deployment AWS partition for service-integration ARNs (default "aws")
         job_names: previously generated job names to keep; used only when reusable_job_names
             accepts them for these pipelines, otherwise new ones are generated
+        max_output_ingestion_wait_hours: how long the run waits for its large outputs to land in
+            the asset before it fails (the AwaitOutputIngestion state's timeout)
 
     Returns:
         Tuple of (workflow_definition dict, job_names list)
@@ -382,6 +429,14 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             # --- Executing-user context ---
             "executingUserName.$": "$.executingUserName",
             "executingRequestContext.$": "$.executingRequestContext",
+
+            # --- A wait state follows: outputs over the async threshold are handed to copy jobs
+            #     and this definition waits for them (ASL v2). Absent on a v1 definition, which the
+            #     copy engine finalizes instead.
+            "awaitOutputIngestion": True,
+            # Retry count of this state (0 on the first attempt). A retried attempt folds in the
+            # copy jobs an earlier attempt started, whose files it may no longer list.
+            "outputStepAttempt.$": "$$.State.RetryCount",
         }
     }
 
@@ -395,7 +450,6 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             "Lambda.ServiceException",
             "Lambda.AWSLambdaException",
             "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException",
             "States.Timeout",
         ],
         interval_seconds=5,
@@ -414,6 +468,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         catch_config=po_catch_config,
         partition=aws_partition
     )
+    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER), po_retry_config]
 
     # Add the single process_output state to the states list
     states.append((process_output_state_id, process_output_state))
@@ -424,8 +479,86 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         comment=f"VAMS Pipeline Workflow for {workflowId} | aslSchemaVersion={ASL_SCHEMA_VERSION}"
     )
 
+    # The wait for large outputs (ASL v2). The process-output state no longer ends the run: it
+    # answers outputIngestionPending when it handed files to copy jobs, and the run then waits on its
+    # ingestion batch (task token, bounded by the maximum wait) and finalizes the outcome.
+    workflow_definition["States"][process_output_state_id].pop("End", None)
+    workflow_definition["States"][process_output_state_id]["Next"] = INGESTION_CHOICE_STATE_ID
+    workflow_definition["States"].update(_output_ingestion_states(
+        process_output_state_id, process_workflow_output_function, error_handler_state_id,
+        po_retry_config, aws_partition, max_output_ingestion_wait_hours))
+
     # Add the error-handler + failure states to the States dict (reachable only via Catch handlers)
     workflow_definition["States"][error_handler_state_id] = error_handler_state
     workflow_definition["States"][failed_state_id] = failed_state
 
     return workflow_definition, job_names
+
+
+def _output_ingestion_states(process_output_state_id, process_workflow_output_function,
+                             error_handler_state_id, retry_config, aws_partition, wait_hours):
+    """The states after process-output: a Choice on outputIngestionPending, the task-token wait, the
+    timeout marker, the finalize task and the success end. The wait and the finalize invoke the same
+    process-output Lambda in another mode, so the workflow role needs no new invoke grant."""
+    pending_path = f"$.{process_output_state_id}.output.Payload.outputIngestionPending"
+    batch_path = f"$.{process_output_state_id}.output.Payload.batchId"
+    wait_seconds = int(wait_hours) * 3600
+
+    await_state = create_lambda_task_state(
+        state_id=AWAIT_INGESTION_STATE_ID,
+        function_name=process_workflow_output_function,
+        payload={"body": {"mode": "await", "batchId.$": batch_path, "taskToken.$": "$$.Task.Token",
+                          "workflowExecutionId.$": "$.workflowExecutionId"}},
+        result_path="$.outputIngestion",
+        wait_for_callback=True,
+        timeout_seconds=wait_seconds,
+        # Retried only on a fault of the Lambda invoke itself (throttling: THROTTLE_RETRIER, set
+        # below). A timeout ends the wait: retrying it would wait the whole maximum again.
+        retry_config=create_retry_config(
+            error_equals=["Lambda.ServiceException", "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException"],
+            interval_seconds=5, backoff_rate=2.0, max_attempts=3),
+        catch_config=[
+            {"ErrorEquals": ["States.Timeout"], "Next": INGESTION_TIMEOUT_STATE_ID,
+             "ResultPath": "$.errorInfo"},
+            *create_catch_all_configs(next_state=error_handler_state_id, result_path="$.errorInfo"),
+        ],
+        partition=aws_partition,
+    )
+    finalize_state = create_lambda_task_state(
+        state_id=FINALIZE_OUTPUTS_STATE_ID,
+        function_name=process_workflow_output_function,
+        payload={"body": {"mode": "finalize", "batchId.$": batch_path,
+                          "workflowExecutionId.$": "$.workflowExecutionId"}},
+        result_path="$.finalizeOutputs",
+        retry_config=retry_config,
+        catch_config=create_catch_all_configs(next_state=error_handler_state_id,
+                                              result_path="$.errorInfo"),
+        partition=aws_partition,
+    )
+    for state in (await_state, finalize_state):
+        state["Retry"] = ([dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER)]
+                          + list(state.get("Retry") or []))
+    finalize_state["Next"] = WORKFLOW_SUCCEEDED_STATE_ID
+    await_state["Next"] = FINALIZE_OUTPUTS_STATE_ID
+    return {
+        INGESTION_CHOICE_STATE_ID: {
+            "Type": "Choice",
+            "Choices": [{
+                "And": [{"Variable": pending_path, "IsPresent": True},
+                        {"Variable": pending_path, "BooleanEquals": True}],
+                "Next": AWAIT_INGESTION_STATE_ID,
+            }],
+            "Default": WORKFLOW_SUCCEEDED_STATE_ID,
+        },
+        AWAIT_INGESTION_STATE_ID: await_state,
+        INGESTION_TIMEOUT_STATE_ID: {
+            "Type": "Pass",
+            "Result": {"Error": INGESTION_TIMEOUT_ERROR,
+                       "Cause": f"Ingesting output files did not finish within {int(wait_hours)} hours."},
+            "ResultPath": "$.errorInfo",
+            "Next": error_handler_state_id,
+        },
+        FINALIZE_OUTPUTS_STATE_ID: finalize_state,
+        WORKFLOW_SUCCEEDED_STATE_ID: {"Type": "Succeed"},
+    }

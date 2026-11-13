@@ -359,6 +359,13 @@ def is_conditional_check_failure(error):
     return "ConditionalCheckFailed" in str(error)
 
 
+# Main-row attributes of a run whose large outputs are being copied into the asset (the phase and its
+# progress counters). They describe a RUNNING row only, so every write of a terminal status removes
+# them (a no-op on a row that never entered the phase).
+INGESTION_PHASE_ATTRIBUTES = ("executionPhase", "outputIngestion")
+REMOVE_INGESTION_PHASE = " REMOVE " + ", ".join(INGESTION_PHASE_ATTRIBUTES)
+
+
 def not_terminal_condition(values):
     """The status-write guard shared by every terminal status write on an execution row: the row carries
     no status yet, or a status that is not terminal. Adds the terminal-status placeholders to `values`
@@ -451,6 +458,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     if execution_error is not None:
         expr += ", executionError = :er"
         values[":er"] = execution_error or ""
+    expr += REMOVE_INGESTION_PHASE
     condition = not_terminal_condition(values)
     try:
         table.update_item(

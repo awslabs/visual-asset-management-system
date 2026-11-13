@@ -13,6 +13,10 @@ import Synonyms from "../synonyms";
 import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { addonNavAdminSections, addonNavMainSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
+import {
+    DOWNLOAD_QUEUE_PAGE_TITLE,
+    isZipDownloadsEnabled,
+} from "../components/zipDownloads/zipDownloads";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "#/",
@@ -219,7 +223,13 @@ function navItems(): any[] {
         {
             type: "section",
             text: "User",
-            items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
+            items: [
+                // Download as Zip: listed only when the deployment has the feature
+                ...(isZipDownloadsEnabled()
+                    ? [{ type: "link", text: DOWNLOAD_QUEUE_PAGE_TITLE, href: "#/zipdownloads/" }]
+                    : []),
+                { type: "link", text: "API Key Management", href: "#/auth/api-keys/" },
+            ],
         },
         // A fork's sections (custom/customNavigation.ts, shipped empty)
         ...customNavSections,

@@ -43,7 +43,8 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
                 { "field": "route__path", "operator": "starts_with", "value": "/executions" },
-                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" },
+                { "field": "route__path", "operator": "starts_with", "value": "/zipdownloads" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -212,6 +213,31 @@
             "description": "Allow read access to all tag types",
             "objectType": "tagType",
             "criteriaAnd": [{ "field": "tagTypeName", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads",
+            "description": "Allow Download as Zip on assets the role can read: create, list and get own jobs, list every user's jobs (/download/zip-all-users), request download URLs (a POST), cancel or delete own jobs. Each call also requires asset GET permission",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
+                { "field": "route__path", "operator": "contains", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My Download Queue)",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }
+            ],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }

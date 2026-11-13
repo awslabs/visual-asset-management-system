@@ -1,0 +1,34 @@
+{
+    "workflowName": "Zip Archive",
+    "category": "Utility",
+    "description": "Write selected files, folders or the whole asset into one zip, tar or tar.gz file added to the asset. Also runs Download as Zip jobs.",
+    "isSystem": true,
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": true
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false,
+            "assetFileMetadata": false,
+            "metadataSchema": false
+        },
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": ""
+    }
+}

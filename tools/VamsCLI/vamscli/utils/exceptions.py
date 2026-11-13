@@ -132,6 +132,19 @@ class APIError(BusinessLogicError):
     pass
 
 
+class RouteNotDeployedError(APIError):
+    """Raised when no deployed API route matches the request (HTTP 403 from API Gateway): the
+    deployment is older than this CLI, or the add-on that serves the route is not deployed. Final:
+    resending the request would not change it."""
+    pass
+
+
+class UploadStatusNotFoundError(APIError):
+    """Raised when an upload has no status the caller can read (a final answer, not a transient
+    failure: polling it again would not change it)."""
+    pass
+
+
 class InvalidRequestPathError(APIError):
     """Raised before any request when an endpoint path has an empty, '.' or '..' segment, which would
     address another route."""
@@ -746,6 +759,80 @@ class SubscriptionAlreadyExistsError(SubscriptionError):
 
 class InvalidSubscriptionDataError(SubscriptionError):
     """Raised when subscription data is invalid."""
+    pass
+
+
+# Download as Zip (prepared downloads) business logic exceptions
+class ZipDownloadError(BusinessLogicError):
+    """Base class for zip download errors."""
+    pass
+
+
+class ZipDownloadDisabledError(ZipDownloadError):
+    """Raised when the deployment does not offer zip downloads.
+
+    Decided from the profile's feature switches (ZIPDOWNLOADS absent) before any request, and from
+    the API's 404 body when the switches were never read."""
+    pass
+
+
+class ZipDownloadNotFoundError(ZipDownloadError):
+    """Raised when a zip download does not exist, has expired, or belongs to another user."""
+    pass
+
+
+class InvalidZipDownloadRequestError(ZipDownloadError):
+    """Raised when a zip download request is refused (selection, pin, limits, or eligibility)."""
+    pass
+
+
+class ZipDownloadLimitError(ZipDownloadError):
+    """Raised when the caller already has the maximum number of active zip downloads."""
+    pass
+
+
+class ZipDownloadNotReadyError(ZipDownloadError):
+    """Raised when the archive of a zip download has not been produced (yet)."""
+    pass
+
+
+class ZipDownloadExpiredError(ZipDownloadError):
+    """Raised when a finished archive is no longer stored."""
+    pass
+
+
+class ZipDownloadStateError(ZipDownloadError):
+    """Raised when cancel is asked of a finished job, or delete of one still running."""
+    pass
+
+
+class ZipDownloadFailedError(ZipDownloadError):
+    """Raised when a waited-on zip download ends FAILED or CANCELLED.
+
+    `json_fields` carries the job's requestId, status and (scrubbed) errorMessage."""
+
+    def __init__(self, message: str, job: dict = None):
+        super().__init__(message)
+        job = job or {}
+        self.json_fields = {
+            key: job[key] for key in ("requestId", "status", "errorMessage", "cancelledBy")
+            if job.get(key) is not None
+        }
+
+
+class ZipDownloadTimeoutError(ZipDownloadError):
+    """Raised when --wait gives up before the job finishes. The job keeps running."""
+
+    def __init__(self, message: str, job: dict = None):
+        super().__init__(message)
+        job = job or {}
+        self.json_fields = {
+            key: job[key] for key in ("requestId", "status") if job.get(key) is not None
+        }
+
+
+class ZipDownloadTransferError(ZipDownloadError):
+    """Raised when streaming a finished archive to a local file fails."""
     pass
 
 

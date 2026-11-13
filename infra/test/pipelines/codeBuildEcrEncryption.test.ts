@@ -6,10 +6,11 @@
 /**
  * The Amazon ECR repositories of the CodeBuild-built pipelines follow `app.useKmsCmkEncryption`.
  *
- * With `useCodeBuild` on, eight pipelines build their container image with AWS CodeBuild into a
+ * With `useCodeBuild` on, nine pipelines build their container image with AWS CodeBuild into a
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
  * model family), NVIDIA GR00T, Isaac Lab training, Video SOP/BOM Extraction, the GenAI CAD STEP
- * agent and Image to 3D (one repository per enabled model). With the CMK on, each repository is
+ * agent and Image to 3D (one repository per enabled model), plus the Download as Zip zipArchive
+ * pipeline (`app.pipelines.useZipDownloads.useCodeBuild`). With the CMK on, each repository is
  * encrypted with the deployment's shared key; with it off, each stays on the Amazon ECR AES-256
  * default, which is no `EncryptionConfiguration` at all. Both directions are asserted for every
  * repository.
@@ -18,7 +19,8 @@
  * property and turning the CMK on or off replaces every repository. Three things must hold for that
  * update to deploy and leave working pipelines, and none of them is visible in a single synth:
  *
- *   - The explicitly named repositories (coordinate transform, Video SOP/BOM, GenAI CAD STEP agent)
+ *   - The explicitly named repositories (coordinate transform, Video SOP/BOM, GenAI CAD STEP agent,
+ *     zipArchive)
  *     change their names with the encryption (`-kms`), because AWS CloudFormation cannot replace a
  *     custom-named resource under the same name.
  *   - Every consumer references its repository, so it moves to the replacement: an AWS Batch job
@@ -61,6 +63,7 @@ const EXPECTED_REPOSITORIES = [
     "VideoSopBomPipelineVideoSopBomCodeBuildEcrRepoVideoSopBom",
     "CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent",
     "ImageTo3dCodeBuildEcrRepostable3dgen",
+    "ZipArchivePipelineZipArchiveCodeBuildEcrRepoZipArchive",
 ];
 
 /** The repositories with an explicit `repositoryName`, each with the name it ends in without the key. */
@@ -68,6 +71,7 @@ const EXPLICITLY_NAMED: Record<string, string> = {
     [EXPECTED_REPOSITORIES[0]]: "-coordtransform",
     [EXPECTED_REPOSITORIES[8]]: "-videosopbom",
     [EXPECTED_REPOSITORIES[9]]: "-cadstepagent",
+    [EXPECTED_REPOSITORIES[11]]: "-ziparchive",
 };
 
 /**
@@ -87,6 +91,8 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useGenAiVideoSopBom",
     "useGenAiCadStepAgent",
     "useImageTo3d",
+    // The zipArchive system pipeline of Download as Zip.
+    "useZipDownloads",
 ];
 
 /**

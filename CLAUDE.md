@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, and more
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, GenAI labeling, video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, the zipArchive system pipeline (Download as Zip), and more
 -   **Add-ons** (`infra/lib/nestedStacks/addon/`, `backend/backend/handlers/addon/`) — optional, feature-gated integrations deployed from their own nested stacks: Garnet Framework, Physna Sync, EDH Workstations (see `documentation/docusaurus-site/docs/developer/addons-overview.md`)
 
 ### **Version Info**
@@ -68,6 +68,8 @@ root/
 │   │   ├── imageTo3d/         # Image to 3D (Stable3DGen default, SAM 3D, TRELLIS.2, TripoSR, Step1X-3D, Hunyuan3D-2, Blender agent)
 │   │   ├── metadata3dLabeling/
 │   │   └── videoSopBom/       # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
+│   ├── utility/
+│   │   └── zipArchive/        # zipArchive system pipeline (utility-zip-archive): streaming ZIP64/tar writer for Download as Zip and zipArchive runs
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── backendAddons/             # Add-on build sources shipped with the repo, one folder per add-on
 ├── documentation/             # User guides, API spec, permission templates
@@ -126,9 +128,13 @@ S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBri
 
 See `backendPipelines/CLAUDE.md` for output path conventions, `assetId` and input-version threading, and the new-pipeline checklist.
 
-Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). No built-in bundle is marked system yet.
+Pipelines and workflows registered from a `vamsSchema` bundle may carry `isSystem: true` (a JSON boolean); the importer is the only writer of that flag. System records are read-only through the API except for `enabled` toggles, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`, and each deployment re-asserts their shipped values (`backend/backend/common/workflows/systemRecords.py`; rules in `backendPipelines/CLAUDE.md`). The shipped system bundle is the zipArchive pipeline (`backendPipelines/utility/zipArchive/`, `utility-zip-archive` in `GLOBAL`), registered only when `app.pipelines.useZipDownloads.enabled`.
+
+Download as Zip (`app.pipelines.useZipDownloads`) creates per-user jobs through `handlers/assets/zipDownloadService.py` (the `/download/zip` routes plus, in the same function, the delayed sweep, always deployed and answering 404 while the feature is off; no terminal callback: a job follows its run by the stored `workflowExecutionId` and the read-time reconcile), stores them in `ZipDownloadRequestsStorageTable` (PK `userId`, SK `requestId`, TTL `expiresAt`), and launches the zipArchive system workflow as `SYSTEM_USER` under its own system trigger value `System-ZipDownload` (`common/zipDownloads.ZIP_SYSTEM_TRIGGER`; core only checks the format). The archive is written under `vams.preparedDownloads/` in the asset auxiliary bucket, which always-deployed lifecycle rules expire after a fixed 7 days (`ZIP_DOWNLOAD_RETENTION_DAYS`, also the job row's TTL); the dotted first segment can never be a database id, so none is reserved. Contract: `backend/CLAUDE.md` "Download as Zip (Prepared Downloads)" and `backendPipelines/CLAUDE.md` "System Pipelines".
 
 A workflow's `systemConfig.concurrencyRestriction` (`perAsset`, `perInputFile`, `perInputFileVersion`) is enforced by conditional-write lock rows in `WorkflowExecutionLocksStorageTable` (`backend/backend/common/workflows/executionLocks.py`): the launch takes them, all or none and in sorted key order, immediately before its first side effect, and takes over a row whose holder never wrote its execution record once the row is older than the launch function's timeout plus a margin; the end-state step, the error handler, the abort route, a launch that fails after acquiring, and the executions read path (for a run stopped outside VAMS) release them, the abort and the failed launch only once the state machine is known to have stopped. A release deletes the union of the keys rebuilt from the execution's input rows and the rows the table's holder index lists, each conditional on the holder. A `fileUpload` trigger launch a lock refuses is recorded as one aggregated `SKIPPED` execution per holder and lock key (uuid5 id; configuration and input rows written before the main row's atomic counting `UpdateItem`); manual launches record nothing, abort of a SKIPPED execution answers `400`, and the list routes' `excludeStatus` acts only on rows that pass the read check. Contract: `backend/CLAUDE.md` "Workflow Execution Locks".
+
+Workflow outputs over 1 GiB and API uploads over 5 GiB are copied into their asset by the large object copy engine (fixed engine constants in `common/largeObjectCopy.py`, not configuration; Step Functions + `handlers/assets/largeObjectCopy.py`, resumable multipart copy in child executions so no history nears its quota); a run waits for its copies (ASL v2 `AwaitOutputIngestion`) and ends FAILED naming any file that did not land, and a copy execution that ends outside its states is reconciled. Contract: `backend/CLAUDE.md` "Large Object Copy Engine".
 
 ### **Deployment Modes**
 

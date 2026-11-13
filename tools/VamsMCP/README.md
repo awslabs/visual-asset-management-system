@@ -163,16 +163,16 @@ write and destructive gates still apply inside a set. Each named set holds at mo
 30,000 characters of descriptions with every gate and add-on on, so it fits a client that lists at
 most 100 tools per connection.
 
-| Set          | Tools                                                                                                                      |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments |
-| `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, and running workflows                    |
-| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                      |
-| `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail     |
-| `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                          |
-| `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                   |
-| `custom`     | The tools a fork adds in `custom_tools.py`                                                                                 |
-| `all`        | Every tool the gates allow (the stdio default)                                                                             |
+| Set          | Tools                                                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
+| `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
+| `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
+| `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
+| `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
+| `custom`     | The tools a fork adds in `custom_tools.py`                                                                                                    |
+| `all`        | Every tool the gates allow (the stdio default)                                                                                                |
 
 `vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
 tools; `tests/test_toolsets.py` holds every set to the limits.
@@ -238,6 +238,8 @@ secrets** — just the command:
                 "list_asset_version_comments",
                 "get_comment",
                 "check_subscription",
+                "list_zip_downloads",
+                "get_zip_download",
                 "list_compliance_schemas",
                 "get_compliance_schema",
                 "get_compliance_bindings",
@@ -329,6 +331,26 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Zip downloads: `list_zip_downloads`, `get_zip_download`. A zip download is a server-side job that archives part or
+all of one asset; jobs expire 7 days after they were created. Only the user who
+created a job can get, cancel or delete it.
+`list_zip_downloads` lists the caller's own jobs: it takes `database_id` and
+`asset_id` together for one asset, or neither for every asset, and is paginated
+like every other list. With `all_users=True` (both IDs required) it lists every
+user's jobs for that asset (the web Download Queue's "Show all users"); the API
+allows it only to a role granted that list route that may also read the asset,
+and each row adds `requestedBy`, `isOwn` and the API's `canDownload` /
+`canRemove` decisions. Jobs on assets the caller can no longer read, and expired
+jobs, are left out.
+`get_zip_download_url` (a write-tier tool) also signs another user's archive
+when the caller may download from the asset and every archived file is still
+downloadable.
+`get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
+CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
+zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
+API's 404) every zip tool returns `error_type` `ZipDownloadDisabledError` with
+"Zip downloads are not available for this deployment".
 
 Compliance: `list_compliance_schemas`, `get_compliance_schema`,
 `get_compliance_bindings`, `get_asset_compliance_state`,
@@ -479,6 +501,13 @@ are lower-bounded by start date at 90 days back by default and echo the applied
 absent by design — widen `filter_start_date` to reach it. `group_id` is how a
 group's members are enumerated, since `rerun_execution` re-runs one execution at a
 time.
+
+Both hide runs of system workflows unless `include_system` is true. A listing
+narrowed to one system workflow (`workflow_id` plus `workflow_database_id`) shows its
+runs unless `include_system` is false. The applied value is echoed as
+`includeSystem`, and each row carries `isSystem`. A `workflow_id` without its
+`workflow_database_id` is not that scope; when runs were hidden there the result adds
+a `systemRunsHint` naming both ways to list them.
 
 Both also surface a `warnings` array — plus `truncated` — when a page withheld
 rows, so a short list is never mistaken for a complete one. On `list_executions` a
@@ -685,6 +714,24 @@ that window keeps working until it expires, a key refused within it stays refuse
 for the same time after re-enabling, and a disabled key not in use is refused on
 its next call.
 
+Zip downloads: `create_zip_download`, `get_zip_download_url`.
+
+`create_zip_download` selects with `files` (asset-relative paths; `PATH@VERSIONID`
+pins one file, and a path that itself contains `@` ends in a bare `@`), `folders`,
+or `whole_asset` alone, up to 1000 entries; `asset_version_id` or
+`asset_version_alias` archives the selection as recorded in that asset version and
+cannot be combined with per-file versions. `archive_format` is `zip`, `tar` or
+`tar.gz`, and `compression` (`store` or `deflate`) applies to zip only. The whole
+job is refused when a selected file is archived, deleted, in an archive storage
+tier or of a blocked type, or the selection exceeds the deployment's limits. It
+starts a Batch job that can run for hours on a large asset, and
+`ZipDownloadLimitError` means the caller already has the maximum number of active
+jobs, which retrying does not clear. `get_zip_download_url` returns a presigned
+URL for a SUCCEEDED job: a bearer credential to the whole archive until it expires,
+which lands in the transcript and the host's logs once returned. Keep both out of
+`autoApprove`, and prefer `vamscli zip-download download`, which streams the
+archive to a file without exposing the URL.
+
 Compliance: `create_compliance_schema`, `update_compliance_schema`,
 `bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
 `sweep_compliance_schema`, `evaluate_database_compliance`, `release_quarantine`,
@@ -800,6 +847,15 @@ deleted comments and the routes' `showDeleted` flag is ignored, so it is
 unrecoverable from an agent's position. `delete_metadata_schema` is not
 reversible and has no archived state; metadata already stored against the schema
 is left in place, unvalidated.
+
+Zip downloads: `cancel_zip_download`, `delete_zip_download`. Both use the one
+DELETE route, which cancels an active job and deletes a finished one, so each tool
+reads the job first and refuses the other state with `ZipDownloadStateError`.
+`cancel_zip_download` stops a QUEUED or RUNNING job and discards its partial
+archive; the job stays listed as CANCELLED. Its DELETE carries the cancel intent,
+so it never deletes a job: one that finished after the check is kept and the
+result reads `action: "ended"` with the final `status`. `delete_zip_download` permanently
+removes a finished job and its archive, and any URL already issued stops working.
 
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
 out every client still presenting the key at once; `update_api_key` /

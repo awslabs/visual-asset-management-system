@@ -165,6 +165,8 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
 | `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's           |
 | `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                       |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, as the running app cached them (assert the right side)         |
+| `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                 |
 
 **Selector facts worth not rediscovering:**
 
@@ -298,6 +300,16 @@ E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev serv
 E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
 E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
+
+Opt-in variables of `zipdownloads.spec.ts` (Download as Zip). Without them each case that needs them
+skips with the reason; the rest of the spec mutates nothing and discovers its data (the first
+distributable asset with a top-level file), skipping when the deployment has none or has the
+`ZIPDOWNLOADS` switch off:
+
+| Variable                                      | Effect                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
+| `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
 
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out

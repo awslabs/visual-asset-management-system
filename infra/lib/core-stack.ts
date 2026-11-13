@@ -255,6 +255,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 // ApiBuilder2 depends on: the metadata service and the upload-file lambda.
                 metadataServiceFunction: apiBuilderNestedStack.metadataServiceFunction,
                 uploadFileFunction: apiBuilderNestedStack.uploadFileFunction,
+                sendEmailFunction: apiBuilderNestedStack.sendEmailFunction,
             });
             apiBuilder2NestedStack.addStackDependency(storageResourcesNestedStack);
             apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);
@@ -357,6 +358,12 @@ export class CoreVAMSStack extends cdk.Stack {
             // states + the job-callback lambda deployed in the API builder stack).
             if (props.config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
+            }
+
+            // Download as Zip: the zipArchive system pipeline and the web/CLI capability. The job table,
+            // lifecycle rule and routes deploy regardless; the routes answer 404 while this is off.
+            if (props.config.app.pipelines.useZipDownloads.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.ZIPDOWNLOADS);
             }
 
             // Build the API stack last (after all registrars have contributed routes).

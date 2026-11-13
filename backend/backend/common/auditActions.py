@@ -129,6 +129,7 @@ from common.apiRoutes import (
     API_UNSUBSCRIBE,
     API_UPLOADS,
     API_UPLOAD_COMPLETE,
+    API_UPLOAD_STATUS,
     API_UPLOAD_COMPLETE_EXTERNAL,
     API_USER_ROLES,
     API_VERSION,
@@ -146,6 +147,11 @@ from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_TRIGGER,
     API_WORKFLOW_TRIGGERS,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ZIP_DOWNLOADS_GLOBAL,
 )
 from common.apiRouteTypes import DELETE, GET, HEAD, POST, PUT
 from common.auditActionTypes import *  # noqa: F401,F403
@@ -232,6 +238,22 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
                   legacy_function="log_file_download_streamed"),
     }),
     **route_entries(API_ASSET_EXPORT, {POST: spec("assetExport", "export", KIND_DOWNLOAD)}),
+    # Download as Zip jobs (an export of the asset's files). The URL hands out the archive, so it is
+    # a download written to the file download group with the other file content surfaces; the
+    # DELETE route's cancel is the secondary action zipDownloadCancel.
+    **route_entries(API_ZIP_DOWNLOADS_ASSET, {
+        GET: read("zipDownloadList", "export"),
+        POST: spec("zipDownloadCreate", "export"),
+    }),
+    **route_entries(API_ZIP_DOWNLOADS_GLOBAL, {GET: read("zipDownloadList", "export")}),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_ALL_USERS, {GET: read("zipDownloadListAllUsers", "export")}),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_REQUEST, {
+        GET: read("zipDownloadGet", "export"),
+        DELETE: spec("zipDownloadDelete", "export"),
+    }),
+    **route_entries(API_ZIP_DOWNLOADS_ASSET_REQUEST_URL, {
+        POST: spec("zipDownloadUrl", "export", KIND_DOWNLOAD, GROUP_FILE_DOWNLOAD),
+    }),
     **route_entries(API_GET_ASSET_HISTORY, {GET: read("assetHistoryGet", "asset")}),
     # Asset files
     **route_entries(API_LIST_FILES, {GET: read("fileList", "file")}),
@@ -257,6 +279,8 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # Uploads
     **route_entries(API_UPLOADS, {POST: _FILE_UPLOAD_START}),
     **route_entries(API_UPLOAD_COMPLETE, {POST: _FILE_UPLOAD}),
+    # The upload's status and the outcome of each file it accepted for asynchronous ingestion.
+    **route_entries(API_UPLOAD_STATUS, {GET: read("uploadStatusGet", "file")}),
     **route_entries(API_UPLOAD_COMPLETE_EXTERNAL, {
         POST: spec("pipelineOutputUpload", "file", group=GROUP_FILE_UPLOAD, legacy_function="log_file_upload"),
     }),
@@ -516,12 +540,18 @@ CORE_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
     spec("workflowRedeploy", "workflow"),
     # DELETE /workflows/executions/{executionId} on an execution group stops every member.
     spec("workflowExecutionGroupAbort", "executionGroup"),
+    # DELETE .../download/zip/{requestId} on a job still running (or with intent=cancel) cancels it.
+    spec("zipDownloadCancel", "export"),
+    # A zip download read, list or create that found the job's run ended finalizes the job.
+    spec("zipDownloadReconcile", "export"),
 )
 
 # Actions recorded by handlers that serve no API route. The actor is the system; onBehalfOf names
 # the user an action ran for when the handler knows it.
 CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.assets.sqsUploadFileLarge", _FILE_UPLOAD),
+    # The large object copy engine: a large API upload or workflow output that landed in its asset.
+    SystemAction("handlers.assets.largeObjectCopy", _FILE_UPLOAD),
     SystemAction("handlers.indexing.sqsBucketSync", spec("assetSync", "asset")),
     SystemAction("handlers.indexing.sqsBucketSync", spec("fileSync", "file")),
     SystemAction("handlers.indexing.crReindexer", spec("searchReindex", "system")),
@@ -530,6 +560,9 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.importGlobalPipelineWorkflow", spec("pipelineImport", "pipeline")),
     SystemAction("handlers.auth.apiOriginVerifyRotation", _auth("originVerifyRotate", "system")),
+    # A delayed sweep pass of a zip download (its state machine invokes the service directly) that
+    # aborted the job's leftover archive uploads.
+    SystemAction("handlers.assets.zipDownloadService", spec("zipDownloadSweep", "export")),
     # Compliance work that runs without an API request. The automatic evaluation the trigger runs
     # on an asset change, and each descendant a cascade evaluates.
     SystemAction("handlers.compliance.complianceTrigger", spec("complianceAutoEvaluate", "complianceEvaluation")),

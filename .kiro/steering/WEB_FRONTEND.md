@@ -832,17 +832,49 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
- * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;

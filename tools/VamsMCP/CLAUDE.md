@@ -103,6 +103,9 @@ tools/VamsMCP/
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
+    test_zip_download_tools.py
+                             # the Download as Zip tools: gate tiers, the body create builds (the CLI's
+                             # own selection helpers), errors as data, the URL tool out of autoApprove
     test_compliance_tools.py # the compliance tools: the two single-response listings, the
                              # maxItems-keyed pages (evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
@@ -239,6 +242,13 @@ asymmetry other callers rely on):
    with `is_active=False` is the reversible revoke and is what the delete tools point at
    first. An API-key tool takes `is_active` as a bool and sends the model's `"true"` /
    `"false"` string — the request model rejects a raw boolean.
+   `get_zip_download_url` (write tier) is the same kind: it returns a presigned URL to a whole
+   archive, so it stays out of `autoApprove` and its docstring says where the URL ends up;
+   `create_zip_download` starts a Batch job and stays out too (annotated `COMPUTE`).
+   `cancel_zip_download` (`DESTRUCTIVE_COMPUTE`: it stops that job) and `delete_zip_download`
+   are destructive tier; the reads `list_zip_downloads` (with `all_users=True`, every user's
+   jobs for one asset; the API decides who may call it) and `get_zip_download` may be
+   auto-approved.
 
     **A required-true request field is not a confirmation to re-expose.**
     `delete_asset` sends `confirmPermanentDelete=True` because

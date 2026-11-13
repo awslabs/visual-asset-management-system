@@ -94,6 +94,18 @@ function applyFilters(tree: FileTree, showArchived: boolean, showNonIncluded: bo
     return filteredTree;
 }
 
+/**
+ * The path fields that follow a multi-item selection. MERGE_FILES re-resolves the selection from
+ * `selectedItemPaths` on every page a still-loading tree merges, so every selection change must
+ * keep them in step, or the next page drops all but the first clicked item (#1125 D32).
+ */
+function selectionPaths(items: FileTree[]) {
+    return {
+        selectedItemPath: items.length > 0 ? items[items.length - 1].relativePath : null,
+        selectedItemPaths: items.map((selected) => selected.relativePath),
+    };
+}
+
 export function fileManagerReducer(
     state: FileManagerState,
     action: FileManagerAction
@@ -143,6 +155,7 @@ export function fileManagerReducer(
                     return {
                         ...state,
                         selectedItems: newSelectedItems,
+                        ...selectionPaths(newSelectedItems),
                         selectedItem:
                             newSelectedItems.length > 0
                                 ? newSelectedItems[newSelectedItems.length - 1]
@@ -157,6 +170,7 @@ export function fileManagerReducer(
                     return {
                         ...state,
                         selectedItems: newSelectedItems,
+                        ...selectionPaths(newSelectedItems),
                         selectedItem: item,
                         multiSelectMode: newSelectedItems.length > 1,
                         lastSelectedIndex: currentIndex,
@@ -188,6 +202,7 @@ export function fileManagerReducer(
                 return {
                     ...state,
                     selectedItems: newSelectedItems,
+                    ...selectionPaths(newSelectedItems),
                     selectedItem: item,
                     multiSelectMode: newSelectedItems.length > 1,
                     lastSelectedIndex: currentIndex,
@@ -211,6 +226,7 @@ export function fileManagerReducer(
             return {
                 ...state,
                 selectedItems: action.payload.items,
+                ...selectionPaths(action.payload.items),
                 selectedItem:
                     action.payload.items.length > 0
                         ? action.payload.items[action.payload.items.length - 1]
@@ -223,6 +239,8 @@ export function fileManagerReducer(
                 ...state,
                 selectedItems: [],
                 selectedItem: null,
+                selectedItemPath: null,
+                selectedItemPaths: [],
                 multiSelectMode: false,
                 lastSelectedIndex: -1,
             };

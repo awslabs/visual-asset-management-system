@@ -18,6 +18,7 @@ import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipel
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
+import { ZipArchiveBuilderNestedStack } from "./utility/zipArchive/zipArchiveBuilder-nestedStack";
 import { VideoSopBomBuilderNestedStack } from "./genAi/videoSopBom/videoSopBomBuilder-nestedStack";
 import { CadStepAgentBuilderNestedStack } from "./genAi/cadStepAgent/cadStepAgentBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
@@ -317,7 +318,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
             props.config.app.pipelines.useModelOps.enabled ||
-            props.config.app.pipelines.useIsaacLabTraining.enabled
+            props.config.app.pipelines.useIsaacLabTraining.enabled ||
+            props.config.app.pipelines.useZipDownloads.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -362,6 +364,23 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 this.pipelineVamsLambdaFunctionNames.push(
                     coordinateTransformPipelineNestedStack.pipelineVamsLambdaFunctionName
                 );
+            }
+
+            // Download as Zip: the zipArchive system pipeline. It registers itself (isSystem, fixed ids
+            // GLOBAL/utility-zip-archive), so its execute function is not listed for manual registration.
+            if (props.config.app.pipelines.useZipDownloads.enabled) {
+                new ZipArchiveBuilderNestedStack(this, "ZipArchiveBuilderNestedStack", {
+                    ...props,
+                    config: props.config,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                    kmsKey: props.storageResources.encryption.kmsKey,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                });
             }
 
             if (props.config.app.pipelines.useGenAiVideoSopBom?.enabled) {

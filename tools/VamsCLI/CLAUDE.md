@@ -36,6 +36,7 @@ tools/VamsCLI/
       setup.py               # Initial CLI configuration
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
       apiKey.py              # API key management (admin: list/get/create/update/delete) + 'user' sub-group (self-service own keys)
+      zip_download.py        # Download as Zip jobs (create, list, get, download, cancel, delete); the archive URL is streamed, never printed
       assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       assetsExport.py        # 'assets export' sub-command, registered on the assets group in assets.py
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
@@ -84,6 +85,7 @@ tools/VamsCLI/
       json_output.py         # output_result(), output_error(), output_status()
       system_records.py      # is_system_record_refusal(): exact match of the API's system-record 400s
       confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
+      zip_downloads.py       # zip-download helpers: PATH@VERSIONID parsing, request body, --wait polling, local path, text output
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
@@ -108,6 +110,7 @@ The core groups are registered in `main.py` via `cli.add_command()`:
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
 search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+zip-download
 compliance
 ```
 
@@ -127,6 +130,10 @@ Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
+
+Zip-download covers the Download as Zip (prepared downloads) API:
+
+-   `zip-download create|list|get|download|cancel|delete` -- `list --all-users` (with `-d`/`-a`) lists every user's jobs for the asset through the all-users route (`API_ZIP_DOWNLOADS_ASSET_ALL_USERS`); `create` takes `--file PATH[@VERSIONID]`, `--folder`, `--whole-asset`, `--asset-version-id`/`--asset-version-alias`, `--format`, `--compression`, `--name`, `--wait [--timeout]` and `--download-to`; `download` streams a finished archive from its presigned URL to `-o` (the URL is never printed or logged); `cancel` and `delete` share one DELETE route that cancels an active job and deletes a finished one, so the `APIClient` methods read the job first and refuse the other state (`ZipDownloadStateError`). Every method raises `ZipDownloadDisabledError` ("Zip downloads are not available for this deployment") from the profile's feature switches (`FEATURE_ZIPDOWNLOADS` absent from a read switch set) before any request, and from the API's 404 body when the switches were never read
 
 Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
 
@@ -184,6 +191,7 @@ VamsCLIError (base)
     AssetLinkError (+ 7 subclasses)
     CommentError (+ 2 subclasses)
     SubscriptionError (+ 3 subclasses)
+    ZipDownloadError (+ 10 subclasses)
     MetadataSchemaError (+ 3 subclasses)
     SearchError (+ 5 subclasses)
     WorkflowError (+ 4 subclasses)
@@ -253,8 +261,8 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Sets headers: `Content-Type: application/json`, `User-Agent: vamscli/{version}`
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
+-   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header. A 429 whose body is a known business refusal (`_BUSINESS_REFUSAL_429_MESSAGES`: the per-user active zip download cap) is not throttling and goes straight to the caller's status mapping, since backing off cannot clear it
 -   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded) with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment, so a path value carrying one would address another route (`tests/test_api_request_path.py`)
--   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
 -   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
 -   HTTP status to exception mapping in response handlers:
@@ -269,7 +277,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                                                                  |
 | `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                                                      |
-| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                                                    |
+| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `RouteNotDeployedError` (an `APIError`) naming the method and URL path, never the body; one send. A caller that must tell a final answer from a transient one catches it (`get_upload_status` maps it to `UploadStatusNotFoundError`)                                                  |
 | `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                                                            |
 | `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError.for_code(code)("Access forbidden. " + message, code=code)`: the subclass whose `forbidden_code` is the body's `code` (an add-on may define one in its exceptions module; it stays a permission denial), else `PermissionDeniedError`, with `code` set; one send |
 | `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)`                                     |
@@ -1169,6 +1177,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`           | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
 | `FEATURE_PHYSNA_ADDON` (`addon_constants.py`)     | `"PHYSNA_ADDON"`                  | Physna add-on features   |
 | `FEATURE_DEADLINECLOUD_PIPELINES`                 | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_ZIPDOWNLOADS`                            | `"ZIPDOWNLOADS"`                  | Download as Zip          |
 | `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
 | `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
 | `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |

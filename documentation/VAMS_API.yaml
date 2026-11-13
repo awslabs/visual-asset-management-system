@@ -2134,6 +2134,368 @@ paths:
               required: true
               schema:
                   $ref: '#/components/schemas/asset_id_regex'
+    /database/{databaseId}/assets/{assetId}/download/zip:
+        post:
+            summary: "Create a Download as Zip job for files, folders, or the whole asset."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller and is visible only to that caller. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createZipDownloadRequest"
+            responses:
+                "200":
+                    description: "The job was created and queued."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadJob"
+                "400":
+                    description: |
+                        Bad request. Possible reasons:
+                        - DatabaseId or AssetId invalid.
+                        - Invalid selection: no entries, more than 1000, a whole-asset entry combined with another entry, a path that is not asset-relative or contains backslashes, control characters, empty, '.' or '..' segments, a folder path without a trailing '/', or a versionId on a non-file entry.
+                        - assetVersionId combined with assetVersionIdAlias, or an asset version pin combined with a per-file versionId.
+                        - compression 'deflate' with a format other than zip.
+                        - Asset not distributable or archived.
+                        - A selected file or folder does not exist, has a blocked extension or media type, or the selection exceeds the file count or total size limit.
+                        - A selected file is archived ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.').
+                        - The Zip Archive workflow refused the run before starting it, for example because it is disabled or the selection fails its checks ('The archive job could not be started for this selection'); no job is recorded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "410":
+                    description: "A selected file version is archived or deleted and cannot be downloaded."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "429":
+                    description: "The caller already has the maximum number of active (QUEUED or RUNNING) zip downloads (app.pipelines.useZipDownloads.maxActiveRequestsPerUser)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: "Error processing request, or the archive job could not be started for another reason ('The archive job could not be started'; a run may exist, so the job is recorded as FAILED)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "The archive job could not be started right now ('The archive job could not be started right now. Try again in a moment.'): a transient condition such as a workflow deployment being brought up to date, the execution limit, or a throttle. Send the request again. When the launch was throttled the job is also recorded as FAILED; otherwise no job is recorded."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        get:
+            summary: "List the caller's zip download jobs for an asset."
+            description: "Lists the authenticated caller's zip download jobs for this asset, newest first. Jobs past their retention (expiresAt) are not returned. The response never contains another user's jobs. Answers 404 when Download as Zip is not enabled for the deployment."
+            parameters:
+                - $ref: '#/components/parameters/zipMaxItemsParam'
+                - $ref: '#/components/parameters/zipPageSizeParam'
+                - $ref: '#/components/parameters/startingTokenParam'
+            responses:
+                "200":
+                    description: "A page of the caller's jobs."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadListResponse"
+                "400":
+                    description: "Invalid path or query parameters, or a startingToken that does not belong to this listing."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, 2-255 characters."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/asset_id_regex'
+    /database/{databaseId}/assets/{assetId}/download/zip/{requestId}:
+        get:
+            summary: "Get one of the caller's zip download jobs."
+            description: "Returns the job with its status and progress. A job that belongs to another user, is named under another asset's path, or is past its retention answers the same 404 as a job that does not exist. Answers 404 when Download as Zip is not enabled for the deployment."
+            responses:
+                "200":
+                    description: "The job."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadJob"
+                "400":
+                    description: "Invalid path parameters."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Zip download not found, or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        delete:
+            summary: "Cancel or delete one of the caller's zip download jobs."
+            description: "Cancels a QUEUED or RUNNING job: the job becomes CANCELLED, its Zip Archive run is aborted, and any partial upload is discarded (action 'cancelled'). Deletes a SUCCEEDED, FAILED, or CANCELLED job: the archive and every other object of the job are removed together with the job record (action 'deleted'). A cancel never deletes a job: a cancel that reaches a job which finished before the cancel was recorded keeps the job with its outcome (action 'ended', with its status). Send intent=cancel to say the call is a cancel: a job that is already SUCCEEDED or FAILED is then kept and answered 'ended' instead of deleted, and a CANCELLED one answers 'cancelled'. Without intent the call cancels an active job and deletes a finished one. Answers 404 for a job that is not the caller's, and when Download as Zip is not enabled for the deployment."
+            parameters:
+              - in: query
+                name: intent
+                required: false
+                schema:
+                    type: string
+                    enum: [cancel]
+                description: "cancel: the call is a cancel and never deletes the job, even when the job finished before the call arrived. Any other value answers 400 and changes nothing. Omitted, the call cancels a QUEUED or RUNNING job and deletes a finished one."
+            responses:
+                "200":
+                    description: "The job was cancelled or deleted."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadDeleteResponse"
+                "400":
+                    description: "Invalid path parameters, or an intent other than cancel."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Zip download not found, or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, 2-255 characters."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/asset_id_regex'
+            - $ref: '#/components/parameters/zipRequestIdParam'
+    /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
+        post:
+            summary: "Issue a short-lived download URL for a finished zip download."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. For the caller's own job that is all. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route) and every file in the archive is still present, not archived and not a blocked type at the time of the request; otherwise it answers 404 (not permitted) or 400 (a file is no longer downloadable, the same message as a refused create). Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            responses:
+                "200":
+                    description: "A download URL for the archive."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadUrlResponse"
+                "400":
+                    description: "Invalid path parameters, the asset is not distributable or is archived, or (another user's job) a file in the archive is no longer downloadable."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Zip download not found, or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "409":
+                    description: "The archive is not ready for download (the job is not SUCCEEDED)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "410":
+                    description: "This zip download has expired (the archive object no longer exists)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, 2-255 characters."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/asset_id_regex'
+            - $ref: '#/components/parameters/zipRequestIdParam'
+    /database/{databaseId}/assets/{assetId}/download/zip-all-users:
+        get:
+            summary: "List every user's zip download jobs for an asset."
+            description: "Lists every user's unexpired zip download jobs for this asset, newest first (the web Download Queue's Show all users). Allowed to a caller whose role grants this route and who holds asset GET permission; a caller without asset GET, and a missing asset, get the same 404 (Asset not found). Each row adds requestedBy (the requester's user ID), isOwn, and the API's own decisions for the caller: canDownload (whether the download URL route would sign this archive) and canRemove (cancel and delete stay with the requester). Another user's row carries the selection summary, not the selection preview. Jobs created before this list existed are returned only in their requester's own lists. Answers 404 when Download as Zip is not enabled for the deployment."
+            parameters:
+                - $ref: '#/components/parameters/zipMaxItemsParam'
+                - $ref: '#/components/parameters/zipPageSizeParam'
+                - $ref: '#/components/parameters/startingTokenParam'
+            responses:
+                "200":
+                    description: "A page of every user's jobs for the asset."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadListResponse"
+                "400":
+                    description: "Invalid path or query parameters, or a startingToken that does not belong to this asset's listing."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (the role does not grant this route).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found (also when the caller may not read it), or Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Database identifier, 3-63 characters of letters, numbers, hyphens, and underscores."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, 2-255 characters."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/asset_id_regex'
+    /download/zip:
+        get:
+            summary: "List the caller's zip download jobs across assets."
+            description: "Lists the authenticated caller's zip download jobs across every asset, newest first. Jobs past their retention, and jobs on an asset the caller can no longer read, are not returned. Answers 404 when Download as Zip is not enabled for the deployment."
+            parameters:
+                - $ref: '#/components/parameters/zipMaxItemsParam'
+                - $ref: '#/components/parameters/zipPageSizeParam'
+                - $ref: '#/components/parameters/startingTokenParam'
+            responses:
+                "200":
+                    description: "A page of the caller's jobs."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/zipDownloadListResponse"
+                "400":
+                    description: "Invalid query parameters, or a startingToken that does not belong to this listing."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Download as Zip is not enabled for this deployment."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /database/{databaseId}/assets/{assetId}/export:
         post:
             summary: "Export comprehensive asset data including child tree, metadata, files, and relationships"
@@ -4360,7 +4722,7 @@ paths:
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload]
-                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
+                                    description: "Trigger type (default manual; set by trigger dispatch otherwise). A system trigger value (System-<Identifier>) is refused with 400: system pipeline runs are launched by VAMS itself, never through this request."
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4454,6 +4816,12 @@ paths:
                 filterStartDate.
 
 
+                Runs of system workflows are not returned unless includeSystem=true, or the list is
+                filtered to one system workflow; the applied value is echoed back as includeSystem.
+                They are removed after the candidate window is read, so a page can come back short or
+                empty with a NextToken, as it can for the other filters.
+
+
                 One request collects at most the 200 most recent executions of the asset, across both
                 directions, and each is then checked against the caller's access; the response carries
                 a NextToken when older executions remain, so page until the token is absent.
@@ -4485,6 +4853,9 @@ paths:
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 1
@@ -4498,7 +4869,7 @@ paths:
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -4577,11 +4948,19 @@ paths:
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, except when the list is filtered to one workflow (workflowId and workflowDatabaseId) that is a system workflow the caller can read, in which case its runs are included. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
     /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
         get:
             summary: "List executions for a specific workflow on an asset."
@@ -4617,6 +4996,9 @@ paths:
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 1
@@ -4630,7 +5012,7 @@ paths:
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -4673,6 +5055,13 @@ paths:
                 description: "Database of the workflow named in the path. Accepts GLOBAL for the shared workflow catalog."
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, unless the workflow named in the path (with its workflowDatabaseId) is a system workflow the caller can read. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -7766,7 +8155,66 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
             security:
                 - DefaultCognitoAuthorizer: []
-    
+
+    /uploads/{uploadId}:
+        get:
+            summary: "Get the status of an upload whose large files are ingested asynchronously."
+            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. An upload whose files all landed at completion has no record, so it answers 404. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
+            parameters:
+                - name: "uploadId"
+                  in: path
+                  description: "Unique identifier for the upload, as returned by POST /uploads."
+                  required: true
+                  schema:
+                    type: string
+                    pattern: "^[A-Za-z0-9-]+$"
+                    maxLength: 64
+                - name: "assetId"
+                  in: query
+                  description: "The asset the upload targets."
+                  required: true
+                  schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+                - name: "databaseId"
+                  in: query
+                  description: "The database of the asset."
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: The upload's status.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/uploadStatusResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to call this route.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Upload not found: no record (including an upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
     /uploads/{uploadId}/complete:
         post:
             summary: "Complete a multipart upload."
@@ -7867,7 +8315,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow, GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), and GET on the asset it wrote to whenever the run wrote to one; a permanently deleted asset defers to GET on the database it lived in. A results-only run names no output asset and reads nothing, so workflow GET is its whole gate. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files. A page shorter than pageSize is a stated bound rather than an absence of matches: warnings names the bound that stopped it."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow, GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), and GET on the asset it wrote to whenever the run wrote to one; a permanently deleted asset defers to GET on the database it lived in. A results-only run names no output asset and reads nothing, so workflow GET is its whole gate. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Runs of system workflows are not returned unless includeSystem=true, or the list is filtered to one system workflow; the applied value is echoed back as includeSystem. Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files. A page shorter than pageSize is a stated bound rather than an absence of matches: warnings names the bound that stopped it."
             parameters:
               - name: pageSize
                 in: query
@@ -7941,6 +8389,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -7951,6 +8400,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: string
+              - in: query
+                name: includeSystem
+                required: false
+                description: "true to include runs of system workflows, false to leave them out. When absent they are left out, except when the list is filtered to one workflow (workflowId and workflowDatabaseId) that is a system workflow the caller can read, in which case its runs are included. Case-insensitive; any other value is rejected with 400."
+                schema:
+                    type: string
+                    enum: ["true", "false"]
             responses:
                 "200":
                     description: OK
@@ -7973,6 +8429,9 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             filterEndDate:
                                                 type: string
                                                 description: "The upper bound that was applied, present only when one was supplied."
+                                            includeSystem:
+                                                type: boolean
+                                                description: "Whether this page includes runs of system workflows: the caller's includeSystem, or the default that applied."
                                             warnings:
                                                 type: array
                                                 maxItems: 2
@@ -7989,7 +8448,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                                 type: string
                                                 nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid — a filterStartDate or filterEndDate outside the accepted UTC form, or a startingToken that cannot be decoded.
+                    description: A filter or pagination parameter is invalid — a filterStartDate or filterEndDate outside the accepted UTC form, an includeSystem other than true or false, or a startingToken that cannot be decoded.
                     content:
                         application/json:
                             schema:
@@ -8080,7 +8539,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. While output files over 1 GiB are still being copied into the asset, the execution stays RUNNING and the response adds executionPhase 'INGESTING_OUTPUTS' and outputIngestion {filesTotal, filesDone, bytesTotal, bytesDone, files, filesTruncated}; both are absent for every other execution. outputIngestion.files lists each copy, sorted by relativeKey, at most 100 entries: {relativeKey, status (QUEUED, RUNNING, SUCCEEDED, FAILED or CANCELLED), bytesTotal, partsTotal, partsDone, error (a generic reason, set only for a FAILED or CANCELLED copy)}; filesTruncated is true when the execution has more copies than are listed. The per-file entries are display progress read from an eventually consistent index. Such a file's outputs.files row carries ingestionStatus 'SUCCEEDED' once it has landed, and a file whose copy failed is left out of outputs.files and named in executionError. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
             parameters:
               - in: path
                 name: executionId
@@ -8558,6 +9017,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 execution's metadata source asset list — cannot
                 be reproduced exactly, so the re-run is answered 400 instead of launching a run that
                 differs from the original. Start a new execution supplying those values.
+
+
+                A system pipeline run (a triggerType that starts with System-, launched by VAMS for a system
+                feature) is never re-run: the request is answered 400 and nothing is launched. Start
+                the operation again from the feature that created it.
             parameters:
               - in: path
                 name: executionId
@@ -15162,10 +15626,14 @@ components:
                     description: "Empty while the execution is still running. For a SKIPPED record, the first refused launch."
                 triggerType:
                     type: string
+                    description: "Stored trigger value: Manual, File-Upload, or a system trigger value (System-<Identifier>, chosen by the feature) on a run VAMS launched for a system feature. A system run cannot be re-run."
                 triggeredByUserId:
                     type: string
                 executionGroupId:
                     type: string
+                isSystem:
+                    type: boolean
+                    description: "True for a run of a system workflow (the workflow's isSystem, copied at launch). False for every other run, including one recorded before the flag existed. Such rows are listed only when includeSystem applies."
                 outputLocationType:
                     type: string
                     description: "'asset' for a run that wrote files to an asset, 'none' for a results-only run. Empty for a run with no configuration row."
@@ -15337,6 +15805,9 @@ components:
                 s3VersionId:
                     type: string
                     description: "Output rows only, when known."
+                ingestionStatus:
+                    type: string
+                    description: "Output rows only: 'SUCCEEDED' for a file over 1 GiB the large object copy engine copied into the asset. Absent on every other row."
                 pipelineId:
                     type: string
                     description: "Output rows only: the pipeline whose step produced the file."
@@ -17716,6 +18187,7 @@ components:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
                     type: boolean
+                    description: "True when every file succeeded. A file accepted for asynchronous processing (largeFileAsynchronousHandling) counts as succeeded, including when every file in the upload is over 1 GiB."
                 largeFileAsynchronousHandling:
                     type: boolean
                     description: "Indicates if any file in this upload is being processed asynchronously due to large file size"
@@ -17726,6 +18198,44 @@ components:
                 - assetId
                 - fileResults
                 - overallSuccess
+        uploadStatusResponse:
+            type: object
+            properties:
+                uploadId:
+                    type: string
+                databaseId:
+                    type: string
+                assetId:
+                    $ref: '#/components/schemas/asset_id_regex'
+                status:
+                    type: string
+                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED)."
+                asyncFiles:
+                    type: array
+                    description: "One entry per file accepted for asynchronous ingestion, sorted by relativeKey; empty when the upload tracks none."
+                    items:
+                        type: object
+                        properties:
+                            relativeKey:
+                                type: string
+                            status:
+                                type: string
+                                enum: [PENDING, SUCCEEDED, FAILED]
+                            error:
+                                type: string
+                                description: "Generic reason, set when the file FAILED."
+                            updatedAt:
+                                type: string
+                                format: date-time
+                        required:
+                            - relativeKey
+                            - status
+            required:
+                - uploadId
+                - databaseId
+                - assetId
+                - status
+                - asyncFiles
         
         # Asset File Operations Schemas
         assetFileItem:
@@ -20323,6 +20833,211 @@ components:
                     maxItems: 2
                     items:
                         $ref: "#/components/schemas/constraintPermissionType"
+        zipSelectionEntry:
+            type: object
+            required:
+                - type
+                - relativePath
+            properties:
+                type:
+                    type: string
+                    enum: [file, folder, asset]
+                    description: "file: one file. folder: every current file under the folder (relativePath ends with '/'). asset: the whole asset (relativePath '/', and the only entry)."
+                relativePath:
+                    type: string
+                    minLength: 1
+                    maxLength: 1024
+                    description: "Asset-relative path beginning with '/'. Backslashes, control characters, and empty, '.' or '..' segments are refused."
+                versionId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    pattern: '^[A-Za-z0-9._\-]+$'
+                    description: "Optional S3 version ID that pins a file entry to that version. Allowed on file entries only, and not combined with an asset version pin."
+        createZipDownloadRequest:
+            type: object
+            required:
+                - selection
+            properties:
+                selection:
+                    type: array
+                    minItems: 1
+                    maxItems: 1000
+                    description: "What to archive. Exact duplicate entries are collapsed."
+                    items:
+                        $ref: "#/components/schemas/zipSelectionEntry"
+                assetVersionId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    pattern: '^[A-Za-z0-9._\-]+$'
+                    description: "Optional asset version ID. Every selected file, folder, or the whole asset resolves to the file versions recorded in that asset version. Mutually exclusive with assetVersionIdAlias and with per-file versionId."
+                assetVersionIdAlias:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                    description: "Optional asset version alias, resolved to an asset version ID as for assetVersionId."
+                archiveFormat:
+                    type: string
+                    enum: [zip, tar, tar.gz]
+                    default: zip
+                    description: "Archive format. Zip archives use ZIP64 records wherever a size, offset, or entry count needs them."
+                compression:
+                    type: string
+                    enum: [store, deflate]
+                    default: store
+                    description: "Zip member compression. deflate applies to the zip format only; tar and tar.gz use store."
+                archiveFileName:
+                    type: string
+                    minLength: 1
+                    maxLength: 255
+                    description: "Optional archive file name. Any directory part is removed, characters other than letters, digits, space and ._()- become '_', the name is cut to 200 characters, and the format's extension is appended when missing. Defaults to '<asset name>-<YYYYMMDD-HHMMSS>.<extension>'."
+        zipDownloadProgress:
+            type: object
+            properties:
+                filesDone:
+                    type: integer
+                filesTotal:
+                    type: integer
+                    description: "0 until the Zip Archive job has resolved the selection, unless create already knew the full file list."
+                bytesDone:
+                    type: integer
+                bytesTotal:
+                    type: integer
+        zipDownloadJob:
+            type: object
+            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and the flags below appear only in the all-users list."
+            properties:
+                requestId:
+                    type: string
+                    description: "Job identifier: a time-sortable prefix and a random suffix."
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                assetName:
+                    type: string
+                    description: "The asset's name when the job was created."
+                status:
+                    type: string
+                    enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]
+                archiveFormat:
+                    type: string
+                    enum: [zip, tar, tar.gz]
+                compression:
+                    type: string
+                    enum: [store, deflate]
+                archiveFileName:
+                    type: string
+                archiveSizeBytes:
+                    type: integer
+                    nullable: true
+                    description: "Size of the finished archive; null until the job succeeds."
+                selectionSummary:
+                    type: object
+                    properties:
+                        files:
+                            type: integer
+                        folders:
+                            type: integer
+                        wholeAsset:
+                            type: boolean
+                selectionPreview:
+                    type: array
+                    maxItems: 20
+                    description: "The first 20 requested entries."
+                    items:
+                        type: object
+                        properties:
+                            type:
+                                type: string
+                            relativePath:
+                                type: string
+                            versionId:
+                                type: string
+                                nullable: true
+                assetVersionId:
+                    type: string
+                    nullable: true
+                    description: "The asset version the job is pinned to (an alias is recorded as its version ID)."
+                progress:
+                    $ref: "#/components/schemas/zipDownloadProgress"
+                errorMessage:
+                    type: string
+                    nullable: true
+                    description: "User-safe reason for a FAILED job, for example the asset-relative path of a refused file."
+                cancelledBy:
+                    type: string
+                    nullable: true
+                    enum: [user, execution]
+                    description: "user: cancelled through this API. execution: the Zip Archive run was aborted from the workflow executions views (the job is then FAILED with 'Cancelled from workflow executions')."
+                createdAt:
+                    type: string
+                    format: date-time
+                startedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                completedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                expiresAt:
+                    type: string
+                    format: date-time
+                    description: "When the job expires (createdAt plus 7 days, a fixed retention). From then on it is not listed and every route answers 404 for it. The archive object is removed by an S3 lifecycle rule 7 days after the archive was written, which S3 applies asynchronously, so it can remain for up to a day or two after expiresAt."
+                requestedBy:
+                    type: string
+                    description: "All-users list only: the requester's user ID."
+                isOwn:
+                    type: boolean
+                    description: "All-users list only: whether the caller requested this job."
+                canDownload:
+                    type: boolean
+                    description: "All-users list only: the API's decision whether the download URL route would sign this archive for the caller (advisory; the route checks again)."
+                canRemove:
+                    type: boolean
+                    description: "All-users list only: whether the caller may cancel or delete the job (only its requester may)."
+        zipDownloadListResponse:
+            type: object
+            properties:
+                Items:
+                    type: array
+                    maxItems: 1000
+                    items:
+                        $ref: "#/components/schemas/zipDownloadJob"
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Opaque token for the next page; absent on the last page. A page can hold fewer items than requested when expired jobs or jobs on assets the caller can no longer read are left out."
+        zipDownloadUrlResponse:
+            type: object
+            properties:
+                url:
+                    type: string
+                    description: "Presigned Amazon S3 GET URL with Content-Disposition attachment and the archive file name."
+                expiresIn:
+                    type: integer
+                    description: "Seconds the URL stays valid."
+                archiveFileName:
+                    type: string
+                archiveSizeBytes:
+                    type: integer
+                    nullable: true
+        zipDownloadDeleteResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    enum: ["Zip download cancelled", "Zip download deleted", "The zip download finished before it could be cancelled"]
+                action:
+                    type: string
+                    enum: [cancelled, deleted, ended]
+                    description: "cancelled: the job is CANCELLED (also a repeated cancel with intent=cancel of a CANCELLED job). deleted: a finished job and its archive were removed (never with intent=cancel). ended: a cancel reached a job that had already finished; the job is kept with its outcome and nothing is deleted."
+                status:
+                    type: string
+                    enum: [SUCCEEDED, FAILED, ""]
+                    description: "Present only with action ended: the job's final status, SUCCEEDED or FAILED. An empty string when the job was deleted by another call while the cancel ran."
 
         complianceSchema:
             type: object
@@ -22177,6 +22892,32 @@ components:
             minimum: 1
             maximum: 500
             default: 100
+      zipMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of zip download jobs returned in one page. Default is 100"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      zipPageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of zip download jobs read per page. Default is 100; the smaller of maxItems and pageSize applies"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      zipRequestIdParam:
+        name: requestId
+        in: path
+        required: true
+        description: "Zip download job identifier, as returned by the create and list routes"
+        schema:
+            type: string
+            pattern: '^[0-9a-z]{9}-[0-9a-f]{32}$'
       complianceEvaluationsMaxItemsParam:
         name: maxItems
         in: query

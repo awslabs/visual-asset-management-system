@@ -697,6 +697,10 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 | `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                                                                              |
 | `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                              |
 
+:::tip[One archive instead of many URLs]
+To download files, folders, or a whole asset as a single zip, tar, or tar.gz file, create a zip download job with `POST /database/{databaseId}/assets/{assetId}/download/zip`. The archive is built in the background and can reach 5 TiB. See the [Zip Downloads API](zip-downloads.md).
+:::
+
 ---
 
 ### Export Asset
@@ -904,6 +908,7 @@ The `assetSnapshot` object is open-schema: snapshot fields may grow over time, a
 
 -   [Databases API](databases.md) -- Manage the databases assets belong to
 -   [Files API](files.md) -- Upload, move, and stream an asset's files
+-   [Zip Downloads API](zip-downloads.md) -- Download files, folders, or a whole asset as one archive
 -   [Asset Versions API](asset-versions.md) -- Create, inspect, and revert asset versions
 -   [Comments API](comments.md) -- Attach review comments to an asset version
 -   [Metadata API](metadata.md) -- Manage asset and file metadata

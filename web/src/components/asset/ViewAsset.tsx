@@ -32,6 +32,7 @@ import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+import { ASSET_TAB_QUERY_PARAM } from "../zipDownloads/zipDownloads";
 
 const ASSET_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata";
 const ASSET_UNARCHIVE_ROUTE = "/database/{databaseId}/assets/{assetId}/unarchiveAsset";
@@ -66,6 +67,27 @@ export default function ViewAsset() {
         if (fromQuery) return fromQuery;
         return (location.state as any)?.filePathToNavigate ?? undefined;
     }, [location.search, location.state]);
+
+    // `?tab=` selects a tab (the Download Queue link of a new zip job uses it). The tab follows the
+    // query while the page stays mounted, and a tab the user picks is written back to it.
+    const requestedTabId = React.useMemo(
+        () => new URLSearchParams(location.search).get(ASSET_TAB_QUERY_PARAM),
+        [location.search]
+    );
+    const handleTabChange = useCallback(
+        (tabId: string) => {
+            const params = new URLSearchParams(location.search);
+            if (tabId === "file-manager") params.delete(ASSET_TAB_QUERY_PARAM);
+            else params.set(ASSET_TAB_QUERY_PARAM, tabId);
+            const search = params.toString();
+            if (`?${search}` === location.search || (!search && !location.search)) return;
+            navigate(
+                { search: search ? `?${search}` : "" },
+                { replace: true, state: location.state }
+            );
+        },
+        [location.search, location.state, navigate]
+    );
 
     // State
     const [state, dispatch] = useReducer(assetDetailReducer, {
@@ -419,6 +441,8 @@ export default function ViewAsset() {
                                         filePathToNavigate={filePathToNavigate}
                                         assetVersionId={selectedVersionId || undefined}
                                         onSelectedPathChange={handleSelectedPathChange}
+                                        requestedTabId={requestedTabId}
+                                        onTabChange={handleTabChange}
                                         onVersionsChanged={handleVersionsChanged}
                                     />
 

@@ -147,6 +147,8 @@ def _stored_workflow(workflow_id="wf1", database_id="db1", refs=None, deployed_f
     if deployed_from is not None:
         row["workflowVersionArn"] = ARN + ":3"
         row["pipelineFingerprints"] = wa.workflow_pipeline_fingerprints(deployed_from)
+        row["aslSchemaVersion"] = str(wa.ASL_SCHEMA_VERSION)
+        row["outputIngestionWaitHours"] = str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)
     row.update(extra)
     return row
 
@@ -205,6 +207,13 @@ class TestPipelineFingerprint:
         workflow = {"pipelineFingerprints": wa.workflow_pipeline_fingerprints([_pipeline()])}
         assert wa.deployment_matches(workflow, [_pipeline()]) is False
         workflow["workflowVersionArn"] = ARN + ":1"
+        # Generated with an older ASL schema: redeployed by its next launch.
+        assert wa.deployment_matches(workflow, [_pipeline()]) is False
+        assert wa.fingerprints_match(workflow, [_pipeline()]) is True
+        workflow["aslSchemaVersion"] = str(wa.ASL_SCHEMA_VERSION)
+        # Generated with another maximum output-ingestion wait (or none recorded): redeployed.
+        assert wa.deployment_matches(workflow, [_pipeline()]) is False
+        workflow["outputIngestionWaitHours"] = str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)
         assert wa.deployment_matches(workflow, [_pipeline()]) is True
         assert wa.deployment_matches(workflow, [_pipeline(taskTimeout="7200")]) is False
 
@@ -258,6 +267,16 @@ class TestStableJobNames:
                    return_value=(ARN, ["zzzzz-pipe2"], ARN + ":4")) as deploy:
             ws._deploy_fields("db1", "wf1", [(_ref("pipe2"), _pipeline("pipe2"))], item)
         assert deploy.call_args.kwargs["job_names"] is None
+
+    def test_a_deploy_records_the_wait_its_definition_was_built_with(self, monkeypatch):
+        """Low L1: the deployment check compares this with the current wait."""
+        # workflowService's own import of the module (the module path differs from wa's).
+        monkeypatch.setattr(ws.workflowAsl, "MAX_OUTPUT_INGESTION_WAIT_HOURS", 72)
+        with patch(f"{MOD}.workflowAsl.deploy_state_machine", return_value=(ARN, [], ARN + ":4")):
+            fields = ws._deploy_fields("db1", "wf1", [(_ref(), _pipeline())], _stored_workflow())
+        assert fields["outputIngestionWaitHours"] == "72"
+        assert ws._deployment_view(fields)["outputIngestionWaitHours"] == "72"
+        assert ws.workflowAsl.deployment_matches(fields, [_pipeline()]) is True
 
 
 #######################
@@ -452,7 +471,9 @@ class TestRedeployIsConditional:
 
         def _concurrent_redeploy(stored):
             stored.update({"deploymentRevision": 4, "workflowVersionArn": ARN + ":7",
-                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live])})
+                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live]),
+                           "aslSchemaVersion": str(wa.ASL_SCHEMA_VERSION),
+                           "outputIngestionWaitHours": str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)})
 
         table = FakeWorkflowTable([row], before_write=_concurrent_redeploy)
         with patch(f"{MOD}._workflow_table", return_value=table), \
@@ -503,7 +524,9 @@ class TestRedeployReadsAreStronglyConsistent:
 
         def _concurrent_redeploy(stored):
             stored.update({"deploymentRevision": 4, "workflowVersionArn": ARN + ":7",
-                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live])})
+                           "pipelineFingerprints": wa.workflow_pipeline_fingerprints([live]),
+                           "aslSchemaVersion": str(wa.ASL_SCHEMA_VERSION),
+                           "outputIngestionWaitHours": str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)})
 
         table = FakeWorkflowTable([row], before_write=_concurrent_redeploy, lagging=True)
         pipelines = LaggingPipelineTable(previous=[live], latest=[live])

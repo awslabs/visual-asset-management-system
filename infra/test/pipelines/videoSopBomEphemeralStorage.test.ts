@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as Config from "../../config/config";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { PREPARED_DOWNLOADS_PREFIX } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 
 /** Fargate's own bounds, from the prop's doc comment on `batch-fargate-pipeline.ts`. */
 const FARGATE_MIN_GIB = 21;
@@ -164,11 +165,14 @@ describe("auxiliary bucket scratch-prefix expiry", () => {
 
     /**
      * True for a rule that expires something and is not one of the bucket's always-on rules. The asset
-     * export staging prefix expires in every deployment (test/storage/assetExportStagingExpiry.test.ts),
-     * so it is not this pipeline's rule and does not count against it.
+     * export staging prefix (test/storage/assetExportStagingExpiry.test.ts) and the Download as Zip
+     * archives' prefix (test/platform/zipDownloadsInfra.test.ts) expire in every deployment, so they are
+     * not this pipeline's rules and do not count against it.
      */
     const pipelineExpiry = (rule: any): boolean =>
-        expiresSomething(rule) && rule.Prefix !== Config.ASSET_EXPORT_STAGING_PREFIX;
+        expiresSomething(rule) &&
+        rule.Prefix !== Config.ASSET_EXPORT_STAGING_PREFIX &&
+        rule.Prefix !== PREPARED_DOWNLOADS_PREFIX;
 
     test("[control] the pre-existing incomplete-multipart abort rule is still there", () => {
         // Without this, a change that dropped `lifecycleRules` entirely would make "no rule expires

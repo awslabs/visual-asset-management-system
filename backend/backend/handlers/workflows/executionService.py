@@ -29,6 +29,8 @@ from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.workflows import executionAccess as ea
 from common.workflows import executionLogCapture as elc
+from common.workflows import systemPipelines as sp
+from common import largeObjectCopy as loc
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -81,7 +83,8 @@ claims_and_roles = {}
 
 def _stored_trigger_type(value) -> str:
     """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
-    and 'File-Upload'; any other value is compared as given."""
+    and 'File-Upload'; any other value (a system trigger value included, whose request and stored
+    spellings are the same) is compared as given."""
     value = (value or "").strip()
     return TRIGGER_TYPE_TO_STORED.get(value, value)
 
@@ -523,6 +526,12 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
+    if reconciled.get("executionStatus") in TERMINAL_STATUSES:
+        # A terminal row is no longer ingesting outputs (abort, group abort, a run stopped outside
+        # VAMS, the read-path expiry of an ingestion that never reported).
+        expr += eo.REMOVE_INGESTION_PHASE
+        for attr in eo.INGESTION_PHASE_ATTRIBUTES:
+            main_item.pop(attr, None)
     kwargs = {}
     if only_if_not_terminal:
         kwargs["ConditionExpression"] = eo.not_terminal_condition(values)
@@ -776,6 +785,25 @@ def prewarm_asset_details(pairs):
     return {pair: _asset_details_cache.get(pair) for pair in requested}
 
 
+def _apply_ingestion_hold(main_item, described):
+    """The Step Functions view a read-path reconcile acts on for a run that may still be ingesting
+    large outputs (common.largeObjectCopy.ingestion_hold).
+
+    A run whose state machine SUCCEEDED on a definition that does not wait is still copying its
+    outputs, and the copy engine records its outcome, so the poll is treated as if the run were
+    still running (None: nothing to adopt). Past the maximum wait plus an hour the copies are taken
+    to have stopped reporting and the run is recorded FAILED. Any other status is adopted as is."""
+    if not described:
+        return described
+    hold = loc.ingestion_hold(main_item, described.get("status"))
+    if hold == "hold":
+        return None
+    if hold == "expired":
+        return {**described, "status": "FAILED", "error": "OutputIngestionTimeout",
+                "cause": loc.REASON_NOT_REPORTED}
+    return described
+
+
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
                           fetch_execution_log_and_error=None, on_terminal_observed=None,
@@ -855,6 +883,7 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
                 'workflowDatabaseId:workflowId': main_item.get('workflowDatabaseId:workflowId', ''),
                 'lastSfnSyncCheckDate': main_item['lastSfnSyncCheckDate'],
             }
+            execution = _apply_ingestion_hold(main_item, execution)
             if execution:
                 status = execution.get('status', status)
                 sfn_stop = execution.get('stopDate')
@@ -903,6 +932,9 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'triggerType': main_item.get('triggerType', ''),
             'triggeredByUserId': main_item.get('triggeredByUserId', ''),
             'executionGroupId': main_item.get('executionGroupId', ''),
+            # True for a run of a system workflow (stamped at launch); a legacy row reads False. The
+            # caller drops these unless includeSystem applies.
+            'isSystem': er.execution_row_is_system(main_item),
             'startDate': start_date,
             'stopDate': stop_date,
             # Alias the dates under the same keys the global/workflow lists use, so the shared web
@@ -955,7 +987,14 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
     parameter, or 90 days before now by default; the applied value is echoed back as
     `filterStartDate`. A caller `filterEndDate` adds the upper bound and is echoed back when set.
     A `warnings` entry means the MAX_EXECUTIONS_INSPECTED cap withheld rows from this page.
+    Runs of system workflows are left out unless `includeSystem=true`, or unless the listing is scoped
+    to one system workflow (see _resolve_include_system); the applied value is echoed as
+    `includeSystem`.
     """
+    include_system_valid, include_system_explicit = _parse_include_system(query_params)
+    if not include_system_valid:
+        return validation_error(body={'message': INCLUDE_SYSTEM_INVALID_MESSAGE}, event=event)
+
     asset_of_workflow = get_asset_details(database_id, asset_id)
 
     if not asset_of_workflow:
@@ -1431,6 +1470,20 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             "groupId": (query_params.get("groupId") or "").strip(),
             "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
         }
+        # System runs: hidden unless asked for, or unless the listing is scoped to one system
+        # workflow — by the path form (workflowId + the body's workflowDatabaseId) or by the query form.
+        # A post-filter like the equality filters above, so the index cursor stays correct and a page
+        # can come back short (or empty) with a NextToken, exactly as a filtered page does today.
+        # The path form's database arrives in the request body, which a browser cannot send on a GET,
+        # so the query form's workflowDatabaseId completes it as well.
+        scoped_workflow_id = workflow_id or extra_filters["workflowId"]
+        scoped_workflow_database_id = ((workflow_database_id if workflow_id else '')
+                                       or extra_filters["workflowDatabaseId"])
+        include_system = _resolve_include_system(
+            include_system_explicit, casbin_enforcer,
+            scoped_workflow_database_id or '', scoped_workflow_id or '')
+        if not include_system:
+            extra_filters["excludeSystem"] = True
         # The walk excluded on the STORED status; a row this request's reconcile moved into an
         # excluded status is dropped here too.
         if excluded_statuses:
@@ -1440,8 +1493,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
         # Surface the effective start-date filter that was applied (the caller's filterStartDate
         # or the default 90-days-before-now), so the response is self-describing. The upper bound is
-        # echoed only when the caller supplied one — there is no default end date.
-        result = {"Items": items, "filterStartDate": filter_start_date}
+        # echoed only when the caller supplied one — there is no default end date. includeSystem
+        # echoes whether system runs were included.
+        result = {"Items": items, "filterStartDate": filter_start_date,
+                  "includeSystem": include_system}
         if filter_end_date:
             result["filterEndDate"] = filter_end_date
 
@@ -1915,6 +1970,140 @@ def authorize_abort(execution_id, main_item, config_row=None):
     return authorize_execution_access(execution_id, main_item, "POST", config_row=config_row)
 
 
+# Per-file entries the details response returns for a run that is ingesting outputs.
+MAX_INGESTION_FILES_RETURNED = 100
+
+
+def _output_ingestion_fields(main_item, execution_status=""):
+    """executionPhase / outputIngestion for the details response, only while a RUNNING run's large
+    outputs are being copied into the asset (additive: absent for every other run, including every
+    terminal one, whose stored phase a terminal writer removes). outputIngestion carries the run's
+    counters and each copy's status and part progress (at most MAX_INGESTION_FILES_RETURNED)."""
+    status = execution_status or main_item.get("executionStatus", "")
+    if (main_item.get("executionPhase") != loc.EXECUTION_PHASE_INGESTING_OUTPUTS
+            or status in TERMINAL_STATUSES):
+        return {}
+    fields = {"executionPhase": main_item["executionPhase"]}
+    progress = main_item.get("outputIngestion")
+    ingestion = {
+        key: int((progress or {}).get(key) or 0)
+        for key in ("filesTotal", "filesDone", "bytesTotal", "bytesDone")}
+    files, truncated = _ingestion_file_progress(main_item.get("workflowExecutionId", ""), main_item)
+    ingestion["files"] = files
+    ingestion["filesTruncated"] = truncated
+    fields["outputIngestion"] = ingestion
+    return fields
+
+
+def _ingestion_file_progress(execution_id, main_item=None):
+    """([{relativeKey, status, bytesTotal, partsTotal, partsDone, error}], truncated) of the run's
+    copy jobs, from one index query (eventually consistent: display only). Best-effort: a read
+    failure returns no entries. With the run's ``main_item`` the read also checks for copies that
+    ended unreported (_reconcile_ended_copies, at most once per interval per run)."""
+    if not execution_id:
+        return [], False
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        rows = loc.jobs_for_execution(table, execution_id)
+    except Exception as e:
+        logger.warning(f"Could not read the output copy progress of execution {execution_id}: {e}")
+        return [], False
+    if main_item is not None:
+        _reconcile_ended_copies(rows, main_item)
+    rows = sorted(rows, key=lambda row: row.get("relativeKey", ""))
+    files = []
+    for row in rows[:MAX_INGESTION_FILES_RETURNED]:
+        job_status = row.get("status", loc.STATUS_QUEUED)
+        files.append({
+            "relativeKey": row.get("relativeKey", ""),
+            "status": job_status,
+            "bytesTotal": int(row.get("sourceSize") or 0),
+            "partsTotal": int(row.get("partCount") or 0),
+            "partsDone": min(int(row.get("partsCopied") or 0), int(row.get("partCount") or 0)),
+            "error": (row.get("error") or "") if job_status in (loc.STATUS_FAILED,
+                                                               loc.STATUS_CANCELLED) else "",
+        })
+    return files, len(rows) > MAX_INGESTION_FILES_RETURNED
+
+
+def _reconcile_ended_copies(rows, main_item):
+    """Backstop for a missed status change event of the copy state machine: hand the copy engine
+    each unfinished job whose execution already ended outside its states (at most
+    MAX_RECONCILE_CHECKS_PER_READ describes per check), so its run is finalized without waiting out
+    MAX_OUTPUT_INGESTION_WAIT_HOURS. A run is checked at most once per
+    COPY_RECONCILE_CHECK_INTERVAL_SECONDS, whatever the number of viewers polling its details: the
+    check is claimed on the run's row first. Asynchronous and idempotent; never raises."""
+    function_name = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME, "")
+    if not function_name:
+        return
+    if not any(row.get("executionArn") and row.get("status") not in loc.TERMINAL_JOB_STATUSES
+               for row in rows or []):
+        return
+    if not _claim_copy_reconcile_check(main_item):
+        return
+    try:
+        for execution_arn in loc.ended_copy_executions(sfn, rows):
+            lambda_client.invoke(FunctionName=function_name, InvocationType="Event",
+                                 Payload=json.dumps({"action": "reconcile", "executionArn": execution_arn}))
+    except Exception as e:
+        logger.warning(f"Could not hand an ended output copy to the copy engine: {e}")
+
+
+def _claim_copy_reconcile_check(main_item):
+    """Claim this interval's ended-copy check of a run by stamping its row (a conditional write, so
+    one of several concurrent reads wins). False when the run was checked within the interval, or
+    the stamp could not be written (logged; the next read tries again)."""
+    key = {"workflowExecutionId": main_item.get("workflowExecutionId", ""),
+           "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")}
+    if not all(key.values()):
+        return False
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=loc.COPY_RECONCILE_CHECK_INTERVAL_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        dynamodb.Table(workflow_execution_database_v2).update_item(
+            Key=key,
+            UpdateExpression="SET #c = :n",
+            ConditionExpression="attribute_exists(workflowExecutionId) AND (attribute_not_exists(#c) OR #c <= :cut)",
+            ExpressionAttributeNames={"#c": loc.COPY_RECONCILE_CHECK_ATTRIBUTE},
+            ExpressionAttributeValues={":n": now.strftime("%Y-%m-%dT%H:%M:%SZ"), ":cut": cutoff},
+        )
+        return True
+    except botocore.exceptions.ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.info(f"Could not stamp the copy check of execution {key['workflowExecutionId']}: {e}")
+        return False
+    except Exception as e:
+        logger.info(f"Could not stamp the copy check of execution {key['workflowExecutionId']}: {e}")
+        return False
+
+
+def _cancel_output_copies(execution_id):
+    """Stop the large object copy jobs of an execution and abort their multipart uploads; one warning
+    per copy that could not be stopped or cleaned up. Never raises."""
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        # The deploy window's AccessDenied and throttles are waited out briefly: the abort route
+        # answers an API call (#1123 L1).
+        return loc.cancel_execution_copy_jobs(table, sfn, _copy_s3_client(), execution_id,
+                                              lambda_client, loc.engine_function_name(),
+                                              max_wait_seconds=loc.API_CALLER_WAIT_SECONDS)
+    except Exception as e:
+        logger.exception(f"Could not cancel the output copies of execution {execution_id}: {e}")
+        return []
+
+
+_copy_s3 = None
+
+
+def _copy_s3_client():
+    """Region-routing S3 client for aborting copy uploads, built on first use."""
+    global _copy_s3
+    if _copy_s3 is None:
+        from common.s3 import region_routing_s3_client
+        _copy_s3 = region_routing_s3_client()
+    return _copy_s3
+
+
 def abort_execution(event, execution_id):
     """Abort a running workflow execution and reconcile the stored statuses.
 
@@ -1966,6 +2155,11 @@ def abort_execution(event, execution_id):
     main_stopped = _stop_sfn_execution(main_item.get('workflow_execution_arn', ''))
     if not main_stopped:
         warnings.append(MAIN_EXECUTION_STOP_UNCONFIRMED_WARNING)
+
+    # Stop the run's large output copies and discard their partial uploads. A run that is waiting on
+    # them, or whose state machine already ended on a definition that does not wait, still has them
+    # running; a run with no large outputs has none.
+    warnings.extend(_cancel_output_copies(execution_id))
 
     # 2) Abort each still-running pipeline's registered sub-processes, then mark their rows ABORTED.
     # Registration arrives ASYNCHRONOUSLY (the pipeline emits an EventBridge event and
@@ -2837,6 +3031,10 @@ def _scrub_output_file(row):
         out["contentType"] = row.get('contentType')
     if row.get('s3VersionId'):
         out["s3VersionId"] = row.get('s3VersionId')
+    # Set only for a file a large object copy job ingested: its outcome and the asset file version
+    # the copy created.
+    if row.get('ingestionStatus'):
+        out["ingestionStatus"] = row.get('ingestionStatus')
     return out
 
 
@@ -3365,6 +3563,8 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         "triggerType": main_item.get('triggerType', ''),
         "triggeredByUserId": main_item.get('triggeredByUserId', ''),
         "executionError": redact_log_text(main_item.get('executionError', '')),
+        # Large outputs still being copied into the asset (the run stays RUNNING meanwhile).
+        **_output_ingestion_fields(main_item),
         # Output target of the run: where outputs were written. locationType 'none' = results-only
         # (no asset outputs); 'asset' carries the destination asset/database ids.
         "outputLocationType": (config_row or {}).get('outputLocationType', '') or 'asset',
@@ -4113,9 +4313,15 @@ def handle_details_results_request(event):
     return get_execution_results(event, execution_id, queryParameters)
 
 
-def _reconcile_main_status(execution_id, main_item):
+def _reconcile_main_status(execution_id, main_item, force=False, raise_on_failure=False):
     """Lazily reconcile a non-terminal main row's status against Step Functions (in place). No-op
-    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort.
+    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort for a read.
+
+    `force` skips the poll interval, for the status change event that reports the execution ended
+    (handle_sfn_status_change). `raise_on_failure` (the status change event) re-raises a failed
+    DescribeExecution or a failed guarded write instead of logging it, so the event is retried by
+    Lambda's asynchronous retries.
+    A lost guard is never a failure: another writer finished the row.
 
     The row was non-terminal when this request read it, and the write below carries the terminal guard
     so it stays that way: the end-state lambda can finish the execution between the read and the write,
@@ -4124,7 +4330,7 @@ def _reconcile_main_status(execution_id, main_item):
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
         return
     last_sync = main_item.get("lastSfnSyncCheckDate", "")
-    if er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
+    if not force and er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
         return
     arn = main_item.get("workflow_execution_arn", "")
     if not arn:
@@ -4132,8 +4338,14 @@ def _reconcile_main_status(execution_id, main_item):
     try:
         described = sfn.describe_execution(executionArn=arn)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Status reconcile poll of execution {execution_id} failed; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Details status reconcile poll failed (non-critical): {e}")
         return
+    described = _apply_ingestion_hold(main_item, described) or {
+        "status": main_item.get("executionStatus", "") or "RUNNING"}
     main_item["lastSfnSyncCheckDate"] = er.iso_now()
     # Only what this poll produced is written back, keyed by the row's own identity — never the whole
     # read-time row, whose executionStopDate is the empty string this reconcile started from.
@@ -4173,6 +4385,10 @@ def _reconcile_main_status(execution_id, main_item):
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Could not persist the reconciled main row of execution {execution_id}; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
         written = False
     # The locks go whenever Step Functions reports the run ended, whether or not this poll's write
@@ -4184,6 +4400,84 @@ def _reconcile_main_status(execution_id, main_item):
     # not been published either: the reconcile that won the guard announces it.
     if written:
         _announce_reconciled_completion(main_item, reconciled_snapshot)
+
+
+# The Step Functions execution status change event (EventBridge default bus) the execution service
+# consumes, and the statuses its rule matches (infra: lambdaBuilder/workflowFunctions.ts,
+# buildWorkflowStatusChangeRule).
+SFN_STATUS_CHANGE_SOURCE = "aws.states"
+SFN_STATUS_CHANGE_DETAIL_TYPE = "Step Functions Execution Status Change"
+
+
+def is_sfn_status_change_event(event):
+    """True for an EventBridge Step Functions execution status change event. An API Gateway request
+    cannot be one: the proxy integration builds the event itself, and it has no top-level `source` or
+    `detail-type`. The handler trusts nothing in the event beyond the execution it names: the status it
+    records comes from its own DescribeExecution call."""
+    return (isinstance(event, dict)
+            and event.get("source") == SFN_STATUS_CHANGE_SOURCE
+            and event.get("detail-type") == SFN_STATUS_CHANGE_DETAIL_TYPE
+            and isinstance(event.get("detail"), dict))
+
+
+def handle_sfn_status_change(event):
+    """Reconcile a workflow execution Step Functions reports as ended, without waiting for a read.
+
+    The rule matches every terminal status of the state machines named with the backend's `vams-`
+    prefix in this account and Region, which several deployments can share, so the event is acted on
+    only when its execution has a main row in THIS deployment whose recorded execution ARN is the
+    event's. The reconcile is the details read path's own (_reconcile_main_status, poll interval
+    skipped) under the shared terminal guard, so the push, a read and a VAMS terminal writer never
+    revert each other, and a duplicate event finds the row terminal and does nothing.
+
+    Unlike a read, the push raises when it cannot do its work: a failed main-row read, a failed
+    DescribeExecution (for example throttling when many runs end at once), or a failed guarded write.
+    EventBridge delivers the event asynchronously, so a raise makes Lambda retry it (twice, with
+    backoff), and a retry is safe: nothing was written, or the row is now
+    terminal and the retry ends like a duplicate. A lost guard is not a failure. An event whose
+    retries are all spent is dropped, and the run falls back to the read paths, which reconcile the
+    status when the run is next read.
+
+    Applies to every workflow run, not only system runs: what it writes is exactly what the next read
+    would have written, and it releases the locks and settles the pipeline rows of a run stopped
+    outside VAMS at once instead of when someone opens it. A run that finished through the state
+    machine is already terminal when the event arrives, so it costs one read. A feature that launched
+    the run (a system pipeline run) sees the result on the row it reads by its stored
+    workflowExecutionId; this handler names no pipeline and calls no feature. Never logs the event's
+    input or output. Returns a small dict for the log; EventBridge ignores it."""
+    detail = event.get("detail") or {}
+    execution_arn = detail.get("executionArn", "") or ""
+    execution_id = detail.get("name", "") or ""
+    status = detail.get("status", "") or ""
+    if os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "") == ROUTE_SET_PERMANENT_DELETE:
+        return {"handled": False, "reason": "not served by this function"}
+    if status not in TERMINAL_STATUSES:
+        return {"handled": False, "reason": "not a terminal status"}
+    (valid, _message) = validate({'executionId': {'value': execution_id, 'validator': 'GUID'}})
+    if not valid or not execution_arn:
+        logger.info("Ignored a status change event that names no VAMS workflow execution")
+        return {"handled": False, "reason": "not a workflow execution"}
+    main_item = get_execution_main_row(execution_id)
+    if not main_item or main_item.get("workflow_execution_arn", "") != execution_arn:
+        logger.info(f"Ignored the {status} status change of {execution_id}: no execution of this "
+                    f"deployment has that execution ARN")
+        return {"handled": False, "reason": "no matching execution"}
+    logger.info(f"Step Functions reported execution {execution_id} {status}")
+    if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
+        if status in NON_SUCCESS_TERMINAL_STATUSES and main_item.get("outputIngestionStartedDate"):
+            # A read recorded the end first: it never stops copies, and its terminal write removed
+            # executionPhase. outputIngestionStartedDate stays, so a run that was ingesting still has
+            # its copies stopped here (jobs already ended are skipped).
+            _cancel_output_copies(execution_id)
+        return {"handled": True, "reconciled": False}
+    _reconcile_main_status(execution_id, main_item, force=True, raise_on_failure=True)
+    if (status in NON_SUCCESS_TERMINAL_STATUSES
+            and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
+        # Stopped, failed or timed out outside VAMS while it waited on its large output copies: they
+        # would otherwise keep copying into the asset of a run that has ended. This is the push
+        # path, not a read, so it may stop them (a GET never does).
+        _cancel_output_copies(execution_id)
+    return {"handled": True, "reconciled": True}
 
 
 def _settle_reconciled_terminal(execution_id, main_item, status):
@@ -5670,10 +5964,63 @@ def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None, 
     return allowed
 
 
+# Query parameter both execution lists accept to list runs of system workflows (isSystem on the
+# workflow row, stamped onto the execution main row at launch). Hidden by default.
+INCLUDE_SYSTEM_PARAM = "includeSystem"
+INCLUDE_SYSTEM_INVALID_MESSAGE = "includeSystem must be true or false."
+
+
+def _parse_include_system(query_params):
+    """(valid, value) for the includeSystem query parameter.
+
+    value is True / False when the caller sent it (case-insensitive "true" / "false"), and None when
+    absent or blank, which leaves the default to _resolve_include_system. Anything else is invalid, so a
+    typo is a 400 rather than a silently applied default."""
+    raw = (query_params or {}).get(INCLUDE_SYSTEM_PARAM)
+    if raw is None:
+        return True, None
+    text = str(raw).strip().lower()
+    if text == "":
+        return True, None
+    if text in ("true", "false"):
+        return True, text == "true"
+    return False, None
+
+
+def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id):
+    """Whether this listing returns system runs.
+
+    An explicit includeSystem wins. Otherwise system runs are hidden, except when the listing is scoped
+    to ONE workflow (both halves of its key) that is itself a system workflow the caller may GET: its
+    runs are what such a view is for, so they show by default. The workflow GET gate keeps the default
+    from saying anything about a workflow the caller cannot see (its rows would be withheld by the
+    per-row workflow GET anyway), and the definition read is the one the per-row authorization memoizes
+    for the same enforcer. Any failure falls back to hiding system runs, which never hides a user run.
+
+    Presentation only: this decides which rows a page includes, never whether a caller may see a row —
+    every row still passes the same per-row visibility check."""
+    if explicit is not None:
+        return explicit
+    if not workflow_database_id or not workflow_id or casbin_enforcer is None:
+        return False
+    try:
+        workflow_obj = _execution_workflow_casbin_object(
+            casbin_enforcer, workflow_database_id, workflow_id)
+        if workflow_obj.get("isSystem") is not True:
+            return False
+        return _enforce_cached(casbin_enforcer, workflow_obj, "GET") is True
+    except Exception:
+        logger.exception("Could not resolve the system-workflow default for an execution listing")
+        return False
+
+
 def _global_list_matches_filters(main_item, filters):
     """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
-    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, and excludeStatus
-    (a list of statuses a row must not carry; absent or empty excludes nothing)."""
+    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId, excludeStatus
+    (a list of statuses a row must not carry; absent or empty excludes nothing), and excludeSystem
+    (set when system runs are hidden: drops a row whose isSystem is exactly True)."""
+    if filters.get("excludeSystem") and er.execution_row_is_system(main_item):
+        return False
     if filters.get("workflowId") and main_item.get("workflowId", "") != filters["workflowId"]:
         return False
     if filters.get("workflowDatabaseId") and main_item.get("workflowDatabaseId", "") != filters["workflowDatabaseId"]:
@@ -5722,8 +6069,10 @@ def _select_global_list_index(filters):
     """(index descriptor, partition value, filter keys the key condition already answers).
 
     A workflow scope needs BOTH halves of the composite key; a workflow id on its own falls back to the
-    by-date index with the id as a filter, which is the one case the web never sends (it always carries
-    the scope's database). A group id keys the group index. Everything else walks the by-date index."""
+    by-date index with the id as a filter. The web's workflow filters send both halves (the option
+    carries the workflow's own database); a CLI or API caller can still send the id alone, which is
+    not a single-workflow scope. A group id keys the group index. Everything else walks the by-date
+    index."""
     if filters.get("workflowId") and filters.get("workflowDatabaseId"):
         return (GLOBAL_LIST_INDEXES["workflow"],
                 er.workflow_composite_key(filters["workflowDatabaseId"], filters["workflowId"]),
@@ -5764,6 +6113,8 @@ def _global_list_row(main_item, config_row=None):
         "triggerType": main_item.get("triggerType", ""),
         "triggeredByUserId": main_item.get("triggeredByUserId", ""),
         "executionGroupId": main_item.get("executionGroupId", ""),
+        # True for a run launched from a system workflow; a legacy row without the flag reads False.
+        "isSystem": er.execution_row_is_system(main_item),
         "outputLocationType": config_row.get("outputLocationType", ""),
         "outputAssetId": config_row.get("outputAssetId", ""),
         "outputDatabaseId": config_row.get("outputDatabaseId", ""),
@@ -5797,6 +6148,9 @@ def get_global_executions(event, query_params):
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }
+    include_system_valid, include_system_explicit = _parse_include_system(query_params)
+    if not include_system_valid:
+        return validation_error(body={"message": INCLUDE_SYSTEM_INVALID_MESSAGE}, event=event)
     # excludeStatus (validated by the route handler): rows of these statuses drop in the query's
     # FilterExpression, before the page is cut, so a page stays full and the cursor stays exact. Only
     # added to the filters when given, so a request without it builds the same query as before.
@@ -5853,8 +6207,8 @@ def get_global_executions(event, query_params):
         # rows itself (see GLOBAL_LIST_QUERY_LIMIT).
         "Limit": GLOBAL_LIST_QUERY_LIMIT,
     }
-    if filter_expr is not None:
-        query_kwargs["FilterExpression"] = filter_expr
+    # The FilterExpression is attached once the page's enforcer exists (below): whether system runs
+    # are hidden can depend on the scoped workflow, which is read through that enforcer's memo.
     starting_token = query_params.get("startingToken") or query_params.get("NextToken")
     if starting_token:
         decoded = _decode_starting_token(starting_token)
@@ -5877,6 +6231,23 @@ def get_global_executions(event, query_params):
     _authz_decision_cache.clear()
     _arm_authz_entity_budget()
     page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
+    # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow
+    # (_resolve_include_system). Hidden server-side as one more FilterExpression term on the walked
+    # index — `attribute_not_exists(isSystem) OR isSystem <> true`, so a legacy row with no flag and any
+    # row whose flag is not exactly true stay listed — and again by the Python safety net. A row the
+    # FilterExpression drops never reaches the loop below, so it never moves last_row_key; it is
+    # skipped all the same, because the cursor is either the last row the loop returned or the query's
+    # LastEvaluatedKey, and DynamoDB has already read past the dropped rows in both cases. The
+    # continuation semantics and the token format are unchanged.
+    include_system = _resolve_include_system(
+        include_system_explicit, page_enforcer,
+        filters["workflowDatabaseId"], filters["workflowId"])
+    if not include_system:
+        filters["excludeSystem"] = True
+        system_cond = Attr("isSystem").not_exists() | Attr("isSystem").ne(True)
+        filter_expr = system_cond if filter_expr is None else (filter_expr & system_cond)
+    if filter_expr is not None:
+        query_kwargs["FilterExpression"] = filter_expr
     # The key of the last row this page FULLY evaluated. Any stop that leaves unread rows in the current
     # query page resumes from it rather than from that query's LastEvaluatedKey, which points PAST the
     # rows the page never returned — so a withheld row is deferred to the next request rather than
@@ -5986,7 +6357,9 @@ def get_global_executions(event, query_params):
 
     # Echo the applied recency window so the caller can show the active range (matches the per-asset
     # list's filterStartDate echo). filterEndDate is included only when the caller set one.
-    result = {"Items": items, "filterStartDate": filter_start_date}
+    # includeSystem echoes whether this page included system runs, so a caller that left it unset can
+    # show the default the server applied (true for a listing scoped to one system workflow).
+    result = {"Items": items, "filterStartDate": filter_start_date, "includeSystem": include_system}
     if filter_end_date:
         result["filterEndDate"] = filter_end_date
     # A stop that left rows unread in the current query page resumes from the last row FULLY evaluated,
@@ -6182,6 +6555,14 @@ def rerun_execution(event, execution_id, request_model):
         logger.info(f"Re-run not authorized for execution {execution_id}")
         return authorization_error()
 
+    # A system-pipeline run is launched by the feature that owns it, with a server-only context the
+    # stored records do not replay; re-running it as an ordinary run would execute it outside that
+    # feature. Checked after the visibility check, so the refusal reveals nothing to a caller who
+    # cannot see the execution.
+    if sp.is_system_trigger(main_item.get("triggerType")):
+        logger.info(f"Re-run refused for system execution {execution_id}")
+        return validation_error(body={"message": sp.SYSTEM_RERUN_REFUSED_MESSAGE}, event=event)
+
     workflow_database_id = main_item.get("workflowDatabaseId", "")
     workflow_id = main_item.get("workflowId", "")
     execute_path = f"/workflows/{workflow_database_id}/{workflow_id}/execute"
@@ -6285,6 +6666,11 @@ def permanent_delete_execution(event, execution_id):
 
     # Guard: the execution must not be in progress (reconcile against SFN when not yet terminal).
     status = main_item.get("executionStatus", "")
+    if (not main_item.get("executionStopDate") and status not in TERMINAL_STATUSES
+            and main_item.get("executionPhase") == loc.EXECUTION_PHASE_INGESTING_OUTPUTS):
+        # Its outputs are still being copied into the asset, whatever its state machine reports.
+        return validation_error(body={
+            "message": "Execution is in progress; abort it before permanent delete."}, event=event)
     if not main_item.get("executionStopDate") and status not in TERMINAL_STATUSES:
         arn = main_item.get("workflow_execution_arn", "")
         if arn:
@@ -6568,6 +6954,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
     DELETE /workflows/executions/{executionId}/permanent -> permanent delete of the DynamoDB rows."""
     global claims_and_roles
+    # A Step Functions status change event is handled before the request log line: its detail carries
+    # the execution's input and output, which this function must not log.
+    if is_sfn_status_change_event(event):
+        return handle_sfn_status_change(event)
     logger.info(event)
     # Normalize the REST (v1) proxy event before the first requestContext.http /
     # queryStringParameters access (coerces null params to {} and injects the

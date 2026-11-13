@@ -43,6 +43,18 @@ interface Cell {
     name: string;
     template: TemplateName;
     mutate?: (c: any) => void;
+    /**
+     * A cell with Download as Zip on. The zip download service registers no terminal callback (a job
+     * follows its run by the stored execution id), so the three terminal-writer roles' inline sizes
+     * must equal those of the named twin (feature off) and they carry no callback invoke policy.
+     */
+    zipOnTwinOf?: string;
+}
+
+/** Download as Zip on; its zipArchive pipeline requires the global VPC (Lambdas stay outside it). */
+function enableZipDownloads(c: any): void {
+    c.app.pipelines.useZipDownloads.enabled = true;
+    c.app.useGlobalVpc.enabled = true;
 }
 
 /**
@@ -71,6 +83,43 @@ const CELLS: Cell[] = [
             c.app.useGlobalVpc.useForAllLambdas = true;
         },
     },
+    {
+        name: "commercial-zip",
+        template: "commercial",
+        mutate: enableZipDownloads,
+        zipOnTwinOf: "commercial",
+    },
+    {
+        name: "govcloud-zip",
+        template: "govcloud",
+        mutate: enableZipDownloads,
+        zipOnTwinOf: "govcloud",
+    },
+    {
+        name: "eusovereign-zip",
+        template: "eusovereign",
+        mutate: enableZipDownloads,
+        zipOnTwinOf: "eusovereign",
+    },
+    {
+        name: "commercial-worst-zip",
+        template: "commercial",
+        mutate: (c) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+            c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.pipelines.useZipDownloads.enabled = true;
+        },
+        zipOnTwinOf: "commercial-worst",
+    },
+];
+
+/** The roles of the three functions that run the system pipeline terminal writers. */
+const TERMINAL_WRITER_ROLES = [
+    "processWorkflowExecutionOutputServiceRole",
+    "handleExecutionErrorServiceRole",
+    "executionServiceServiceRole",
 ];
 
 /** The nested stacks whose roles this budget covers: every API Lambda. */
@@ -183,6 +232,30 @@ describe.each(CELLS)("API Lambda role inline policy budget ($name)", (cell) => {
         expect(over).toEqual([]);
     });
 });
+
+/** Construct id of the terminal writers' callback invoke policy (lambdaBuilder/systemPipelineCallbacks.ts). */
+const CALLBACK_INVOKE_POLICY_ID = "SystemPipelineCallbackInvokePolicy";
+
+test.each(CELLS.filter((c) => c.zipOnTwinOf))(
+    "Download as Zip adds nothing to the terminal writers' roles ($name)",
+    (cell) => {
+        // Runs after the cells above have filled the report.
+        const registered = report[cell.name];
+        const base = report[cell.zipOnTwinOf!];
+        for (const prefix of TERMINAL_WRITER_ROLES) {
+            const re = new RegExp(`^${prefix}[0-9A-F]{8}$`);
+            const roleId = Object.keys(registered).find((k) => re.test(k));
+            expect(roleId).toBeDefined();
+            expect(registered[roleId!]).toBe(base[roleId!]);
+            // No terminal callback is registered, so no callback invoke policy is attached.
+            expect(
+                Object.keys(registered).some(
+                    (k) => k.startsWith(`${roleId}:`) && k.includes(CALLBACK_INVOKE_POLICY_ID)
+                )
+            ).toBe(false);
+        }
+    }
+);
 
 test("every exception is still above the budget in some cell", () => {
     // Runs after the cells above have filled the report.

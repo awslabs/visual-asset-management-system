@@ -39,6 +39,8 @@ from common.workflows import executionRecords as er
 from common.workflows import executionLogCapture as elc
 from common.workflows import executionOutputs as eo
 from common.workflows import executionLocks as el
+from common import largeObjectCopy as loc
+from common.s3 import region_routing_s3_client
 
 logger = safeLogger(service="HandleExecutionError")
 
@@ -50,6 +52,10 @@ logs_client = boto3.client('logs', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
 batch_client = boto3.client('batch', config=retry_config)
+# Aborts the multipart uploads of the run's cancelled large output copies (in the asset bucket's Region).
+s3_client = region_routing_s3_client()
+# Hands a cancelled copy whose outcome the cancel left to the copy engine to its reconcile.
+lambda_client = boto3.client('lambda', config=retry_config)
 events_client = boto3.client('events', config=events_retry_config)
 # Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
 # inside try/except and left None on failure: the execution type is accepted only in the commercial
@@ -296,6 +302,21 @@ def _derive_failure_output_types(pipeline_rows):
     return er.derive_output_types(has_file, has_metadata, has_result)
 
 
+def _cancel_output_copies(execution_id):
+    """Stop the large object copy jobs of a failing run and abort their multipart uploads. Returns
+    one message per copy that could not be stopped or cleaned up. Never raises."""
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        # The deploy window's AccessDenied and throttles are waited out (#1123 L1).
+        return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id,
+                                              lambda_client, loc.engine_function_name(),
+                                              max_wait_seconds=loc.ENGINE_CALL_DEPLOY_WAIT_SECONDS)
+    except Exception as e:
+        # Best-effort like every step here; a run with no large outputs has nothing to cancel.
+        logger.warning(f"Could not cancel the output copies of execution {execution_id} (continuing): {e}")
+        return []
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
@@ -330,6 +351,10 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error marking pipeline rows failed (continuing): {e}")
         pipeline_rows = []
+
+    # 1b) Stop the run's large output copies (its output wait timed out, or a later state failed)
+    #     and discard their partial uploads. A run with no large outputs has no copy jobs.
+    stop_failures.extend(_cancel_output_copies(execution_id))
 
     # 2) Per-pipeline log row for each in-flight pipeline that was just failed. Step Functions
     #    cannot inject the failing state's id into this handler's static payload, so attribute

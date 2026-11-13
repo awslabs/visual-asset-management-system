@@ -38,6 +38,9 @@ from backend.backend.common.apiRoutes import (  # noqa: E402
     API_REVERT_FILE_VERSION,
     API_SEARCH,
     API_SEARCH_SIMPLE,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     DELETE,
     POST,
     PUT,
@@ -204,9 +207,13 @@ def _fillings(route_path):
 _TEMPLATE_ALLOWED = {(POST, route) for route in (
     API_AUTH_ROUTES, API_AUTH_LOGIN_PROFILE, API_SEARCH, API_SEARCH_SIMPLE, API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET, API_ASSET_EXPORT)}
+# The read-only templates also grant Download as Zip (#1125): creating a job, its URL (a POST because
+# it signs), and cancelling or deleting the caller's own job. The seeded role does not.
+_TEMPLATE_ZIP_DOWNLOADS = {(POST, API_ZIP_DOWNLOADS_ASSET), (DELETE, API_ZIP_DOWNLOADS_ASSET_REQUEST),
+                           (POST, API_ZIP_DOWNLOADS_ASSET_REQUEST_URL)}
 EXPECTED_WRITE_METHOD_ROUTES = {
-    "template database-readonly.json": _TEMPLATE_ALLOWED,
-    "template global-readonly.json": _TEMPLATE_ALLOWED,
+    "template database-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS,
+    "template global-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS,
     "seeded basicReadOnly": _TEMPLATE_ALLOWED | {
         (method, route) for route in ALL_API_ROUTES if route.path.startswith("/auth/user/api-keys")
         for method in WRITE_METHODS if method in route.methods},

@@ -896,13 +896,24 @@ def build_workflow_execution_record(
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
     last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
+    system_execution_context="",
+    is_system=False,
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
+
+    system_execution_context is the serialized server-only context of a system-pipeline run
+    (common.workflows.systemPipelines). It is written only when set, so every other row keeps its
+    existing shape, and no list or details projection reads it.
 
     execution_group_id groups executions launched together (bulk / re-run). When set it is the PK of
     the WorkflowExecutionsByGroupGSI (SK executionStartDate), so abort-by-group can enumerate a group's
     executions. Empty when the execution is not part of a group (the attribute is omitted so it stays
     out of the sparse GSI).
+
+    is_system is the launched workflow's stored isSystem flag, copied onto the row at launch so the
+    execution lists can hide system runs by default without reading the workflow table per row. Only
+    an exact boolean True marks the run as system; a row written before the flag existed has no
+    attribute and lists as a user run (see execution_row_is_system).
     """
     record = {
         "workflowExecutionId": execution_id,  # PK
@@ -933,6 +944,9 @@ def build_workflow_execution_record(
         # Both empty at launch.
         "executionError": "",
         "executionLog": "",
+        # Whether the run was launched from a system workflow (isSystem on the workflow row). The
+        # execution lists hide these unless the caller asks for them (includeSystem).
+        "isSystem": is_system is True,
     }
     # executionGroupId is a sparse GSI PK: set it only when the execution belongs to a group, so
     # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
@@ -942,9 +956,17 @@ def build_workflow_execution_record(
     # Absent for an execution started on the unqualified state machine ARN.
     if workflow_version_arn:
         record["workflowVersionArn"] = workflow_version_arn
+    if system_execution_context:
+        record["systemExecutionContext"] = system_execution_context
     return record
 
 
+def execution_row_is_system(main_item) -> bool:
+    """True only when an execution main row carries isSystem as the boolean True.
+
+    A missing attribute (a row written before the flag existed), False, or any non-boolean value reads
+    as a user run, so a row the launch did not stamp stays visible rather than hidden."""
+    return isinstance(main_item, dict) and main_item.get("isSystem") is True
 # A fileUpload trigger launch refused by the workflow's concurrency restriction is recorded as ONE
 # SKIPPED execution per blocking run and lock key, however many launches that run refuses: the record
 # counts them (skippedLaunchCount) and lists the files they named, up to MAX_SKIP_RECORD_INPUT_ROWS input
@@ -1421,10 +1443,14 @@ def build_input_configuration_record(
 
 def build_output_file_record(
     pipeline_execution_id, file_type, relative_file_path, s3_bucket, s3_key,
-    file_size, content_type, s3_version_id,
+    file_size, content_type, s3_version_id, ingestion_status="",
 ):
-    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview})."""
-    return {
+    """PipelineExecutionOutputFilesStorageTable row (file_type in {file, preview}).
+
+    ingestion_status is set only for a file a large object copy job ingested (its outcome; s3Key and
+    s3VersionId stay the staged object's locator, as for every other row). Rows without it read as
+    before."""
+    row = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "fileType:relativeFilePath": f"{file_type}:{relative_file_path}",  # SK
         "fileType": file_type,
@@ -1435,6 +1461,9 @@ def build_output_file_record(
         "contentType": content_type or "",
         "s3VersionId": s3_version_id or "",
     }
+    if ingestion_status:
+        row["ingestionStatus"] = ingestion_status
+    return row
 
 
 OUTPUT_METADATA_TYPE_METADATA = "metadata"

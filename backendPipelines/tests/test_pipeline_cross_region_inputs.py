@@ -52,6 +52,7 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/preview/3dThumbnail/lambda/manifestHelper.py",
     "backendPipelines/preview/pcPotreeViewer/lambda/manifestHelper.py",
     "backendPipelines/simulation/isaacLabTraining/lambda/manifestHelper.py",
+    "backendPipelines/utility/zipArchive/lambda/manifestHelper.py",
 )
 
 ISOLATED_SUBNET_VAMS_EXECUTE = (
@@ -60,6 +61,7 @@ ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/genAi/metadata3dLabeling/lambda/vamsExecuteGenAiMetadata3dLabelingPipeline.py",
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
     "backendPipelines/genAi/videoSopBom/lambda/vamsExecuteVideoSopBomPipeline.py",
+    "backendPipelines/utility/zipArchive/lambda/vamsExecuteZipArchivePipeline.py",
 )
 
 # Private-subnet pipelines whose VAMS-owned container addresses each asset bucket in its own Region: the

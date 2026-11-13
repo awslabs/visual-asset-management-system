@@ -638,6 +638,22 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+**Download as Zip** is gated twice: the `ZIPDOWNLOADS` feature switch decides whether the controls exist at all,
+and `useAllowedRoutes().can()` on the zip routes (a server decision) decides whether the user sees them. The
+file manager's **Export** menu offers **Download as Zip** for file, folder, root and mixed selections (hidden for
+an asset that is not distributable or is archived). `buildZipSelection` lists archived or deleted selected items in
+`refused`, and the dialog then refuses the whole job (names them, no Create), as the API does; items inside a selected
+folder collapse into it, and more than `ZIP_MAX_SELECTION_ENTRIES` (1,000) entries is refused with a plain message. The asset tab `zipDownloads` (**Download Queue**) and the
+global page `#/zipdownloads` (**My Download Queue**) list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+The user-facing names come from `DOWNLOAD_QUEUE_PAGE_TITLE` / `DOWNLOAD_QUEUE_TAB_LABEL` and do not say "zip", so other kinds of
+download job can join the queue; the route, the tab id, the API routes and the CLI/MCP names keep `zip`. Both lists search the
+rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the
+search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it). **My Download Queue** stays in the side navigation's User section.
+
+Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
+`ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
+`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the nav entry in `src/layout/Navigation.tsx`.
+
 A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config carries no `featuresEnabled` until the secure config lands after the first login, and only the context re-renders a mounted consumer when it does.
 
 Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
@@ -670,6 +686,19 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 
 ### **New Page Template**
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -677,10 +706,29 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -874,7 +922,7 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
 
-**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`. A spec that mutates data or needs a second user does so only behind an `E2E_*` opt-in variable, documented in `web/e2e/CLAUDE.md` ("Running the suite"), and otherwise skips with the reason: `zipdownloads.spec.ts` takes `E2E_ZIP_CREATE=1` and `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD`.
 
 **Lint and format (from project root):**
 

@@ -57,6 +57,13 @@ TOOLS = {
     "unarchive_file": ("unarchive_file",),
     "delete_file": ("delete_file",),
     "download_asset_file": ("generate_download_url",),
+    # Download as Zip: one list tool covers the caller's lists and, with all_users, every user's.
+    "list_zip_downloads": ("list_zip_downloads",),
+    "get_zip_download": ("get_zip_download",),
+    "create_zip_download": ("create_zip_download",),
+    "get_zip_download_url": ("get_zip_download_url",),
+    "cancel_zip_download": ("cancel_zip_download",),
+    "delete_zip_download": ("delete_zip_download",),
     "download_asset_files_bulk": ("generate_download_urls_bulk",),
     # --- Asset versions ---
     "get_asset_versions": ("find_and_summarize", "list_asset_versions"),
@@ -235,6 +242,7 @@ EXCLUDED = {
     # --- Upload ---
     "initialize_upload": _UPLOAD,
     "complete_upload": _UPLOAD,
+    "get_upload_status": "the status of a CLI upload's files over 1 GiB; vamscli file upload reports it",
     # --- Administration ---
     "list_cognito_users": _ADMIN,
     "create_cognito_user": _ADMIN,
@@ -263,6 +271,8 @@ EXCLUDED = {
     # --- Preview images, which the web app shows and the pipelines regenerate ---
     "download_asset_preview": "a presigned URL of the preview image the web app shows; agents read the asset's files",
     "delete_auxiliary_preview_files": "removes generated preview files a pipeline rebuilds; maintenance, not an agent task",
+    # --- Writes a local file ---
+    "download_zip_archive": "streams a finished archive to a local file (vamscli zip-download download)",
     # --- Never returned to an agent ---
     "get_edh_workstation_os_sign_in": "the desktop sign-in (a Windows password) is shown to its owner only",
 }

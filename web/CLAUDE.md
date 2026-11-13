@@ -80,6 +80,9 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
+                            #   details' executionPhase/outputIngestion; IngestedBadge for output
+                            #   rows with ingestionStatus SUCCEEDED; display only)
                             #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
                             #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
@@ -124,7 +127,7 @@ web/
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
         tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
-                              #   Compliance tabs
+                              #   Compliance tabs, ZipDownloadsTab ("Download Queue", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
       compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
@@ -191,9 +194,15 @@ web/
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
+                                #   selection -> request entries, names, polling rule),
+                                #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
+                                #   global page; polls every 5 s only while a job is queued/running,
+                                #   the surface is active and the browser tab is visible)
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
+      ZipDownloadsPage.tsx    # #/zipdownloads "My Download Queue" (nav item only with ZIPDOWNLOADS)
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
@@ -758,6 +767,8 @@ A **navigational surface** is the exception: the execution detail page's Logs ta
 
 **System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
 
+**System workflow runs** are hidden by the execution list APIs unless the request carries `includeSystem`. `ExecutionsBoard` (global page, workflow-scoped page and asset Executions tab) keeps the **Show system runs** choice in the URL query (`INCLUDE_SYSTEM_PARAM`, read and written with `useSearchParams`, other query keys preserved), sends it only when the user chose, and otherwise ticks the box from the response's `includeSystem` echo: the server alone decides the default (shown for a list scoped to one system workflow). Rows with `isSystem: true` carry the same **System** badge as system records.
+
 **Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
@@ -895,6 +906,19 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list in the side navigation's User section, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -902,10 +926,29 @@ export default MyComponent;
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -1046,6 +1089,7 @@ Known feature flags:
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.pipelines.useZipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **Download Queue** tab and the side navigation no **My Download Queue** link; `#/zipdownloads` states the feature is off. With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are icon buttons (`variant="icon"`, named by `ariaLabel`, which is also their tooltip; the compact form that keeps `disabledReason`) greyed the same way from the URL and DELETE routes. No table column has a `minWidth`; long names and IDs break anywhere (`overflowWrap: anywhere`), so the table fits its container at 1280 px (#1125 D28, D30). A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client. The user-facing names (`DOWNLOAD_QUEUE_PAGE_TITLE` "My Download Queue", `DOWNLOAD_QUEUE_TAB_LABEL` "Download Queue") do not say "zip", so other kinds of download job can join the queue later; the `#/zipdownloads` route, the `zipDownloads` tab id, the API routes and the CLI and MCP names keep `zip`. Both lists search the rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it). **My Download Queue** stays in the side navigation's User section.
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)

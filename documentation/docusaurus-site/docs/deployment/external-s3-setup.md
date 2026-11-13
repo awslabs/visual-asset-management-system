@@ -340,6 +340,8 @@ The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write int
 Avoid narrowing this grant with an `aws:PrincipalArn` condition that matches only `role/<APP_NAME>*`. The IAM roles that configure event notifications and check versioning are **CDK-generated custom resource roles** (for example `BucketNotificationsHandler...` and the S3 asset buckets table populator provider role). These roles are **not** named with your application prefix, so such a condition denies them and deployment fails with `AccessDenied`.
 
 If you require principal scoping, grant the VAMS account root (as shown above) and rely on Account A's IAM policies to constrain which roles use the access, or enumerate the specific CDK-generated role ARNs after a first deployment and add them explicitly.
+
+From v2.7 the large object copy engine writes workflow outputs over 1 GiB and API uploads over 5 GiB into the bucket, with its own role: the service role of the `largeObjectCopy` Lambda function. A policy that lists role ARNs must add that role, or those files fail to land after the update. A grant to the VAMS account root needs no change.
 :::
 
 #### Object ownership (cross-account writes)
@@ -539,7 +541,7 @@ For external buckets, the CDK deployment imports the bucket by ARN, creates Amaz
 
 ### Step 6: Configure lifecycle rules for upload staging
 
-VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage.
+VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage. The large object copy engine removes the partial upload of a copy that is cancelled, stopped or fails itself, including parts that were still being copied when it stopped (it checks again about 5 and 16 minutes later), so these rules cover the uploads a client abandons. The copy engine lists the bucket's incomplete multipart uploads for that check (`s3:ListBucketMultipartUploads`), which the read and write access VAMS needs on an external bucket already includes.
 
 Add two lifecycle rules to the external bucket, for each `baseAssetsPrefix` that VAMS uses in it:
 
