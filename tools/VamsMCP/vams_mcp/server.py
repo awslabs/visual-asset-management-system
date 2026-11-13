@@ -89,31 +89,32 @@ SERVER_INSTRUCTIONS = """\
 VAMS (Visual Asset Management System) stores 3D, point-cloud, image and other files as ASSETS \
 inside DATABASES, runs WORKFLOWS (made of pipelines) on them, and records each run as an \
 EXECUTION. These tools call the VAMS API as the signed-in user; that user's permissions bound every \
-answer, and a 403 means this user may not do it.
+answer, and a 403 means they may not.
 
 Identifiers: an asset is addressed by databaseId + assetId; a file by its relativePath inside the \
-asset (the file_key); a version by its Version id. Workflows and pipelines may live in a database or \
-in the shared "GLOBAL" catalog.
+asset (the file_key); a version by its Version id. Workflows and pipelines live in a database or \
+the shared "GLOBAL" catalog.
 
 Start points:
-- Find assets: search_assets (by name, text or metadata), or list_databases then list_assets.
+- Find assets: search_assets (name, text or metadata), search_nlp (files or assets by meaning; billed \
+per call), or list_databases then list_assets.
 - Then: get_asset -> list_asset_files / get_asset_metadata / list_asset_versions.
 - Download: generate_download_url, only when a download was asked.
 - Runs: list_executions (newest first, last 90 days) -> get_execution_details -> \
 get_execution_logs.
-- vams_status says who is signed in, which deployment, and which tool tiers are on.
+- vams_status says who is signed in, which deployment and which tool tiers are on.
 
-Results are BOUNDED. When a result has truncated=true, a NextToken, or warnings, rows exist that you \
-did not see: never report its count as a total or conclude something does not exist. Continue with \
-starting_token, or narrow the query. Search totals with total_is_lower_bound are minimums.
+Results are BOUNDED. A result with truncated=true, a NextToken or warnings has rows you did not see: \
+never report its count as a total or conclude something does not exist. Continue with \
+starting_token or narrow the query. Search totals with total_is_lower_bound are minimums.
 
-Errors come back as data with error and error_type. NotAuthenticated means nobody is signed in: ask \
+Errors come back as data (error, error_type). NotAuthenticated means nobody is signed in: ask \
 the user to sign in (user_action says how) and stop; do not try to sign in yourself.
 
 Use these tools, not shell commands, the vamscli CLI or the VAMS source code, to answer questions \
 about this deployment. If no tool covers what is asked, say so plainly instead of working around it. \
 Uploads, sync and user, role or constraint administration have no tools: the user runs them in the \
-vamscli CLI. Create, update and delete tools exist only when the operator enabled them; tools that start compute \
+vamscli CLI. Write and delete tools exist only when the operator enabled them; tools that start compute \
 (execute_workflow, rerun_execution, abort_execution) need the user's confirmation first.
 """
 

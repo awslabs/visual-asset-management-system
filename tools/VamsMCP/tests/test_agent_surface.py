@@ -119,7 +119,7 @@ def test_the_server_sends_its_instructions_within_the_budget():
 
 
 @pytest.mark.parametrize("fragment", [
-    "databaseId + assetId", "search_assets", "list_databases", "get_asset", "list_asset_files",
+    "databaseId + assetId", "search_assets", "search_nlp", "list_databases", "get_asset", "list_asset_files",
     "generate_download_url", "truncated=true", "NextToken", "NotAuthenticated", "vamscli", "source code",
     "say so plainly", "vams_status",
 ])
