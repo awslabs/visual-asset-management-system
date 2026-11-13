@@ -32,6 +32,9 @@ const ROUTE_FILES = ["routes.tsx", "addons/addonRoutes.tsx", "custom/customRoute
 /** The page shells: a Cloudscape page `Box` with the standard sides, or the orchestration class. */
 const SHELL_PATTERNS = [
     /<Box\s+padding=\{\{\s*top:[^}]*horizontal:\s*"l"/,
+    // The compliance pages' shared constant, `{ top: "m", horizontal: "l" }`
+    // (src/components/compliance/rowActions.ts).
+    /<Box\s+padding=\{VAMS_PAGE_PADDING\}/,
     /\borchestration-page\b/,
 ];
 
