@@ -251,10 +251,89 @@ class TestRegistryMatchesHandlers:
 @pytest.mark.unit
 class TestSystemActions:
     def test_every_named_handler_module_exists(self):
-        names = [system.handler for system in REGISTRY.AUDIT_SYSTEM_ACTIONS] + list(REGISTRY.AUDIT_SYSTEM_EXEMPT)
+        names = ([system.handler for system in REGISTRY.AUDIT_SYSTEM_ACTIONS] + list(REGISTRY.AUDIT_SYSTEM_EXEMPT)
+                 + list(REGISTRY.AUDIT_ENTRYPOINT_EXEMPT))
         missing = [name for name in names
                    if not os.path.isfile(os.path.join(BACKEND, *name.split(".")) + ".py")]
         assert not missing, f"system actions name handler modules that do not exist: {missing}"
+
+    def test_each_system_action_is_recorded_by_its_own_handler(self):
+        wrong = []
+        for system in REGISTRY.AUDIT_SYSTEM_ACTIONS:
+            path = os.path.join(BACKEND, *system.handler.split(".")) + ".py"
+            if not os.path.isfile(path) or system.spec.action in REGISTRY.AUDIT_PENDING_ACTIONS:
+                continue
+            with open(path, encoding="utf-8") as handle:
+                literals, functions = _scan_source(handle.read())
+            if not _recorded_actions({system.spec.action: system.spec}, literals, functions):
+                wrong.append((system.handler, system.spec.action))
+        assert not wrong, f"system actions their handler module does not record: {wrong}"
+
+
+def _entrypoints(tree):
+    """The module's top-level Lambda entrypoints: lambda_handler and lambda_handler_<name>."""
+    return [node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and (node.name == "lambda_handler" or node.name.startswith("lambda_handler_"))]
+
+
+def _opens_audit_context(function):
+    for decorator in function.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        name = target.id if isinstance(target, ast.Name) else getattr(target, "attr", None)
+        if name == "audited_handler":
+            return True
+    for node in ast.walk(function):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if isinstance(call, ast.Call) and _call_name(call) == "audit_request":
+                    return True
+    return False
+
+
+def _module_name(path):
+    return os.path.relpath(path, BACKEND)[:-3].replace(os.sep, ".")
+
+
+@pytest.mark.unit
+class TestEntrypointsOpenTheAuditContext:
+    def test_every_entrypoint_opens_the_audit_context_or_is_exempt(self):
+        missing = []
+        for path in _python_files(HANDLERS):
+            module = _module_name(path)
+            with open(path, encoding="utf-8") as handle:
+                tree = ast.parse(handle.read())
+            for function in _entrypoints(tree):
+                if module in REGISTRY.AUDIT_ENTRYPOINT_EXEMPT:
+                    continue
+                if not _opens_audit_context(function):
+                    missing.append(f"{module}.{function.name}")
+        assert not missing, ("Lambda entrypoints that do not open the request audit context; decorate them "
+                             f"with @audited_handler or list them in AUDIT_ENTRYPOINT_EXEMPT: {sorted(missing)}")
+
+    def test_every_exemption_has_a_reason_and_an_entrypoint(self):
+        for module, reason in REGISTRY.AUDIT_ENTRYPOINT_EXEMPT.items():
+            assert isinstance(reason, str) and reason.strip(), module
+            with open(os.path.join(BACKEND, *module.split(".")) + ".py", encoding="utf-8") as handle:
+                assert _entrypoints(ast.parse(handle.read())), f"{module} defines no entrypoint"
+
+    def test_the_check_detects_each_shape(self):
+        # Control: decorated, with-block and attribute forms are seen; a bare entrypoint is not.
+        source = (
+            "@audited_handler\n"
+            "def lambda_handler(event, context):\n    pass\n"
+            "def lambda_handler_created(event, context):\n"
+            "    with auditLogging.audit_request(event, context):\n        pass\n"
+            "@auditLogging.audited_handler\n"
+            "def lambda_handler_deleted(event, context):\n    pass\n"
+            "def lambda_handler_bare(event, context):\n    pass\n"
+            "def helper(event):\n    pass\n"
+        )
+        functions = _entrypoints(ast.parse(source))
+        assert [function.name for function in functions] == [
+            "lambda_handler", "lambda_handler_created", "lambda_handler_deleted", "lambda_handler_bare"]
+        assert [_opens_audit_context(function) for function in functions] == [True, True, True, False]
 
 
 @pytest.mark.unit

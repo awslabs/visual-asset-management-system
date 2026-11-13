@@ -961,3 +961,136 @@ class TestRecordReadsSwitch:
         with auditLogging.audit_request(event, LAMBDA_CONTEXT):
             auditLogging.log_action(event, asset_id="a1")
         assert clients.flush.calls == [] and clients.module.calls == []
+
+
+# ---------------------------------------------------------------------------------------------------
+# The entrypoint decorator records the outcome of a request whose handler recorded nothing
+# ---------------------------------------------------------------------------------------------------
+
+_WORKFLOW_PATH = "/database/db1/workflows/w1"
+
+
+def _workflow_event(method="PUT"):
+    event = api_event(path=_WORKFLOW_PATH, method=method)
+    event["pathParameters"] = {"databaseId": "db1", "workflowId": "w1", "notAnIdField": "x"}
+    return event
+
+
+def _handler_returning(status, record=None):
+    @auditLogging.audited_handler
+    def handler(event, context):
+        if record:
+            auditLogging.log_action(event, record)
+        return {"statusCode": status}
+
+    return handler
+
+
+@pytest.mark.unit
+class TestEntrypointOutcome:
+    @pytest.mark.parametrize("status, reason", [
+        (400, "validation"), (404, "notFound"), (409, "conflict"), (418, "clientError"),
+        (500, "internal"), (503, "internal")])
+    def test_an_error_response_is_recorded_as_the_routes_failed_action(self, clients, status, reason):
+        _handler_returning(status)(_workflow_event(), LAMBDA_CONTEXT)
+        records = [parse(message)[1] for message in clients.flush.messages(group_name("auditActions"))]
+        assert len(records) == 1
+        payload = records[0]
+        assert payload["action"] == "workflowUpdate"
+        assert payload["outcome"] == "failed" and payload["reason"] == reason
+        assert payload["databaseId"] == "db1" and payload["workflowId"] == "w1"
+        assert "notAnIdField" not in json.dumps(payload), "only id fields are taken from the path"
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_denial_is_left_to_the_authorization_record(self, clients, status):
+        _handler_returning(status)(_workflow_event(), LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    @pytest.mark.parametrize("status", [200, 201, 204, 303])
+    def test_a_success_response_adds_no_record(self, clients, status):
+        _handler_returning(status)(_workflow_event(), LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    def test_a_handler_that_recorded_the_action_gets_no_second_record(self, clients):
+        _handler_returning(400, record="workflowUpdate")(_workflow_event(), LAMBDA_CONTEXT)
+        records = [parse(message)[1] for message in clients.flush.messages()]
+        assert [record["outcome"] for record in records] == ["success"]
+
+    def test_a_legacy_record_of_the_action_counts_as_recorded(self, clients):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            auditLogging.log_actions(event, "workflowUpdate", {"workflowId": "w1"})
+            return {"statusCode": 500}
+
+        handler(_workflow_event(), LAMBDA_CONTEXT)
+        assert len(clients.flush.messages(group_name("auditActions"))) == 1
+
+    def test_an_error_record_does_not_count_as_recorded(self, clients):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            auditLogging.log_errors(event, "validation", {"statusCode": 400})
+            return {"statusCode": 400}
+
+        handler(_workflow_event(), LAMBDA_CONTEXT)
+        errors = clients.flush.messages(group_name("auditErrors"))
+        actions = [parse(message)[1] for message in clients.flush.messages(group_name("auditActions"))]
+        assert len(errors) == 1
+        assert [(record["action"], record["outcome"]) for record in actions] == [("workflowUpdate", "failed")]
+
+    def test_an_exception_is_recorded_as_failed_and_raised(self, clients):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            handler(_workflow_event(), LAMBDA_CONTEXT)
+        records = [parse(message)[1] for message in clients.flush.messages(group_name("auditActions"))]
+        assert [(record["outcome"], record["reason"]) for record in records] == [("failed", "internal")]
+        assert "boom" not in json.dumps(records), "the error text is never recorded"
+
+    def test_a_response_object_with_a_status_attribute_is_read(self, clients):
+        @auditLogging.audited_handler
+        def handler(event, context):
+            return SimpleNamespace(statusCode=404)
+
+        handler(_workflow_event(), LAMBDA_CONTEXT)
+        records = [parse(message)[1] for message in clients.flush.messages(group_name("auditActions"))]
+        assert [record["reason"] for record in records] == ["notFound"]
+
+    def test_a_pending_action_is_skipped(self, clients, monkeypatch):
+        monkeypatch.setattr(auditLogging, "AUDIT_PENDING_ACTIONS", frozenset({"workflowUpdate"}))
+        _handler_returning(500)(_workflow_event(), LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    @pytest.mark.parametrize("path, method", [("/roles", "POST"), ("/auth/loginProfile/u1", "POST")])
+    def test_an_auth_record_route_adds_no_outcome_record(self, clients, monkeypatch, path, method):
+        monkeypatch.setattr(auditLogging, "AUDIT_PENDING_ACTIONS", frozenset())
+        _handler_returning(500)(api_event(path=path, method=method), LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    def test_an_unregistered_route_adds_no_record(self, clients):
+        _handler_returning(500)(api_event(path="/no/such/route"), LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    def test_a_system_event_adds_no_record(self, clients):
+        _handler_returning(500)({"Records": []}, LAMBDA_CONTEXT)
+        assert clients.flush.calls == [] and clients.module.calls == []
+
+    def test_a_nested_entrypoint_leaves_the_outcome_to_the_outer_one(self, clients):
+        inner = _handler_returning(500)
+
+        @auditLogging.audited_handler
+        def outer(event, context):
+            inner(event, context)
+            return {"statusCode": 500}
+
+        outer(_workflow_event(), LAMBDA_CONTEXT)
+        assert len(clients.flush.messages(group_name("auditActions"))) == 1
+
+    def test_on_behalf_of_names_the_user_a_system_action_ran_for(self, clients):
+        auditLogging.log_action({"Records": []}, "workflowExecutionEnd", executionId="e1",
+                                on_behalf_of="alice")
+        _, payload, _ = parse(clients.module.messages(group_name("auditActions"))[0])
+        assert payload["actor"]["userId"] == "SYSTEM_USER"
+        assert payload["actor"]["authMethod"] == "system"
+        assert payload["actor"]["onBehalfOf"] == "alice"

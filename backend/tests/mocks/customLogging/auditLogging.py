@@ -68,3 +68,8 @@ def audit_request(event, lambda_context=None, *, on_behalf_of=None):
 def audited_handler(handler):
     """Stand-in for the entrypoint decorator: the handler unchanged."""
     return handler
+
+
+def audit_failure_reason(status):
+    """Stand-in for the real mapping of an error status to its generic reason."""
+    return "internal" if status >= 500 else "clientError"

@@ -471,6 +471,16 @@ AUDIT_SYSTEM_EXEMPT: Dict[str, str] = {
     "handlers.sendEmail.sendEmail": "delivers the notification of a recorded subscription",
 }
 
+# Lambda entrypoints that do not open the request audit context, with the reason. Every other
+# module under handlers/ that defines a lambda_handler (or lambda_handler_<name>) decorates it with
+# customLogging.auditLogging.audited_handler or enters audit_request around its work.
+AUDIT_ENTRYPOINT_EXEMPT: Dict[str, str] = {
+    "handlers.auth.apiGatewayAuthorizerRest": ("the API authorizer: runs before the request reaches a "
+                                               "handler and writes its own authorization records"),
+    "handlers.auth.pretokengenv1": "Amazon Cognito sign-in trigger: sign-in is recorded by the identity provider",
+    "handlers.auth.pretokengenv2": "Amazon Cognito sign-in trigger: sign-in is recorded by the identity provider",
+}
+
 
 def _merge_route_actions() -> Dict[RouteMethod, AuditSpec]:
     merged: Dict[RouteMethod, AuditSpec] = dict(CORE_AUDIT_ROUTE_ACTIONS)
@@ -522,21 +532,21 @@ AUDIT_PENDING_ACTIONS: FrozenSet[str] = frozenset({
     "assetVersionArchive", "assetVersionCreate", "assetVersionGet", "assetVersionList", "assetVersionRevert",
     "assetVersionUnarchive", "assetVersionUpdate", "auxiliaryPreviewDelete", "cognitoUserList", "commentCreate",
     "commentDelete", "commentGet", "commentList", "commentUpdate", "constraintGet", "constraintList",
-    "databaseCreate", "databaseDelete", "databaseGet", "databaseList", "databaseUpdate", "edhAmiBuildList",
-    "edhAmiRecipeGet", "edhAmiRecipeList", "edhCapacityGet", "edhCapacityReservationList",
-    "edhCatalogCapacityReservationList", "edhCatalogImageList", "edhCatalogInstanceTypeList", "edhCatalogLeaseGet",
-    "edhContainerCatalogList", "edhContainerJobCancel", "edhContainerJobCreate", "edhContainerJobList",
-    "edhHealthGet", "edhImageCreate", "edhImageDelete", "edhImageList", "edhInstanceDeactivate", "edhInstanceList",
-    "edhInstanceStop", "edhSessionReconcile", "edhSettingsGet", "edhWorkstationConnect", "edhWorkstationCreate",
-    "edhWorkstationDelete", "edhWorkstationGet", "edhWorkstationLaunch", "edhWorkstationList",
-    "edhWorkstationOsSignIn", "edhWorkstationStart", "edhWorkstationStop", "fileArchive", "fileCopy", "fileDelete",
-    "fileInfoGet", "fileList", "fileMove", "filePrimarySet", "fileSync", "fileUnarchive", "fileVersionRevert",
-    "folderCreate", "garnetAssetSync", "garnetDatabaseSync", "garnetFileSync", "metadataCreate", "metadataDelete",
-    "metadataGet", "metadataSchemaCreate", "metadataSchemaDelete", "metadataSchemaGet", "metadataSchemaList",
-    "metadataSchemaUpdate", "metadataUpdate", "originVerifyRotate", "physnaAssetSync", "physnaFileSync",
-    "physnaViewerGet", "pipelineGet", "pipelineImport", "pipelineList", "pipelineTemplateGet",
-    "pipelineTemplateList", "pipelineTemplateTagSchemaGet", "pipelineTemplateTagSchemaUpdate", "roleList", "search",
-    "searchReindex", "subscriptionCheck", "subscriptionCreate", "subscriptionDelete", "subscriptionList",
+    "edhAmiBuildList", "edhAmiRecipeGet", "edhAmiRecipeList", "edhCapacityGet", "edhCapacityReservationList",
+    "edhCatalogCapacityReservationList", "edhCatalogImageList", "edhCatalogInstanceTypeList",
+    "edhCatalogLeaseGet", "edhContainerCatalogList", "edhContainerJobCancel", "edhContainerJobCreate",
+    "edhContainerJobList", "edhHealthGet", "edhImageCreate", "edhImageDelete", "edhImageList",
+    "edhInstanceDeactivate", "edhInstanceList", "edhInstanceStop", "edhSessionReconcile", "edhSettingsGet",
+    "edhWorkstationConnect", "edhWorkstationCreate", "edhWorkstationDelete", "edhWorkstationGet",
+    "edhWorkstationLaunch", "edhWorkstationList", "edhWorkstationOsSignIn", "edhWorkstationStart",
+    "edhWorkstationStop", "fileArchive", "fileCopy", "fileDelete", "fileInfoGet", "fileList", "fileMove",
+    "filePrimarySet", "fileSync", "fileUnarchive", "fileVersionRevert", "folderCreate", "garnetAssetSync",
+    "garnetDatabaseSync", "garnetFileSync", "metadataCreate", "metadataDelete", "metadataGet",
+    "metadataSchemaCreate", "metadataSchemaDelete", "metadataSchemaGet", "metadataSchemaList",
+    "metadataSchemaUpdate", "metadataUpdate", "physnaAssetSync", "physnaFileSync", "physnaViewerGet",
+    "pipelineGet", "pipelineImport", "pipelineList", "pipelineTemplateGet", "pipelineTemplateList",
+    "pipelineTemplateTagSchemaGet", "pipelineTemplateTagSchemaUpdate", "roleList", "search", "searchReindex",
+    "subscriptionCheck", "subscriptionCreate", "subscriptionDelete", "subscriptionList",
     "subscriptionUnsubscribe", "subscriptionUpdate", "tagCreate", "tagDelete", "tagList", "tagTypeCreate",
     "tagTypeDelete", "tagTypeList", "tagTypeUpdate", "tagUpdate", "userRoleList", "workflowExecutionEnd",
     "workflowExecutionFilesGet", "workflowExecutionGet", "workflowExecutionList", "workflowExecutionLogsGet",
