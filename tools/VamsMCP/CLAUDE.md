@@ -12,11 +12,16 @@ that exposes the VAMS REST API as agent-callable tools. It is built with the
 `mcp` SDK (`FastMCP`) and **reuses the `vamscli` package** for API access and
 authentication.
 
--   **Entry point**: `vams_mcp/server.py` (`main()` -> `mcp.run()`, stdio transport)
--   **Stores no credentials**: authenticates via the user's existing `vamscli`
-    profile (`vamscli setup` + `vamscli auth login`).
--   **Reused dependency**: `vamscli.utils.api_client.APIClient` and
-    `vamscli.utils.profile.ProfileManager`.
+-   **Entry point**: the `vams-mcp` console script is `vams_mcp/cli.py` `main()`: `vams-mcp
+setup-remote ...` runs `setup_remote.py`; anything else imports `vams_mcp/server.py` and runs its
+    `main()` (`mcp.run()` over stdio, or `http_app.run()` in remote mode).
+-   **Stores no credentials**: over stdio it authenticates via the user's existing `vamscli`
+    profile (`vamscli setup` + `vamscli auth login`). In remote mode
+    (`VAMS_MCP_TRANSPORT=streamable-http`) it reads no profile: each HTTP request carries its user's
+    OAuth access token, which the server verifies itself and sends to the VAMS API for that request
+    only (Mandatory Rule 16).
+-   **Reused dependency**: `vamscli.utils.api_client.APIClient` (in remote mode with its per-call
+    `bearer_token`) and `vamscli.utils.profile.ProfileManager` (stdio only).
 
 ---
 
@@ -33,11 +38,23 @@ tools/VamsMCP/
                              # nothing loads a .env; set them in the MCP host's `env` block)
   vams_mcp/
     __init__.py              # __version__ (roll with pyproject.toml)
-    config.py                # env-based config (profile, feature gates, pagination); ConfigError
-                             # carries `reason` (for the agent) and `user_step` (the user's command)
+    cli.py                   # the `vams-mcp` console script: `setup-remote` or the server
+    config.py                # env-based config (profile, feature gates, pagination, transport, tool
+                             # sets, remote host/port/timeout/auth file); ConfigError carries `reason`
+                             # (for the agent) and `user_step` (the user's command)
+    toolsets.py              # the named tool sets (VAMS_MCP_TOOLSETS) and their limits (Rule 17)
+    request_context.py       # remote mode: the request's verified identity and the call's time budget
+                             # (context variables; never set over stdio)
+    remote_auth.py           # remote mode: RemoteAuthSettings (the auth file) and TokenVerifier
+                             # (the server's own token check, before any tool runs)
+    http_app.py              # remote mode: RemoteGate (RFC 9728 metadata, the 401 challenge, token
+                             # check, per-request identity) in front of the SDK's streamable HTTP app
+    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config
     annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
     results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
-    client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
+    client.py                # VamsClient: wraps vamscli APIClient + ProfileManager; remote mode's
+                             # TokenVamsClient (one per request), RequestScopedClient (CLIENT in
+                             # remote mode), FeatureSwitchCache, silence_cli_request_log()
     server.py                # FastMCP app + SERVER_INSTRUCTIONS, vams_status, the NotAuthenticated
                              # degraded start (Rule 14), response-shape helpers, tool definitions,
                              # logging guard;
@@ -67,6 +84,18 @@ tools/VamsMCP/
                              # annotations per gate (core + add-on), outputSchema and structured
                              # content, NotAuthenticated and vams_status, the README autoApprove sample
     test_agent_scenarios.py  # evals/check_transcript.py
+    test_toolsets.py         # every named set within 100 tools and 30,000 description characters,
+                             # every tool in a set, a selection registers exactly its tools
+    test_metadata_and_file_role_tools.py
+                             # file / asset-link metadata reads, file metadata, primary file and file
+                             # revert writes, asset metadata delete: the requests they send
+    remote_support.py        # remote test support: keys, tokens, a fake issuer + VAMS API, uvicorn
+    test_remote_http.py      # remote mode end to end over loopback HTTP: 401 + challenge, metadata,
+                             # bad tokens, per-user results under concurrency, fail closed, no token
+                             # in logs or on disk, DNS rebinding, body limit
+    test_remote_auth.py      # TokenVerifier rules (Cognito, external IdP, keys) and the auth file
+    test_remote_mode.py      # remote start-up rules, per-request client, CLI log silenced, budget
+    test_setup_remote.py     # `vams-mcp setup-remote`
     api_coverage.py          # COVERAGE MANIFEST: every public APIClient method -> the tools that call
                              # it, an exclusion with its reason, or a not-yet-exposed gap (Rule 15)
     test_api_coverage.py     # the manifest against APIClient and the tools' client.api calls
@@ -107,7 +136,11 @@ source. Document a new variable in `.env.example` **and** in the README's `env` 
    `get_json()/post_json()`, `trim_search_results()`, `has_feature()` and
    `require_feature()`.
 3. `server.py` — defines `@mcp.tool()` functions that call `CLIENT`. Reads are
-   always registered; writes/destructive tools are registered conditionally.
+   always registered; writes/destructive tools are registered conditionally, and only the tools of
+   the selected tool sets are registered (`_ToolSetServer.tool`, Rule 17).
+4. Remote mode only: `remote_auth.py` verifies each request's token, `http_app.py` serves the SDK's
+   stateless streamable HTTP app behind `RemoteGate`, and `CLIENT` is a `RequestScopedClient` whose
+   attributes come from the current request's `TokenVamsClient` (Rule 16).
 
 `client.py` helpers worth knowing: `paginate()` (follows `NextToken`, normalizes
 any list field onto `Items`, flags `truncated`), `unwrap_message()` (strips the
@@ -142,13 +175,16 @@ asymmetry other callers rely on):
 
 ## Mandatory Rules
 
-1. **stdout is sacred.** MCP stdio transport uses stdout for JSON-RPC. Never
+1. **stdout is sacred over stdio.** MCP stdio transport uses stdout for JSON-RPC. Never
    `print()` to stdout and never let logging reach stdout. `server.py` calls
    `_force_logging_to_stderr()` at startup — keep it, and route any new logs to
-   stderr.
+   stderr. The rule is about the stdio transport; remote mode logs to stderr too, and
+   `vams-mcp setup-remote` (which runs no server) prints its summary to stdout.
 2. **No credential storage.** Do not add API-key or password env vars that get
-   persisted. Auth must come from the vamscli profile. This server is
-   distributed publicly for bring-your-own-account use.
+   persisted. Auth must come from the vamscli profile over stdio, and from each request's own
+   verified token in remote mode (Rule 16). No shared API key or service identity for remote mode,
+   no secret the server mints itself. This server is distributed publicly for
+   bring-your-own-account use.
 3. **Reuse `APIClient` methods.** Prefer existing `vamscli` `APIClient` methods
    over hand-rolled requests so retries/backoff/typed-errors are inherited. Use
    `VamsClient.get_json/post_json` only for endpoints without a dedicated method.
@@ -200,7 +236,8 @@ asymmetry other callers rely on):
    machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI
    and every tool carry it alike.
 6. **The profile supplies the URL.** The server takes no URL of its own; it reads
-   `api_gateway_url` from the `vamscli` profile. `vamscli setup` stores there the
+   `api_gateway_url` from the `vamscli` profile (in remote mode, `apiUrl` of the auth file that
+   `vams-mcp setup-remote` wrote from the same `/api/amplify-config`). `vamscli setup` stores there the
    API Gateway invoke URL that `GET /api/amplify-config` returns, whether it was
    given the web application URL or the API Gateway URL.
 7. **Match the endpoint's list field.** `paginate()` normalizes results onto
@@ -322,7 +359,9 @@ asymmetry other callers rely on):
     quirks, why a helper exists and other maintainer rationale go in code comments or this file,
     never in the docstring. Each description stays within 1,200 characters, except the short named
     list in `tests/test_agent_surface.py` (`DESCRIPTION_EXCEPTIONS`, each with its reason and
-    ceiling), and the core tools together within 30,000. Before adding text, cut text. Many older
+    ceiling), and each tool set's descriptions together within 30,000 (`toolsets.MAX_DESCRIPTION_CHARS_PER_SET`,
+    Rule 17; the full core surface, which only `all` over stdio lists, within 32,000). Before adding text,
+    cut text. Many older
     contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
     changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
     `evals/agent-scenarios.md` against a test deployment in Kiro and Claude Code.
@@ -372,6 +411,57 @@ asymmetry other callers rely on):
     `CustomAPIClientMixin` method counts as covered when `custom_tools.py` calls it; a fork that
     keeps one CLI-only lists it in `EXCLUDED`. Upload and administration stay CLI-only unless
     planning decides otherwise: moving one to `TOOLS` changes the server instructions too.
+16. **Remote mode: per-request identity, verified first, never logged.** With
+    `VAMS_MCP_TRANSPORT=streamable-http` the server serves many users from one process, so:
+    - **The server verifies the token before any tool or resource runs.** `http_app.RemoteGate`
+      checks every request except the RFC 9728 metadata routes with `remote_auth.TokenVerifier`
+      (RS256 against the issuer's JWKS, `iss`, an audience in the auth file, `exp`, `token_use`, a
+      named user, the machine-token rules of the API authorizer). No token or a bad one: `401` with
+      `WWW-Authenticate: Bearer resource_metadata="..."`. Keys that cannot be read: `503`, nothing
+      passes. Detecting a header is not verifying it; never add a path around the gate, and never a
+      test bypass (the tests sign real tokens with keys a loopback fake issuer serves).
+    - **Per-request identity only.** `CLIENT` is a `RequestScopedClient`; every attribute a tool
+      reads comes from the request's own `TokenVamsClient` (`APIClient(bearer_token=...)`), so the
+      VAMS API's authorizer and Casbin decide each call for that user. A tool never decides a
+      permission itself, never reads a profile, and keeps nothing between calls: no module-level
+      state written per request (stdio's `_SIGN_IN_FAILURE` is not touched in remote mode), and the
+      only shared cache is the deployment's feature switches (`FeatureSwitchCache`), which are not
+      per user. Mixing remote mode with `VAMS_PROFILE` is refused at start.
+    - **No token in logs, errors, metrics or results.** `VerifiedIdentity` hides its token from
+      `repr`; remote tool errors pass through `vamscli`'s `scrub_text`; the CLI's shared request log
+      is silenced (`silence_cli_request_log`). Log the user, client, tool, outcome and duration
+      (the `vams_mcp.remote` logger), never a header, body or query string.
+    - **Loopback by default.** The listener binds to `127.0.0.1` unless `VAMS_MCP_HOST` says
+      otherwise, and a wider bind needs an `https` resource URL (`http_app.check_exposure`). No
+      example publishes the port on all interfaces.
+    - **Remote tool calls run in a worker thread within a time budget** (`VAMS_MCP_TOOL_TIMEOUT`,
+      `request_context.time_budget`). A loop that issues several API requests checks
+      `request_context.budget_low()` before the next one and stops with a resumable answer, as
+      `paginate()`, `get_execution_results` and `find_and_summarize` do; a call past its budget is
+      answered `ToolTimeout`. Over stdio no budget applies. The worker thread of a call answered at its
+      budget runs on, so a non-read tool's timeout never invites a retry: it says the outcome is
+      unknown (`outcomeUnknown`) and names the read tool that checks it (`checkWith`, from
+      `server._OUTCOME_CHECKS`); a new non-read tool must resolve to a registered read tool there
+      (`tests/test_remote_mode.py`).
+    - **One user cannot starve the others.** Tool bodies run on their own thread limiter, token
+      verification on another (`http_app._verify_limiter`), and the verifier never holds its cache lock
+      across a key-set download. A user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in
+      progress, counted until each worker thread really ends; a call past it is answered
+      `TooManyConcurrentCalls` without running.
+    - **The request body is read whole in the gate** (at most 1 MiB, declared or chunked; `413`
+      otherwise) before the SDK sees the request.
+    - The gate is ours, not the SDK's auth middleware, because the SDK's resource-server wiring
+      differs across the supported `mcp` range (1.10.x serves the metadata at a path its own
+      challenge does not name). The SDK still carries the protocol and its DNS rebinding check,
+      which `transport_security_settings` configures for the resource's host and loopback only.
+17. **Every tool is in a tool set, and every set fits a remote client.** `toolsets.py` names the sets
+    (`consumer`, `operator`, `admin`, `edh`, `edh-admin`; plus `custom` for a fork's tools and `all`).
+    `_ToolSetServer.tool` registers only the selected sets' tools, under the gates as before. A new
+    core or add-on tool goes into at least one set (`consumer` takes reads only, never a write), and
+    each set stays within `MAX_TOOLS_PER_SET` (100, the most Amazon Quick lists per connection) and
+    `MAX_DESCRIPTION_CHARS_PER_SET` (30,000) with every gate and add-on on; `tests/test_toolsets.py`
+    fails otherwise. When a set would pass a limit, split it rather than raise the limit. The stdio
+    default is `all` (every tool, as before tool sets); the remote default is `consumer`.
 
 ---
 
@@ -410,7 +500,8 @@ asymmetry other callers rely on):
    `NOT_YET_EXPOSED` to `TOOLS` with the new tool's name, or add it there. Write and
    destructive tools also go in the `WRITE_TOOLS` / `DESTRUCTIVE_TOOLS` tuples of
    `tests/test_gated_tools.py`, and a safe read in the README's `autoApprove` sample and
-   the docs-site MCP page's auto-approval list.
+   the docs-site MCP page's auto-approval list. Place the tool in a tool set in
+   `vams_mcp/toolsets.py` (Mandatory Rule 17).
 9. When the server's contract with the CLI changes, roll the version in **both**
    `pyproject.toml` and `vams_mcp/__init__.py`, alongside
    `tools/VamsCLI/vamscli/version.py` (root `CLAUDE.md` Pattern 7 rule 6).
@@ -452,6 +543,7 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     level after the destructive block and before `register_custom_tools(...)`. The MCP SDK keeps
     the first registration of a name, so a core tool wins over an add-on tool and an add-on tool
     over a custom one.
+-   **No add-on tool name appears in core server code**, lookup tables included (`infra/test/addon/addonCoreSeparation.test.ts`). An add-on module declares what the core needs to know about its tools, such as `OUTCOME_CHECKS` (the read tool that checks a timed-out non-read call), and `addon_tools/__init__.py` merges it in (`addon_outcome_checks()`).
 -   **An add-on's tools exist only on a deployment with the add-on.** Each module declares its
     add-on's switch in `FEATURE` (a `FEATURE_*` of `vamscli.addon_constants`), and
     `register_addon_tools` registers the module only when `addon_deployed(client, module)`: the
@@ -601,6 +693,13 @@ docstring, so descriptions and their budgets are the same on both.
 
 CI runs this suite in the `vamsmcp-test` job of `.github/workflows/ci.yml`, on Python 3.12 in a job of
 its own (the same two installs, then `pytest -q --tb=short`), so a broken tool fails the pull request.
+
+The remote-mode tests (`tests/test_remote_*.py`, `tests/test_setup_remote.py`) start real HTTP servers
+on `127.0.0.1` only: a fake issuer and VAMS API (`tests/remote_support.py`) and the remote server under
+uvicorn. They sign tokens with RSA keys generated per run, so no deployment or network is needed. They
+reload `vams_mcp.server` in remote mode and back, and restore the CLI's logger afterwards. Run them on
+the `mcp` floor (1.10.0), the newest 1.x and 2.x when touching `http_app.py`: the SDK's streamable HTTP
+app differs across that range (for example 1.10.x mounts its handler at `/mcp/`).
 
 ### Mark a Temporary Test with `@pytest.mark.temporary`
 

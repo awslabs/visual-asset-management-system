@@ -83,7 +83,7 @@ def input_file_extension(input_s3_uri):
 
 def abort_external_workflow(error, task_token):
     if task_token and task_token != "":
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error='Pipeline Failure: ' + error,
