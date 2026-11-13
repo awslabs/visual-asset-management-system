@@ -1835,7 +1835,7 @@ const CORE_RULES: Rule[] = [
 
     // ----- Execution log read allow-list (config.ts: "executionLogReadPrefixes") -----
     //
-    // Each entry is used verbatim as an IAM log-group resource name on the executionService read
+    // Each entry is used verbatim as an IAM log-group resource name on the executionLogs read
     // grant, so getConfig() rejects '*', '/', '/aws/', '/aws/*', '/aws/<service>/*', anything outside
     // '/aws/', a '*' anywhere but last, '?', duplicates, an empty list and names over 512 characters.
     {

@@ -143,13 +143,21 @@ function attachHandlerPolicy(fun: lambda.Function, id: string, statements: iam.P
 }
 
 /**
- * handlers/workflows/executionService.py runs as two functions with two roles. EXECUTION_SERVICE_ROUTES
- * names the routes each serves (the handler answers 404 for any other): the execution service serves
- * every execution route but permanent delete, and the permanent-delete function serves that one route
- * and is the only role that can delete execution rows.
+ * handlers/workflows/executionService.py runs as four functions with four roles. EXECUTION_SERVICE_ROUTES
+ * names the routes each serves (the handler answers 404 for any other):
+ * - `service` (executionService): the asset-scoped and global lists, abort, abort by group and re-run;
+ * - `details` (executionDetails): the details view and its paged metadata, files and results;
+ * - `logs` (executionLogs): the logs view;
+ * - `permanentDelete` (executionPermanentDelete): permanent delete, the only role that can delete
+ *   execution rows.
+ * Each role holds only the calls its routes make, which keeps every one of them inside IAM's inline
+ * policy quota in every partition without a customer managed policy (infra/CLAUDE.md, IAM inline
+ * policy budget).
  */
 export const EXECUTION_SERVICE_ROUTES_ENV = "EXECUTION_SERVICE_ROUTES";
 export const EXECUTION_SERVICE_ROUTE_SET_SERVICE = "service";
+export const EXECUTION_SERVICE_ROUTE_SET_DETAILS = "details";
+export const EXECUTION_SERVICE_ROUTE_SET_LOGS = "logs";
 export const EXECUTION_SERVICE_ROUTE_SET_PERMANENT_DELETE = "permanentDelete";
 
 /** Index of PipelineExecutionsStorageTable on workflowExecutionId: an execution's pipeline rows. */
@@ -180,27 +188,19 @@ function dynamoStatement(actions: string[], resources: string[]): iam.PolicyStat
     });
 }
 
-/**
- * The indexes the execution service queries, by table: the asset and global listings (the main table's
- * by-workflow, by-group and by-date indexes, the inputs' by-asset and the configuration rows'
- * by-output-asset index), an execution's pipeline rows, and the file versions an execution produced.
- */
-export const EXECUTION_SERVICE_QUERIED_INDEXES = {
-    workflowExecutionsStorageTableV2: [
-        "WorkflowExecutionsByWorkflowGSI",
-        "WorkflowExecutionsByGroupGSI",
-        "WorkflowExecutionsByDateGSI",
-    ],
-    workflowExecutionInputsStorageTable: ["WorkflowExecInputsByAssetGSI"],
-    workflowExecutionConfigurationStorageTable: [
-        "WorkflowExecConfigByOutputAssetGSI", // pragma: allowlist secret
-    ],
-    pipelineExecutionsStorageTable: [PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX],
-    assetFileVersionHistoryStorageTable: ["WorkflowExecutionIdIndex"],
-} as const;
+/** A storage table field, or `<field>/index/<index name>` for one index of it. */
+type ExecutionTableTarget = keyof storageResources["dynamo"] | `${string}/index/${string}`;
 
-/** Construct id of the customer managed policy that carries the execution service's table reads. */
-export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
+/** The authorization reads every execution route but permanent delete makes before it answers: the
+ * main row, the run's input rows and configuration row, its assets (batched, then one by one) and the
+ * workflow definition. */
+const EXECUTION_AUTHORIZATION_READS: Partial<Record<ExecutionTableTarget, string[]>> = {
+    workflowExecutionsStorageTableV2: ["Query"],
+    workflowExecutionInputsStorageTable: ["Query"],
+    workflowExecutionConfigurationStorageTable: ["GetItem"],
+    assetStorageTable: ["BatchGetItem", "Query"],
+    workflowStorageTableV2: ["GetItem"],
+};
 
 /**
  * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
@@ -209,81 +209,87 @@ export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
 export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
 
 /**
- * The execution service's table reads: GetItem, BatchGetItem and Query, the only read calls it makes,
- * on every table it reads and on the indexes it queries by exact ARN (not the `index/*`
- * Table.grantReadData() adds). Carried by a customer managed policy (see buildExecutionServiceFunction).
+ * Every DynamoDB call each route set makes, by table and by the one index ARN of each index it
+ * queries (never `index/*`), with only the actions it calls. The lock table's calls are in the lock
+ * policy (executionLockDeleteStatements). backend/tests/handlers/workflows/
+ * test_execution_service_route_split.py records each route set's calls against the same lists.
  */
-export function executionServiceTableReadStatements(
-    storageResources: storageResources
-): iam.PolicyStatement[] {
-    const dynamo = storageResources.dynamo;
-    const indexes = EXECUTION_SERVICE_QUERIED_INDEXES as Record<string, readonly string[]>;
-    const readTables: [string, dynamodb.Table][] = [
-        ["assetStorageTable", dynamo.assetStorageTable],
-        ["workflowExecutionsStorageTableV2", dynamo.workflowExecutionsStorageTableV2],
-        ["workflowExecutionInputsStorageTable", dynamo.workflowExecutionInputsStorageTable],
-        [
-            "workflowExecutionConfigurationStorageTable",
-            dynamo.workflowExecutionConfigurationStorageTable,
+export const EXECUTION_ROUTE_SET_DYNAMO_CALLS: Record<
+    string,
+    Partial<Record<ExecutionTableTarget, string[]>>
+> = {
+    // Lists (with the lazy status reconcile), abort and abort by group, re-run.
+    [EXECUTION_SERVICE_ROUTE_SET_SERVICE]: {
+        ...EXECUTION_AUTHORIZATION_READS,
+        workflowExecutionsStorageTableV2: ["Query", "UpdateItem"],
+        "workflowExecutionsStorageTableV2/index/WorkflowExecutionsByWorkflowGSI": ["Query"],
+        "workflowExecutionsStorageTableV2/index/WorkflowExecutionsByGroupGSI": ["Query"],
+        "workflowExecutionsStorageTableV2/index/WorkflowExecutionsByDateGSI": ["Query"],
+        "workflowExecutionInputsStorageTable/index/WorkflowExecInputsByAssetGSI": ["Query"],
+        // pragma: allowlist nextline secret
+        "workflowExecutionConfigurationStorageTable/index/WorkflowExecConfigByOutputAssetGSI": [
+            "Query",
         ],
-        ["pipelineExecutionsStorageTable", dynamo.pipelineExecutionsStorageTable],
-        // Every per-pipeline table but the input files, which only permanent delete reads.
-        ...pipelineExecutionSubTables(storageResources)
-            .filter((t) => t !== dynamo.pipelineExecutionInputFilesStorageTable)
-            .map((t) => ["", t] as [string, dynamodb.Table]),
-        // Definition tables (V2) are read only to cross-fetch human-readable workflow/pipeline
-        // names + descriptions for the detail view.
-        ["workflowStorageTableV2", dynamo.workflowStorageTableV2],
-        ["pipelineStorageTableV2", dynamo.pipelineStorageTableV2],
-        ["assetFileVersionHistoryStorageTable", dynamo.assetFileVersionHistoryStorageTable],
-    ];
-    return [
-        dynamoStatement(
-            ["BatchGetItem", "GetItem", "Query"],
-            readTables.flatMap(([field, table]) => [
-                table.tableArn,
-                ...(indexes[field] ?? []).map((name) => `${table.tableArn}/index/${name}`),
-            ])
-        ),
-    ];
-}
+        pipelineExecutionsStorageTable: ["UpdateItem"],
+        [`pipelineExecutionsStorageTable/index/${PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX}`]:
+            ["Query"],
+        // The abort resolves a Deadline Cloud step's farm and queue from its pipeline definition.
+        pipelineStorageTableV2: ["GetItem"],
+        // The re-run reads the steps' input configuration.
+        pipelineExecutionInputConfigurationStorageTable: ["Query"],
+    },
+    // The details view (with the lazy status reconcile) and its paged collections.
+    [EXECUTION_SERVICE_ROUTE_SET_DETAILS]: {
+        ...EXECUTION_AUTHORIZATION_READS,
+        workflowExecutionsStorageTableV2: ["Query", "UpdateItem"],
+        pipelineExecutionsStorageTable: ["UpdateItem"],
+        [`pipelineExecutionsStorageTable/index/${PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX}`]:
+            ["Query"],
+        pipelineStorageTableV2: ["BatchGetItem", "GetItem"],
+        pipelineExecutionInputConfigurationStorageTable: ["Query"],
+        pipelineExecutionInputMetadataStorageTable: ["Query"],
+        pipelineExecutionOutputFilesStorageTable: ["Query"],
+        pipelineExecutionOutputMetadataStorageTable: ["BatchGetItem", "Query"],
+        pipelineExecutionOutputResultsStorageTable: ["Query"],
+        "assetFileVersionHistoryStorageTable/index/WorkflowExecutionIdIndex": ["Query"],
+    },
+    // The logs view: the pipeline rows and their recorded log sources.
+    [EXECUTION_SERVICE_ROUTE_SET_LOGS]: {
+        ...EXECUTION_AUTHORIZATION_READS,
+        [`pipelineExecutionsStorageTable/index/${PIPELINE_EXECUTIONS_BY_WORKFLOW_EXECUTION_INDEX}`]:
+            ["Query"],
+        pipelineExecutionLogsStorageTable: ["Query"],
+    },
+};
 
 /**
- * The only rows the execution service writes: the lazy status reconcile and the abort update the main
- * row and mark the pipeline rows. Permanent delete has its own function. The lock table's calls are in
- * the role's lock policy. backend/tests/handlers/workflows/test_execution_service_route_split.py records
- * every write the service's routes make.
+ * The statements for one route set's calls: one per distinct action set, naming each table or index
+ * once, so a table that is read and updated costs one ARN rather than two.
  */
-export function executionServiceTableWriteStatements(
-    storageResources: storageResources
+export function executionRouteSetDynamoStatements(
+    storageResources: storageResources,
+    routeSet: string
 ): iam.PolicyStatement[] {
-    const dynamo = storageResources.dynamo;
-    return [
-        dynamoStatement(
-            ["UpdateItem"],
-            [
-                dynamo.workflowExecutionsStorageTableV2.tableArn,
-                dynamo.pipelineExecutionsStorageTable.tableArn,
-            ]
-        ),
-    ];
-}
-
-/**
- * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
- * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
- * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
- * default policy update; statements moving out of the default policy are therefore never missing on
- * upgrade. The function waits for it as well.
- */
-function attachManagedHandlerPolicy(
-    fun: lambda.Function,
-    id: string,
-    statements: iam.PolicyStatement[]
-) {
-    const policy = new iam.ManagedPolicy(fun, id, { statements });
-    fun.role!.addManagedPolicy(policy);
-    fun.node.defaultChild!.node.addDependency(policy);
+    const calls = EXECUTION_ROUTE_SET_DYNAMO_CALLS[routeSet];
+    if (!calls) {
+        throw new Error(`No DynamoDB calls are recorded for execution route set ${routeSet}`);
+    }
+    const dynamo = storageResources.dynamo as unknown as Record<string, dynamodb.Table>;
+    const byActions = new Map<string, string[]>();
+    for (const [target, actions] of Object.entries(calls) as [string, string[]][]) {
+        const [field, index] = target.split("/index/");
+        const table = dynamo[field];
+        if (!table) {
+            throw new Error(`Execution route set ${routeSet} names an unknown table ${field}`);
+        }
+        const key = [...actions].sort().join(",");
+        const resources = byActions.get(key) ?? [];
+        resources.push(index ? `${table.tableArn}/index/${index}` : table.tableArn);
+        byActions.set(key, resources);
+    }
+    return [...byActions.entries()].map(([actions, resources]) =>
+        dynamoStatement(actions.split(","), resources)
+    );
 }
 
 /**
@@ -417,19 +423,24 @@ function executeMetadataSchemaReadStatements(storageResources: storageResources)
     ];
 }
 
-export function buildExecutionServiceFunction(
+/**
+ * One function running the execution service handler for one route set, with the grants every route
+ * set shares: the customer managed key, the authorization tables and audit logs, and the resource-name
+ * parameters. Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
+ */
+function newExecutionServiceFunction(
     scope: Construct,
+    id: string,
+    routeSet: string,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    workflowsLogGroup: logs.LogGroup,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "executionService";
-    const fun = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, id, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.workflows.${name}.lambda_handler`,
+        handler: "handlers.workflows.executionService.lambda_handler",
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
@@ -442,175 +453,100 @@ export function buildExecutionServiceFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The log group each execution
-        // was launched against is read from that execution's own record (executionLogGroupArn), so
-        // no log group ARN is set here; the read scope is granted on the role policy below.
-        // Permanent delete is served by its own function (buildExecutionPermanentDeleteFunction).
-        environment: {
-            [EXECUTION_SERVICE_ROUTES_ENV]: EXECUTION_SERVICE_ROUTE_SET_SERVICE,
-            // Abort and the lazy status reconcile publish workflow.execution.completed once the
-            // terminal status is written.
-            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
-            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
-        },
+        environment: { [EXECUTION_SERVICE_ROUTES_ENV]: routeSet },
     });
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    return fun;
+}
+
+/**
+ * Attaches statements to a handler's role as a customer managed policy, which IAM does not count against
+ * the role's 10,240-character inline policy quota (each managed policy has its own 6,144). The role's
+ * ManagedPolicyArns names the policy, so CloudFormation creates and attaches it before the role and its
+ * default policy update; statements moving out of the default policy are therefore never missing on
+ * upgrade. The function waits for it as well.
+ */
+function attachManagedHandlerPolicy(
+    fun: lambda.Function,
+    id: string,
+    statements: iam.PolicyStatement[]
+) {
+    const policy = new iam.ManagedPolicy(fun, id, { statements });
+    fun.role!.addManagedPolicy(policy);
+    fun.node.defaultChild!.node.addDependency(policy);
+}
+
+/**
+ * Lets a function publish the workflow.execution.completed event on the orchestration bus, for a
+ * terminal status it writes: the service function's abort, list reconcile and Step Functions status
+ * change, and the details function's reconcile (development, #749). The logs and permanent-delete
+ * functions write no terminal status and get neither the grant nor the variables.
+ */
+function addCompletionEventPublish(fun: lambda.Function, storageResources: storageResources) {
+    fun.addEnvironment(
+        "ORCHESTRATION_BUS_ARN",
+        storageResources.eventBridge.orchestrationBus.eventBusArn
+    );
+    fun.addEnvironment(
+        "ORCHESTRATION_EVENT_SOURCE_PREFIX",
+        storageResources.eventBridge.eventSourcePrefix
+    );
     storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
-    // The table reads are the role's largest statement (about two dozen table and index ARNs, each
-    // carrying the stack name), so they sit in a managed policy of their own and the inline policies
-    // keep their headroom under IAM's quota in every partition (infra/CLAUDE.md, IAM inline policy
-    // budget).
-    attachManagedHandlerPolicy(
-        fun,
-        EXECUTION_SERVICE_TABLE_READ_POLICY_ID,
-        executionServiceTableReadStatements(storageResources)
-    );
-    for (const statement of executionServiceTableWriteStatements(storageResources)) {
-        fun.addToRolePolicy(statement);
-    }
+}
+
+/** Every Step Functions state machine and execution ARN pattern a VAMS run and its registered pipeline
+ * sub-executions run under (CDK-generated sub-state-machine names, see the constant above). */
+function executionStateMachineArns(config: Config.Config, kind: "statemachine" | "execution") {
+    return [
+        "*" + config.name + "*",
+        BACKEND_GENERATED_NAME_PATTERN,
+        PIPELINE_SUB_STATE_MACHINE_PATTERN,
+    ]
+        .map((pattern) => IAMArn(pattern))
+        .map((arn) => (kind === "statemachine" ? arn.statemachine : arn.statemachineExecution));
+}
+
+/**
+ * The log groups the lazy status reconcile of a list or details read captures a run's log from when it
+ * finds the run stopped outside VAMS: the group the execution's own record names, which every launch
+ * sets to the shared workflow log group, and the config-name groups an older record may name (the
+ * scope the execution service held before the route split). Suffixed with ':*' for stream-level reads.
+ */
+function addWorkflowLogCaptureGrant(
+    fun: lambda.Function,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config
+) {
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            // DescribeExecution/StopExecution + GetExecutionHistory (the whole-execution log view
-            // renders the Step Functions execution history) act on executions; DescribeStateMachine
-            // resolves a registered sub-SFN's CloudWatch log group from its state-machine ARN.
-            actions: [
-                "states:DescribeExecution",
-                "states:StopExecution",
-                "states:GetExecutionHistory",
-                "states:DescribeStateMachine",
-            ],
+            actions: ["logs:FilterLogEvents"],
             resources: [
-                IAMArn("*" + config.name + "*").statemachine,
-                IAMArn("*" + config.name + "*").statemachineExecution,
-                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
-                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
-                // Registered pipeline sub-executions (CDK-generated names — see the constant above).
-                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachine,
-                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachineExecution,
+                workflowsLogGroup.logGroupArn,
+                workflowsLogGroup.logGroupArn + ":*",
+                IAMArn("*" + config.name + "*").loggroup,
+                IAMArn("*" + config.name + "*").loggroup + ":*",
             ],
         })
     );
+}
+
+/**
+ * Describe a registered SageMaker training job or pipeline execution (details and logs views), and on
+ * the abort also stop it. Job and pipeline execution names are recorded on registration rows at run
+ * time, so the resources are this account and Region's training-job and pipeline-execution
+ * namespaces; the handler only ever passes an ARN read from a registration row on the execution being
+ * aborted or read.
+ */
+function addSageMakerSubProcessGrant(fun: lambda.Function, config: Config.Config, stop: boolean) {
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            // Terminate a Batch job a pipeline registered as an abortable sub-process. Needed only
-            // for jobs a pipeline submits ITSELF: a job submitted through the Step Functions `.sync`
-            // Batch integration is stopped by StopExecution on its state machine (granted above).
-            // AWS Batch generates job ids with no deployment-specific prefix to scope on, so the
-            // resource is a wildcard; the abort path only ever passes an id read from a registration
-            // row on the execution being aborted.
-            actions: ["batch:TerminateJob"],
-            resources: ["*"],
-        })
-    );
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            // Resolve a registered Batch job's status and container log stream for the execution
-            // details and logs APIs. DescribeJobs supports no resource-level scoping (its only
-            // resource type is `*`); the handler only ever passes job ids read from registration
-            // rows of the execution being read.
-            actions: ["batch:DescribeJobs"],
-            resources: ["*"],
-        })
-    );
-    // Gated the same way the createJob grant is: with the execution type disabled no pipeline can be
-    // registered as DeadlineCloud, so no execution can hold a job to cancel or report on, and the
-    // grants would be standing access to every farm in the account for code paths that cannot run.
-    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
-        fun.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                // Cancel a Deadline Cloud farm job on abort. The task is
-                // `createJob.waitForTaskToken`, so Step Functions holds the token and NOT the job —
-                // StopExecution on the state machine leaves the job running (and billing) on the
-                // farm, which is why an explicit cancel is required here.
-                //
-                // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise
-                // identified from a registration written by the job-status callback, and that
-                // callback only runs on a status CHANGE — a job sitting queued with no worker never
-                // produces one. Discovery walks the pipeline's queue and matches the reserved
-                // VamsPipelineExecutionId job parameter instead, so it needs no event to have
-                // occurred.
-                //
-                // GetJob also resolves a registered job's name and status for the execution details
-                // view. ListSessions lists the job's sessions for the logs API: each session is one
-                // CloudWatch log stream in the queue's shared '/aws/deadline/{farmId}/{queueId}'
-                // group, and the lines carry no VAMS id, so the streams are read by exact session
-                // id (log-group grant below).
-                actions: [
-                    "deadline:UpdateJob",
-                    "deadline:ListJobs",
-                    "deadline:GetJob",
-                    "deadline:ListSessions",
-                ],
-                // Farm and queue ids come from the pipeline record, not from configuration, so they
-                // are not known at deploy time; the handler only ever passes ids read from the
-                // execution being aborted or read. Scoped to the account/Region's Deadline resources.
-                resources: [
-                    `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
-                ],
-            })
-        );
-        fun.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
-                // Deadline Cloud writes session logs to the queue's own group
-                // '/aws/deadline/{farmId}/{queueId}', one stream per session, shared by every job of
-                // the queue. Farm and queue ids come from the pipeline record, so the group is not
-                // known at deploy time; the handler only ever reads the streams named by the session
-                // ids ListSessions returned for a job registered on the execution being read. Suffixed
-                // with ':*' for stream-level reads, as the log-group statement below.
-                resources: [
-                    IAMArn("/aws/deadline/*").loggroup,
-                    IAMArn("/aws/deadline/*").loggroup + ":*",
-                ],
-            })
-        );
-        NagSuppressions.addResourceSuppressions(
-            fun,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
-                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob/ListSessions are scoped to " +
-                        "this account and Region's farm hierarchy. The handler only ever passes a farm/queue read " +
-                        "from the pipeline definition of the execution being aborted or read, and a job id it " +
-                        "either read from that execution's registration rows or matched by the execution's own id " +
-                        "in a reserved job parameter.",
-                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
-                        "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
-                        "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
-                        "log-group namespace. The handler only ever reads the streams named by the session ids " +
-                        "Deadline Cloud returned for a job registered on the execution being read.",
-                    appliesTo: [
-                        {
-                            regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-    }
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            // Stop a SageMaker training job or pipeline execution a pipeline registered as an abortable
-            // sub-process, and describe either for the execution details view. Job and pipeline
-            // execution names are recorded on registration rows at run time, so the resources are this
-            // account and Region's training-job and pipeline-execution namespaces; the handler only
-            // ever passes an ARN read from a registration row on the execution being aborted or read.
             actions: [
-                "sagemaker:StopTrainingJob",
-                "sagemaker:StopPipelineExecution",
+                ...(stop ? ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"] : []),
                 "sagemaker:DescribeTrainingJob",
                 "sagemaker:DescribePipelineExecution",
             ],
@@ -635,6 +571,273 @@ export function buildExecutionServiceFunction(
         ],
         true
     );
+}
+
+/**
+ * Deadline Cloud job calls on this account and Region's farm hierarchy. Farm and queue ids come from
+ * the pipeline record, not from configuration, so they are not known at deploy time; the handler only
+ * ever passes a farm/queue read from the pipeline definition of the execution being aborted or read,
+ * and a job id it either read from that execution's registration rows or matched by the execution's
+ * own id in the reserved VamsPipelineExecutionId job parameter.
+ */
+function addDeadlineJobGrant(fun: lambda.Function, config: Config.Config, actions: string[]) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions,
+            resources: [
+                `arn:${Partition()}:deadline:${config.env.region}:${config.env.account}:farm/*`,
+            ],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                    "known at deploy time, so the Deadline Cloud job actions are scoped to this account and " +
+                    "Region's farm hierarchy. The handler only ever passes a farm/queue read from the pipeline " +
+                    "definition of the execution being aborted or read, and a job id it either read from that " +
+                    "execution's registration rows or matched by the execution's own id in a reserved job " +
+                    "parameter.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * The execution service: the asset-scoped and global lists, abort, abort by group and re-run
+ * (EXECUTION_SERVICE_ROUTES `service`). The details view, the logs view and permanent delete run the
+ * same handler on functions of their own (buildExecutionDetailsFunction, buildExecutionLogsFunction,
+ * buildExecutionPermanentDeleteFunction).
+ */
+export function buildExecutionServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const fun = newExecutionServiceFunction(
+        scope,
+        "executionService",
+        EXECUTION_SERVICE_ROUTE_SET_SERVICE,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+    for (const statement of executionRouteSetDynamoStatements(
+        storageResources,
+        EXECUTION_SERVICE_ROUTE_SET_SERVICE
+    )) {
+        fun.addToRolePolicy(statement);
+    }
+    addCompletionEventPublish(fun, storageResources);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // The list reconcile and the abort describe a run's execution; the abort stops it and its
+            // registered pipeline sub-executions.
+            actions: ["states:DescribeExecution", "states:StopExecution"],
+            resources: executionStateMachineArns(config, "execution"),
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Terminate a Batch job a pipeline registered as an abortable sub-process. Needed only
+            // for jobs a pipeline submits ITSELF: a job submitted through the Step Functions `.sync`
+            // Batch integration is stopped by StopExecution on its state machine (granted above).
+            // AWS Batch generates job ids with no deployment-specific prefix to scope on, so the
+            // resource is a wildcard; the abort path only ever passes an id read from a registration
+            // row on the execution being aborted.
+            actions: ["batch:TerminateJob"],
+            resources: ["*"],
+        })
+    );
+    // Gated the same way the createJob grant is: with the execution type disabled no pipeline can be
+    // registered as DeadlineCloud, so no execution can hold a job to cancel, and the grant would be
+    // standing access to every farm in the account for code paths that cannot run.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        // Cancel a Deadline Cloud farm job on abort. The task is `createJob.waitForTaskToken`, so Step
+        // Functions holds the token and NOT the job: StopExecution on the state machine leaves the job
+        // running (and billing) on the farm, which is why an explicit cancel is required here.
+        // ListJobs + GetJob are what make a QUEUED job cancellable. The job is otherwise identified
+        // from a registration written by the job-status callback, and that callback only runs on a
+        // status CHANGE; a job sitting queued with no worker never produces one. Discovery walks the
+        // pipeline's queue and matches the reserved VamsPipelineExecutionId job parameter instead.
+        addDeadlineJobGrant(fun, config, [
+            "deadline:UpdateJob",
+            "deadline:ListJobs",
+            "deadline:GetJob",
+        ]);
+    }
+    addSageMakerSubProcessGrant(fun, config, true);
+    addWorkflowLogCaptureGrant(fun, workflowsLogGroup, config);
+    // Concurrency lock rows are released when an execution is aborted and when a list read observes a
+    // run stopped outside VAMS. The workflow and input rows the release reads are granted above
+    // already, so only the lock-table calls are attached.
+    attachExecutionLockPolicy(fun, executionLockDeleteStatements(storageResources));
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+/**
+ * The read grants the details and logs views share: describing a run's execution, its history (the
+ * per-step view and the whole-execution log view render it) and a registered sub-SFN's state machine
+ * (which names its CloudWatch log group), a registered Batch job's status and container log stream,
+ * and a registered SageMaker job.
+ */
+function addExecutionReadGrants(fun: lambda.Function, config: Config.Config) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "states:DescribeExecution",
+                "states:GetExecutionHistory",
+                "states:DescribeStateMachine",
+            ],
+            resources: [
+                ...executionStateMachineArns(config, "statemachine"),
+                ...executionStateMachineArns(config, "execution"),
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // DescribeJobs supports no resource-level scoping (its only resource type is `*`); the
+            // handler only ever passes job ids read from registration rows of the execution being read.
+            actions: ["batch:DescribeJobs"],
+            resources: ["*"],
+        })
+    );
+    addSageMakerSubProcessGrant(fun, config, false);
+}
+
+/**
+ * The details view and its paged metadata, files and results (EXECUTION_SERVICE_ROUTES `details`). A
+ * details read reconciles a run it finds stopped outside VAMS the way a list read does: it updates the
+ * main and pipeline rows, captures the run's log and releases its locks.
+ */
+export function buildExecutionDetailsFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const fun = newExecutionServiceFunction(
+        scope,
+        "executionDetails",
+        EXECUTION_SERVICE_ROUTE_SET_DETAILS,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+    for (const statement of executionRouteSetDynamoStatements(
+        storageResources,
+        EXECUTION_SERVICE_ROUTE_SET_DETAILS
+    )) {
+        fun.addToRolePolicy(statement);
+    }
+    addCompletionEventPublish(fun, storageResources);
+    addExecutionReadGrants(fun, config);
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        // A registered Deadline Cloud job's name and status for the per-step view.
+        addDeadlineJobGrant(fun, config, ["deadline:GetJob"]);
+    }
+    addWorkflowLogCaptureGrant(fun, workflowsLogGroup, config);
+    attachExecutionLockPolicy(fun, executionLockDeleteStatements(storageResources));
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
+/** The logs view (EXECUTION_SERVICE_ROUTES `logs`): whole-execution and per-step log sources. */
+export function buildExecutionLogsFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const fun = newExecutionServiceFunction(
+        scope,
+        "executionLogs",
+        EXECUTION_SERVICE_ROUTE_SET_LOGS,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+    for (const statement of executionRouteSetDynamoStatements(
+        storageResources,
+        EXECUTION_SERVICE_ROUTE_SET_LOGS
+    )) {
+        fun.addToRolePolicy(statement);
+    }
+    addExecutionReadGrants(fun, config);
+    // Gated the same way the createJob grant is (see buildExecutionServiceFunction).
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        // GetJob resolves a registered job's name and status; ListSessions lists the job's sessions.
+        // Each session is one CloudWatch log stream in the queue's shared
+        // '/aws/deadline/{farmId}/{queueId}' group, and the lines carry no VAMS id, so the streams are
+        // read by exact session id (log-group grant below).
+        addDeadlineJobGrant(fun, config, ["deadline:GetJob", "deadline:ListSessions"]);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+                // Deadline Cloud writes session logs to the queue's own group
+                // '/aws/deadline/{farmId}/{queueId}', one stream per session, shared by every job of
+                // the queue. Farm and queue ids come from the pipeline record, so the group is not
+                // known at deploy time; the handler only ever reads the streams named by the session
+                // ids ListSessions returned for a job registered on the execution being read. Suffixed
+                // with ':*' for stream-level reads, as the log-group statement below.
+                resources: [
+                    IAMArn("/aws/deadline/*").loggroup,
+                    IAMArn("/aws/deadline/*").loggroup + ":*",
+                ],
+            })
+        );
+        NagSuppressions.addResourceSuppressions(
+            fun,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
+                        "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
+                        "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
+                        "log-group namespace. The handler only ever reads the streams named by the session ids " +
+                        "Deadline Cloud returned for a job registered on the execution being read.",
+                    appliesTo: [
+                        {
+                            regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+    }
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -668,14 +871,6 @@ export function buildExecutionServiceFunction(
             ],
         })
     );
-    // Concurrency lock rows are released when an execution is aborted and when a read observes a run
-    // stopped outside VAMS. The workflow and input rows the release reads are granted above already,
-    // so only the lock-table calls are attached.
-    attachExecutionLockPolicy(fun, executionLockDeleteStatements(storageResources));
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;

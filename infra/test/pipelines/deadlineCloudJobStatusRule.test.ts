@@ -177,12 +177,13 @@ describe("Deadline Cloud job-status EventBridge rule", () => {
 
         // CDK spills an over-long inline policy into an AWS::IAM::ManagedPolicy, so scanning only
         // AWS::IAM::Policy reports a grant that IS present as missing.
-        const executionServiceStatements = (s: SynthResult): Statement[] => {
+        // The logs view runs on executionLogs, the only role with these two reads.
+        const executionLogsStatements = (s: SynthResult): Statement[] => {
             const found: Statement[] = [];
             for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
                 for (const pol of s.ofType(type)) {
                     // The policy's own logical id names the role it defaults for.
-                    if (!/executionService/i.test(pol.logicalId)) continue;
+                    if (!/executionLogs/i.test(pol.logicalId)) continue;
                     found.push(...(pol.properties?.PolicyDocument?.Statement ?? []));
                 }
             }
@@ -193,7 +194,7 @@ describe("Deadline Cloud job-status EventBridge rule", () => {
         // resource is a partition-aware string built at synth, but flattening guards against a future
         // Fn::Join rendering that a raw JSON substring match would pass while checking nothing.
         const deadlineLogStatements = (s: SynthResult): Statement[] =>
-            executionServiceStatements(s).filter((stmt) =>
+            executionLogsStatements(s).filter((stmt) =>
                 ([] as unknown[])
                     .concat(stmt.Resource ?? [])
                     .some((r) => DEADLINE_LOG_GROUP.test(SynthResult.flatten(r)))
@@ -203,7 +204,7 @@ describe("Deadline Cloud job-status EventBridge rule", () => {
         // ListSessions that moved onto a `Resource: "*"` statement would otherwise still pass.
         const DEADLINE_FARM = /:deadline:.*:farm\/\*$/;
         const deadlineFarmStatements = (s: SynthResult): Statement[] =>
-            executionServiceStatements(s).filter((stmt) =>
+            executionLogsStatements(s).filter((stmt) =>
                 ([] as unknown[])
                     .concat(stmt.Resource ?? [])
                     .some((r) => DEADLINE_FARM.test(SynthResult.flatten(r)))
