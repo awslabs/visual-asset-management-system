@@ -69,6 +69,13 @@ _NESTED_BLOCK = 4096
 STRAY_SHARE = 0.05
 STRAY_SCALE = 10.0
 STRAY_SIZE_SHARE = 0.5
+# A candidate stray with a peer is not a stray (``_has_peer``): a part within PEER_SIZE_RATIO of its
+# size in the core, or another candidate of that size whose distance from the core's centre is within
+# PEER_DISTANCE_SHARE of its own. The pairwise distance test runs for at most MAX_PEER_CANDIDATES
+# candidates; past that only the core test applies.
+PEER_SIZE_RATIO = 1.5
+PEER_DISTANCE_SHARE = 0.1
+MAX_PEER_CANDIDATES = 2048
 
 # Parts tracked per scene. A backdrop is one part, or a few, at least BACKDROP_SCALE times the rest of
 # the scene, so a scene of more parts (a point instancer's forest, a large assembly) frames as before.
@@ -320,8 +327,37 @@ def stray_parts(bounds, counts):
         return mask
     with_part = np.maximum(core_hi, bounds[:, 3:]) - np.minimum(core_lo, bounds[:, :3])
     far = with_part.max(axis=1) >= STRAY_SCALE * core_largest
-    small = (bounds[:, 3:] - bounds[:, :3]).max(axis=1) <= STRAY_SIZE_SHARE * core_largest
-    return ~core & far & small & ~_near_flat(bounds)
+    size = (bounds[:, 3:] - bounds[:, :3]).max(axis=1)
+    small = size <= STRAY_SIZE_SHARE * core_largest
+    candidates = ~core & far & small & ~_near_flat(bounds)
+    if candidates.any():
+        candidates &= ~_has_peer(bounds, size, core, candidates, (core_lo + core_hi) / 2.0)
+    return candidates
+
+
+def _has_peer(bounds, size, core, candidates, centre):
+    """True per candidate stray that belongs to a pattern rather than being a leftover: a part of
+    comparable size (within PEER_SIZE_RATIO of it) that is in the core, or another candidate at the
+    same distance from the core's centre (within PEER_DISTANCE_SHARE). Identical parts of an exploded
+    ring, some of which landed in the core by point count, are framed together. One leftover piece
+    has no such peer, and a small piece beside a much larger model is not comparable to it."""
+    peer = np.zeros(len(bounds), dtype=bool)
+    index = np.flatnonzero(candidates)
+    core_sizes = np.sort(size[core])
+    lo = np.searchsorted(core_sizes, size[index] / PEER_SIZE_RATIO, side="left")
+    hi = np.searchsorted(core_sizes, size[index] * PEER_SIZE_RATIO, side="right")
+    peer[index] = hi > lo
+    rest = index[~peer[index]]
+    if 2 <= len(rest) <= MAX_PEER_CANDIDATES:
+        distance = np.linalg.norm((bounds[rest, :3] + bounds[rest, 3:]) / 2.0 - centre, axis=1)
+        s = size[rest]
+        comparable = (np.maximum(s[:, None], s[None, :]) <= PEER_SIZE_RATIO * np.minimum(s[:, None], s[None, :]))
+        same = np.abs(distance[:, None] - distance[None, :]) <= PEER_DISTANCE_SHARE * np.maximum(
+            distance[:, None], distance[None, :])
+        pair = comparable & same
+        np.fill_diagonal(pair, False)
+        peer[rest] = pair.any(axis=1)
+    return peer
 
 
 def framing_bounds(pv_data):

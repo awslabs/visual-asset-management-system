@@ -72,6 +72,22 @@ class TestStrayRule:
         far = _box((145.0, -5.0, -5.0), (155.0, 5.0, 5.0))
         assert not scene_parts.stray_parts([near, far], [10242, 8]).any()
 
+    def test_an_exploded_ring_of_eight_identical_parts_is_framed_whole(self):
+        """A dense hub and eight identical small parts in a ring far around it: whichever of them the
+        point count puts in the core, the rest have a peer of their size in the core or at their
+        distance, so none is left out."""
+        ring = [_box((20 * np.cos(a) - 0.05, 0.0, 20 * np.sin(a) - 0.05),
+                     (20 * np.cos(a) + 0.05, 0.1, 20 * np.sin(a) + 0.05))
+                for a in np.linspace(0, 2 * np.pi, 8, endpoint=False)]
+        hub = _box((-0.5, 0.0, -0.5), (0.5, 1.0, 0.5))
+        for hub_points in (2000, 1000, 600):  # none, some or most of the ring in the core
+            assert not scene_parts.stray_parts([hub] + ring, [hub_points] + [8] * 8).any(), hub_points
+
+    def test_two_leftovers_at_different_distances_are_both_strays(self):
+        near_left = _box((49.99, 0.0, -0.01), (50.01, 0.02, 0.01))
+        far_left = _box((-0.01, 0.0, 119.99), (0.01, 0.02, 120.01))
+        assert scene_parts.stray_parts([MODEL, near_left, far_left], [400, 8, 8]).tolist() == [False, True, True]
+
     def test_a_far_part_over_half_the_core_is_kept_and_at_half_is_a_stray(self):
         core = _box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
         over = _box((50.0, 0.0, 0.0), (50.51, 0.51, 0.51))
