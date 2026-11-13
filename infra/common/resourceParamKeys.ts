@@ -68,6 +68,12 @@ export const RESOURCE_PARAM_KEYS = {
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
         workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
         largeObjectCopyJobsStorage: "dynamoTables/largeObjectCopyJobsStorage",
+        // Compliance tables
+        complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
+        complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
+        complianceEvaluationStorage: "dynamoTables/complianceEvaluationStorage",
+        complianceCascadeStorage: "dynamoTables/complianceCascadeStorage",
+        complianceAuditStorage: "dynamoTables/complianceAuditStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {

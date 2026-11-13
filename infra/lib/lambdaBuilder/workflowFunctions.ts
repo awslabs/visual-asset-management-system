@@ -203,6 +203,12 @@ export const EXECUTION_SERVICE_QUERIED_INDEXES = {
 export const EXECUTION_SERVICE_TABLE_READ_POLICY_ID = "TableReadPolicy";
 
 /**
+ * Construct id of the customer managed policy that carries the end-state handler's PutEvents on the
+ * orchestration bus (the workflow.execution.completed event).
+ */
+export const PROCESS_OUTPUT_EVENTS_POLICY_ID = "OrchestrationEventsPolicy";
+
+/**
  * The execution service's table reads: GetItem, BatchGetItem and Query, the only read calls it makes,
  * on every table it reads and on the indexes it queries by exact ARN (not the `index/*`
  * Table.grantReadData() adds). Carried by a customer managed policy (see buildExecutionServiceFunction).
@@ -440,8 +446,15 @@ export function buildExecutionServiceFunction(
         // was launched against is read from that execution's own record (executionLogGroupArn), so
         // no log group ARN is set here; the read scope is granted on the role policy below.
         // Permanent delete is served by its own function (buildExecutionPermanentDeleteFunction).
-        environment: { [EXECUTION_SERVICE_ROUTES_ENV]: EXECUTION_SERVICE_ROUTE_SET_SERVICE },
+        environment: {
+            [EXECUTION_SERVICE_ROUTES_ENV]: EXECUTION_SERVICE_ROUTE_SET_SERVICE,
+            // Abort and the lazy status reconcile publish workflow.execution.completed once the
+            // terminal status is written.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+        },
     });
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     // The table reads are the role's largest statement (about two dozen table and index ARNs, each
     // carrying the stack name), so they sit in a managed policy of their own and the inline policies
     // keep their headroom under IAM's quota in every partition (infra/CLAUDE.md, IAM inline policy
@@ -856,11 +869,24 @@ export function buildProcessWorkflowExecutionOutputFunction(
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
+    // This role is a named exception to the IAM inline policy budget (its execution table grants), so
+    // the completion event's PutEvents sits in a customer managed policy of its own rather than
+    // adding to the inline total (infra/CLAUDE.md, IAM Inline Policy Budget).
+    attachManagedHandlerPolicy(fun, PROCESS_OUTPUT_EVENTS_POLICY_ID, [
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["events:PutEvents"],
+            resources: [storageResources.eventBridge.orchestrationBus.eventBusArn],
+        }),
+    ]);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -987,11 +1013,15 @@ export function buildHandleExecutionErrorFunction(
             // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only the
             // non-SSM shared workflow SFN log group ARN is set here (used to pull failed-run logs).
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     // A failed run's outputTypes are derived from whatever output rows exist at failure (one
     // existence query per output table) and recorded on the launch-time configuration row.
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);

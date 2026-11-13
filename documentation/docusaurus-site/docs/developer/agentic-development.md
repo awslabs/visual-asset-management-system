@@ -169,16 +169,18 @@ These commands encode the cross-component patterns from the steering documents i
 
 The steering documents above guide agents that **write VAMS code**. VAMS also ships two components for agents that **operate a running VAMS deployment** — searching, inspecting, and managing assets on a user's behalf. Both authenticate through the user's existing VAMS credentials and inherit exactly that user's two-tier (RBAC/ABAC) permissions, so an agent can never reach data the user could not reach through the web application or the CLI.
 
-| Component        | Location                        | Interface                         | Use when                                                                   |
-| :--------------- | :------------------------------ | :-------------------------------- | :------------------------------------------------------------------------- |
-| VAMS MCP server  | `tools/VamsMCP/`                | Model Context Protocol over stdio | The agent host supports MCP and you want typed, structured tools           |
-| VAMS agent skill | `tools/VamsAgentSkill/SKILL.md` | Shell commands via `vamscli`      | The host has no MCP support, or you want the agent to use the CLI directly |
+| Component        | Location                        | Interface                                                                  | Use when                                                                   |
+| :--------------- | :------------------------------ | :------------------------------------------------------------------------- | :------------------------------------------------------------------------- |
+| VAMS MCP server  | `tools/VamsMCP/`                | Model Context Protocol over stdio, or streamable HTTP when hosted remotely | The agent host supports MCP and you want typed, structured tools           |
+| VAMS agent skill | `tools/VamsAgentSkill/SKILL.md` | Shell commands via `vamscli`                                               | The host has no MCP support, or you want the agent to use the CLI directly |
 
 ### VAMS MCP Server
 
 The MCP server exposes the VAMS API as agent-callable tools for any MCP-capable host (Kiro, Claude Desktop, Amazon Bedrock agents, or an internal orchestrator). It is built on the `mcp` SDK and reuses the VamsCLI `APIClient`, inheriting its retries, throttling backoff, typed errors, and automatic token refresh.
 
 The server stores no keys, tokens, or URLs. It reads the API Gateway URL and authentication from the local `vamscli` profile, so the MCP host configuration contains no secrets and every user runs the server against their own account. Installation, client registration, configuration, upgrading and troubleshooting are covered in [MCP Server](../mcp/mcp-server.md).
+
+An operator can also host the server remotely over streamable HTTP for clients that support only remote servers, such as Amazon Quick. It then reads no profile: it verifies each request's OAuth access token itself and calls the API with that token for that request only, so every call still runs as its own user. Tool sets (`VAMS_MCP_TOOLSETS`) keep each connection within a client's tool limit. See [Remote MCP Server](../mcp/remote-mcp-server.md).
 
 Tools are organized into three tiers, gated by environment variable:
 
