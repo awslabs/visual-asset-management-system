@@ -363,10 +363,6 @@ def _run_preview_stage(
                 pv_data = _load_file(local_filepath, ext,
                                      asset_root=None if localTest else reference_local_root,
                                      budgets=budgets)
-                # Environment geometry enclosing the model (a room or environment box, a sky
-                # sphere) is left out while the parts still match the loaded points.
-                if not splat_handler.is_splat(pv_data):
-                    pv_data = scene_parts.without_enclosure(pv_data)
             pv_data = geometry_budget.apply_budgets(pv_data, budgets)
     except MemoryError:
         logger.exception("Out of memory while loading the input")

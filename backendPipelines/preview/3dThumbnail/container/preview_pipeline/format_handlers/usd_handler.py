@@ -77,6 +77,7 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     context = _LoadContext(file_path, asset_root or os.path.dirname(os.path.abspath(file_path)), time)
 
     parts = []
+    sides = []  # per part: (single-sided, winding reversed) for the enclosure test
     iterator = iter(Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()))
     for prim in iterator:
         if prim.IsPseudoRoot():
@@ -85,12 +86,16 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
             iterator.PruneChildren()
             continue
         if prim.IsA(UsdGeom.PointInstancer):
-            parts.extend(_expand_point_instancer(prim, xform_cache, context))
+            expanded = _expand_point_instancer(prim, xform_cache, context)
+            parts.extend(expanded)
+            sides.extend([(False, False)] * len(expanded))
             iterator.PruneChildren()
             continue
-        part = _gprim_part(prim, np.array(xform_cache.GetLocalToWorldTransform(prim)), context)
+        matrix = np.array(xform_cache.GetLocalToWorldTransform(prim))
+        part = _gprim_part(prim, matrix, context)
         if part is not None:
             parts.append(part)
+            sides.append(_sidedness(prim, matrix, time))
         if context.points_total > MAX_POINTS:
             logger.warning(f"Stage expands past {MAX_POINTS} vertices; remaining prims are skipped")
             break
@@ -98,6 +103,11 @@ def load(file_path: str, asset_root: str = None) -> pv.PolyData:
     if not parts:
         raise ValueError("No valid mesh geometry found in USD stage")
 
+    keep = scene_parts.environment_kept([scene_parts.Part(points, triangles, one_sided, reversed_winding)
+                                         for (points, triangles, _), (one_sided, reversed_winding)
+                                         in zip(parts, sides)])
+    if keep is not None:
+        parts = [part for part, kept in zip(parts, keep) if kept]
     pv_mesh = _merge_parts(parts)
     pv_mesh = _normalize_usd_up_axis(stage, pv_mesh)
     scene_parts.record_parts(pv_mesh, [len(points) for points, _, _ in parts])
@@ -140,6 +150,18 @@ def _is_rendered(prim, time) -> bool:
 # --------------------------------------------------------------------------------------------------
 # Geometry
 # --------------------------------------------------------------------------------------------------
+
+def _sidedness(prim, matrix, time):
+    """(single-sided, winding reversed) of a gprim: ``doubleSided`` unset or false, and whether its
+    ``orientation`` (leftHanded) or a mirroring transform reverses the triangles' winding."""
+    from pxr import UsdGeom
+
+    gprim = UsdGeom.Gprim(prim)
+    double_sided = bool(gprim.GetDoubleSidedAttr().Get(time))
+    left_handed = str(gprim.GetOrientationAttr().Get(time)) == str(UsdGeom.Tokens.leftHanded)
+    mirrored = float(np.linalg.det(np.asarray(matrix, dtype=np.float64)[:3, :3])) < 0
+    return not double_sided, left_handed != mirrored
+
 
 def _gprim_part(prim, matrix, context):
     """(points, triangles, colours or None) for one gprim in world space, or None."""

@@ -80,24 +80,33 @@ def load(file_path: str, max_triangles: int = None) -> pv.PolyData:
         from OCP.TopLoc import TopLoc_Location
 
         parts = [(read_step_shape(file_path), TopLoc_Location(), None, {})]
-    return _content_alone(parts, *_tessellate(parts, limit), max_triangles)
+    return _without_environment(parts, *_tessellate(parts, limit), max_triangles)
 
 
-def _content_alone(parts, mesh, part_points, max_triangles):
-    """``mesh`` or, when it holds environment geometry that encloses its content
-    (``scene_parts.without_enclosure``), the content's parts tessellated again on their own. The linear
-    deflection follows the bounding-box diagonal of what is tessellated, so the content then comes out
-    as fine as from a file holding it alone, not as coarse as the enclosure's size made it."""
-    if scene_parts.without_enclosure(mesh) is mesh:
-        return mesh
-    screen = scene_parts.enclosure_screen(scene_parts.part_bounds(mesh))
+def _without_environment(parts, mesh, part_points, part_triangles, max_triangles):
+    """``mesh`` or, when some of its parts are environment geometry enclosing the model
+    (``scene_parts.environment_kept``; a B-rep face's triangles wind by the face's orientation, so a
+    solid faces outward), the other parts tessellated again on their own: the linear deflection follows
+    the diagonal of what is tessellated, so the model comes out as from a file holding it alone."""
     placed = [index for index, count in enumerate(part_points) if count > 0]
-    content = [parts[placed[row]] for row in np.flatnonzero(screen[2])]
-    logger.info(f"Tessellating the {len(content)} part(s) inside the enclosure on their own")
+    if len(placed) < 2:
+        return mesh
+    points = np.asarray(mesh.points)
+    triangles = np.asarray(mesh.faces).reshape(-1, 4)[:, 1:]
+    point_starts = np.concatenate(([0], np.cumsum([part_points[i] for i in placed])))
+    triangle_starts = np.concatenate(([0], np.cumsum([part_triangles[i] for i in placed])))
+    keep = scene_parts.environment_kept([
+        scene_parts.Part(points[point_starts[k]:point_starts[k + 1]],
+                         triangles[triangle_starts[k]:triangle_starts[k + 1]] - point_starts[k], True)
+        for k in range(len(placed))])
+    if keep is None:
+        return mesh
     from OCP.BRepTools import BRepTools
 
+    content = [parts[placed[k]] for k in np.flatnonzero(keep)]
     for shape, _, _, _ in content:
         BRepTools.Clean_s(shape)  # mesh afresh, not by refining the scene-sized triangulation
+    logger.info(f"Tessellating the {len(content)} part(s) inside the enclosure on their own")
     return tessellate_parts(content, SceneLimit("STEP assembly", max_triangles))
 
 
@@ -340,8 +349,7 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
 
 
 def _tessellate(parts, limit: SceneLimit = None):
-    """``tessellate_parts``' PolyData and the points placed for each part, in the order of ``parts``
-    (shorter when ``limit`` stopped the walk)."""
+    """``tessellate_parts``' PolyData, and the points and triangles placed for each part walked."""
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.TopoDS import TopoDS
 
@@ -352,12 +360,13 @@ def _tessellate(parts, limit: SceneLimit = None):
 
     coloured = any(colour or face_colours for _, _, colour, face_colours in parts)
     points, cells, colours = [], [], []
-    part_points = []
+    part_points, part_triangles = [], []
     offset = 0
     for shape, location, colour, face_colours in parts:
         if limit.reached:
             break
         part_points.append(0)
+        part_triangles.append(0)
         BRepMesh_IncrementalMesh(shape, deflection, False, ANGULAR_DEFLECTION, True)
         matrix = None if location.IsIdentity() else _transform_matrix(location)
         faces = face_map(shape)
@@ -374,6 +383,7 @@ def _tessellate(parts, limit: SceneLimit = None):
             cells.append(triangles + offset)
             offset += len(nodes)
             part_points[-1] += len(nodes)
+            part_triangles[-1] += len(triangles)
             if coloured:
                 rgb = face_colours.get(index) or colour or DEFAULT_RGB
                 colours.append(np.tile(np.asarray(rgb, dtype=np.uint8), (len(triangles), 1)))
@@ -390,4 +400,4 @@ def _tessellate(parts, limit: SceneLimit = None):
     scene_parts.record_parts(mesh, part_points)
     logger.info(f"Tessellated CAD model: {len(vertices)} vertices, {len(triangles)} faces"
                 f"{', coloured' if coloured else ''}")
-    return mesh, part_points
+    return mesh, part_points, part_triangles

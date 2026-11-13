@@ -101,6 +101,7 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
             raise ValueError("No valid mesh geometry found in scene")
 
         logger.info(f"Loaded scene with {len(trimeshes)} geometries (transforms applied)")
+        trimeshes = _without_environment(trimeshes, file_path, ext)
 
         # Single geometry: preserve full UV texture for proper PBR rendering
         if len(trimeshes) == 1:
@@ -129,6 +130,51 @@ def _load(file_path: str, max_triangles: int = None) -> pv.PolyData:
     else:
         raise ValueError(f"Unsupported trimesh result type: {type(scene_or_mesh)}")
 
+
+# Formats whose triangles' winding is the front face: glTF (counter-clockwise, single-sided unless a
+# material says doubleSided) and OBJ (counter-clockwise; it has no double-sided notion).
+_WINDING_FORMATS = {".glb", ".gltf", ".obj"}
+
+
+def _gltf_declares_double_sided(file_path: str) -> bool:
+    """True when the glTF file's JSON declares a double-sided material, or cannot be read."""
+    import json
+    import struct
+
+    try:
+        with open(file_path, "rb") as handle:
+            if file_path.lower().endswith(".glb"):
+                header = handle.read(20)
+                length = struct.unpack_from("<I", header, 12)[0]
+                document = json.loads(handle.read(length))
+            else:
+                document = json.load(handle)
+        return any(material.get("doubleSided") for material in document.get("materials", []))
+    except Exception:
+        return True
+
+
+def _without_environment(trimeshes: list, file_path: str, ext: str) -> list:
+    """The scene's geometries without environment geometry that encloses the model
+    (``scene_parts.environment_kept``), decided before any texture is baked. A glTF geometry is
+    single-sided unless its material is double-sided; one whose material was not read (vertex colours
+    only) counts as double-sided when the file declares any double-sided material. Other formats keep
+    every geometry."""
+    if len(trimeshes) < 2 or ext not in _WINDING_FORMATS:
+        return trimeshes
+    declared = ext != ".obj" and _gltf_declares_double_sided(file_path)
+    parts = []
+    for mesh in trimeshes:
+        material = getattr(getattr(mesh, "visual", None), "material", None)
+        if ext == ".obj":
+            one_sided = True
+        elif isinstance(material, trimesh.visual.material.PBRMaterial):
+            one_sided = not material.doubleSided
+        else:
+            one_sided = not declared
+        parts.append(scene_parts.Part(mesh.vertices, mesh.faces, one_sided))
+    keep = scene_parts.environment_kept(parts)
+    return trimeshes if keep is None else [mesh for mesh, kept in zip(trimeshes, keep) if kept]
 
 
 def _trimesh_to_pyvista_textured(mesh: trimesh.Trimesh) -> pv.PolyData:

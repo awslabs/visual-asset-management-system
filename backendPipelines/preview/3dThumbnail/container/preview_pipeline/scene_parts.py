@@ -3,7 +3,7 @@
 
 """
 Per-part bounds of a merged scene, the parts the camera leaves out of its framing, and the environment
-geometry the preview leaves out.
+parts the preview leaves out.
 
 A loader that merges several parts (USD prims, glTF/GLB scene geometries, OBJ objects that trimesh
 loads as separate geometries, FBX meshes, STEP parts, 3MF/COLLADA instances) into one PolyData
@@ -17,17 +17,11 @@ The camera leaves out of its framing a part that is a backdrop (``backdrop_parts
 sheet, such as a ground or environment plane, far larger than the rest of the scene and centred on
 it. The part is still drawn.
 
-The preview leaves out environment geometry that encloses the content (``without_enclosure``): a room
-or environment box, a sky sphere or dome, with any light cards or pictures on its walls, around a much
-smaller model. Framed on the whole scene, the camera stood outside the enclosure and showed its
-outside. The renderer's background is transparent and its lights are its own, so the enclosure adds
-nothing a preview needs: the loaded scene is cut down to the content, right after loading while the
-recorded part point counts still match the points, and is then budgeted, framed, lit and drawn as if
-the file held the model alone. Only a scene whose part bounds pass the screen (``enclosure_screen``)
-is looked at further: no environment point may lie inside the content's bounds, the content must be
-drawn in far finer detail than the environment, and rays cast from the content must meet the
-environment in nearly every direction (a closed or near-closed shell, not an open backdrop or a
-floor). Any doubt, such as a hollow product whose shell is the asset, leaves the scene as it is.
+A loader whose parts carry a reliable winding asks, before it merges them, which parts are environment
+geometry enclosing the model (``environment_kept``): a room or environment box, or a sky sphere or
+dome, authored to be seen from inside, so single-sided and facing the model. Those parts are not
+loaded, and the model is loaded, framed, lit and drawn as from a file holding it alone. A shell that
+faces outward, has a wall thickness, is double-sided or is in any other doubt is drawn as before.
 """
 
 import numpy as np
@@ -37,10 +31,8 @@ from .utils.logging import get_logger
 
 logger = get_logger()
 
-# Field-data arrays holding one row per part: (xmin, ymin, zmin, xmax, ymax, zmax), and the part's
-# point count in merge order (valid until the triangle budget reduces the points).
+# Field-data array holding one row per part: (xmin, ymin, zmin, xmax, ymax, zmax).
 PART_BOUNDS = "vamsPreviewPartBounds"
-PART_POINTS = "vamsPreviewPartPoints"
 
 # A part is a near-flat sheet when its smallest extent is at most FLAT_RATIO of its largest and its
 # middle extent at least SHEET_RATIO of its largest: a plane, not a rod or a cable. A circuit board
@@ -63,31 +55,6 @@ CENTRE_SHARE = 0.25
 MAX_PARTS = 100_000
 BYTES_PER_PART = 64
 PART_MEMORY_FRACTION = 0.01
-
-# Enclosures. A part is a shell part when its bounds span at least SHELL_SPAN of the scene's bounds on
-# two or more axes: a wall, a floor, a ceiling, a closed box or a sphere around the scene. The content
-# is the union of the parts that are neither shell parts nor near-flat sheets (a light card or a
-# picture on a wall is neither content nor shell). An enclosure surrounds content whose largest extent
-# is at most 1 / ENCLOSURE_SCALE of the scene's, with a gap of at least ENCLOSURE_MARGIN of the scene's
-# extent on every side but one (the floor the model stands on). The parts that are not shell parts and
-# lie within NEAR_CONTENT of the content's largest extent of it are kept with it; every other part is
-# environment.
-SHELL_SPAN = 0.5
-ENCLOSURE_SCALE = 8.0
-ENCLOSURE_MARGIN = 0.05
-NEAR_CONTENT = 0.25
-# The content is drawn in much finer detail than the enclosure: its points per unit of its bounding
-# box's surface are at least DETAIL_RATIO times those of the points outside it, over the scene's
-# bounding box, and it holds at least CONTENT_POINT_SHARE of the scene's points. Environment geometry
-# is coarse for its size, even a dense sky dome, while a hollow product (a housing around a small part)
-# carries its detail in the shell, which is the asset.
-DETAIL_RATIO = 10.0
-CONTENT_POINT_SHARE = 0.1
-# Of ENCLOSURE_RAYS rays cast from the content's centre in evenly spread directions, at least
-# ENCLOSURE_COVERAGE meet geometry outside the content (a ray leaving through the floor the content
-# stands on counts): a closed or near-closed shell. An open backdrop or a floor covers far less.
-ENCLOSURE_RAYS = 64
-ENCLOSURE_COVERAGE = 0.9
 
 
 def part_limit(memory_bytes: int) -> int:
@@ -116,7 +83,6 @@ def record_parts(pv_data, point_counts, max_parts: int = None):
     np.minimum.reduceat(points, starts, axis=0, out=bounds[:, :3])
     np.maximum.reduceat(points, starts, axis=0, out=bounds[:, 3:])
     pv_data.field_data[PART_BOUNDS] = bounds
-    pv_data.field_data[PART_POINTS] = counts
     return pv_data
 
 
@@ -149,17 +115,6 @@ def rotate_z_up_to_y_up(pv_data):
     return pv_data
 
 
-def _sheets(bounds):
-    """Per part: the extents, the axes in increasing order of extent, the largest extent and whether
-    the part is a near-flat sheet."""
-    raw = bounds[:, 3:] - bounds[:, :3]
-    order = np.argsort(raw, axis=1)
-    extents = np.take_along_axis(raw, order, axis=1)
-    largest = extents[:, 2]
-    flat = (largest > 0) & (extents[:, 0] <= FLAT_RATIO * largest) & (extents[:, 1] >= SHEET_RATIO * largest)
-    return raw, order, largest, flat
-
-
 def backdrop_parts(bounds):
     """A boolean mask over the parts in ``bounds``: True for a backdrop. A backdrop is a near-flat sheet
     whose largest extent is at least ``BACKDROP_SCALE`` times that of the content, the union of the
@@ -173,7 +128,11 @@ def backdrop_parts(bounds):
     mask = np.zeros(len(bounds), dtype=bool)
     if len(bounds) < 2:
         return mask
-    raw, order, largest, flat = _sheets(bounds)
+    raw = bounds[:, 3:] - bounds[:, :3]
+    order = np.argsort(raw, axis=1)
+    extents = np.take_along_axis(raw, order, axis=1)
+    largest = extents[:, 2]
+    flat = (largest > 0) & (extents[:, 0] <= FLAT_RATIO * largest) & (extents[:, 1] >= SHEET_RATIO * largest)
     content = ~flat & (largest > 0)
     if not content.any() or not flat.any():
         return mask
@@ -214,6 +173,55 @@ def framing_bounds(pv_data):
     return lo, hi
 
 
+# Environment geometry that encloses the model: a room or environment box, a sky sphere or dome, authored
+# to be seen from inside. Rendered whole, the camera stands outside it and the preview shows its outside.
+#
+# A part is a shell part when its bounds span at least SHELL_SPAN of the scene's on two or more axes. The
+# content is the union of the parts that are neither shell parts nor near-flat sheets, grown by the other
+# parts that lie within NEAR_CONTENT of its largest extent of it; every other part is environment. The
+# content is at most 1 / ENCLOSURE_SCALE of the scene on every axis and keeps a gap of ENCLOSURE_MARGIN of
+# the scene's extent to the scene's bounds on every side but at most one (the floor it stands on).
+SHELL_SPAN = 0.5
+ENCLOSURE_SCALE = 8.0
+ENCLOSURE_MARGIN = 0.05
+NEAR_CONTENT = 0.25
+# The positive evidence that the environment is meant to be seen from inside: every environment part is
+# single-sided (its loader reads a reliable winding and no double-sided flag) and at least INWARD_SHARE of
+# its area faces the content's centre. A shell that is part of a product faces outward: a single surface
+# (a vase, a globe, a car body) has almost none of its area facing in, and a solid with a wall thickness
+# (a housing, a container) about half. An environment box or sky authored to be seen from inside faces in
+# with all of it, so the threshold leaves room for a few stray faces and stays well clear of one half.
+INWARD_SHARE = 0.9
+# Of ENCLOSURE_RAYS rays cast from the content's centre in evenly spread directions, at least
+# ENCLOSURE_COVERAGE meet the environment (a ray leaving through the face the content stands on counts):
+# a closed or near-closed shell, not an inward-facing backdrop open to the camera.
+ENCLOSURE_RAYS = 64
+ENCLOSURE_COVERAGE = 0.9
+# Environment triangles the orientation and ray tests look at; a larger environment is left as it is,
+# so the cost is bounded whatever the size of the input.
+MAX_ENVIRONMENT_TRIANGLES = 1_000_000
+# Triangles intersected with all the rays at once, to bound the temporary arrays.
+_RAY_CHUNK = 8_192
+
+
+class Part:
+    """One part of a scene for the enclosure test: its vertices and triangles in world space, whether its
+    loader read a reliable single-sided winding (False for a double-sided or unknown part), and whether
+    its front faces wind clockwise (a USD leftHanded orientation or a mirroring transform)."""
+
+    __slots__ = ("vertices", "triangles", "one_sided", "reversed_winding", "lo", "hi")
+
+    def __init__(self, vertices, triangles, one_sided, reversed_winding=False):
+        self.vertices = np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
+        self.triangles = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+        self.one_sided = bool(one_sided)
+        self.reversed_winding = bool(reversed_winding)
+        if len(self.vertices):
+            self.lo, self.hi = self.vertices.min(axis=0), self.vertices.max(axis=0)
+        else:
+            self.lo = self.hi = np.zeros(3)
+
+
 def _face_gaps(lo, hi, scene_lo, scene_hi):
     """The gap between a box and the scene's bounds on each face, in the order of a bounds row:
     (xmin, ymin, zmin, xmax, ymax, zmax)."""
@@ -222,16 +230,9 @@ def _face_gaps(lo, hi, scene_lo, scene_hi):
 
 def enclosure_screen(bounds):
     """The bounds-only screen for an enclosure: (lo, hi, kept, contact) when the part ``bounds`` show
-    content surrounded by shell parts, else None.
-
-    Shell parts have bounds spanning at least ``SHELL_SPAN`` of the scene's on two or more axes. The
-    content is the union of the parts that are neither shell parts nor near-flat sheets, grown by the
-    other non-shell parts that lie within ``NEAR_CONTENT`` of it; ``kept`` marks those parts and (lo, hi)
-    are their bounds. Every other part is environment. The content's largest extent is at most
-    1 / ``ENCLOSURE_SCALE`` of the scene's, and it keeps a gap of ``ENCLOSURE_MARGIN`` of the scene's
-    extent to the scene's bounds on every face but at most one, ``contact`` (a face index in bounds-row
-    order, or -1). A scene without volume, without a shell part or without content has no enclosure.
-    Costs a few passes over the parts."""
+    content surrounded by shell parts, else None. ``kept`` marks the content's parts (and the parts near
+    it), (lo, hi) are their bounds and ``contact`` is the one face (bounds-row order) on which the content
+    may touch the scene's bounds, or -1. Costs a few passes over the parts."""
     bounds = np.asarray(bounds, dtype=np.float64)
     if len(bounds) < 2:
         return None
@@ -239,7 +240,10 @@ def enclosure_screen(bounds):
     scene_extent = scene_hi - scene_lo
     if not np.all(scene_extent > 0):
         return None
-    raw, _, largest, flat = _sheets(bounds)
+    raw = bounds[:, 3:] - bounds[:, :3]
+    ordered = np.sort(raw, axis=1)
+    largest = ordered[:, 2]
+    flat = (largest > 0) & (ordered[:, 0] <= FLAT_RATIO * largest) & (ordered[:, 1] >= SHEET_RATIO * largest)
     shell = (raw >= SHELL_SPAN * scene_extent).sum(axis=1) >= 2
     content = ~shell & ~flat & (largest > 0)
     if not shell.any() or not content.any():
@@ -251,13 +255,26 @@ def enclosure_screen(bounds):
     if near.any():
         lo = np.minimum(lo, bounds[near, :3].min(axis=0))
         hi = np.maximum(hi, bounds[near, 3:].max(axis=0))
-    content_largest = float((hi - lo).max())
-    if content_largest <= 0 or scene_extent.max() < ENCLOSURE_SCALE * content_largest:
+    if not np.all(scene_extent >= ENCLOSURE_SCALE * (hi - lo)):
         return None
     short = np.flatnonzero(_face_gaps(lo, hi, scene_lo, scene_hi) < ENCLOSURE_MARGIN * np.tile(scene_extent, 2))
     if len(short) > 1:
         return None
     return lo, hi, content | near, int(short[0]) if len(short) else -1
+
+
+def _inward_share(part, centre):
+    """The share of the part's area whose faces point toward ``centre``."""
+    corners = part.vertices[part.triangles]
+    normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    area = np.linalg.norm(normals, axis=1)
+    total = float(area.sum())
+    if total <= 0:
+        return 0.0
+    facing = np.einsum("ij,ij->i", normals, centre - corners.mean(axis=1)) > 0
+    if part.reversed_winding:
+        facing = ~facing
+    return float(area[facing].sum()) / total
 
 
 def _directions(n):
@@ -269,150 +286,112 @@ def _directions(n):
     return np.column_stack([r * np.cos(phi), r * np.sin(phi), z])
 
 
-# vtkPolyData orders its cells, and so its cell data: vertices, lines, polygons, then strips.
-_CELL_KINDS = (("verts", "GetVerts"), ("lines", "GetLines"), ("faces", "GetPolys"), ("strips", "GetStrips"))
-
-
-def _subset(pv_data, point_keep):
-    """A copy of ``pv_data`` holding only the points in ``point_keep`` and the cells all of whose points
-    are kept, in their order, with their point, cell and field data and the loader's ``_preview_*``
-    attributes (texture, up axis). The kept part bounds are set by the caller."""
-    import pyvista as pv
-
-    index = np.cumsum(point_keep, dtype=np.int64) - 1
-    cells, cell_keep = {}, []
-    for keyword, getter in _CELL_KINDS:
-        cell_array = getattr(pv_data, getter)()
-        n_cells = cell_array.GetNumberOfCells()
-        if not n_cells:
-            continue
-        connectivity = np.asarray(pv.convert_array(cell_array.GetConnectivityArray()), dtype=np.int64)
-        offsets = np.asarray(pv.convert_array(cell_array.GetOffsetsArray()), dtype=np.int64)
-        sizes = np.diff(offsets)
-        kept_corners = point_keep[connectivity]
-        keep = np.ones(n_cells, dtype=bool)
-        non_empty = sizes > 0
-        keep[non_empty] = np.logical_and.reduceat(kept_corners, offsets[:-1][non_empty])
-        cell_keep.append(keep)
-        if keep.any():
-            corners = np.repeat(keep, sizes)
-            cells[keyword] = pv.CellArray.from_arrays(
-                np.concatenate(([0], np.cumsum(sizes[keep]))), index[connectivity[corners]])
-    subset = pv.PolyData(np.asarray(pv_data.points)[point_keep], **cells)
-    point_data = pv_data.point_data
-    for name in point_data.keys():
-        subset.point_data[name] = np.asarray(point_data[name])[point_keep]
-    for attribute in ("active_scalars_name", "active_normals_name", "active_texture_coordinates_name"):
-        name = getattr(point_data, attribute, None)
-        if name in subset.point_data:
-            setattr(subset.point_data, attribute, name)
-    keep_all = np.concatenate(cell_keep) if cell_keep else np.zeros(0, dtype=bool)
-    for name in pv_data.cell_data.keys():
-        subset.cell_data[name] = np.asarray(pv_data.cell_data[name])[keep_all]
-    for name in pv_data.field_data.keys():
-        if name not in (PART_BOUNDS, PART_POINTS):
-            subset.field_data[name] = pv_data.field_data[name]
-    for attribute, value in vars(pv_data).items():
-        if attribute.startswith("_preview_"):
-            setattr(subset, attribute, value)
-    return subset
-
-
-def _rays_meet(environment, lo, hi, contact, scene_extent) -> float:
-    """The share of ``ENCLOSURE_RAYS`` rays from the centre of the box (lo, hi) that meet the
-    ``environment`` mesh beyond the box, or leave the box through its ``contact`` face."""
-    import vtk
-
-    tree = vtk.vtkOBBTree()
-    tree.SetDataSet(environment)
-    tree.BuildLocator()
+def _ray_coverage(environment, lo, hi, contact):
+    """The share of ``ENCLOSURE_RAYS`` rays from the centre of the box (lo, hi), started on the box's
+    surface, that meet a triangle of the ``environment`` parts or leave the box through its ``contact``
+    face. Moeller-Trumbore over the triangles, a chunk at a time."""
     eps = 1e-3 * float((hi - lo).max())
     lo, hi, centre = lo - eps, hi + eps, (lo + hi) / 2.0
-    reach = 2.0 * float(np.linalg.norm(scene_extent))
-    covered = 0
-    for direction in _directions(ENCLOSURE_RAYS):
-        with np.errstate(divide="ignore", invalid="ignore"):
-            t_axes = np.where(direction > 0, (hi - centre) / direction,
-                              np.where(direction < 0, (lo - centre) / direction, np.inf))
-        axis = int(np.argmin(t_axes))
-        if axis + (3 if direction[axis] > 0 else 0) == contact:
-            covered += 1
-            continue
-        start = centre + direction * t_axes[axis]
-        t, x, pcoords, sub_id, cell_id = vtk.reference(0.0), [0.0] * 3, [0.0] * 3, vtk.reference(0), vtk.reference(0)
-        if tree.IntersectWithLine(tuple(start), tuple(start + direction * reach), 0.0, t, x, pcoords,
-                                  sub_id, cell_id, vtk.vtkGenericCell()):
-            covered += 1
-    return covered / ENCLOSURE_RAYS
+    directions = _directions(ENCLOSURE_RAYS)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_axes = np.where(directions > 0, (hi - centre) / directions,
+                          np.where(directions < 0, (lo - centre) / directions, np.inf))
+    axis = np.argmin(t_axes, axis=1)
+    faces = axis + np.where(directions[np.arange(len(axis)), axis] > 0, 3, 0)
+    origins = centre + directions * t_axes[np.arange(len(axis)), axis][:, None]
+    hit = faces == contact
+    for part in environment:
+        corners = part.vertices[part.triangles]
+        for start in range(0, len(corners), _RAY_CHUNK):
+            if hit.all():
+                return 1.0
+            v0, v1, v2 = (corners[start:start + _RAY_CHUNK, k] for k in range(3))
+            e1, e2 = v1 - v0, v2 - v0
+            todo = np.flatnonzero(~hit)
+            d, o = directions[todo][:, None, :], origins[todo][:, None, :]
+            p = np.cross(d, e2[None])
+            det = np.einsum("rtk,tk->rt", p, e1)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                inv = 1.0 / det
+                s = o - v0[None]
+                u = np.einsum("rtk,rtk->rt", s, p) * inv
+                q = np.cross(s, e1[None])
+                v = np.einsum("rtk,rtk->rt", np.broadcast_to(d, q.shape), q) * inv
+                t = np.einsum("rtk,tk->rt", q, e2) * inv
+            meets = (np.abs(det) > 1e-12) & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 0)
+            hit[todo[meets.any(axis=1)]] = True
+    return float(hit.mean())
 
 
-def _extents(rows):
-    return "({:.2f}, {:.2f}, {:.2f})".format(*rows)
+def _extents(values):
+    return "({:.2f}, {:.2f}, {:.2f})".format(*values)
 
 
-def _box_area(extent):
-    x, y, z = (float(v) for v in extent)
-    return 2.0 * (x * y + y * z + z * x)
-
-
-def _finer(content_points, other_points, content_extent, scene_extent) -> bool:
-    """True when the content's points per unit of its box's surface are at least ``DETAIL_RATIO`` times
-    those of the other points over the scene's box."""
-    content_area, scene_area = _box_area(content_extent), _box_area(scene_extent)
-    if content_area <= 0 or scene_area <= 0:
-        return False
-    return content_points / content_area >= DETAIL_RATIO * other_points / scene_area
-
-
-def without_enclosure(pv_data):
-    """``pv_data`` without the environment geometry that encloses its content, or ``pv_data`` itself.
-
-    Runs on a freshly loaded scene, while the recorded part point counts still match its points. The
-    scene passes the bounds screen (``enclosure_screen``); no environment point lies inside the
-    content's bounds; the content holds at least ``CONTENT_POINT_SHARE`` of the points and is drawn at
-    least ``DETAIL_RATIO`` times finer than the environment; and at least ``ENCLOSURE_COVERAGE`` of the
-    rays cast from the content meet the environment (a closed or near-closed shell). The result holds
-    the content alone, as if the file held only the model, so it is framed, lit and drawn as an
-    ordinary preview. Any doubt leaves the scene as it is. Only a scene that passes the screen pays for
-    a pass over its points and a tree over the environment's cells, which is coarse by the detail
-    test."""
-    bounds = part_bounds(pv_data)
-    if bounds is None or PART_POINTS not in pv_data.field_data:
-        return pv_data
-    counts = np.asarray(pv_data.field_data[PART_POINTS], dtype=np.int64)
-    if len(counts) != len(bounds) or int(counts.sum()) != int(pv_data.n_points) or pv_data.n_cells == 0:
-        return pv_data
+def _peel(parts, active):
+    """(the indices of the environment parts of ``parts[active]``, the log line) when they enclose the
+    content and every check passes, else None, with the reason a check failed logged at DEBUG."""
+    index = np.flatnonzero(active)
+    bounds = np.array([np.concatenate([parts[i].lo, parts[i].hi]) for i in index])
     screen = enclosure_screen(bounds)
     if screen is None:
-        return pv_data
+        return None
     lo, hi, kept, contact = screen
-    point_keep = np.repeat(kept, counts)
-    environment_points = np.asarray(pv_data.points)[~point_keep]
+    environment = [parts[i] for i in index[~kept]]
+    if not all(part.one_sided for part in environment):
+        logger.debug("Enclosure screen passed, but the environment is double-sided or its winding unknown")
+        return None
+    if sum(len(part.triangles) for part in environment) > MAX_ENVIRONMENT_TRIANGLES:
+        logger.debug(f"Enclosure screen passed, but the environment holds over "
+                     f"{MAX_ENVIRONMENT_TRIANGLES:,} triangles")
+        return None
     eps = 1e-3 * float((hi - lo).max())
-    if np.any(np.all((environment_points > lo + eps) & (environment_points < hi - eps), axis=1)):
-        logger.debug("Enclosure screen passed, but environment geometry reaches into the content")
-        return pv_data
-    content_points = int(point_keep.sum())
-    scene_extent = bounds[:, 3:].max(axis=0) - bounds[:, :3].min(axis=0)
-    if (content_points < CONTENT_POINT_SHARE * len(point_keep)
-            or not _finer(content_points, len(point_keep) - content_points, hi - lo, scene_extent)):
-        logger.debug(f"Enclosure screen passed, but the content holds {content_points:,} of "
-                     f"{len(point_keep):,} points, too few or too coarse next to the environment")
-        return pv_data
-    environment = _subset(pv_data, ~point_keep)
-    if environment.n_cells == 0:
-        return pv_data
-    coverage = _rays_meet(environment, lo, hi, contact, scene_extent)
+    for part in environment:
+        if np.any(np.all((part.vertices > lo + eps) & (part.vertices < hi - eps), axis=1)):
+            logger.debug("Enclosure screen passed, but the environment reaches into the content")
+            return None
+    centre = (lo + hi) / 2.0
+    shares = [_inward_share(part, centre) for part in environment]
+    if min(shares) < INWARD_SHARE:
+        logger.debug(f"Enclosure screen passed, but an environment part faces the content with "
+                     f"{min(shares):.0%} of its area")
+        return None
+    coverage = _ray_coverage(environment, lo, hi, contact)
     if coverage < ENCLOSURE_COVERAGE:
         logger.debug(f"Enclosure screen passed, but rays from the content meet it in {coverage:.0%} of directions")
-        return pv_data
-    content = _subset(pv_data, point_keep)
-    if content.n_cells == 0:
-        return pv_data
-    if kept.sum() >= 2:
-        content.field_data[PART_BOUNDS] = bounds[kept]
-        content.field_data[PART_POINTS] = counts[kept]
-    logger.info(f"Enclosure left out of the preview: {int((~kept).sum())} of {len(bounds)} parts, scene "
-                f"extents {_extents(scene_extent)}, around content of extents {_extents(hi - lo)} "
-                f"({content_points:,} of {len(point_keep):,} points)")
-    return content
+        return None
+    scene = bounds[:, 3:].max(axis=0) - bounds[:, :3].min(axis=0)
+    message = (f"Enclosure left out of the preview: {len(environment)} of {len(index)} parts facing inward "
+               f"(at least {min(shares):.0%} of their area), scene extents {_extents(scene)}, around content "
+               f"of extents {_extents(hi - lo)}")
+    return index[~kept], message
+
+
+def environment_kept(parts):
+    """A boolean mask over ``parts`` (``Part``): True for a part the preview keeps, or None to keep every
+    part. Each layer of environment that encloses the content is left out, the outermost first, while
+    every check holds for that layer: the bounds screen (``enclosure_screen``), single-sided parts, no
+    environment vertex inside the content's bounds, at least ``INWARD_SHARE`` of each environment part's
+    area facing the content, and at least ``ENCLOSURE_COVERAGE`` of the rays from the content meeting it.
+    A layer that fails any check is drawn as before, and so is the whole scene when such a layer still
+    encloses the content once the layers around it are left out: the preview would show the outside of
+    that layer instead, which hides the model just as well."""
+    if len(parts) < 2:
+        return None
+    active = np.ones(len(parts), dtype=bool)
+    messages = []
+    while active.sum() >= 2:
+        peeled = _peel(parts, active)
+        if peeled is None:
+            break
+        active[peeled[0]] = False
+        messages.append(peeled[1])
+    if active.all():
+        return None
+    if active.sum() >= 2 and enclosure_screen(np.array(
+            [np.concatenate([parts[i].lo, parts[i].hi]) for i in np.flatnonzero(active)])) is not None:
+        logger.info("Environment around the content not left out: a shell inside it still encloses the content "
+                    "and is not one the preview leaves out")
+        return None
+    for message in messages:
+        logger.info(message)
+    return active
