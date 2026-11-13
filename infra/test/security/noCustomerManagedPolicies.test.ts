@@ -22,6 +22,7 @@
  * the VPC), and the commercial template with every optional pipeline enabled.
  */
 
+import cdkJson from "../../cdk.json";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
 
 jest.setTimeout(900_000);
@@ -191,7 +192,8 @@ describe("the overflow check tells CDK's overflow from a hand-written policy (co
 
 test("cdk.json sets the ARN size estimate CDK's overflow split uses, for every stack and partition", () => {
     // App-wide context, so every template (commercial, GovCloud, EU Sovereign) splits on it.
-    const cdkJson = require("../../cdk.json");
-    expect(cdkJson.context["@aws-cdk/aws-iam:minimizePolicies"]).toBe(true);
-    expect(cdkJson.context["@aws-cdk/aws-iam.arnSizeEstimate"]).toBeGreaterThanOrEqual(280);
+    expect((cdkJson as any).context["@aws-cdk/aws-iam:minimizePolicies"]).toBe(true);
+    expect((cdkJson as any).context["@aws-cdk/aws-iam.arnSizeEstimate"]).toBeGreaterThanOrEqual(
+        280
+    );
 });
