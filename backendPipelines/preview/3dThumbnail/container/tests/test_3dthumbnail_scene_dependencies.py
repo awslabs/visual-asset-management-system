@@ -636,3 +636,49 @@ class TestReferencesThatLoadNothing:
         report = resolver.report()
         assert report.missing == ["scene/layers/gone.usda"]
         assert report.missing_required == ["scene/layers/gone.usda"] and report.partial is True
+
+
+def _fbx_naming(*names):
+    """A binary FBX naming each texture by an absolute FileName and a RelativeFilename, as exporters do."""
+    def record(text):  # a binary FBX string property: 'S', uint32 length, bytes
+        return b"S" + struct.pack("<I", len(text)) + text
+
+    body = b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00\x05\x00\x00\x00"
+    for name in names:
+        body += record(b"C:\\Users\\artist\\scene\\" + name) + b"\x00\x00" + record(name) + b"\x00\x01"
+    return body
+
+
+@pytest.mark.unit
+class TestFbxAndLccReferencesInTheSceneWalk:
+    """The FBX texture and LCC data file references are optional appearance or data, never required, and
+    a missing FBX texture is still reported in the scene report the Blender image reads: Blender's FBX
+    importer loads the textures, unlike the thumbnail's loader, whose incomplete preview leaves them out
+    (``test_thumbnail_incomplete_preview.py``)."""
+
+    def test_collector_entries_are_optional_with_their_kind(self, tmp_path):
+        fbx = tmp_path / "scene.fbx"
+        fbx.write_bytes(_fbx_naming(b"Body.jpg"))
+        lcc = tmp_path / "meta.lcc"
+        lcc.write_text(json.dumps({"fileType": "Quality"}))
+        for entry in dependencies._fbx_references(str(fbx)):
+            assert len(entry) == 4 and entry[2] is False
+            assert entry[3] == dependencies.KIND_UNSAMPLED_TEXTURE
+        for entry in dependencies._lcc_references(str(lcc)):
+            assert len(entry) == 4 and entry[2] is False
+            assert entry[3] == dependencies.KIND_DATA_FILE
+
+    def test_a_missing_fbx_texture_is_in_the_scene_report_and_the_scene_is_not_partial(self, tmp_path):
+        store = FakeStore({"xid/scene/model.fbx": _fbx_naming(b"Body.jpg", b"Eyes.jpg"),
+                           "xid/scene/Body.jpg": b"j"})
+        report, _ = _resolve(tmp_path, store, "xid/scene/model.fbx")
+        assert _fetched(report) == ["scene/Body.jpg"]
+        assert report.missing == ["scene/Eyes.jpg"]
+        assert report.missing_required == [] and report.partial is False
+
+    def test_missing_lcc_data_files_are_not_required(self, tmp_path):
+        store = FakeStore({"xid/scan/meta.lcc": json.dumps({"fileType": "Quality"}).encode(),
+                           "xid/scan/index.bin": b"i"})
+        report, _ = _resolve(tmp_path, store, "xid/scan/meta.lcc")
+        assert "scan/data.bin" in report.missing
+        assert report.missing_required == [] and report.partial is False

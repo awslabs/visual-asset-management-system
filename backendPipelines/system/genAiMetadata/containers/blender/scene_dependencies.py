@@ -172,10 +172,15 @@ KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
 # file of the asset: still looked up as before, not reported.
 KIND_RENDERER_MDL = "rendererMdl"
-# A texture of a format whose loader does not sample textures (FBX): still fetched as before, but a
-# missing one removes nothing from the preview, so it is not reported.
+# A texture of a format whose thumbnail loader does not sample textures (FBX): still fetched as before,
+# but a missing one removes nothing from the thumbnail, so its incomplete preview does not report it.
+# Blender's FBX importer does load the textures, so the scene report (``report``) still lists a missing
+# one.
 KIND_UNSAMPLED_TEXTURE = "unsampledTexture"
-_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL, KIND_UNSAMPLED_TEXTURE)
+# References that load nothing for any renderer: never reported missing (``report``, ``loads_nothing``).
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+# What the thumbnail's incomplete preview leaves out: those, and the textures its loader does not sample.
+_UNREPORTED_PREVIEW_KINDS = _UNREPORTED_KINDS + (KIND_UNSAMPLED_TEXTURE,)
 
 
 @dataclass
@@ -646,14 +651,14 @@ def _fbx_references(path: str) -> List[tuple]:
         name = match.group(0).decode("utf-8", errors="replace").strip()
         if name not in names:
             names.append(name)
-    references = [(name, False, KIND_UNSAMPLED_TEXTURE) for name in names]
+    references = [(name, False, False, KIND_UNSAMPLED_TEXTURE) for name in names]
     # An authoring machine's absolute path keeps the file name as its last segment, and a binary
     # string record's length bytes can read as text and prefix the match; the bare file name is
     # offered too, as a sibling of the FBX -- where an uploader most often puts the textures.
     for name in names:
         base = name.replace("\\", "/").rsplit("/", 1)[-1]
-        if (base, False, KIND_UNSAMPLED_TEXTURE) not in references:
-            references.append((base, False, KIND_UNSAMPLED_TEXTURE))
+        if (base, False, False, KIND_UNSAMPLED_TEXTURE) not in references:
+            references.append((base, False, False, KIND_UNSAMPLED_TEXTURE))
     return references
 
 
@@ -755,7 +760,7 @@ def _lcc_references(path: str) -> List[tuple]:
             meta = json.loads(handle.read(_JSON_SCAN_LIMIT).decode("utf-8", errors="replace"))
     except (OSError, ValueError):
         pass
-    return [(name, False, KIND_DATA_FILE) for name in lcc_meta.lcc_data_files(meta)]
+    return [(name, False, False, KIND_DATA_FILE) for name in lcc_meta.lcc_data_files(meta)]
 
 
 def _lcc2_references(path: str, max_splats: Optional[int] = None) -> List[tuple]:
@@ -1140,7 +1145,7 @@ class DependencyResolver:
                 if node.state == _MISSING:
                     self.missing_required.append(relative)
             # A file named both as metadata and by an arc that loads it (a sublayer, say) loads.
-            if node is not None and node.kind in _UNREPORTED_KINDS and kind not in _UNREPORTED_KINDS:
+            if node is not None and node.kind in _UNREPORTED_PREVIEW_KINDS and kind not in _UNREPORTED_PREVIEW_KINDS:
                 node.kind = kind
             return
         self.visited.add(relative)
@@ -1466,7 +1471,7 @@ def incomplete_preview(report: Optional[FetchReport],
     unique: List[SkippedReference] = []
     keys = set()
     for entry in report.skipped:
-        if entry.resolved_kind in _UNREPORTED_KINDS:
+        if entry.resolved_kind in _UNREPORTED_PREVIEW_KINDS:
             continue
         key = (entry.reference, entry.reason)
         if key not in keys:
