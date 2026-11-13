@@ -12,7 +12,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2,
@@ -352,6 +352,7 @@ def handle_put_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for create/update role APIs"""
     global claims_and_roles

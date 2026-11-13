@@ -656,6 +656,10 @@ def _load_redactor(relative, constants_module):
     return module
 
 
+CREDENTIAL_FIELD_NAMES = ("password", "secret", "clientSecret", "client_secret", "accessToken",
+                          "access_token", "refreshToken", "refresh_token", "privateKey", "private_key")
+
+
 @pytest.mark.unit
 class TestLogKeyMerge:
     """``LOG_SENSITIVE_KEYS`` (the structured logger) and ``LOG_TEXT_SENSITIVE_KEYS`` (the free-text
@@ -674,10 +678,13 @@ class TestLogKeyMerge:
         # Control: the comparisons above are against the real core keys, not two empty tuples.
         assert C.CORE_LOG_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-            "SessionToken", "apiKey", "apiKeySecret", "rawKey", "x-vams-origin-verify")
+            "SessionToken", "apiKey", "apiKeySecret", "rawKey", "x-vams-origin-verify",
+            "cookie", "set-cookie", "x-api-key", "proxy-authorization", "x-amz-security-token",
+            *CREDENTIAL_FIELD_NAMES)
         assert C.CORE_LOG_TEXT_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-            "SessionToken", "x-amz-security-token", "TaskToken")
+            "SessionToken", "x-amz-security-token", "TaskToken",
+            *(name for name in CREDENTIAL_FIELD_NAMES if name != "secret"))
 
     def test_the_merged_keys_are_tuples(self):
         # The structured logger concatenates its key list with a tuple of content keys.

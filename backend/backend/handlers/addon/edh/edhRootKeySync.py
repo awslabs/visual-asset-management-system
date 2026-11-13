@@ -65,6 +65,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from .common.edhRootKeySyncTrigger import ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS, ROOT_KEY_SYNC_TRIGGER
 
 # Bounded clients: one call ends within (connect + read) x attempts = 26 s, so a call started with
@@ -602,6 +603,7 @@ def _request_id(context):
     return value if isinstance(value, str) and REQUEST_ID_PATTERN.match(value) else None
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     """One sync, whatever invoked it; the event is read for a label from a fixed set and nothing else. The
     answer is the outcome code alone."""

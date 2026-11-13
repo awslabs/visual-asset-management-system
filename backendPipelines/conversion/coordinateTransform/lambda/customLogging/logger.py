@@ -13,7 +13,8 @@ REDACTED = "<redacted>"
 
 # Keys whose values never reach a log line. The two task tokens travel under several spellings:
 # the workflow body's TaskToken, the nested-invoke payload's sfnExternalTaskToken, the state
-# machine input's externalSfnTaskToken, and the Batch container environment's TASK_TOKEN.
+# machine input's externalSfnTaskToken, and the Batch container environment's TASK_TOKEN (or
+# SFN_TASK_TOKEN, the name the Isaac Lab job uses).
 KEYS_TO_REDACT = (
     "authorization",
     "externalSfnTaskToken",
@@ -21,6 +22,7 @@ KEYS_TO_REDACT = (
     "taskToken",
     "TaskToken",
     "TASK_TOKEN",
+    "SFN_TASK_TOKEN",
 )
 
 # The Batch container environment carries the token as a {"name": <key>, "value": <token>} pair

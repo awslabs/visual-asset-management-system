@@ -160,7 +160,7 @@ class RecordingMcp:
     def __init__(self):
         self.tools = {}
 
-    def tool(self):
+    def tool(self, **_kwargs):
         def record(fn):
             assert fn.__name__ not in self.tools, f"{fn.__name__} registered twice"
             self.tools[fn.__name__] = fn

@@ -286,6 +286,17 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# The audit action registry is pure constants over the route list, so load the REAL modules by path
+# for the same reason: the route type module first, then the add-on lane and the merged registry
+# (which imports the fork-owned custom/customAuditActions.py by name).
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions'):
+    _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
+        f'common.{_audit_reg}',
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')
+    )
+    _audit_reg_module = _s3mk_importlib_util.module_from_spec(_audit_reg_spec)
+    sys.modules[f'common.{_audit_reg}'] = _audit_reg_module
+    _audit_reg_spec.loader.exec_module(_audit_reg_module)
 # common.constants is a MagicMock here, but the per-directory conftests and the tests that need the
 # real Casbin field list load constants.py by path, and it imports the add-on constants lane
 # (common/addonConstants.py, pure data). `common` is a MagicMock, not a package, so register the real

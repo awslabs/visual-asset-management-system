@@ -31,7 +31,7 @@ from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_bulk
+from customLogging.auditLogging import audited_handler, log_action, log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
@@ -100,10 +100,12 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
 # client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
-# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
-# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
-# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
-EXPORT_STAGING_PREFIX = "assetExports/"
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
+# bucket's lifecycle expiry for staged payloads are scoped to this prefix
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together. The
+# bucket's preview and viewer data sits under {databaseId}/, and the dot is a character no database
+# ID can contain, so the expiry on this prefix never reaches a database's auxiliary data.
+EXPORT_STAGING_PREFIX = "vams.assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10
@@ -1843,6 +1845,12 @@ def export_assets(
 # Request Handlers
 #######################
 
+
+def _exported_files(asset) -> List:
+    files = asset.get('files') if isinstance(asset, dict) else getattr(asset, 'files', None)
+    return files if isinstance(files, list) else []
+
+
 def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /export requests"""
     try:
@@ -1908,6 +1916,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
+        exported = response_data.get('assets') or []
+        log_action(event, "assetExport", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(exported),
+                   file_count=sum(len(_exported_files(asset)) for asset in exported),
+                   request_parameters=request_model.dict(exclude_none=True))
+
         # Deliver inline, or redirect to a presigned URL when the payload is too large
         return build_export_response(
             response_data,
@@ -1933,6 +1947,8 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset export operations"""
     global claims_and_roles, bucket_cache

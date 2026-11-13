@@ -15,6 +15,7 @@ from common.tagScope import GLOBAL_SCOPE, normalize_scope, verify_database_exist
 TAG_TYPE_NAME_INDEX = "tagTypeNameIndex"
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2,
@@ -256,7 +257,10 @@ def handle_post_request(event):
         
         # Create tag type
         result = create_tag_type(request_model, claims_and_roles)
-        
+        changes = request_model.dict(exclude_none=True)
+        log_action(event, "tagTypeCreate", tagTypeId=changes.get("tagTypeName"),
+                   database_id=changes.get("databaseId"), changes=changes)
+
         return success(body=result.dict())
         
     except ValidationError as v:
@@ -297,7 +301,10 @@ def handle_put_request(event):
         
         # Update tag type
         result = update_tag_type(request_model, claims_and_roles)
-        
+        changes = request_model.dict(exclude_none=True)
+        log_action(event, "tagTypeUpdate", tagTypeId=changes.get("tagTypeName"),
+                   database_id=changes.get("databaseId"), changes=changes)
+
         return success(body=result.dict())
         
     except ValidationError as v:
@@ -310,6 +317,8 @@ def handle_put_request(event):
         logger.exception(f"Error handling PUT request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag type create/update operations"""
     global claims_and_roles
