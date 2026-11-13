@@ -790,6 +790,14 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     effect without re-issuing a token. The value is informational for handlers and audit logs:
     `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
     authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
+-   **The authorizer owns the `vams:` context namespace**: `authenticate_request` copies a
+    verified token's claims into the context except every key under the reserved `vams:` prefix
+    (`RESERVED_CONTEXT_KEY_PREFIX`, matched without regard to case), then sets `vams:tokens` to
+    `[username]` (`cognito:username`, then `username`, then `sub` -- the value roles and MFA are
+    resolved for), `vams:roles`, `vams:mfaEnabled` and `vams:externalAttributes` (`[]`). A
+    verified token with no username is unauthenticated (401). A new value the authorizer passes
+    to handlers takes the `vams:` prefix and is written after the claim copy; never treat a token
+    claim as identity, role, MFA or credential-type input.
 -   **Accepted token audiences (#1337)**: the authorizer accepts a Cognito token issued to
     `APP_CLIENT_ID` or to one of `ADDITIONAL_APP_CLIENT_IDS`, and an external IdP token whose
     `aud` is `JWT_AUDIENCE` or one of `JWT_ADDITIONAL_AUDIENCES` (JSON arrays CDK sets only when
