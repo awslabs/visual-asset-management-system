@@ -3,35 +3,50 @@ import {
     BreadcrumbGroup,
     Button,
     Container,
+    ExpandableSection,
+    Form,
     FormField,
     Grid,
+    Input,
+    KeyValuePairs,
     SpaceBetween,
-    TextContent,
-    Toggle,
 } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
+import { useSearchParams } from "react-router-dom";
+import { FileUploadTableItem } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
+import UploadPreview, {
+    ExistingCheckState,
+    blockingReason,
+} from "../../components/form/UploadPreview";
+import {
+    ExistingState,
+    FolderNameMode,
+    UploadRoot,
+    isSingleFolderSelection,
+    markExisting,
+    normalizeDestination,
+    planUploadPaths,
+    removeFromRoots,
+} from "../../components/form/uploadPaths";
+import { fetchExistingPaths, plannedToUploadItems } from "./uploadSelection";
 import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
-import { safeGetFile } from "../../utils/fileHandleCompat";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
 import {
-    validateFiles,
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
-    ValidationResult,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
@@ -78,63 +93,9 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
-const getFilesFromFileHandles = async (
-    fileHandles: any[],
-    prefix = ""
-): Promise<FileUploadTableItem[]> => {
-    const fileUploadTableItems: FileUploadTableItem[] = [];
-    for (let i = 0; i < fileHandles.length; i++) {
-        try {
-            // Use our safe utility to get the file regardless of handle type
-            const file = await safeGetFile(fileHandles[i].handle);
-
-            // Prepend the folder path to the relative path if a prefix exists
-            const relativePath = prefix
-                ? prefix.endsWith("/")
-                    ? prefix + fileHandles[i].path
-                    : prefix + "/" + fileHandles[i].path
-                : fileHandles[i].path;
-
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || file.name,
-                size: file.size,
-                relativePath: relativePath,
-                progress: 0,
-                status: "Queued",
-                loaded: 0,
-                total: file.size,
-            });
-        } catch (error) {
-            // Console logging only: a % specifier in the interpolated value can at most garble this
-            // one log line; nothing is executed, stored or returned from it.
-            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-            console.error(`Error processing file at index ${i}:`, error);
-            // Add a placeholder entry with error status
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || `File ${i}`,
-                size: 0,
-                relativePath: prefix
-                    ? prefix.endsWith("/")
-                        ? prefix + (fileHandles[i].path || "")
-                        : prefix + "/" + (fileHandles[i].path || "")
-                    : fileHandles[i].path || "",
-                progress: 0,
-                status: "Failed",
-                loaded: 0,
-                total: 0,
-                error: "Browser compatibility issue: Cannot access file",
-            });
-        }
-    }
-    return fileUploadTableItems;
-};
-
 export default function ModifyAssetsUploadsPage() {
-    const { state } = useLocation();
+    const location = useLocation();
+    const { state } = location;
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
 
@@ -152,19 +113,100 @@ export default function ModifyAssetsUploadsPage() {
     );
     usePageTitle(databaseId, assetDetail?.assetName || assetId, "Upload Files");
     const [showUploadWorkflow, setShowUploadWorkflow] = useState(false);
-    // Initialize with empty array since we're uploading new files, not showing existing ones
-    const [fileItems, setFileItems] = useState<FileUploadTableItem[]>([]);
     const [previewFile, setPreviewFile] = useState<File | null>(null);
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
-    const [folderPath, setFolderPath] = useState<string>("");
-    const [keyPrefix, setKeyPrefix] = useState<string>("");
 
+    // Destination folder: the ?folder= query parameter (survives a refresh or a deep link), else
+    // the folder the page was opened from in the file manager, else the asset root.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [destinationInput, setDestinationInput] = useState<string>(
+        () => searchParams.get("folder") ?? state?.fileTree?.relativePath ?? "/"
+    );
+    const { value: destination, error: destinationError } = normalizeDestination(destinationInput);
+
+    // The selection (what the user added); the final paths are derived from it (uploadPaths.ts).
+    const [roots, setRoots] = useState<UploadRoot[]>([]);
+    const [folderNameMode, setFolderNameMode] = useState<FolderNameMode>("auto");
+    const [existingPaths, setExistingPaths] = useState<Map<string, ExistingState> | null>(null);
+    const [existingCheck, setExistingCheck] = useState<ExistingCheckState>("none");
+    // The database's extension restriction; files it refuses are errors on their preview rows.
     const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
         useState<string>("");
-    const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
-    const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
-        assetDetail.isMultiFile ? "folder" : "files"
+
+    const planned = useMemo(
+        () =>
+            markExisting(
+                planUploadPaths(roots, {
+                    flow: "addFiles",
+                    destination,
+                    folderNameMode,
+                    restrictFileUploadsToExtensions,
+                }),
+                existingPaths
+            ),
+        [roots, destination, folderNameMode, existingPaths, restrictFileUploadsToExtensions]
     );
+    const fileItems: FileUploadTableItem[] = useMemo(
+        () => plannedToUploadItems(planned),
+        [planned]
+    );
+    const pathErrorReason = blockingReason(planned);
+
+    const applySelection = (nextRoots: UploadRoot[], nextMode: FolderNameMode) => {
+        // The override only applies to a single folder; reset it once the selection changes shape.
+        setRoots(nextRoots);
+        setFolderNameMode(isSingleFolderSelection(nextRoots) ? nextMode : "auto");
+    };
+
+    // Follow a navigation to this page with another ?folder= (or, without one, another file-manager
+    // folder): the page stays mounted, so the initial state alone would keep the old destination
+    // and write it back. A typed value that already means the same folder is left as typed.
+    const folderParam = searchParams.get("folder");
+    useEffect(() => {
+        const wanted = folderParam ?? state?.fileTree?.relativePath;
+        if (wanted === undefined || wanted === null) return;
+        const target = normalizeDestination(wanted);
+        setDestinationInput((prev) => {
+            const current = normalizeDestination(prev);
+            return !target.error && !current.error && current.value === target.value
+                ? prev
+                : wanted;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [folderParam, location.key]);
+
+    // Keep ?folder= in the URL in step with a valid destination.
+    useEffect(() => {
+        if (destinationError) return;
+        if (searchParams.get("folder") === destination) return;
+        const next = new URLSearchParams(searchParams);
+        next.set("folder", destination);
+        setSearchParams(next, { replace: true, state });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [destination, destinationError]);
+
+    // Advisory existing-path check under the destination (debounced). The API authorizes the
+    // listing; a refusal or failure only means no marks, and the API still enforces the upload.
+    const hasSelection = roots.length > 0;
+    useEffect(() => {
+        if (!hasSelection || destinationError || !databaseId || !assetId) {
+            setExistingPaths(null);
+            setExistingCheck("none");
+            return;
+        }
+        let cancelled = false;
+        setExistingCheck("checking");
+        const timer = setTimeout(async () => {
+            const result = await fetchExistingPaths({ databaseId, assetId, destination });
+            if (cancelled) return;
+            setExistingPaths(result.paths);
+            setExistingCheck(result.complete ? "done" : "incomplete");
+        }, 400);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [hasSelection, destination, destinationError, databaseId, assetId]);
 
     // Update assetDetail when fileItems change
     useEffect(() => {
@@ -190,26 +232,6 @@ export default function ModifyAssetsUploadsPage() {
                     state.assetDetailState
                 );
                 setAssetDetail(state.assetDetailState);
-            }
-
-            // Extract folder information if available
-            if (state.fileTree) {
-                const relativePath = state.fileTree.relativePath || "";
-                setFolderPath(relativePath);
-
-                // Use relativePath as the upload prefix since keyPrefix only contains
-                // the last path segment, not the full path from the asset root
-                let prefix = relativePath;
-                if (prefix === "/" || prefix === "") {
-                    prefix = "/";
-                }
-                setKeyPrefix(prefix);
-
-                console.log("ModifyAssetsUploads - Path Info:", {
-                    relativePath,
-                    prefix,
-                    originalKeyPrefix: state.fileTree.keyPrefix,
-                });
             }
         }
 
@@ -292,83 +314,24 @@ export default function ModifyAssetsUploadsPage() {
         fetchDatabaseRestrictions();
     }, [databaseId]);
 
-    // Validate files whenever fileItems or restrictions change
-    useEffect(() => {
-        if (fileItems && fileItems.length > 0) {
-            const validationResult = validateFiles(fileItems, restrictFileUploadsToExtensions);
-            setFileValidationResult(validationResult);
-        } else {
-            setFileValidationResult(null);
-        }
-    }, [fileItems, restrictFileUploadsToExtensions]);
-
     // Clear preview file when not uploading to root path
     useEffect(() => {
-        const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
-        if (!isRootPath && previewFile) {
+        if (destination !== "/" && previewFile) {
             setPreviewFile(null);
         }
-    }, [keyPrefix, previewFile]);
-
-    // Handle file selection
-    const handleFileSelection = useCallback(
-        async (directoryHandle: any, fileHandles: any[]) => {
-            try {
-                console.log("handleFileSelection called with:", {
-                    directoryHandle,
-                    fileHandlesCount: fileHandles.length,
-                    keyPrefix,
-                });
-
-                // Convert the file selection directly to FileUploadTableItems
-                const newItems = await getFilesFromFileHandles(fileHandles, keyPrefix);
-
-                console.log("File selection - new items:", newItems.length, newItems);
-
-                // Combine with existing files if any exist
-                setFileItems((prevItems) => {
-                    console.log("Previous items count:", prevItems.length);
-
-                    if (prevItems.length === 0) {
-                        console.log("No previous items, returning new items");
-                        return newItems;
-                    }
-
-                    // Create a map of existing file paths to avoid duplicates
-                    const existingFilePaths = new Map(
-                        prevItems.map((item) => [item.relativePath, item])
-                    );
-
-                    // Filter out any new files that would be duplicates
-                    const uniqueNewFiles = newItems.filter(
-                        (file) => !existingFilePaths.has(file.relativePath)
-                    );
-
-                    console.log("Unique new files:", uniqueNewFiles.length);
-
-                    // Combine existing files with unique new files
-                    const combinedFiles = [
-                        ...prevItems,
-                        ...uniqueNewFiles.map((file, idx) => ({
-                            ...file,
-                            index: prevItems.length + idx,
-                        })),
-                    ];
-
-                    console.log("Combined files:", combinedFiles.length);
-                    return combinedFiles;
-                });
-            } catch (error) {
-                console.error("Error in handleFileSelection:", error);
-            }
-        },
-        [keyPrefix]
-    );
+    }, [destination, previewFile]);
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
         return fileItems.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [fileItems]);
+
+    // The preview-file guidance is expanded by default and reopens when the selection gains
+    // preview files; the user can still close it.
+    const [guidanceExpanded, setGuidanceExpanded] = useState(true);
+    useEffect(() => {
+        if (hasPreviewFiles) setGuidanceExpanded(true);
+    }, [hasPreviewFiles]);
 
     // Handle preview file selection with size and extension validation
     const handlePreviewFileSelection = (file: File | null) => {
@@ -395,26 +358,6 @@ export default function ModifyAssetsUploadsPage() {
         setPreviewFile(file);
     };
 
-    // Function to remove a file
-    const handleRemoveFile = (index: number) => {
-        if (fileItems) {
-            const updatedFiles = fileItems.filter((item) => item.index !== index);
-
-            // Update indices to be sequential
-            const reindexedFiles = updatedFiles.map((item, idx) => ({
-                ...item,
-                index: idx,
-            }));
-
-            setFileItems(reindexedFiles);
-        }
-    };
-
-    // Function to remove all files
-    const handleRemoveAllFiles = () => {
-        setFileItems([]);
-    };
-
     // Handle upload completion
     const handleUploadComplete = (response: CompleteUploadResponse) => {
         console.log("Upload completed:", response);
@@ -434,25 +377,128 @@ export default function ModifyAssetsUploadsPage() {
 
     // Start upload process
     const startUpload = () => {
-        // Don't proceed if there's a preview file error
-        if (previewFileError) {
+        // Don't proceed if there's a preview file, destination or path error
+        if (previewFileError || destinationError || pathErrorReason) {
             return;
         }
         setShowUploadWorkflow(true);
     };
 
-    // Check if we're uploading to root path (including explicit "/" path)
-    const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
+    // Check if we're uploading to root path
+    const isRootPath = destination === "/";
 
-    // Debug log to help troubleshoot path issues
-    console.log("ModifyAssetsUploads - Path Check:", {
-        folderPath,
-        keyPrefix,
-        isRootPath,
-    });
+    const hasRestrictions =
+        !!restrictFileUploadsToExtensions &&
+        restrictFileUploadsToExtensions.trim() !== "" &&
+        restrictFileUploadsToExtensions.toLowerCase() !== ".all";
+
+    const nothingSelected = fileItems.length === 0 && (isRootPath ? !previewFile : true);
+    const uploadDisabled =
+        nothingSelected ||
+        !!previewFileError ||
+        !!destinationError ||
+        // Path and extension errors on the preview rows (D3).
+        !!pathErrorReason;
+    // The reason shown next to Finalize and Upload while it is disabled for one of these causes.
+    const uploadBlockedReason = nothingSelected
+        ? isRootPath
+            ? `Please select at least one ${Synonyms.asset} file or preview file to upload.`
+            : `Please select at least one ${Synonyms.asset} file to upload.`
+        : destinationError || pathErrorReason;
+
+    const assetLink = (
+        <Link href={`#/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}>
+            {assetDetail.assetName || assetDetail.assetId || "Loading..."}
+        </Link>
+    );
+
+    const pageHeader = (
+        <SpaceBetween direction="vertical" size="s">
+            <Header
+                variant="h1"
+                description={`Add files to an existing ${Synonyms.asset}. Each file's final path is shown before the upload starts.`}
+            >
+                {`Modify ${Synonyms.Asset} Files`}
+            </Header>
+            <KeyValuePairs
+                columns={3}
+                items={[
+                    { label: Synonyms.Asset, value: assetLink },
+                    { label: Synonyms.Database, value: assetDetail.databaseId || "-" },
+                    { label: "Destination", value: destinationError ? "-" : destination },
+                ]}
+            />
+        </SpaceBetween>
+    );
+
+    const previewGuidance = (
+        <ExpandableSection
+            headerText="About preview files"
+            expanded={guidanceExpanded}
+            onChange={({ detail }) => setGuidanceExpanded(detail.expanded)}
+            data-testid="preview-file-guidance"
+        >
+            <SpaceBetween direction="vertical" size="xs">
+                <Box variant="p">
+                    Files with <strong>{PREVIEW_FILE_PATTERN}</strong> in the filename are ingested
+                    as preview files for their associated files. For example,{" "}
+                    <code>model.gltf{PREVIEW_FILE_PATTERN}png</code> is used as a preview for{" "}
+                    <code>model.gltf</code>.
+                </Box>
+                <ul style={{ margin: 0 }}>
+                    <li>
+                        You cannot upload a preview file for a file that is not part of this upload
+                        or is already {`uploaded as part of the ${Synonyms.asset}.`}
+                    </li>
+                    <li>
+                        Only{" "}
+                        {previewFileFormats.map((ext, index) => (
+                            <React.Fragment key={ext}>
+                                {index > 0 && ", "}
+                                <code>{ext}</code>
+                            </React.Fragment>
+                        ))}{" "}
+                        are valid file extensions for preview files.
+                    </li>
+                    <li>Preview files must be 5MB or less in size.</li>
+                </ul>
+                {hasPreviewFiles && (
+                    <Box variant="p">
+                        <strong>Note:</strong> Some of your selected files will be treated as
+                        preview files based on their filenames.
+                    </Box>
+                )}
+            </SpaceBetween>
+        </ExpandableSection>
+    );
+
+    const restrictionsNotice = hasRestrictions && (
+        <Alert type="warning" header="File upload restrictions">
+            {`This ${Synonyms.database} only allows these extensions: `}
+            <strong>{restrictFileUploadsToExtensions}</strong>. Preview files (containing{" "}
+            {PREVIEW_FILE_PATTERN} in the filename) are exempt, but must still be one of{" "}
+            {previewFileFormatsStr}.
+        </Alert>
+    );
+
+    const formActions = (
+        <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+            {uploadDisabled && uploadBlockedReason && (
+                <Box color="text-status-error" fontSize="body-s">
+                    {uploadBlockedReason}
+                </Box>
+            )}
+            <Button variant="link" onClick={handleViewAsset}>
+                Cancel
+            </Button>
+            <Button variant="primary" onClick={startUpload} disabled={uploadDisabled}>
+                Finalize and Upload
+            </Button>
+        </SpaceBetween>
+    );
 
     return (
-        <Box padding={{ top: "xs", horizontal: "l" }}>
+        <Box padding={{ top: "xs", horizontal: "l", bottom: "l" }}>
             <SpaceBetween size="xs" direction="vertical">
                 <BreadcrumbGroup
                     items={[
@@ -473,283 +519,97 @@ export default function ModifyAssetsUploadsPage() {
                     ]}
                     ariaLabel="Breadcrumbs"
                 />
-                <SpaceBetween size="l" direction="vertical">
-                    <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                        <SpaceBetween size="l" direction="vertical">
-                            <TextContent>
-                                <Header variant="h1">{`Modify ${Synonyms.Asset} Files`}</Header>
-                            </TextContent>
-
-                            {/* Asset Information */}
-                            <Container
-                                header={
-                                    <Header variant="h2">{`${Synonyms.Asset} Information`}</Header>
-                                }
-                            >
-                                <SpaceBetween direction="vertical" size="m">
-                                    <Box variant="awsui-key-label">
-                                        {Synonyms.Asset}:
-                                        <Link
-                                            href={`#/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
-                                            target="_blank"
+                {showUploadWorkflow ? (
+                    <SpaceBetween size="l" direction="vertical">
+                        {pageHeader}
+                        <AssetUploadWorkflow
+                            assetDetail={assetDetail}
+                            metadata={{}} // Pass empty metadata object to ensure the step is skipped
+                            fileItems={fileItems}
+                            onComplete={handleUploadComplete}
+                            onCancel={handleCancel}
+                            isExistingAsset={true}
+                            keyPrefix={destination}
+                        />
+                    </SpaceBetween>
+                ) : (
+                    <Form header={pageHeader} actions={formActions}>
+                        <SpaceBetween direction="vertical" size="l">
+                            <Container header={<Header variant="h2">Select files</Header>}>
+                                {/* Two columns when the container is wide enough, one below. */}
+                                <Grid
+                                    gridDefinition={[
+                                        { colspan: { default: 12, xs: 7 } },
+                                        { colspan: { default: 12, xs: 5 } },
+                                    ]}
+                                >
+                                    <SpaceBetween direction="vertical" size="m">
+                                        <FormField
+                                            label="Destination folder"
+                                            description="Folder in the asset the files are added to. Every previewed path includes it."
+                                            errorText={destinationError}
                                         >
-                                            {` ${
-                                                assetDetail.assetName ||
-                                                assetDetail.assetId ||
-                                                "Loading..."
-                                            }`}
-                                        </Link>
-                                    </Box>
-                                    <Box variant="awsui-key-label">
-                                        {Synonyms.Database}: {assetDetail.databaseId}
-                                    </Box>
-                                    {folderPath && (
-                                        <Box variant="awsui-key-label">
-                                            Upload Location: {folderPath}
-                                        </Box>
-                                    )}
-                                </SpaceBetween>
+                                            <Input
+                                                value={destinationInput}
+                                                onChange={({ detail }) =>
+                                                    setDestinationInput(detail.value)
+                                                }
+                                                ariaLabel="Destination folder"
+                                                placeholder="/"
+                                            />
+                                        </FormField>
+                                        <DragDropFileUpload
+                                            label={`${Synonyms.Asset} Files`}
+                                            description={
+                                                planned.length > 0
+                                                    ? `Total Files to Upload: ${planned.length}`
+                                                    : "Add files, a folder, or drop several at once. A folder keeps its name under the destination."
+                                            }
+                                            onAdd={(added) =>
+                                                applySelection([...roots, ...added], folderNameMode)
+                                            }
+                                        />
+                                    </SpaceBetween>
+
+                                    <SpaceBetween direction="vertical" size="m">
+                                        {/* The overall preview applies to the asset root only. */}
+                                        {isRootPath && (
+                                            <FileUpload
+                                                label={`${Synonyms.Asset} Overall Preview File (Optional)`}
+                                                disabled={false}
+                                                setFile={handlePreviewFileSelection}
+                                                fileFormats={previewFileFormatsStr}
+                                                file={previewFile || undefined}
+                                                errorText={previewFileError}
+                                                description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
+                                                data-testid="preview-file"
+                                            />
+                                        )}
+                                        {restrictionsNotice}
+                                        {previewGuidance}
+                                    </SpaceBetween>
+                                </Grid>
                             </Container>
 
-                            {/* Display warning about file extension restrictions if they exist */}
-                            {restrictFileUploadsToExtensions &&
-                                restrictFileUploadsToExtensions.trim() !== "" &&
-                                restrictFileUploadsToExtensions.toLowerCase() !== ".all" && (
-                                    <Container>
-                                        <Alert header="File Upload Restrictions" type="warning">
-                                            <SpaceBetween direction="vertical" size="xs">
-                                                <div>
-                                                    {`This ${Synonyms.database} has file upload restrictions in place.`}{" "}
-                                                    Only files with the following extensions are
-                                                    allowed:
-                                                </div>
-                                                <div style={{ marginTop: "8px" }}>
-                                                    <strong>
-                                                        {restrictFileUploadsToExtensions}
-                                                    </strong>
-                                                </div>
-                                                <div
-                                                    style={{ fontSize: "0.9em", marginTop: "8px" }}
-                                                >
-                                                    <em>
-                                                        Note: Preview files (containing{" "}
-                                                        {PREVIEW_FILE_PATTERN} in the filename) are
-                                                        exempt from these restrictions, but must
-                                                        still be one of {previewFileFormatsStr}.
-                                                    </em>
-                                                </div>
-                                            </SpaceBetween>
-                                        </Alert>
-                                    </Container>
-                                )}
-
-                            {/* Display file extension validation errors */}
-                            {fileValidationResult && !fileValidationResult.isValid && (
-                                <Container>
-                                    <Alert header="Invalid Files Selected" type="error">
-                                        <SpaceBetween direction="vertical" size="xs">
-                                            <div>The following files cannot be uploaded:</div>
-                                            <ul style={{ marginTop: "8px", marginBottom: "8px" }}>
-                                                {fileValidationResult.invalidFiles.map(
-                                                    (file, index) => (
-                                                        <li key={index}>
-                                                            <strong>{file.fileName}</strong> -{" "}
-                                                            {file.errorMessage ||
-                                                                `Extension ${file.extension} not allowed`}
-                                                        </li>
-                                                    )
-                                                )}
-                                            </ul>
-                                            {fileValidationResult.allowedExtensions !== null && (
-                                                <div>
-                                                    <strong>Allowed extensions:</strong>{" "}
-                                                    {fileValidationResult.allowedExtensions.join(
-                                                        ", "
-                                                    )}
-                                                </div>
-                                            )}
-                                        </SpaceBetween>
-                                    </Alert>
-                                </Container>
-                            )}
-
-                            {/* Show upload workflow or file selection UI */}
-                            {showUploadWorkflow ? (
-                                <AssetUploadWorkflow
-                                    assetDetail={assetDetail}
-                                    metadata={{}} // Pass empty metadata object to ensure the step is skipped
-                                    fileItems={fileItems}
-                                    onComplete={handleUploadComplete}
-                                    onCancel={handleCancel}
-                                    isExistingAsset={true}
-                                    keyPrefix={keyPrefix}
+                            {/* Every file's final asset path, before the upload starts */}
+                            {planned.length > 0 && (
+                                <UploadPreview
+                                    flow="addFiles"
+                                    destination={destination}
+                                    roots={roots}
+                                    planned={planned}
+                                    folderNameMode={folderNameMode}
+                                    onFolderNameModeChange={(mode) => applySelection(roots, mode)}
+                                    onRemove={(ids) =>
+                                        applySelection(removeFromRoots(roots, ids), folderNameMode)
+                                    }
+                                    onRemoveAll={() => applySelection([], "auto")}
+                                    existingCheck={existingCheck}
                                 />
-                            ) : (
-                                <Container header={<Header variant="h2">Select Files</Header>}>
-                                    <SpaceBetween direction="vertical" size="l">
-                                        <Alert header="Preview File Information" type="info">
-                                            <p>
-                                                Files with <strong>{PREVIEW_FILE_PATTERN}</strong>{" "}
-                                                in the filename will be ingested as preview files
-                                                for their associated files. For example,{" "}
-                                                <code>model.gltf{PREVIEW_FILE_PATTERN}png</code>{" "}
-                                                will be used as a preview for{" "}
-                                                <code>model.gltf</code>.
-                                            </p>
-                                            <p>
-                                                <strong>Important notes:</strong>
-                                                <ul>
-                                                    <li>
-                                                        You cannot upload a preview file for a file
-                                                        that is not part of this upload or is
-                                                        already{" "}
-                                                        {`uploaded as part of the ${Synonyms.asset}.`}
-                                                    </li>
-                                                    <li>
-                                                        Only{" "}
-                                                        {previewFileFormats.map((ext, index) => (
-                                                            <React.Fragment key={ext}>
-                                                                {index > 0 && ", "}
-                                                                <code>{ext}</code>
-                                                            </React.Fragment>
-                                                        ))}{" "}
-                                                        are valid file extensions for preview files.
-                                                    </li>
-                                                    <li>
-                                                        Preview files must be 5MB or less in size.
-                                                    </li>
-                                                </ul>
-                                            </p>
-                                            {hasPreviewFiles && (
-                                                <p>
-                                                    <strong>Note:</strong> Some of your selected
-                                                    files will be treated as preview files based on
-                                                    their filenames.
-                                                </p>
-                                            )}
-                                        </Alert>
-
-                                        <Container>
-                                            <Grid
-                                                gridDefinition={
-                                                    isRootPath
-                                                        ? [{ colspan: 6 }, { colspan: 6 }]
-                                                        : [{ colspan: 12 }]
-                                                }
-                                            >
-                                                {/* Asset Files Selection */}
-                                                <SpaceBetween direction="vertical" size="m">
-                                                    <FormField
-                                                        label={`${Synonyms.Asset} Files`}
-                                                        description={
-                                                            fileItems.length > 0
-                                                                ? `Total Files to Upload: ${fileItems.length}`
-                                                                : "Select a folder or multiple files"
-                                                        }
-                                                    >
-                                                        <SpaceBetween
-                                                            direction="vertical"
-                                                            size="xs"
-                                                        >
-                                                            <Toggle
-                                                                onChange={({ detail }) => {
-                                                                    setAssetDetail((prev) => ({
-                                                                        ...prev,
-                                                                        isMultiFile: detail.checked,
-                                                                    }));
-                                                                    setSelectionMode(
-                                                                        detail.checked
-                                                                            ? "folder"
-                                                                            : "files"
-                                                                    );
-                                                                }}
-                                                                checked={assetDetail.isMultiFile}
-                                                            >
-                                                                {assetDetail.isMultiFile
-                                                                    ? "Folder Upload"
-                                                                    : "File Upload"}
-                                                            </Toggle>
-
-                                                            <DragDropFileUpload
-                                                                label=""
-                                                                description=""
-                                                                multiFile={true}
-                                                                selectionMode={selectionMode}
-                                                                onSelect={handleFileSelection}
-                                                            />
-                                                        </SpaceBetween>
-                                                    </FormField>
-                                                </SpaceBetween>
-
-                                                {/* Preview File Selection - Only show when uploading to root path (including "/") */}
-                                                {isRootPath && (
-                                                    <FileUpload
-                                                        label={`${Synonyms.Asset} Overall Preview File (Optional)`}
-                                                        disabled={false}
-                                                        setFile={handlePreviewFileSelection}
-                                                        fileFormats={previewFileFormatsStr}
-                                                        file={previewFile || undefined}
-                                                        errorText={previewFileError}
-                                                        description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
-                                                        data-testid="preview-file"
-                                                    />
-                                                )}
-                                            </Grid>
-                                        </Container>
-
-                                        {/* Display selected files with remove option */}
-                                        {fileItems && fileItems.length > 0 && (
-                                            <Box padding={{ bottom: "l" }}>
-                                                <FileUploadTable
-                                                    allItems={fileItems}
-                                                    resume={false}
-                                                    showCount={true}
-                                                    allowRemoval={true}
-                                                    onRemoveItem={handleRemoveFile}
-                                                    onRemoveAll={handleRemoveAllFiles}
-                                                    displayMode="selection"
-                                                />
-                                            </Box>
-                                        )}
-
-                                        {/* Upload Button */}
-                                        <Box textAlign="right">
-                                            <SpaceBetween direction="vertical" size="xs">
-                                                {fileItems.length === 0 &&
-                                                    (isRootPath ? !previewFile : true) && (
-                                                        <Box
-                                                            color="text-status-error"
-                                                            fontSize="body-s"
-                                                        >
-                                                            {isRootPath
-                                                                ? `Please select at least one ${Synonyms.asset} file or preview file to upload.`
-                                                                : `Please select at least one ${Synonyms.asset} file to upload.`}
-                                                        </Box>
-                                                    )}
-                                                <Button
-                                                    variant="primary"
-                                                    onClick={startUpload}
-                                                    disabled={
-                                                        (fileItems.length === 0 &&
-                                                            (isRootPath ? !previewFile : true)) ||
-                                                        !!previewFileError ||
-                                                        !!(
-                                                            fileValidationResult &&
-                                                            !fileValidationResult.isValid
-                                                        )
-                                                    }
-                                                >
-                                                    Finalize and Upload
-                                                </Button>
-                                            </SpaceBetween>
-                                        </Box>
-                                    </SpaceBetween>
-                                </Container>
                             )}
                         </SpaceBetween>
-                    </Grid>
-                </SpaceBetween>
-                <div style={{ paddingBottom: "20px" }} />
+                    </Form>
+                )}
             </SpaceBetween>
         </Box>
     );

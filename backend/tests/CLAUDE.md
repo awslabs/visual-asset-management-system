@@ -29,6 +29,7 @@ Every worker runs the full collection, so module-level setup in `conftest.py` an
 -   Patch module globals and `sys.modules` entries with `monkeypatch` / `patch` / `patch.dict` so they are restored, and reset module-level caches (`resourceNames._cache`, authorizer caches, Casbin enforcer caches) in the fixture that fills them.
 -   Write files only under `tmp_path` or a `tempfile` directory, never at a fixed path; workers run at the same time.
 -   Do not depend on another file's tests having run first. Check with two different worker counts (`-n 2` and `-n auto`); a test that fails only in one of them is order-dependent. Fix the test, never skip it.
+-   Do not take a timestamp from the live clock at import when the code under test compares it with its own clock (a grace period, a stale cutoff, a TTL). A worker can reach a file many minutes after it imported it, so build that timestamp when the test runs (in the test, a fixture, or a helper the test calls), or give the code a fixed `now`.
 
 The collected count is the same with and without xdist (`pytest --collect-only -q | tail -1`). Pass `-p no:xdist` to force a plain serial run.
 
