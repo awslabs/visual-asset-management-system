@@ -895,6 +895,60 @@ def format_authorization_denial_record(claims_and_roles: Dict[str, Any], probe_e
                                _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
 
 
+def log_authorization_denials(claims_and_roles: Dict[str, Any], denials: list) -> None:
+    """
+    Log several failed authorization checks of one caller in one batch, with silent failure.
+
+    Each entry of `denials` (the `custom_data` of one check, e.g. {"action", "obj"}) becomes the
+    record `log_authorization(claims_and_roles, False, custom_data)` writes, and the records go out
+    through `_write_batch_to_cloudwatch`: one PutLogEvents round trip per batch instead of one per
+    denial, for a listing that checks many records. A denial that is not delivered (the log group
+    name does not resolve, or the write fails) is kept in the function's own log and counted, as
+    every other audit record is (`report_undelivered_audit_records`).
+
+    Args:
+        claims_and_roles: The claims and roles dictionary
+        denials: The custom data of each denied check
+    """
+    if not denials:
+        return
+    messages: List[Optional[str]] = [None] * len(denials)
+    try:
+        user_context = {
+            "user": claims_and_roles.get("tokens", ["UNKNOWN"])[0] if claims_and_roles.get("tokens") else "UNKNOWN",
+            "roles": claims_and_roles.get("roles", []),
+            "mfaEnabled": claims_and_roles.get("mfaEnabled", False)
+        }
+        event_type = _event_type(("AUTHORIZATION", None), ("authorized", False))
+        log_type = _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        messages = [_format_log_message(event_type, user_context, custom_data, log_type)
+                    for custom_data in denials]
+        mock_event = {
+            'requestContext': {
+                'authorizer': {
+                    'jwt': {
+                        'claims': {
+                            'sub': user_context["user"]
+                        }
+                    }
+                }
+            }
+        }
+
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        if not log_group_name:
+            _report_unresolved_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION, messages, mock_event)
+            return
+
+        _write_batch_to_cloudwatch(log_group_name, messages, mock_event)
+
+    except Exception as e:
+        # Silent failure - log locally but don't raise; the denials are kept as undelivered.
+        logger.exception(f"Failed to log authorization audit events: {e}")
+        report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError",
+                                         messages)
+
+
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log API authorization events with silent failure.
@@ -1494,6 +1548,7 @@ AUDIT_ID_FIELDS = (
     "workflowId", "executionId", "executionGroupId", "assetLinkId", "commentId", "tagId", "tagTypeId",
     "metadataSchemaId", "subscriptionId", "roleName", "constraintId", "targetUserId", "apiKeyId",
     "uploadId", "triggerType", "sessionId", "targetDatabaseId", "targetAssetId", "targetFilePath",
+    "schemaName", "cascadeId", "evaluationId",
 )
 
 # The id field that names an entity of each type, used when log_action is given no entity_id.
@@ -1506,6 +1561,9 @@ _ENTITY_ID_FIELDS = {
     "execution": "executionId", "executionGroup": "executionGroupId", "role": "roleName",
     "userRole": "targetUserId", "constraint": "constraintId", "user": "targetUserId",
     "apiKey": "apiKeyId", "workstation": "sessionId",
+    "complianceSchema": "schemaName", "complianceBinding": "databaseId",
+    "complianceEvaluation": "evaluationId", "complianceState": "assetId",
+    "complianceCascade": "cascadeId",
 }
 
 # Path parameters whose name differs from the id field of the entity they name, by entity type:

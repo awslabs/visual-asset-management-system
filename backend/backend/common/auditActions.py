@@ -58,6 +58,25 @@ from common.apiRoutes import (
     API_COMMENTS_ASSET,
     API_COMMENTS_ASSET_VERSION,
     API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_COMPLIANCE_AUDIT,
+    API_COMPLIANCE_AUDIT_ASSET,
+    API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_BIND_DATABASE,
+    API_COMPLIANCE_CASCADES,
+    API_COMPLIANCE_CASCADE_APPROVE,
+    API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATE_DATABASE,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_QUARANTINE,
+    API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_QUARANTINE_RELEASE,
+    API_COMPLIANCE_SCHEMAS,
+    API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_STATE_ASSET,
+    API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_SWEEP_SCHEMA,
     API_COPY_FILE,
     API_CREATE_ASSET_VERSION,
     API_CREATE_FOLDER,
@@ -418,6 +437,56 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # Search: the request (index, filters, page) is recorded and the hit count, never the hits.
     **route_entries(API_SEARCH, {POST: spec("search", "search", KIND_SEARCH)}),
     **route_entries(API_SEARCH_SIMPLE, {POST: spec("search", "search", KIND_SEARCH)}),
+    # Compliance. The compliance services also write their own audit trail (the compliance audit
+    # table, read by the two audit routes); these records are the VAMS action records of the calls.
+    **route_entries(API_COMPLIANCE_SCHEMAS, {
+        GET: read("complianceSchemaList", "complianceSchema"),
+        POST: spec("complianceSchemaCreate", "complianceSchema"),
+    }),
+    **route_entries(API_COMPLIANCE_SCHEMA_BY_NAME, {
+        GET: read("complianceSchemaGet", "complianceSchema"),
+        PUT: spec("complianceSchemaUpdate", "complianceSchema"),
+        DELETE: spec("complianceSchemaDelete", "complianceSchema"),
+    }),
+    # A database binding and an asset override record the same actions.
+    **route_entries(API_COMPLIANCE_BIND_DATABASE, {
+        GET: read("complianceBindingGet", "complianceBinding"),
+        PUT: spec("complianceBindingSet", "complianceBinding"),
+        DELETE: spec("complianceBindingDelete", "complianceBinding"),
+    }),
+    **route_entries(API_COMPLIANCE_BIND_ASSET, {
+        PUT: spec("complianceBindingSet", "complianceBinding"),
+        DELETE: spec("complianceBindingDelete", "complianceBinding"),
+    }),
+    # An evaluation writes the asset's evaluation and compliance record (and may quarantine it).
+    **route_entries(API_COMPLIANCE_EVALUATE_ASSET, {POST: spec("complianceEvaluate", "complianceEvaluation")}),
+    **route_entries(API_COMPLIANCE_EVALUATE_DATABASE, {
+        POST: spec("complianceDatabaseEvaluate", "complianceEvaluation"),
+    }),
+    **route_entries(API_COMPLIANCE_SWEEP_SCHEMA, {POST: spec("complianceSchemaSweep", "complianceEvaluation")}),
+    **route_entries(API_COMPLIANCE_EVALUATIONS_ASSET, {
+        GET: read("complianceEvaluationList", "complianceEvaluation"),
+    }),
+    **route_entries(API_COMPLIANCE_STATE_ASSET, {GET: read("complianceStateGet", "complianceState")}),
+    **route_entries(API_COMPLIANCE_STATE_DATABASE, {GET: read("complianceStateList", "complianceState")}),
+    **route_entries(API_COMPLIANCE_QUARANTINE, {GET: read("complianceQuarantineList", "complianceState")}),
+    **route_entries(API_COMPLIANCE_QUARANTINE_RELEASE, {
+        POST: spec("complianceQuarantineRelease", "complianceState"),
+    }),
+    **route_entries(API_COMPLIANCE_QUARANTINE_EXCEPTION, {
+        POST: spec("complianceExceptionGrant", "complianceState"),
+        DELETE: spec("complianceExceptionRevoke", "complianceState"),
+    }),
+    **route_entries(API_COMPLIANCE_CASCADES, {
+        GET: read("complianceCascadeList", "complianceCascade"),
+        POST: spec("complianceCascadeCreate", "complianceCascade"),
+    }),
+    **route_entries(API_COMPLIANCE_CASCADE_BY_ID, {GET: read("complianceCascadeGet", "complianceCascade")}),
+    **route_entries(API_COMPLIANCE_CASCADE_APPROVE, {POST: spec("complianceCascadeApprove", "complianceCascade")}),
+    **route_entries(API_COMPLIANCE_CASCADE_REJECT, {POST: spec("complianceCascadeReject", "complianceCascade")}),
+    # The two audit routes read the compliance audit trail.
+    **route_entries(API_COMPLIANCE_AUDIT, {GET: read("complianceAuditList", "complianceAudit")}),
+    **route_entries(API_COMPLIANCE_AUDIT_ASSET, {GET: read("complianceAuditList", "complianceAudit")}),
 }
 
 _HEAD_REASON = "returns object headers only, no content; the GET of the same file is recorded"
@@ -460,6 +529,27 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.importGlobalPipelineWorkflow", spec("pipelineImport", "pipeline")),
     SystemAction("handlers.auth.apiOriginVerifyRotation", _auth("originVerifyRotate", "system")),
+    # Compliance work that runs without an API request. The automatic evaluation the trigger runs
+    # on an asset change, and each descendant a cascade evaluates.
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceAutoEvaluate", "complianceEvaluation")),
+    SystemAction("handlers.compliance.complianceCascadeExecutor",
+                 spec("complianceAutoEvaluate", "complianceEvaluation")),
+    # The compliance record of a permanently deleted asset removed, and a cascade opened awaiting
+    # approval when an evaluated asset has downstream children.
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceRecordRemove", "complianceState")),
+    SystemAction("handlers.compliance.complianceTrigger", spec("complianceCascadeAutoCreate", "complianceCascade")),
+    # A pipeline rule's workflow completion recorded on its evaluation (which may finalize it).
+    SystemAction("handlers.compliance.complianceWorkflowCallback",
+                 spec("compliancePipelineRuleComplete", "complianceEvaluation")),
+    # An approved cascade run to its end (completed or aborted).
+    SystemAction("handlers.compliance.complianceCascadeExecutor", spec("complianceCascadeRun", "complianceCascade")),
+    # The background jobs: a database binding change applied to the database's records, and a
+    # deleted database's compliance data moved under `<databaseId>#deleted`.
+    SystemAction("handlers.compliance.complianceJobs", spec("complianceBindingApply", "complianceBinding")),
+    SystemAction("handlers.compliance.complianceJobs", spec("complianceDatabaseRetire", "database")),
+    # The deploy-time seed of the GLOBAL default compliance schema (a CloudFormation custom
+    # resource): the version it wrote, or the schema it found already present.
+    SystemAction("handlers.compliance.complianceDefaultSchemaSeed", spec("complianceSchemaSeed", "complianceSchema")),
 )
 
 # Handlers that serve no API route and record no action, with the reason.
