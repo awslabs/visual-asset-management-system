@@ -79,11 +79,19 @@ const useDocumentVisible = (): boolean => {
 };
 
 /**
- * Minimum widths (px) of the Status and Actions columns, so "Ready" / "Cancelled" and the Download,
- * Cancel and Delete buttons never break mid-word (#1125 D28); the Archive column takes the slack.
+ * Column sizing (#1125 D28, D30). The status label and the action buttons never wrap, and no column
+ * has a minimum width, so the table fits its container (no sideways scroll at 1280 px) on the asset
+ * tab and on My Download Queue. The width comes from the text columns instead: identifiers and
+ * names with no spaces (archive and asset names, request IDs, e-mail addresses) may break anywhere,
+ * and the row actions are icon buttons (download, close for cancel, remove for delete) named by their
+ * ariaLabel, the compact Cloudscape form that still carries a disabled reason.
  */
-export const ZIP_STATUS_COLUMN_MIN_WIDTH = 150;
-export const ZIP_ACTIONS_COLUMN_MIN_WIDTH = 240;
+const BREAK_ANYWHERE: React.CSSProperties = { overflowWrap: "anywhere" };
+
+/** Text that may break between any two characters rather than widen its column. */
+const Breakable: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <span style={BREAK_ANYWHERE}>{children}</span>
+);
 
 const StatusCell: React.FC<{ job: ZipDownloadJob }> = ({ job }) => {
     const percent = job.status === "RUNNING" ? progressPercent(job) : null;
@@ -122,7 +130,7 @@ const SelectionCell: React.FC<{ job: ZipDownloadJob }> = ({ job }) => {
     const preview = job.selectionPreview ?? [];
     const pinned = job.assetVersionId ? ` (version ${job.assetVersionId})` : "";
     if (job.selectionSummary?.wholeAsset || preview.length === 0) {
-        return <span>{`${summary}${pinned}`}</span>;
+        return <Breakable>{`${summary}${pinned}`}</Breakable>;
     }
     return (
         <ExpandableSection headerText={`${summary}${pinned}`} variant="footer">
@@ -370,7 +378,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                   navigate(`/databases/${job.databaseId}/assets/${job.assetId}`);
                               }}
                           >
-                              {job.assetName || job.assetId}
+                              <Breakable>{job.assetName || job.assetId}</Breakable>
                           </Link>
                       ),
                   },
@@ -380,9 +388,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             header: "Archive",
             cell: (job) => (
                 <SpaceBetween size="xxs">
-                    <span>{job.archiveFileName}</span>
+                    <Breakable>{job.archiveFileName}</Breakable>
                     <Box variant="small" color="text-body-secondary">
-                        {`Request ID: ${job.requestId}`}
+                        <Breakable>{`Request ID: ${job.requestId}`}</Breakable>
                     </Box>
                 </SpaceBetween>
             ),
@@ -392,8 +400,11 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                   {
                       id: "requestedBy",
                       header: "Requested by",
-                      cell: (job: ZipDownloadJob) =>
-                          job.isOwn ? `${job.requestedBy || ""} (you)` : job.requestedBy || "",
+                      cell: (job: ZipDownloadJob) => (
+                          <Breakable>
+                              {job.isOwn ? `${job.requestedBy || ""} (you)` : job.requestedBy || ""}
+                          </Breakable>
+                      ),
                   },
               ]
             : []),
@@ -405,10 +416,18 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         {
             id: "format",
             header: "Format",
+            // The compression goes on a second, smaller line, so the column stays narrow (#1125 D30).
             cell: (job) =>
-                job.archiveFormat === "zip" && job.compression === "deflate"
-                    ? "zip (compressed)"
-                    : job.archiveFormat,
+                job.archiveFormat === "zip" && job.compression === "deflate" ? (
+                    <SpaceBetween size="xxxs">
+                        <span>zip</span>
+                        <Box variant="small" color="text-body-secondary">
+                            compressed
+                        </Box>
+                    </SpaceBetween>
+                ) : (
+                    job.archiveFormat
+                ),
         },
         {
             id: "size",
@@ -422,8 +441,6 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             id: "status",
             header: "Status",
             cell: (job) => <StatusCell job={job} />,
-            // Room for the longest label ("Cancelled") and its icon on one line (#1125 D28).
-            minWidth: ZIP_STATUS_COLUMN_MIN_WIDTH,
         },
         {
             id: "expires",
@@ -433,8 +450,6 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         {
             id: "actions",
             header: "Actions",
-            // Room for Download and Delete side by side, each on one line (#1125 D28).
-            minWidth: ZIP_ACTIONS_COLUMN_MIN_WIDTH,
             cell: (job) => {
                 const terminal = isTerminalStatus(job.status);
                 // All-users view: each control follows the API's own decision for this row (the
@@ -444,22 +459,22 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 const offerDownload = job.status === "SUCCEEDED" && (!shared || !!job.canDownload);
                 const offerRemove = !shared || !!job.canRemove;
                 return (
-                    <SpaceBetween direction="horizontal" size="xs">
+                    <SpaceBetween direction="horizontal" size="xxs">
                         {offerDownload && (
                             <Button
+                                variant="icon"
                                 iconName="download"
                                 onClick={() => download(job)}
                                 loading={busyId === job.requestId}
                                 disabled={!shared && !!downloadReason}
                                 disabledReason={shared ? undefined : downloadReason}
                                 ariaLabel={`Download ${job.archiveFileName}`}
-                                wrapText={false}
-                            >
-                                Download
-                            </Button>
+                            />
                         )}
                         {offerRemove && (
                             <Button
+                                variant="icon"
+                                iconName={terminal ? "remove" : "close"}
                                 onClick={() =>
                                     setConfirm({ job, kind: terminal ? "delete" : "cancel" })
                                 }
@@ -468,10 +483,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 ariaLabel={`${terminal ? "Delete" : "Cancel"} ${
                                     job.archiveFileName
                                 }`}
-                                wrapText={false}
-                            >
-                                {terminal ? "Delete" : "Cancel"}
-                            </Button>
+                            />
                         )}
                     </SpaceBetween>
                 );

@@ -8,10 +8,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { MemoryRouter } from "react-router-dom";
-import ZipDownloadsTable, {
-    ZIP_ACTIONS_COLUMN_MIN_WIDTH,
-    ZIP_STATUS_COLUMN_MIN_WIDTH,
-} from "./ZipDownloadsTable";
+import ZipDownloadsTable from "./ZipDownloadsTable";
 import { ZIP_POLL_INTERVAL_MS, ZipDownloadJob } from "./zipDownloads";
 
 const mockAssetList = jest.fn();
@@ -119,30 +116,41 @@ describe("ZipDownloadsTable", () => {
         ["the asset tab", {}],
         ["My Download Queue", { databaseId: undefined, assetId: undefined }],
     ])(
-        "keeps Ready and the action buttons on one line in %s (#1125 D28)",
+        "keeps Ready and the actions on one line in %s without widening the table (#1125 D28, D30)",
         async (_name, props: Partial<React.ComponentProps<typeof ZipDownloadsTable>>) => {
-            mockAssetList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
-            mockGlobalList.mockResolvedValue(page([job("1", "SUCCEEDED")]));
+            mockAssetList.mockResolvedValue(
+                page([job("1", "SUCCEEDED", { archiveFormat: "zip", compression: "deflate" })])
+            );
+            mockGlobalList.mockResolvedValue(
+                page([job("1", "SUCCEEDED", { archiveFormat: "zip", compression: "deflate" })])
+            );
             const { container } = renderTable(props);
             const done = await screen
                 .findByText("archive-1.zip")
                 .then(() => rowFor("archive-1.zip"));
             const table = createWrapper(container).findTable()!;
-            const headerOf = (text: string) =>
-                table
-                    .findColumnHeaders()
-                    .map((h) => h.getElement())
-                    .find((h) => h.textContent === text) as HTMLElement;
-            expect(headerOf("Status").style.minWidth).toBe(`${ZIP_STATUS_COLUMN_MIN_WIDTH}px`);
-            expect(headerOf("Actions").style.minWidth).toBe(`${ZIP_ACTIONS_COLUMN_MIN_WIDTH}px`);
-            // Cloudscape's no-wrap forms: the status indicator's ellipsis container and no-wrap buttons.
+            // No column has a minimum width (D28's 150 / 240 px pushed the table past its container).
+            for (const header of table.findColumnHeaders()) {
+                expect([
+                    header.getElement().textContent,
+                    header.getElement().style.minWidth,
+                ]).toEqual([header.getElement().textContent, ""]);
+            }
+            // The status label keeps Cloudscape's one-line form (ellipsis container, no wrap).
             const ready = within(done).getByText("Ready");
             expect(ready.closest("[class*='overflow-ellipsis']")).not.toBeNull();
+            // The actions are icon buttons (nothing to wrap), each named by its ariaLabel.
             for (const name of ["Download archive-1.zip", "Delete archive-1.zip"]) {
-                expect(within(done).getByRole("button", { name }).className).toMatch(
-                    /button-no-wrap/
-                );
+                const button = within(done).getByRole("button", { name });
+                expect(button.className).toMatch(/variant-icon/);
+                expect(button.textContent).toBe("");
+                expect(button.getAttribute("title")).toBe(name);
             }
+            // Names and request IDs break anywhere instead of widening their columns.
+            expect(within(done).getByText("archive-1.zip").style.overflowWrap).toBe("anywhere");
+            expect(within(done).getByText(/^Request ID: /).style.overflowWrap).toBe("anywhere");
+            // The compression is a second, smaller line under the format.
+            expect(within(done).getByText("compressed")).toBeInTheDocument();
         }
     );
 
