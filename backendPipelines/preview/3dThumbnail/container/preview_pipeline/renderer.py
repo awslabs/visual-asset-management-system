@@ -32,6 +32,11 @@ _BG_COLOR = (128, 128, 128)
 _FOCUS_PERCENTILE_LO = 2
 _FOCUS_PERCENTILE_HI = 98
 
+# A mesh whose full bounds are at least this many times its percentile bounds is framed on the
+# percentile bounds (``_percentile_bounds_if_sparse``); vertices sampled for that check.
+SPARSE_FRAMING_SCALE = 25.0
+_SPARSE_SAMPLE = 1_000_000
+
 # Camera elevation angle in degrees above the orbit plane.
 # 25 degrees is the industry standard for 3D product thumbnails.
 _CAMERA_ELEVATION_DEG = 25
@@ -329,6 +334,35 @@ def _capture_rgba(plotter) -> np.ndarray:
     return np.ascontiguousarray(img, dtype=np.uint8)
 
 
+def _percentile_bounds_if_sparse(points, lo, hi):
+    """The percentile bounds of a mesh whose full bounds would leave its content covering almost
+    nothing, else None.
+
+    A mesh is framed on its full bounds, but one stray piece far away (a vertex cluster in the same
+    mesh, or a part the scene's parts do not tell apart) makes those bounds so large that the model
+    shrinks to a few pixels. When the full bounds are at least ``SPARSE_FRAMING_SCALE`` times the
+    2nd-98th percentile bounds on their largest axis, the model would cover at most about 1/25 of the
+    frame's width; the percentile bounds are framed instead, as for a point cloud. An ordinary mesh,
+    even one whose vertices crowd into a finely detailed region, stays far below that ratio. The check
+    reads at most ``_SPARSE_SAMPLE`` evenly spaced vertices."""
+    full = float(np.max(hi - lo))
+    if full <= 0:
+        return None
+    step = max(1, len(points) // _SPARSE_SAMPLE)
+    sample = np.asarray(points[::step])
+    p_lo = np.percentile(sample, _FOCUS_PERCENTILE_LO, axis=0)
+    p_hi = np.percentile(sample, _FOCUS_PERCENTILE_HI, axis=0)
+    core = float(np.max(p_hi - p_lo))
+    if core <= 0 or full < SPARSE_FRAMING_SCALE * core:
+        return None
+    if step > 1:
+        p_lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
+        p_hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    logger.info(f"Camera framing: the full bounds are {full / core:.0f}x the 2nd-98th percentile "
+                f"bounds, so the model would cover almost nothing; framing the percentile bounds")
+    return p_lo, p_hi
+
+
 def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
     """
     Compute camera framing parameters for orbit-style camera positioning.
@@ -353,6 +387,9 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     elif use_full_bounds:
         lo = points.min(axis=0)
         hi = points.max(axis=0)
+        sparse = _percentile_bounds_if_sparse(points, lo, hi)
+        if sparse is not None:
+            lo, hi = sparse
     else:
         lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
         hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)

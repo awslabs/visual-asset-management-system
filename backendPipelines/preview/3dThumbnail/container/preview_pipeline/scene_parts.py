@@ -27,8 +27,9 @@ from .utils.logging import get_logger
 
 logger = get_logger()
 
-# Field-data array holding one row per part: (xmin, ymin, zmin, xmax, ymax, zmax).
+# Field-data arrays holding one row per part: (xmin, ymin, zmin, xmax, ymax, zmax), and its points.
 PART_BOUNDS = "vamsPreviewPartBounds"
+PART_POINTS = "vamsPreviewPartPoints"
 
 # A part is a near-flat sheet when its smallest extent is at most FLAT_RATIO of its largest and its
 # middle extent at least SHEET_RATIO of its largest: a plane, not a rod or a cable. A circuit board
@@ -44,12 +45,24 @@ SHEET_RATIO = 0.1
 BACKDROP_SCALE = 50.0
 CENTRE_SHARE = 0.25
 
+# A stray part is one the framing leaves out because it would shrink the model to nothing: a small
+# piece left far from the rest (an export leftover, a helper object, a light's proxy). The core of the
+# scene is its largest parts by points, taken in descending order until they hold at least
+# 1 - STRAY_SHARE of the points; a part outside the core is a stray when framing the core with it
+# would make the framed extent at least STRAY_SCALE times the core's own. At ten times the model fills
+# a tenth of the frame; an exploded view or a scene of separate objects does not spread 5% of its
+# points that far. A stray is still drawn. A near-flat sheet is never a stray: whether a sheet is left
+# out is decided by the backdrop rule alone, at BACKDROP_SCALE.
+STRAY_SHARE = 0.05
+STRAY_SCALE = 10.0
+
 # Parts tracked per scene. A backdrop is one part, or a few, at least BACKDROP_SCALE times the rest of
 # the scene, so a scene of more parts (a point instancer's forest, a large assembly) frames as before.
 # Memory charged per tracked part while the bounds are built: the six float64 bounds, the int64 point
-# count and its start offset; at most PART_MEMORY_FRACTION of the task's memory.
+# count kept, and the int64 count and start offset of the build; at most PART_MEMORY_FRACTION of the
+# task's memory.
 MAX_PARTS = 100_000
-BYTES_PER_PART = 64
+BYTES_PER_PART = 72
 PART_MEMORY_FRACTION = 0.01
 
 
@@ -79,7 +92,18 @@ def record_parts(pv_data, point_counts, max_parts: int = None):
     np.minimum.reduceat(points, starts, axis=0, out=bounds[:, :3])
     np.maximum.reduceat(points, starts, axis=0, out=bounds[:, 3:])
     pv_data.field_data[PART_BOUNDS] = bounds
+    pv_data.field_data[PART_POINTS] = counts
     return pv_data
+
+
+def part_points(pv_data):
+    """The point count of each part recorded on ``pv_data`` (as loaded, before any decimation), or
+    None."""
+    bounds = part_bounds(pv_data)
+    if bounds is None or PART_POINTS not in pv_data.field_data:
+        return None
+    counts = np.asarray(pv_data.field_data[PART_POINTS], dtype=np.int64).reshape(-1)
+    return counts if len(counts) == len(bounds) else None
 
 
 def part_bounds(pv_data):
@@ -98,6 +122,9 @@ def carry_parts(source, result):
     bounds = part_bounds(source)
     if bounds is not None and result is not source:
         result.field_data[PART_BOUNDS] = bounds
+        counts = part_points(source)
+        if counts is not None:
+            result.field_data[PART_POINTS] = counts
     return result
 
 
@@ -217,20 +244,66 @@ def backdrop_keep_bounds(bounds, counts, max_parts: int = None):
     return keep
 
 
+def _near_flat(bounds):
+    """True per part for a near-flat sheet (``FLAT_RATIO``, ``SHEET_RATIO``)."""
+    extents = np.sort(bounds[:, 3:] - bounds[:, :3], axis=1)
+    largest = extents[:, 2]
+    return (largest > 0) & (extents[:, 0] <= FLAT_RATIO * largest) & (extents[:, 1] >= SHEET_RATIO * largest)
+
+
+def stray_parts(bounds, counts):
+    """A boolean mask over the parts: True for a stray (``STRAY_SHARE``, ``STRAY_SCALE``), given each
+    part's point count. A scene of one part, of no points, or whose core has no extent has none, and a
+    core part or a near-flat sheet is never one, so the mask never selects every part."""
+    bounds = np.asarray(bounds, dtype=np.float64)
+    counts = np.asarray(counts, dtype=np.float64)
+    mask = np.zeros(len(bounds), dtype=bool)
+    total = counts.sum()
+    if len(bounds) < 2 or total <= 0:
+        return mask
+    order = np.argsort(-counts, kind="stable")
+    held = np.cumsum(counts[order])
+    n_core = int(np.searchsorted(held, (1.0 - STRAY_SHARE) * total)) + 1
+    core = np.zeros(len(bounds), dtype=bool)
+    core[order[:n_core]] = True
+    core_lo, core_hi = bounds[core, :3].min(axis=0), bounds[core, 3:].max(axis=0)
+    core_largest = float((core_hi - core_lo).max())
+    if core_largest <= 0:
+        return mask
+    with_part = np.maximum(core_hi, bounds[:, 3:]) - np.minimum(core_lo, bounds[:, :3])
+    far = with_part.max(axis=1) >= STRAY_SCALE * core_largest
+    return ~core & far & ~_near_flat(bounds)
+
+
 def framing_bounds(pv_data):
-    """The (lo, hi) the camera frames when backdrop parts are left out, or None to frame the whole
-    data (no backdrop, or leaving the backdrops out does not change the bounds). Logs the parts left
-    out. A loader that records parts has already left its backdrops out of the data
-    (``backdrop_keep``), so this applies to data whose parts were recorded without that step."""
+    """The (lo, hi) the camera frames when backdrop and stray parts are left out, or None to frame the
+    whole data (none, or leaving them out does not change the bounds). Logs the parts left out. A
+    loader that records parts has already dropped its backdrops from the data (``backdrop_keep``), so
+    the backdrop test here applies to data whose parts were recorded without that step. A stray part
+    is still drawn."""
     bounds = part_bounds(pv_data)
     if bounds is None:
         return None
-    mask = _changing_backdrops(bounds)
-    if mask is None:
+    backdrops = _changing_backdrops(bounds)
+    left_out = np.zeros(len(bounds), dtype=bool) if backdrops is None else backdrops.copy()
+    strays = np.zeros(len(bounds), dtype=bool)
+    counts = part_points(pv_data)
+    rest = np.flatnonzero(~left_out)
+    if counts is not None and len(rest) >= 2:
+        strays[rest] = stray_parts(bounds[rest], counts[rest])
+    left_out |= strays
+    if not left_out.any():
         return None
-    kept = bounds[~mask]
+    kept = bounds[~left_out]
     lo, hi = kept[:, :3].min(axis=0), kept[:, 3:].max(axis=0)
-    logger.info(f"Camera framing leaves out {int(mask.sum())} of {len(bounds)} parts as a backdrop "
-                f"(near-flat, at least {BACKDROP_SCALE:g}x the rest of the scene and centred on it); "
-                f"{_describe(bounds[mask])}")
+    if np.array_equal(lo, bounds[:, :3].min(axis=0)) and np.array_equal(hi, bounds[:, 3:].max(axis=0)):
+        return None
+    if backdrops is not None:
+        logger.info(f"Camera framing leaves out {int(backdrops.sum())} of {len(bounds)} parts as a "
+                    f"backdrop (near-flat, at least {BACKDROP_SCALE:g}x the rest of the scene and "
+                    f"centred on it); {_describe(bounds[backdrops])}")
+    if strays.any():
+        logger.info(f"Camera framing leaves out {int(strays.sum())} of {len(bounds)} parts as stray "
+                    f"(outside the parts holding {1 - STRAY_SHARE:.0%} of the points, and widening the "
+                    f"frame at least {STRAY_SCALE:g}x); they are still drawn; {_describe(bounds[strays])}")
     return lo, hi
