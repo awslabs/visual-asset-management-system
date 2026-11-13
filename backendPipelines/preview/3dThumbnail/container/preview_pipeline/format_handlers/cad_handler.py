@@ -383,7 +383,8 @@ def tessellate_parts(parts, limit: SceneLimit = None, drop_backdrops: bool = Tru
     mesh = pv.PolyData(vertices, pv_faces)
     if coloured:
         mesh.cell_data["RGB"] = np.vstack(colours)
-    scene_parts.record_parts(mesh, part_points)
+    # A tessellation stopped by the scene limit skipped the backdrop check: the framing still runs it.
+    scene_parts.record_parts(mesh, part_points, backdrops_dropped=not (drop_backdrops and limit.reached))
     logger.info(f"Tessellated CAD model: {len(vertices)} vertices, {len(triangles)} faces"
                 f"{', coloured' if coloured else ''}")
     return mesh

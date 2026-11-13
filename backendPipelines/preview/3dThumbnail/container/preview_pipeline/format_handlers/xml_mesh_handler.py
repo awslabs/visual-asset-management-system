@@ -293,7 +293,7 @@ def load_3mf(file_path: str, max_triangles: int = None) -> pv.PolyData:
     points_out, cells_out, colours_out = _without_backdrops(points_out, cells_out, colours_out)
     points = _z_up_to_y_up(np.vstack(points_out))
     mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if colours_out else None)
-    scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out])
+    scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out], backdrops_dropped=True)
     logger.info(f"Loaded 3MF: {mesh.n_points} vertices, {mesh.n_cells} triangles from {len(items)} build item(s)")
     return mesh
 
@@ -499,7 +499,7 @@ def load_dae(file_path: str, max_triangles: int = None) -> pv.PolyData:
     elif up_axis == "X_UP":
         points = np.column_stack([-points[:, 1], points[:, 0], points[:, 2]])
     mesh = _polydata(points, np.vstack(cells_out), np.vstack(colours_out) if colours_out else None)
-    scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out])
+    scene_parts.record_parts(mesh, [len(xyz) for xyz in points_out], backdrops_dropped=True)
     logger.info(f"Loaded COLLADA ({up_axis}): {mesh.n_points} vertices, {mesh.n_cells} triangles")
     return mesh
 

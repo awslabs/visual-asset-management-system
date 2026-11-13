@@ -72,6 +72,20 @@ class TestBackdropRule:
     def test_the_scale_is_fifty_times_the_content(self):
         assert scene_parts.BACKDROP_SCALE == 50.0
 
+    def test_a_platform_on_a_ground_plane_is_kept_and_only_the_ground_is_a_backdrop(self):
+        """A 1 m robot on its own 60 m platform on a 1 km ground: only the outermost sheet goes."""
+        robot = _box((-0.5, 0.1, -0.5), (0.5, 1.1, 0.5))
+        platform = _box((-30.0, 0.0, -30.0), (30.0, 0.1, 30.0))
+        ground = _box((-500.0, 0.0, -500.0), (500.0, 0.0, 500.0))
+        assert scene_parts.backdrop_parts([robot, platform, ground]).tolist() == [False, False, True]
+
+    def test_a_thin_sheet_with_one_centred_item_under_a_fiftieth_of_it_is_a_backdrop(self):
+        """The documented limit: a 1.6 m solar panel (3 mm) with only a centred 30 mm junction box is
+        treated as a backdrop; the preview shows the box alone."""
+        panel = _box((-0.8, 0.0, -0.5), (0.8, 0.003, 0.5))
+        junction = _box((-0.015, 0.003, -0.015), (0.015, 0.023, 0.015))
+        assert scene_parts.backdrop_parts([junction, panel]).tolist() == [False, True]
+
     def test_a_panel_with_one_centred_40_mm_bracket_is_not_a_backdrop(self):
         """A 1 m x 0.6 m x 2 mm sheet-metal panel is 25 times a 40 mm bracket at its centre: the panel
         is part of the model, so it is drawn and framed."""
@@ -460,6 +474,29 @@ class TestGlbScene:
         framed = renderer._compute_camera_framing(data, use_full_bounds=True)
         full = renderer._compute_camera_framing(plain, use_full_bounds=True)
         assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]
+
+    def test_a_glb_robot_on_its_platform_on_a_ground_keeps_and_frames_the_platform(self, tmp_path):
+        import trimesh
+
+        from preview_pipeline import core, renderer
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(extents=(1, 1, 1)).apply_translation((0, 0.6, 0)), geom_name="robot")
+        scene.add_geometry(trimesh.creation.box(extents=(60, 0.1, 60)).apply_translation((0, 0.05, 0)),
+                           geom_name="platform")
+        scene.add_geometry(trimesh.Trimesh(vertices=[[-500, 0, -500], [500, 0, -500], [500, 0, 500], [-500, 0, 500]],
+                                           faces=[[0, 2, 1], [0, 3, 2]]), geom_name="ground")
+        path = tmp_path / "platform.glb"
+        scene.export(str(path))
+        data = core._normalize_up_axis(core._load_file(str(path), ".glb"), ".glb")
+        assert data.n_points == 16  # robot and platform drawn, ground dropped
+        plain = data.copy()
+        plain.field_data.clear()
+        framed = renderer._compute_camera_framing(data, use_full_bounds=True)
+        full = renderer._compute_camera_framing(plain, use_full_bounds=True)
+        assert np.array_equal(framed[0], full[0]) and framed[1:] == full[1:]
+        frame = renderer.generate_static_frame(data, resolution=(160, 120))
+        assert (frame[..., 3] == 0).mean() > 0.3, "the platform fills the frame"
 
     def test_a_textured_model_on_a_ground_plane_keeps_its_texture(self, tmp_path):
         """With the ground dropped before the merge, the one part left keeps its UV texture rather

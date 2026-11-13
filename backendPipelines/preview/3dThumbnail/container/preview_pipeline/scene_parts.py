@@ -30,6 +30,9 @@ logger = get_logger()
 # Field-data arrays holding one row per part: (xmin, ymin, zmin, xmax, ymax, zmax), and its points.
 PART_BOUNDS = "vamsPreviewPartBounds"
 PART_POINTS = "vamsPreviewPartPoints"
+# Set when the loader already dropped the scene's backdrops (``backdrop_keep``): the framing then does
+# not judge the parts kept as backdrops again (a model's own platform, kept under a ground plane).
+BACKDROPS_DROPPED = "vamsPreviewBackdropsDropped"
 
 # A part is a near-flat sheet when its smallest extent is at most FLAT_RATIO of its largest and its
 # middle extent at least SHEET_RATIO of its largest: a plane, not a rod or a cable. A circuit board
@@ -44,6 +47,9 @@ SHEET_RATIO = 0.1
 # which none is centred on it, leaves every sheet in the framing.
 BACKDROP_SCALE = 50.0
 CENTRE_SHARE = 0.25
+# A backdrop sheet lying on a larger backdrop sheet (a model's own platform on a ground plane) is at
+# most this share of the larger one's size; it is kept as part of the model.
+NESTED_SHARE = 0.5
 
 # A stray part is one the framing leaves out because it would shrink the model to nothing: a small
 # piece left far from the rest (an export leftover, a helper object, a light's proxy). The core of the
@@ -71,9 +77,10 @@ def part_limit(memory_bytes: int) -> int:
     return max(2, min(MAX_PARTS, int(memory_bytes * PART_MEMORY_FRACTION / BYTES_PER_PART)))
 
 
-def record_parts(pv_data, point_counts, max_parts: int = None):
+def record_parts(pv_data, point_counts, max_parts: int = None, backdrops_dropped: bool = False):
     """Record on ``pv_data`` the bounds of the parts it was merged from, given each part's point count
-    in merge order. Nothing is recorded for fewer than two parts, for more than ``max_parts`` (default:
+    in merge order; ``backdrops_dropped`` says the loader already ran ``backdrop_keep`` on them.
+    Nothing is recorded for fewer than two parts, for more than ``max_parts`` (default:
     ``part_limit`` of the running container's memory), or when the counts do not add up to the data's
     points. Costs one min and one max over the points, as framing on the full bounds does."""
     counts = np.asarray(point_counts, dtype=np.int64).reshape(-1)
@@ -93,6 +100,8 @@ def record_parts(pv_data, point_counts, max_parts: int = None):
     np.maximum.reduceat(points, starts, axis=0, out=bounds[:, 3:])
     pv_data.field_data[PART_BOUNDS] = bounds
     pv_data.field_data[PART_POINTS] = counts
+    if backdrops_dropped:
+        pv_data.field_data[BACKDROPS_DROPPED] = np.array([1], dtype=np.int8)
     return pv_data
 
 
@@ -125,6 +134,8 @@ def carry_parts(source, result):
         counts = part_points(source)
         if counts is not None:
             result.field_data[PART_POINTS] = counts
+        if BACKDROPS_DROPPED in source.field_data:
+            result.field_data[BACKDROPS_DROPPED] = source.field_data[BACKDROPS_DROPPED]
     return result
 
 
@@ -169,7 +180,26 @@ def backdrop_parts(bounds):
     large_axes = order[:, 1:]
     centred = np.all(np.take_along_axis(offset, large_axes, axis=1)
                      <= CENTRE_SHARE * np.take_along_axis(raw, large_axes, axis=1), axis=1)
-    return flat & centred & (largest >= BACKDROP_SCALE * content_largest)
+    selected = flat & centred & (largest >= BACKDROP_SCALE * content_largest)
+    # Only the outermost sheet is a backdrop: a selected sheet lying on a larger selected sheet (the
+    # platform a model stands on, on a ground plane) belongs to the model and is kept.
+    for inner in np.flatnonzero(selected):
+        for outer in np.flatnonzero(selected):
+            if outer != inner and _lies_on(bounds, order, largest, inner, outer):
+                mask[inner] = True
+                break
+    return selected & ~mask
+
+
+def _lies_on(bounds, order, largest, inner, outer) -> bool:
+    """True when sheet ``inner`` lies on sheet ``outer``: the same thin axis, at most half its size
+    (NESTED_SHARE), and its footprint inside the outer sheet's on the two large axes. Six equal skybox
+    walls do not lie on one another."""
+    if order[inner, 0] != order[outer, 0] or largest[inner] > NESTED_SHARE * largest[outer]:
+        return False
+    axes = order[outer, 1:]
+    return bool(np.all(bounds[inner, axes] >= bounds[outer, axes])
+                and np.all(bounds[inner, axes + 3] <= bounds[outer, axes + 3]))
 
 
 def _changing_backdrops(bounds):
@@ -284,7 +314,7 @@ def framing_bounds(pv_data):
     bounds = part_bounds(pv_data)
     if bounds is None:
         return None
-    backdrops = _changing_backdrops(bounds)
+    backdrops = None if BACKDROPS_DROPPED in pv_data.field_data else _changing_backdrops(bounds)
     left_out = np.zeros(len(bounds), dtype=bool) if backdrops is None else backdrops.copy()
     strays = np.zeros(len(bounds), dtype=bool)
     counts = part_points(pv_data)
