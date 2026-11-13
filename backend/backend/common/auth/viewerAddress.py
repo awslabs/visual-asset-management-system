@@ -12,7 +12,8 @@ On a CloudFront deployment the authorizer, which has checked it, adds the SHA-25
 value it accepted to the authorizer context (``ORIGIN_VERIFY_DIGEST_CONTEXT_KEY``).
 ``viewer_ip_for_audit`` reads the forwarding headers only when the request's own origin verification
 header has that digest. API Gateway sets the authorizer context from the authorizer's answer; a client
-cannot set it. A request without the header, or with any other value, resolves to no viewer address,
+cannot set it, and the authorizer removes a verified token claim of the same name before it adds its
+own entry, so only the authorizer's check sets the key. A request without the header, or with any other value, resolves to no viewer address,
 so the caller keeps the connection address. The digest names the request only in audit records; it
 is never an input to an authorization decision.
 

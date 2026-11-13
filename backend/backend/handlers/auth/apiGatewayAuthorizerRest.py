@@ -20,6 +20,7 @@ from common.auth.authorizerCore import (
     IGNORED_PATHS,
 )
 from common.auth.clientIp import origin_verify_audit_context, resolve_client_ip
+from common.auth.viewerAddress import ORIGIN_VERIFY_DIGEST_CONTEXT_KEY
 from customLogging.auditLogging import log_authorization_gateway
 from customLogging.logger import safeLogger
 
@@ -156,7 +157,10 @@ def lambda_handler(event, context):
             ctx = dict(res.get("context") or {})
             principal = ctx.get("sub") or ctx.get("cognito:username") or "user"
             # Lets the handler's audit records name the CloudFront viewer (audit only; see
-            # common/auth/viewerAddress.py). Added after the decision, never read by one.
+            # common/auth/viewerAddress.py). Added after the decision, never read by one. The
+            # context is built from the verified token's claims, so a claim of the same name is
+            # removed first: only this authorizer sets the key, and only for an accepted value.
+            ctx.pop(ORIGIN_VERIFY_DIGEST_CONTEXT_KEY, None)
             ctx.update(origin_verify_audit_context(event, fronted=API_FRONTED))
             return _policy(principal, "Allow", resource, ctx)
     except Exception as e:
