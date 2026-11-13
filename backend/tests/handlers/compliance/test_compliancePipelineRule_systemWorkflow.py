@@ -10,6 +10,10 @@ preview companions. The workflow writes no `compliance-output.json`, so a succee
 the derived `execution_success` and `processing_duration_seconds`, as for any workflow without that
 file. Its `perInputFileVersion` restriction is the one the upload's own run holds, so a rule launch
 over a file version that run is analyzing waits for it.
+
+Since such rules are refused (test_compliancePipelineRule_systemRecordRefused.py: a save answers 400
+and a stored rule is never launched), these facts describe only what the rule model and the shared
+helpers would do with one; they are kept as the record of why the refusal was chosen.
 """
 
 import json
