@@ -185,7 +185,10 @@ backend/
 │   │   │                                           #   Error: " prefix, D169); each handler catches it
 │   │   │                                           #   ahead of VAMSGeneralErrorResponse and answers with
 │   │   │                                           #   quarantine_refusal(): one INFO line (database,
-│   │   │                                           #   asset, route), no traceback (D174)
+│   │   │                                           #   asset, route), no traceback (D174); the single-
+│   │   │                                           #   object routes pass the resolved key and
+│   │   │                                           #   is_preview_object() serves preview images (asset
+│   │   │                                           #   preview, current {file}.previewFile.{ext}) (#1495)
 │   │   ├── workflows/executionAccess.py            # THE execution read rule (workflow GET, captured
 │   │   │                                           #   metadata-source databases, every asset read and
 │   │   │                                           #   the output asset, deleted asset → its database)

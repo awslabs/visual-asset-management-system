@@ -113,6 +113,14 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
+def _quarantine_object_key(object_key, version_id, asset_version_id, asset_version_id_alias):
+    """The key the quarantine block judges for a stream request: the resolved key for the object's
+    current version, None (the whole asset is guarded) when the request pins a version."""
+    if version_id or asset_version_id or asset_version_id_alias:
+        return None
+    return object_key
+
+
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     """
     Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
@@ -233,10 +241,6 @@ def handle_head_request(event, claims_and_roles):
     if not operation_allowed_on_asset:
         return authorization_error()
 
-    # The quarantine block is evaluated only for an authorized caller, so a denied caller
-    # cannot learn the asset's compliance state from the response.
-    check_quarantine_block(databaseId, assetId)
-
     # Get asset location
     asset_location = asset_object.get('assetLocation')
     if not asset_location:
@@ -258,6 +262,12 @@ def handle_head_request(event, claims_and_roles):
         message = "File key exceeds the maximum S3 object key length"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
+
+    # The quarantine block is evaluated only for an authorized caller, so a denied caller
+    # cannot learn the asset's compliance state from the response. It applies to the resolved key:
+    # a preview companion at its current version is served for a quarantined asset (#1495).
+    check_quarantine_block(databaseId, assetId, object_key=_quarantine_object_key(
+        object_key, version_id, asset_version_id, asset_version_id_alias))
 
     # Resolve assetVersionId/alias to S3 versionId
     if asset_version_id_alias or asset_version_id:
@@ -484,10 +494,6 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
-            # The quarantine block is evaluated only for an authorized caller, so a denied
-            # caller cannot learn the asset's compliance state from the response.
-            check_quarantine_block(databaseId, assetId)
-
             # Get asset location
             asset_location = asset_object.get('assetLocation')
             if not asset_location:
@@ -523,6 +529,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 error_response = validation_error(body={'message': message}, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
+
+            # The quarantine block is evaluated only for an authorized caller, so a denied
+            # caller cannot learn the asset's compliance state from the response. It applies to
+            # the resolved key: a preview companion at its current version is served for a
+            # quarantined asset (#1495).
+            check_quarantine_block(databaseId, assetId, object_key=_quarantine_object_key(
+                object_key, version_id, asset_version_id, asset_version_id_alias))
 
             # Resolve assetVersionId/alias to S3 versionId
             if asset_version_id_alias or asset_version_id:
