@@ -115,6 +115,7 @@ export const EDH_DEFAULTS: ConfigShape = {
         edhApiCaBundleSecretArn: "",
         edhApiTlsServerName: "",
         edhClusterId: "",
+        lambdaSubnets: "isolated",
         edhRootKeyAutoSync: true,
         autoProvisionUsers: true,
         edhAllowedInstanceTypes: [],
@@ -211,6 +212,22 @@ export const EDH_FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         help: "Required when EDH Workstations is enabled. 1-113 tag-key characters (letters, digits, spaces, _.:/=+@-).",
+        visibleWhen: edhEnabled,
+    },
+    {
+        path: "app.addons.useEdhWorkstations.lambdaSubnets",
+        label: "EDH — Lambda subnets",
+        input: "select",
+        section: "addons",
+        advanced: true,
+        options: [
+            { value: "isolated", label: "Isolated (no route out of the VPC)" },
+            {
+                value: "private",
+                label: "Private (NAT egress, for an internet-facing EDH load balancer)",
+            },
+        ],
+        help: "Subnets the add-on's functions that call EDH run in. Isolated reaches an internal EDH load balancer in the same or a connected VPC. Private reaches an internet-facing one through the VPC's NAT gateways: a VPC that VAMS creates gains public and private subnets and one NAT gateway per Availability Zone, and an imported VPC needs app.useGlobalVpc.optionalExternalPrivateSubnetIds. Admit the NAT addresses on the EDH load balancer.",
         visibleWhen: edhEnabled,
     },
     {
@@ -660,6 +677,35 @@ export const EDH_RULES: Rule[] = [
         },
         message:
             "useEdhWorkstations.edhClusterId must be the EDH cluster's CloudFormation stack name (a letter, then letters, digits and hyphens, such as edh-prod) while edhRootKeyAutoSync is on: the root key sync finds the EDH controller by that stack name. Set edhRootKeyAutoSync to false to keep another id.",
+    },
+    // ----- (edhWorkstationsConfig.ts: "The subnet tier of the Lambdas that call EDH") -----
+    {
+        id: "edh-lambdasubnets-value",
+        severity: "error",
+        fieldPaths: ["app.addons.useEdhWorkstations.lambdaSubnets"],
+        appliesWhen: (c) => {
+            if (!edhEnabled(c)) return false;
+            const value = g(c, "app.addons.useEdhWorkstations.lambdaSubnets");
+            // Unset is "isolated", as getConfig() fills it in.
+            return !isAbsent(value) && !["isolated", "private"].includes(String(value));
+        },
+        message: 'useEdhWorkstations.lambdaSubnets must be "isolated" or "private".',
+    },
+    {
+        id: "edh-lambdasubnets-private-imported-vpc",
+        severity: "error",
+        fieldPaths: [
+            "app.addons.useEdhWorkstations.lambdaSubnets",
+            "app.useGlobalVpc.optionalExternalVpcId",
+            "app.useGlobalVpc.optionalExternalPrivateSubnetIds",
+        ],
+        appliesWhen: (c) =>
+            edhEnabled(c) &&
+            g(c, "app.addons.useEdhWorkstations.lambdaSubnets") === "private" &&
+            !isBlank(g(c, "app.useGlobalVpc.optionalExternalVpcId")) &&
+            isBlank(g(c, "app.useGlobalVpc.optionalExternalPrivateSubnetIds")),
+        message:
+            'useEdhWorkstations.lambdaSubnets "private" places the add-on\'s Lambdas in the private subnets of the imported VPC, and app.useGlobalVpc.optionalExternalPrivateSubnetIds names none. List private subnets that route through a NAT gateway, or set lambdaSubnets to "isolated".',
     },
     {
         id: "edh-instancetypes-pattern",

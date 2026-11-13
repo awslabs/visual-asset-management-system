@@ -267,6 +267,20 @@ Request the full response and read `connectionUrl`; treat the value like a passw
 vamscli edh workstation connect SESSION_ID --json-output | jq -r '.connectionUrl'
 ```
 
+### The Connection URL Does Not Load
+
+**Symptoms:**
+
+-   The `connectionUrl` that `edh workstation connect` returned opens a browser tab that stays blank or ends in the browser's own error that the site cannot be reached or took too long to respond
+
+**Cause:**
+
+The browser has no network path to the EDH cluster's Amazon DCV entry point. The command itself succeeded: VAMS returns the URL and never carries the desktop traffic. An internet-facing entry point admits only the address ranges on the cluster's client prefix list, and an internal one, on a cluster installed with `--deployment-mode private`, only networks connected to the cluster VPC.
+
+**Resolution:**
+
+For an internal entry point, connect from the corporate network or over the VPN, then open the URL again. For an internet-facing one, an EDH administrator adds the network's address range to the client prefix list, as [Browser access to Amazon DCV](enable.md#browser-access-to-amazon-dcv) shows. A browser warning that the connection is not private is a different case: the entry point presents a self-signed certificate, which the same section describes.
+
 ### Connect Refused Because the Display Session Ended
 
 **Symptoms:**

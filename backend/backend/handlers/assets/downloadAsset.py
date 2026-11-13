@@ -23,7 +23,7 @@ from common.downloadEligibility import (  # noqa: F401 (is_file_archived, normal
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download, log_file_download_bulk
+from customLogging.auditLogging import log_file_download, log_file_download_bulk, audited_handler
 from common.s3 import (
     bucket_region_fields,
     region_routing_s3_client,
@@ -365,6 +365,8 @@ def download_asset_preview(databaseId, assetId, request_model):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset download API"""
     claims_and_roles = request_to_claims(event)

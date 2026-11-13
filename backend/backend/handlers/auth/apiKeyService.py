@@ -36,7 +36,7 @@ from models.apiKeys import (
     USER_API_KEY_MAX_EXPIRATION_DAYS, parse_iso8601_datetime,
 )
 from common.dynamodb import to_update_expr
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_auth_changes, audited_handler
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -712,6 +712,7 @@ def delete_api_key(event, api_key_id, user_scope=False):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
