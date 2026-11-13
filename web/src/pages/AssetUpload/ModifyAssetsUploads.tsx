@@ -5,27 +5,42 @@ import {
     Container,
     FormField,
     Grid,
+    Input,
     SpaceBetween,
     TextContent,
-    Toggle,
 } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
+import { useSearchParams } from "react-router-dom";
+import { FileUploadTableItem } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
+import UploadPreview, {
+    ExistingCheckState,
+    blockingReason,
+} from "../../components/form/UploadPreview";
+import {
+    ExistingState,
+    FolderNameMode,
+    UploadRoot,
+    isSingleFolderSelection,
+    markExisting,
+    normalizeDestination,
+    planUploadPaths,
+    removeFromRoots,
+} from "../../components/form/uploadPaths";
+import { fetchExistingPaths, plannedToUploadItems } from "./uploadSelection";
 import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
-import { safeGetFile } from "../../utils/fileHandleCompat";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
 import {
     validateFiles,
@@ -78,61 +93,6 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
-const getFilesFromFileHandles = async (
-    fileHandles: any[],
-    prefix = ""
-): Promise<FileUploadTableItem[]> => {
-    const fileUploadTableItems: FileUploadTableItem[] = [];
-    for (let i = 0; i < fileHandles.length; i++) {
-        try {
-            // Use our safe utility to get the file regardless of handle type
-            const file = await safeGetFile(fileHandles[i].handle);
-
-            // Prepend the folder path to the relative path if a prefix exists
-            const relativePath = prefix
-                ? prefix.endsWith("/")
-                    ? prefix + fileHandles[i].path
-                    : prefix + "/" + fileHandles[i].path
-                : fileHandles[i].path;
-
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || file.name,
-                size: file.size,
-                relativePath: relativePath,
-                progress: 0,
-                status: "Queued",
-                loaded: 0,
-                total: file.size,
-            });
-        } catch (error) {
-            // Console logging only: a % specifier in the interpolated value can at most garble this
-            // one log line; nothing is executed, stored or returned from it.
-            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-            console.error(`Error processing file at index ${i}:`, error);
-            // Add a placeholder entry with error status
-            fileUploadTableItems.push({
-                handle: fileHandles[i].handle,
-                index: i,
-                name: fileHandles[i].handle.name || `File ${i}`,
-                size: 0,
-                relativePath: prefix
-                    ? prefix.endsWith("/")
-                        ? prefix + (fileHandles[i].path || "")
-                        : prefix + "/" + (fileHandles[i].path || "")
-                    : fileHandles[i].path || "",
-                progress: 0,
-                status: "Failed",
-                loaded: 0,
-                total: 0,
-                error: "Browser compatibility issue: Cannot access file",
-            });
-        }
-    }
-    return fileUploadTableItems;
-};
-
 export default function ModifyAssetsUploadsPage() {
     const { state } = useLocation();
     const navigate = useNavigate();
@@ -152,19 +112,79 @@ export default function ModifyAssetsUploadsPage() {
     );
     usePageTitle(databaseId, assetDetail?.assetName || assetId, "Upload Files");
     const [showUploadWorkflow, setShowUploadWorkflow] = useState(false);
-    // Initialize with empty array since we're uploading new files, not showing existing ones
-    const [fileItems, setFileItems] = useState<FileUploadTableItem[]>([]);
     const [previewFile, setPreviewFile] = useState<File | null>(null);
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
-    const [folderPath, setFolderPath] = useState<string>("");
-    const [keyPrefix, setKeyPrefix] = useState<string>("");
+
+    // Destination folder: the ?folder= query parameter (survives a refresh or a deep link), else
+    // the folder the page was opened from in the file manager, else the asset root.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [destinationInput, setDestinationInput] = useState<string>(
+        () => searchParams.get("folder") ?? state?.fileTree?.relativePath ?? "/"
+    );
+    const { value: destination, error: destinationError } = normalizeDestination(destinationInput);
+
+    // The selection (what the user added); the final paths are derived from it (uploadPaths.ts).
+    const [roots, setRoots] = useState<UploadRoot[]>([]);
+    const [folderNameMode, setFolderNameMode] = useState<FolderNameMode>("auto");
+    const [existingPaths, setExistingPaths] = useState<Map<string, ExistingState> | null>(null);
+    const [existingCheck, setExistingCheck] = useState<ExistingCheckState>("none");
+
+    const planned = useMemo(
+        () =>
+            markExisting(
+                planUploadPaths(roots, { flow: "addFiles", destination, folderNameMode }),
+                existingPaths
+            ),
+        [roots, destination, folderNameMode, existingPaths]
+    );
+    const fileItems: FileUploadTableItem[] = useMemo(
+        () => plannedToUploadItems(planned),
+        [planned]
+    );
+    const pathErrorReason = blockingReason(planned);
 
     const [restrictFileUploadsToExtensions, setRestrictFileUploadsToExtensions] =
         useState<string>("");
     const [fileValidationResult, setFileValidationResult] = useState<ValidationResult | null>(null);
-    const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
-        assetDetail.isMultiFile ? "folder" : "files"
-    );
+
+    const applySelection = (nextRoots: UploadRoot[], nextMode: FolderNameMode) => {
+        // The override only applies to a single folder; reset it once the selection changes shape.
+        setRoots(nextRoots);
+        setFolderNameMode(isSingleFolderSelection(nextRoots) ? nextMode : "auto");
+    };
+
+    // Keep ?folder= in the URL in step with a valid destination.
+    useEffect(() => {
+        if (destinationError) return;
+        if (searchParams.get("folder") === destination) return;
+        const next = new URLSearchParams(searchParams);
+        next.set("folder", destination);
+        setSearchParams(next, { replace: true, state });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [destination, destinationError]);
+
+    // Advisory existing-path check under the destination (debounced). The API authorizes the
+    // listing; a refusal or failure only means no marks, and the API still enforces the upload.
+    const hasSelection = roots.length > 0;
+    useEffect(() => {
+        if (!hasSelection || destinationError || !databaseId || !assetId) {
+            setExistingPaths(null);
+            setExistingCheck("none");
+            return;
+        }
+        let cancelled = false;
+        setExistingCheck("checking");
+        const timer = setTimeout(async () => {
+            const result = await fetchExistingPaths({ databaseId, assetId, destination });
+            if (cancelled) return;
+            setExistingPaths(result.paths);
+            setExistingCheck(result.complete ? "done" : "incomplete");
+        }, 400);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [hasSelection, destination, destinationError, databaseId, assetId]);
 
     // Update assetDetail when fileItems change
     useEffect(() => {
@@ -190,26 +210,6 @@ export default function ModifyAssetsUploadsPage() {
                     state.assetDetailState
                 );
                 setAssetDetail(state.assetDetailState);
-            }
-
-            // Extract folder information if available
-            if (state.fileTree) {
-                const relativePath = state.fileTree.relativePath || "";
-                setFolderPath(relativePath);
-
-                // Use relativePath as the upload prefix since keyPrefix only contains
-                // the last path segment, not the full path from the asset root
-                let prefix = relativePath;
-                if (prefix === "/" || prefix === "") {
-                    prefix = "/";
-                }
-                setKeyPrefix(prefix);
-
-                console.log("ModifyAssetsUploads - Path Info:", {
-                    relativePath,
-                    prefix,
-                    originalKeyPrefix: state.fileTree.keyPrefix,
-                });
             }
         }
 
@@ -304,66 +304,10 @@ export default function ModifyAssetsUploadsPage() {
 
     // Clear preview file when not uploading to root path
     useEffect(() => {
-        const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
-        if (!isRootPath && previewFile) {
+        if (destination !== "/" && previewFile) {
             setPreviewFile(null);
         }
-    }, [keyPrefix, previewFile]);
-
-    // Handle file selection
-    const handleFileSelection = useCallback(
-        async (directoryHandle: any, fileHandles: any[]) => {
-            try {
-                console.log("handleFileSelection called with:", {
-                    directoryHandle,
-                    fileHandlesCount: fileHandles.length,
-                    keyPrefix,
-                });
-
-                // Convert the file selection directly to FileUploadTableItems
-                const newItems = await getFilesFromFileHandles(fileHandles, keyPrefix);
-
-                console.log("File selection - new items:", newItems.length, newItems);
-
-                // Combine with existing files if any exist
-                setFileItems((prevItems) => {
-                    console.log("Previous items count:", prevItems.length);
-
-                    if (prevItems.length === 0) {
-                        console.log("No previous items, returning new items");
-                        return newItems;
-                    }
-
-                    // Create a map of existing file paths to avoid duplicates
-                    const existingFilePaths = new Map(
-                        prevItems.map((item) => [item.relativePath, item])
-                    );
-
-                    // Filter out any new files that would be duplicates
-                    const uniqueNewFiles = newItems.filter(
-                        (file) => !existingFilePaths.has(file.relativePath)
-                    );
-
-                    console.log("Unique new files:", uniqueNewFiles.length);
-
-                    // Combine existing files with unique new files
-                    const combinedFiles = [
-                        ...prevItems,
-                        ...uniqueNewFiles.map((file, idx) => ({
-                            ...file,
-                            index: prevItems.length + idx,
-                        })),
-                    ];
-
-                    console.log("Combined files:", combinedFiles.length);
-                    return combinedFiles;
-                });
-            } catch (error) {
-                console.error("Error in handleFileSelection:", error);
-            }
-        },
-        [keyPrefix]
-    );
+    }, [destination, previewFile]);
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
@@ -395,26 +339,6 @@ export default function ModifyAssetsUploadsPage() {
         setPreviewFile(file);
     };
 
-    // Function to remove a file
-    const handleRemoveFile = (index: number) => {
-        if (fileItems) {
-            const updatedFiles = fileItems.filter((item) => item.index !== index);
-
-            // Update indices to be sequential
-            const reindexedFiles = updatedFiles.map((item, idx) => ({
-                ...item,
-                index: idx,
-            }));
-
-            setFileItems(reindexedFiles);
-        }
-    };
-
-    // Function to remove all files
-    const handleRemoveAllFiles = () => {
-        setFileItems([]);
-    };
-
     // Handle upload completion
     const handleUploadComplete = (response: CompleteUploadResponse) => {
         console.log("Upload completed:", response);
@@ -434,22 +358,15 @@ export default function ModifyAssetsUploadsPage() {
 
     // Start upload process
     const startUpload = () => {
-        // Don't proceed if there's a preview file error
-        if (previewFileError) {
+        // Don't proceed if there's a preview file, destination or path error
+        if (previewFileError || destinationError || pathErrorReason) {
             return;
         }
         setShowUploadWorkflow(true);
     };
 
-    // Check if we're uploading to root path (including explicit "/" path)
-    const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
-
-    // Debug log to help troubleshoot path issues
-    console.log("ModifyAssetsUploads - Path Check:", {
-        folderPath,
-        keyPrefix,
-        isRootPath,
-    });
+    // Check if we're uploading to root path
+    const isRootPath = destination === "/";
 
     return (
         <Box padding={{ top: "xs", horizontal: "l" }}>
@@ -503,11 +420,9 @@ export default function ModifyAssetsUploadsPage() {
                                     <Box variant="awsui-key-label">
                                         {Synonyms.Database}: {assetDetail.databaseId}
                                     </Box>
-                                    {folderPath && (
-                                        <Box variant="awsui-key-label">
-                                            Upload Location: {folderPath}
-                                        </Box>
-                                    )}
+                                    <Box variant="awsui-key-label">
+                                        Destination: {destinationError ? "-" : destination}
+                                    </Box>
                                 </SpaceBetween>
                             </Container>
 
@@ -582,7 +497,7 @@ export default function ModifyAssetsUploadsPage() {
                                     onComplete={handleUploadComplete}
                                     onCancel={handleCancel}
                                     isExistingAsset={true}
-                                    keyPrefix={keyPrefix}
+                                    keyPrefix={destination}
                                 />
                             ) : (
                                 <Container header={<Header variant="h2">Select Files</Header>}>
@@ -637,48 +552,36 @@ export default function ModifyAssetsUploadsPage() {
                                                         : [{ colspan: 12 }]
                                                 }
                                             >
-                                                {/* Asset Files Selection */}
+                                                {/* Destination and asset files selection */}
                                                 <SpaceBetween direction="vertical" size="m">
                                                     <FormField
+                                                        label="Destination folder"
+                                                        description="Folder in the asset the files are added to. Every previewed path includes it."
+                                                        errorText={destinationError}
+                                                    >
+                                                        <Input
+                                                            value={destinationInput}
+                                                            onChange={({ detail }) =>
+                                                                setDestinationInput(detail.value)
+                                                            }
+                                                            ariaLabel="Destination folder"
+                                                            placeholder="/"
+                                                        />
+                                                    </FormField>
+                                                    <DragDropFileUpload
                                                         label={`${Synonyms.Asset} Files`}
                                                         description={
-                                                            fileItems.length > 0
-                                                                ? `Total Files to Upload: ${fileItems.length}`
-                                                                : "Select a folder or multiple files"
+                                                            planned.length > 0
+                                                                ? `Total Files to Upload: ${planned.length}`
+                                                                : "Add files, a folder, or drop several at once. A folder keeps its name under the destination."
                                                         }
-                                                    >
-                                                        <SpaceBetween
-                                                            direction="vertical"
-                                                            size="xs"
-                                                        >
-                                                            <Toggle
-                                                                onChange={({ detail }) => {
-                                                                    setAssetDetail((prev) => ({
-                                                                        ...prev,
-                                                                        isMultiFile: detail.checked,
-                                                                    }));
-                                                                    setSelectionMode(
-                                                                        detail.checked
-                                                                            ? "folder"
-                                                                            : "files"
-                                                                    );
-                                                                }}
-                                                                checked={assetDetail.isMultiFile}
-                                                            >
-                                                                {assetDetail.isMultiFile
-                                                                    ? "Folder Upload"
-                                                                    : "File Upload"}
-                                                            </Toggle>
-
-                                                            <DragDropFileUpload
-                                                                label=""
-                                                                description=""
-                                                                multiFile={true}
-                                                                selectionMode={selectionMode}
-                                                                onSelect={handleFileSelection}
-                                                            />
-                                                        </SpaceBetween>
-                                                    </FormField>
+                                                        onAdd={(added) =>
+                                                            applySelection(
+                                                                [...roots, ...added],
+                                                                folderNameMode
+                                                            )
+                                                        }
+                                                    />
                                                 </SpaceBetween>
 
                                                 {/* Preview File Selection - Only show when uploading to root path (including "/") */}
@@ -697,17 +600,26 @@ export default function ModifyAssetsUploadsPage() {
                                             </Grid>
                                         </Container>
 
-                                        {/* Display selected files with remove option */}
-                                        {fileItems && fileItems.length > 0 && (
+                                        {/* Every file's final asset path, before the upload starts */}
+                                        {planned.length > 0 && (
                                             <Box padding={{ bottom: "l" }}>
-                                                <FileUploadTable
-                                                    allItems={fileItems}
-                                                    resume={false}
-                                                    showCount={true}
-                                                    allowRemoval={true}
-                                                    onRemoveItem={handleRemoveFile}
-                                                    onRemoveAll={handleRemoveAllFiles}
-                                                    displayMode="selection"
+                                                <UploadPreview
+                                                    flow="addFiles"
+                                                    destination={destination}
+                                                    roots={roots}
+                                                    planned={planned}
+                                                    folderNameMode={folderNameMode}
+                                                    onFolderNameModeChange={(mode) =>
+                                                        applySelection(roots, mode)
+                                                    }
+                                                    onRemove={(ids) =>
+                                                        applySelection(
+                                                            removeFromRoots(roots, ids),
+                                                            folderNameMode
+                                                        )
+                                                    }
+                                                    onRemoveAll={() => applySelection([], "auto")}
+                                                    existingCheck={existingCheck}
                                                 />
                                             </Box>
                                         )}
@@ -726,6 +638,14 @@ export default function ModifyAssetsUploadsPage() {
                                                                 : `Please select at least one ${Synonyms.asset} file to upload.`}
                                                         </Box>
                                                     )}
+                                                {(pathErrorReason || destinationError) && (
+                                                    <Box
+                                                        color="text-status-error"
+                                                        fontSize="body-s"
+                                                    >
+                                                        {destinationError || pathErrorReason}
+                                                    </Box>
+                                                )}
                                                 <Button
                                                     variant="primary"
                                                     onClick={startUpload}
@@ -733,6 +653,8 @@ export default function ModifyAssetsUploadsPage() {
                                                         (fileItems.length === 0 &&
                                                             (isRootPath ? !previewFile : true)) ||
                                                         !!previewFileError ||
+                                                        !!destinationError ||
+                                                        !!pathErrorReason ||
                                                         !!(
                                                             fileValidationResult &&
                                                             !fileValidationResult.isValid
