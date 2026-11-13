@@ -94,6 +94,7 @@ if "common.auth" not in sys.modules:
     _load("common.auth", os.path.join(_auth_dir, "__init__.py"))
 _load("common.resourceNames", os.path.join(_common_dir, "resourceNames.py"))
 _load("common.auth.originVerify", os.path.join(_auth_dir, "originVerify.py"))
+_load("common.auth.viewerAddress", os.path.join(_auth_dir, "viewerAddress.py"))
 _load("common.auth.clientIp", os.path.join(_auth_dir, "clientIp.py"))
 _load("common.auth.apiEvent", os.path.join(_auth_dir, "apiEvent.py"))
 _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py"))
