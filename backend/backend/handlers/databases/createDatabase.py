@@ -94,6 +94,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
 # Lambda Handler
 #######################
 
+
 @audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database creation API"""

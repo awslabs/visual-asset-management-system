@@ -11,6 +11,7 @@ import hashlib
 import urllib.parse
 from common.timestamps import utc_now
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
 from handlers.assets.assetCount import update_asset_count
@@ -128,6 +129,14 @@ class SimpleCache:
 s3_buckets_cache = SimpleCache()  # Cache for S3 asset buckets table
 database_cache = SimpleCache()    # Cache for database lookups
 asset_cache = SimpleCache()       # Cache for asset lookups
+
+
+def _log_sync(action: str, operation: str, **kwargs) -> None:
+    """Record a bucket sync action of the invocation being served (the actor is the system)."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, action, details={"source": "bucketSync", "operation": operation}, **kwargs)
+
 
 def validate_asset_id(asset_id: str) -> bool:
     """
@@ -1783,6 +1792,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not restored_database_id:
                     logger.error(f"Failed to restore archived asset {asset_id}")
                     return False, True, f"Failed to restore archived asset {asset_id}"
+                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=asset_id)
                 logger.info(
                     f"Restored archived asset {asset_id} to database {restored_database_id} "
                     f"after direct S3 upload of {object_key}"
@@ -1815,6 +1825,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                _log_sync("assetSync", "create", database_id=database_id_to_use, asset_id=asset_id)
         
         # 3. Check if the object is an "init" import marker - If so delete and skip indexing
         if is_init_marker(object_key):
@@ -1864,7 +1875,10 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         if object_key.endswith('/'):
             logger.info(f"Folder marker detected: {object_key}, processing but skipping indexing")
             return True, False, f"Processed folder marker {object_key}"
-        
+
+        _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
+                  file_path=extract_relative_file_path(object_key, prefix, asset_id),
+                  bytes=(record.get('s3', {}).get('object') or {}).get('size'))
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
@@ -2070,6 +2084,8 @@ def parse_event(event):
     logger.warning("Could not parse event into a standard format, returning original event")
     return event
 
+
+@audited_handler
 def lambda_handler_created(event, context):
     """
     Handler for file creation events from SQS
@@ -2140,6 +2156,8 @@ def lambda_handler_created(event, context):
 
     return with_batch_item_failures({}, event, failures)
 
+
+@audited_handler
 def lambda_handler_deleted(event, context):
     """
     Handler for file deleted events from SQS
@@ -2281,6 +2299,10 @@ def lambda_handler_deleted(event, context):
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+                    if asset_data:
+                        _log_sync("fileSync", "deleted", database_id=asset_data.get('databaseId'),
+                                  asset_id=asset_id,
+                                  file_path=extract_relative_file_path(object_key, prefix, asset_id))
 
                     logger.info(f"Successfully processed deletion for {object_key}")
                 except Exception as e:

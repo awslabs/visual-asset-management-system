@@ -401,6 +401,7 @@ def import_template_constraints(template_data, claims_and_roles):
 # Lambda Handler
 #######################
 
+
 @audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auth constraints template import API"""

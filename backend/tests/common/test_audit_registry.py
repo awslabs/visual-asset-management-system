@@ -72,10 +72,34 @@ def _call_name(node):
     return None
 
 
+def _forwarding_helpers(tree):
+    """Functions that pass one of their own parameters as the action of a typed audit call, by name,
+    with that parameter's position: ``def _log_x(event, action, ...): log_action(event, action)``."""
+    helpers = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        params = [arg.arg for arg in node.args.args]
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call) or _call_name(call) not in _TYPED_AUDIT_FUNCTIONS:
+                continue
+            argument = call.args[1] if len(call.args) > 1 else None
+            for keyword in call.keywords:
+                if keyword.arg in ("action", "secondary_type"):
+                    argument = keyword.value
+            if isinstance(argument, ast.Name) and argument.id in params:
+                helpers[node.name] = (params.index(argument.id), argument.id)
+    return helpers
+
+
 def _scan_source(source):
-    """(literal types passed to the typed audit functions, file audit functions called)."""
+    """(literal types passed to the typed audit functions, file audit functions called).
+
+    A literal passed to a module helper that forwards it as the action of a typed audit call counts as
+    passed to that call."""
     tree = ast.parse(source)
     constants = _module_string_constants(tree)
+    helpers = _forwarding_helpers(tree)
     literals, file_functions = set(), set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -83,11 +107,15 @@ def _scan_source(source):
         name = _call_name(node)
         if name in _FILE_AUDIT_FUNCTIONS:
             file_functions.add(_FILE_FUNCTION_ALIASES.get(name, name))
-        if name not in _TYPED_AUDIT_FUNCTIONS:
+        if name in _TYPED_AUDIT_FUNCTIONS:
+            position, keywords = 1, ("action", "secondary_type")
+        elif name in helpers:
+            position, keywords = helpers[name][0], (helpers[name][1],)
+        else:
             continue
-        argument = node.args[1] if len(node.args) > 1 else None
+        argument = node.args[position] if len(node.args) > position else None
         for keyword in node.keywords:
-            if keyword.arg in ("action", "secondary_type"):
+            if keyword.arg in keywords:
                 argument = keyword.value
         if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
             literals.add(argument.value)
@@ -241,6 +269,22 @@ class TestRegistryMatchesHandlers:
         literals, functions = _scan_source(source)
         assert literals == {"controlLiteral", "controlConstant", "controlKeyword"}
         assert functions == {"log_file_download"}
+
+    def test_the_scan_follows_a_helper_that_forwards_its_action(self):
+        # Control: a literal reaches log_action through a helper's parameter; a helper that passes a
+        # literal of its own does not make its callers' other arguments count.
+        source = (
+            "def _log_write(event, action, response):\n"
+            "    log_action(event, action, item_count=1)\n"
+            "def _fixed(event, label):\n"
+            "    log_action(event, 'controlFixed')\n"
+            "def handler(event):\n"
+            "    _log_write(event, 'controlForwarded', None)\n"
+            "    _log_write(event, action='controlForwardedKeyword', response=None)\n"
+            "    _fixed(event, 'controlNotAnAction')\n"
+        )
+        literals, _ = _scan_source(source)
+        assert literals == {"controlForwarded", "controlForwardedKeyword", "controlFixed"}
 
     def test_the_recorded_check_detects_an_unrecorded_action(self):
         # Control: an action no handler names is not recorded.

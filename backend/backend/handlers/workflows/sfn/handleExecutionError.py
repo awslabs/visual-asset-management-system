@@ -31,6 +31,7 @@ import boto3
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionLogCapture as elc
@@ -372,6 +373,7 @@ def reconcile_failed_execution(body, error_info):
                            execution_log)
 
 
+@audited_handler
 def lambda_handler(event, context):
     """SFN-invoked on any caught error. Reconciles tables to FAILED, then returns so the
     state machine transitions to the Fail state. Never raises (so it never masks the
@@ -383,6 +385,14 @@ def lambda_handler(event, context):
             body = json.loads(body)
         error_info = event.get('errorInfo', {})
         reconcile_failed_execution(body or {}, error_info)
+        body = body or {}
+        user = body.get('executingUserName')
+        log_action(event, "workflowExecutionEnd", outcome="failed", reason="internal",
+                   database_id=body.get('databaseId') or body.get('outputDatabaseId') or None,
+                   asset_id=body.get('assetId') or body.get('outputAssetId') or None,
+                   workflowId=body.get('workflowId') or None, executionId=body.get('workflowExecutionId') or None,
+                   on_behalf_of=user if user and user != "SYSTEM_USER" else None,
+                   details={"workflowDatabaseId": body.get('workflowDatabaseId')})
     except Exception as e:
         # Best-effort: never let a bookkeeping error mask the original failure.
         logger.exception(f"Error handler encountered an error (continuing to Fail state): {e}")

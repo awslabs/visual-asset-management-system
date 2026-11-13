@@ -14,6 +14,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
 logger = safeLogger(service="CheckSubscriptionService")
@@ -61,6 +62,7 @@ def check_subscriptions(body):
     return response
 
 
+@audited_handler
 def lambda_handler(event, context):
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
@@ -150,7 +152,11 @@ def lambda_handler(event, context):
                 allowed = True
 
         if allowed and httpMethod == 'POST':
-            return check_subscriptions(event['body'])
+            result = check_subscriptions(event['body'])
+            log_action(event, "subscriptionCheck", database_id=asset_object.get('databaseId'),
+                       asset_id=event['body']["assetId"],
+                       request_parameters={"userId": event['body']['userId'], "assetId": event['body']['assetId']})
+            return result
         else:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})

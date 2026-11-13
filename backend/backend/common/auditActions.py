@@ -526,32 +526,7 @@ AUDIT_ACTIONS: Dict[str, AuditSpec] = _actions_by_name()
 # already records, and for an action that is neither recorded nor listed. The list empties as the
 # handlers are covered.
 AUDIT_PENDING_ACTIONS: FrozenSet[str] = frozenset({
-    "apiKeyGet", "apiKeyList", "assetArchive", "assetCreate", "assetDelete", "assetExport", "assetGet",
-    "assetHistoryGet", "assetIngest", "assetLinkCreate", "assetLinkDelete", "assetLinkGet", "assetLinkList",
-    "assetLinkUpdate", "assetList", "assetPreviewDelete", "assetSync", "assetUnarchive", "assetUpdate",
-    "assetVersionArchive", "assetVersionCreate", "assetVersionGet", "assetVersionList", "assetVersionRevert",
-    "assetVersionUnarchive", "assetVersionUpdate", "auxiliaryPreviewDelete", "cognitoUserList", "commentCreate",
-    "commentDelete", "commentGet", "commentList", "commentUpdate", "constraintGet", "constraintList",
-    "edhAmiBuildList", "edhAmiRecipeGet", "edhAmiRecipeList", "edhCapacityGet", "edhCapacityReservationList",
-    "edhCatalogCapacityReservationList", "edhCatalogImageList", "edhCatalogInstanceTypeList",
-    "edhCatalogLeaseGet", "edhContainerCatalogList", "edhContainerJobCancel", "edhContainerJobCreate",
-    "edhContainerJobList", "edhHealthGet", "edhImageCreate", "edhImageDelete", "edhImageList",
-    "edhInstanceDeactivate", "edhInstanceList", "edhInstanceStop", "edhSessionReconcile", "edhSettingsGet",
-    "edhWorkstationConnect", "edhWorkstationCreate", "edhWorkstationDelete", "edhWorkstationGet",
-    "edhWorkstationLaunch", "edhWorkstationList", "edhWorkstationOsSignIn", "edhWorkstationStart",
-    "edhWorkstationStop", "fileArchive", "fileCopy", "fileDelete", "fileInfoGet", "fileList", "fileMove",
-    "filePrimarySet", "fileSync", "fileUnarchive", "fileVersionRevert", "folderCreate", "garnetAssetSync",
-    "garnetDatabaseSync", "garnetFileSync", "metadataCreate", "metadataDelete", "metadataGet",
-    "metadataSchemaCreate", "metadataSchemaDelete", "metadataSchemaGet", "metadataSchemaList",
-    "metadataSchemaUpdate", "metadataUpdate", "physnaAssetSync", "physnaFileSync", "physnaViewerGet",
-    "pipelineGet", "pipelineImport", "pipelineList", "pipelineTemplateGet", "pipelineTemplateList",
-    "pipelineTemplateTagSchemaGet", "pipelineTemplateTagSchemaUpdate", "roleList", "search", "searchReindex",
-    "subscriptionCheck", "subscriptionCreate", "subscriptionDelete", "subscriptionList",
-    "subscriptionUnsubscribe", "subscriptionUpdate", "tagCreate", "tagDelete", "tagList", "tagTypeCreate",
-    "tagTypeDelete", "tagTypeList", "tagTypeUpdate", "tagUpdate", "userRoleList", "workflowExecutionEnd",
-    "workflowExecutionFilesGet", "workflowExecutionGet", "workflowExecutionList", "workflowExecutionLogsGet",
-    "workflowExecutionMetadataGet", "workflowExecutionResultsGet", "workflowGet", "workflowList",
-    "workflowOutputIngest", "workflowTriggerGet", "workflowTriggerList",
+    "apiKeyGet", "apiKeyList", "cognitoUserList", "constraintGet", "constraintList", "roleList", "userRoleList",
 })
 
 

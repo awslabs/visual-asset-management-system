@@ -16,6 +16,7 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetLinks import CreateAssetLinkRequestModel, CreateAssetLinkResponseModel, RelationshipType
 
@@ -388,6 +389,10 @@ def handle_post_request(event):
         
         # Create the asset link
         response = create_asset_link(request_model, claims_and_roles)
+        log_action(event, "assetLinkCreate", assetLinkId=response.assetLinkId,
+                   database_id=request_model.fromAssetDatabaseId, asset_id=request_model.fromAssetId,
+                   targetDatabaseId=request_model.toAssetDatabaseId, targetAssetId=request_model.toAssetId,
+                   changes=request_model.dict(exclude_none=True))
         return success(body=response.dict())
         
     # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
@@ -413,6 +418,8 @@ def handle_post_request(event):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset link creation API"""
     global claims_and_roles

@@ -22,6 +22,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -631,6 +632,8 @@ def handle_database_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework database indexing.
@@ -705,6 +708,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                     batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet database indexing completed: {successful_records} successful, {failed_records} failed")
+        log_action(event, "garnetDatabaseSync", outcome="failed" if failed_records else "success",
+                   reason="internal" if failed_records else None, item_count=successful_records,
+                   details={"failedRecords": failed_records})
         
         return with_batch_item_failures({
             'statusCode': 200,

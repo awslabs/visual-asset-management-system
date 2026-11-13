@@ -56,7 +56,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_actions
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -3259,6 +3259,7 @@ def handle_post_request(event):
         event, path_params["workflowDatabaseId"], path_params["workflowId"], request_model)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the asset-less execute-workflow API (POST)."""
     global claims_and_roles

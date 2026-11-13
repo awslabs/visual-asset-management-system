@@ -15,6 +15,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.validators import validate
 from common.tagScope import GLOBAL_SCOPE, normalize_scope
 from common.dynamodb import (
@@ -326,6 +327,9 @@ def handle_get_request(event):
         if 'NextToken' in tags_result:
             response['NextToken'] = tags_result['NextToken']
         
+        log_action(event, "tagList", item_count=len(formatted_items),
+                   request_parameters={key: value for key, value in query_params.items() if value is not None})
+
         # Wrap in "message" for backwards compatibility with tagTypeService format
         return success(body={"message": response})
         
@@ -359,7 +363,8 @@ def handle_delete_request(event):
 
         # Delete the tag
         result = delete_tag(tag_name, claims_and_roles, database_id)
-        
+        log_action(event, "tagDelete", tagId=tag_name, database_id=database_id)
+
         # Return success response
         return success(body=result.dict())
         
@@ -369,6 +374,8 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag service APIs"""
     global claims_and_roles

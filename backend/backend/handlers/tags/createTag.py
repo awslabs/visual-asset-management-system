@@ -17,6 +17,7 @@ from common.tagScope import GLOBAL_SCOPE, normalize_scope, verify_database_exist
 TAG_NAME_INDEX = "tagNameIndex"
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.tag import (
     CreateTagRequestModel, UpdateTagRequestModel, TagOperationResponseModel
@@ -294,11 +295,11 @@ def handle_post_request(event):
         request_model = parse(body, model=CreateTagRequestModel)
         
         # Create the tag
-        result = create_tag(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
-        
+        tag_data = request_model.dict(exclude_unset=True)
+        result = create_tag(tag_data, claims_and_roles)
+        log_action(event, "tagCreate", tagId=tag_data.get("tagName"), database_id=tag_data.get("databaseId"),
+                   changes=tag_data)
+
         # Return success response
         return success(body=result.dict())
         
@@ -344,11 +345,11 @@ def handle_put_request(event):
         request_model = parse(body, model=UpdateTagRequestModel)
         
         # Update the tag
-        result = update_tag(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
-        
+        tag_data = request_model.dict(exclude_unset=True)
+        result = update_tag(tag_data, claims_and_roles)
+        log_action(event, "tagUpdate", tagId=tag_data.get("tagName"), database_id=tag_data.get("databaseId"),
+                   changes=tag_data)
+
         # Return success response
         return success(body=result.dict())
         
@@ -362,6 +363,8 @@ def handle_put_request(event):
         logger.exception(f"Error handling PUT request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag creation and update APIs"""
     global claims_and_roles

@@ -37,6 +37,7 @@ from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
 from common.s3 import region_routing_s3_client
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import APIGatewayProxyResponseV2, success
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -423,6 +424,7 @@ def _iter_uploaded_objects(event):
         yield from _from_detail(event.get("detail") or {})
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Dispatch fileUpload workflow triggers for each uploaded object in the (SQS-buffered
     EventBridge) event. Best-effort per file: per-file/per-workflow failures are logged and do not

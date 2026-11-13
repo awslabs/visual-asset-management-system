@@ -99,7 +99,7 @@ class TestDatabaseDeleteRecord:
     @pytest.mark.parametrize("setup, status", [
         ("missing", 404), ("denied", 403), ("busy", 400)])
     def test_a_delete_that_did_not_happen_records_nothing(self, recorder, table, allow, monkeypatch,
-                                                         setup, status):
+                                                          setup, status):
         if setup == "missing":
             table.get_item.return_value = {}
         elif setup == "denied":

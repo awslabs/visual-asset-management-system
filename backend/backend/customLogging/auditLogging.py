@@ -1078,7 +1078,8 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHCHANGES, "unexpectedError", [None])
 
 
-def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
+def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None,
+                outcome: str = "success") -> None:
     """
     Log general actions with silent failure.
 
@@ -1086,13 +1087,15 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
         event: The API Gateway event
         secondary_type: The secondary type of action
         custom_data: Additional data to log (optional)
+        outcome: Inside an audit context, the outcome the record carries (success or failed); a
+            failed record is written at once rather than buffered
     """
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("ACTIONS", None), ("type", secondary_type))
-        canonical = _legacy_canonical(event, secondary_type=secondary_type)
+        canonical = _legacy_canonical(event, secondary_type=secondary_type, outcome=outcome)
         _write_audit_entry(ResourceKeys.AUDIT_LOG_ACTIONS, event_type, user_context, custom_data, event,
-                           canonical=canonical, buffer=True)
+                           canonical=canonical, buffer=outcome == "success")
         
     except Exception as e:
         # Silent failure - log locally but don't raise

@@ -19,7 +19,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
@@ -6571,6 +6571,21 @@ def _route_served_here(event):
     return False
 
 
+def _log_execution_read(event, action, response):
+    """Record a successful execution read (the path ids and query it asked, never what it returned)
+    and hand the response back."""
+    status = response.get('statusCode') if isinstance(response, dict) else getattr(response, 'statusCode', None)
+    if status != 200:
+        return response
+    path_parameters = event.get('pathParameters') or {}
+    log_action(event, action, database_id=path_parameters.get('databaseId'),
+               asset_id=path_parameters.get('assetId'), workflowId=path_parameters.get('workflowId'),
+               executionId=path_parameters.get('executionId'),
+               request_parameters=dict(event.get('queryStringParameters') or {}))
+    return response
+
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the workflow execution service API.
 
@@ -6619,19 +6634,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # templates are exact-match so neither claims the other's path, but keeping the more
             # specific route first means a later template change cannot silently reroute it.
             if API_WORKFLOW_EXECUTION_DETAILS_METADATA.matches(path):
-                return handle_details_metadata_request(event)
+                return _log_execution_read(event, "workflowExecutionMetadataGet",
+                                           handle_details_metadata_request(event))
             elif API_WORKFLOW_EXECUTION_DETAILS_FILES.matches(path):
-                return handle_details_files_request(event)
+                return _log_execution_read(event, "workflowExecutionFilesGet", handle_details_files_request(event))
             elif API_WORKFLOW_EXECUTION_DETAILS_RESULTS.matches(path):
-                return handle_details_results_request(event)
+                return _log_execution_read(event, "workflowExecutionResultsGet",
+                                           handle_details_results_request(event))
             elif API_WORKFLOW_EXECUTION_DETAILS.matches(path):
-                return handle_details_request(event)
+                return _log_execution_read(event, "workflowExecutionGet", handle_details_request(event))
             elif API_WORKFLOW_EXECUTION_LOGS.matches(path):
-                return handle_logs_request(event)
+                return _log_execution_read(event, "workflowExecutionLogsGet", handle_logs_request(event))
             elif API_WORKFLOW_EXECUTIONS_GLOBAL.matches(path):
-                return handle_global_list_request(event)
+                return _log_execution_read(event, "workflowExecutionList", handle_global_list_request(event))
             else:
-                return handle_get_request(event)
+                return _log_execution_read(event, "workflowExecutionList", handle_get_request(event))
         elif method == 'POST':
             if API_WORKFLOW_EXECUTION_RERUN.matches(path):
                 return handle_rerun_request(event)

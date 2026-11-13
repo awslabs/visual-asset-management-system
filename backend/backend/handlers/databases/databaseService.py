@@ -644,6 +644,7 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 # Lambda Handler
 #######################
 
+
 @audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
