@@ -57,6 +57,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetsV3 import (
@@ -3747,6 +3748,14 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         logger.info(f"Returning {len(file_items)} files in detailed mode from version {asset_version_id}")
         return ListAssetFilesResponseModel(items=file_items, NextToken=None)
 
+def _log_per_file(event, action, path_params, response, requested_path, **kwargs):
+    """One record per file the operation acted on (a folder operation lists each), all in the request's
+    flush; the requested path when the response names none."""
+    for file_path in (getattr(response, "affectedFiles", None) or [requested_path]):
+        log_action(event, action, database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=file_path, **kwargs)
+
+
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteFile requests
     
@@ -3825,6 +3834,8 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileDelete", path_params, response, request_model.filePath,
+                       changes={"isPrefix": request_model.isPrefix, "confirmPermanentDelete": request_model.confirmPermanentDelete})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -3914,6 +3925,7 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileUnarchive", path_params, response, request_model.filePath)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4004,6 +4016,8 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileArchive", path_params, response, request_model.filePath,
+                       changes={"isPrefix": request_model.isPrefix})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4096,6 +4110,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileCopy", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.sourcePath, 
+                   targetFilePath=request_model.destinationPath,
+                   targetAssetId=request_model.destinationAssetId or path_params['assetId'],
+                   targetDatabaseId=request_model.destinationDatabaseId or path_params['databaseId'],
+                   file_count=len(getattr(response, "affectedFiles", None) or []) or None)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4186,6 +4206,9 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileMove", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.sourcePath, 
+                   targetFilePath=request_model.destinationPath, file_count=len(getattr(response, "affectedFiles", None) or []) or None)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4295,6 +4318,9 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             show_archived=show_archived
         )
         
+        log_action(event, "fileInfoGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.filePath, 
+                   request_parameters={"includeVersions": request_model.includeVersions, "showArchived": show_archived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4394,6 +4420,11 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileVersionRevert", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.filePath, 
+                   versionId=path_params['versionId'],
+                   changes={"versionId": response.newVersionId},
+                   previous={"versionId": response.revertedFromVersionId})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4483,6 +4514,8 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "folderCreate", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.relativeKey)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4653,6 +4686,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetPreviewDelete", database_id=path_params['databaseId'], asset_id=path_params['assetId'])
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4742,6 +4776,8 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
             claims_and_roles
         )
         
+        log_action(event, "auxiliaryPreviewDelete", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], file_path=request_model.filePath)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4833,6 +4869,10 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "filePrimarySet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.filePath, 
+                   changes={"primaryType": request_model.primaryType,
+                            "primaryTypeOther": request_model.primaryTypeOther})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4928,6 +4968,9 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
             show_archived=show_archived
         )
         
+        log_action(event, "fileList", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(response.items), 
+                   request_parameters={**query_params, "showArchived": show_archived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4948,6 +4991,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset file operations
 
