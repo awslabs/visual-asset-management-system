@@ -108,3 +108,26 @@ def test_an_unexpected_failure_keeps_the_formatted_denials(capsys):
     assert [(f["logGroupKey"], f["reason"]) for f in fallbacks] == [
         ("auditAuthorization", "unexpectedError")]
     assert '"kept"' in fallbacks[0]["record"]
+
+
+def test_a_denied_compliance_call_is_an_authorization_record(capsys):
+    """A compliance route answered 403 records its action as denied (common/compliance/routeAudit), and
+    the real writer puts that record in the authorization log group, naming the compliance action."""
+    from backend.backend.common.compliance import routeAudit
+
+    os.environ.setdefault("AUDIT_LOG_ACTIONS", "test-auditActions")
+    written = []
+    with patch.object(auditLogging, "cloudwatch_logs") as client, \
+            patch.object(auditLogging, "_created_log_streams", {}), \
+            patch.object(auditLogging, "request_to_claims",
+                         lambda event: {"tokens": ["alice"], "roles": [], "mfaEnabled": True}):
+        client.put_log_events.side_effect = lambda **kwargs: written.append(kwargs)
+        event = {"httpMethod": "POST", "path": "/compliance/quarantine/db1/a1/exception",
+                 "requestContext": {"requestId": "r1"}}
+        auditLogging.log_action(event, "complianceExceptionGrant", database_id="db1", asset_id="a1",
+                                **routeAudit.audit_outcome({"statusCode": 403}))
+    assert [call["logGroupName"] for call in written] == [os.environ["AUDIT_LOG_AUTHORIZATION"]]
+    message = written[0]["logEvents"][0]["message"]
+    assert message.startswith("[AUTHORIZATION][authorized: False] [user: alice]")
+    assert '"action": "complianceExceptionGrant"' in message and '"outcome": "denied"' in message
+    assert '"route": "/compliance/quarantine/{databaseId}/{assetId}/exception"' in message

@@ -43,6 +43,10 @@ from common.compliance import knownDatabase
 from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.validators import validate
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -121,6 +125,12 @@ asset_table = store.asset_table
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -134,6 +144,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -145,12 +156,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
     finally:
         # The denials of this request's asset checks (`AssetAccess`).
@@ -168,11 +182,26 @@ def handle_get_request(event):
     # The history reads also take a deleted database's `<databaseId>#deleted` (sent as `%23deleted`).
     database_id = knownDatabase.decoded_scope(path_params.get("databaseId"))
     if API_COMPLIANCE_EVALUATIONS_ASSET.matches(path):
-        return get_evaluations(event, database_id, path_params.get("assetId"), query_params)
+        response = get_evaluations(event, database_id, path_params.get("assetId"), query_params)
+        log_action(event, "complianceEvaluationList", **audit_outcome(response),
+                   database_id=database_id, asset_id=path_params.get("assetId"),
+                   request_parameters=request_parameters(query_params, ("maxItems", "startingToken")),
+                   item_count=response_count(response, "evaluations"))
+        return response
     if API_COMPLIANCE_STATE_ASSET.matches(path):
-        return get_compliance_state(event, database_id, path_params.get("assetId"))
+        response = get_compliance_state(event, database_id, path_params.get("assetId"))
+        log_action(event, "complianceStateGet", **audit_outcome(response),
+                   database_id=database_id, asset_id=path_params.get("assetId"))
+        return response
     if API_COMPLIANCE_STATE_DATABASE.matches(path):
-        return get_database_compliance_overview(event, database_id, query_params)
+        response = get_database_compliance_overview(event, database_id, query_params)
+        log_action(event, "complianceStateList", **audit_outcome(response),
+                   database_id=database_id,
+                   request_parameters=request_parameters(query_params, (
+                       "state", "schemaName", "schemaSource", "evaluationError", "text", "sort",
+                       "maxItems", "startingToken")),
+                   item_count=response_count(response, "assets"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -181,14 +210,28 @@ def handle_post_request(event):
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_EVALUATE_ASSET.matches(path):
         request = parse(_parse_body(event), model=EvaluateAssetRequestModel)
-        return evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
-                              request)
+        response = evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
+                                  request)
+        log_action(event, "complianceEvaluate", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   schemaName=request.schemaName)
+        return response
     if API_COMPLIANCE_EVALUATE_DATABASE.matches(path):
         request = parse(_parse_body(event), model=EvaluateDatabaseRequestModel)
-        return evaluate_database(event, path_params.get("databaseId"), request.startingToken)
+        response = evaluate_database(event, path_params.get("databaseId"), request.startingToken)
+        log_action(event, "complianceDatabaseEvaluate", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"),
+                   item_count=response_count(response, "assetsTriggered"),
+                   details={"resumed": bool(request.startingToken)})
+        return response
     if API_COMPLIANCE_SWEEP_SCHEMA.matches(path):
         request = parse(_parse_body(event), model=SweepSchemaRequestModel)
-        return sweep_schema(event, path_params.get("schemaName"), request.startingToken)
+        response = sweep_schema(event, path_params.get("schemaName"), request.startingToken)
+        log_action(event, "complianceSchemaSweep", **audit_outcome(response),
+                   schemaName=path_params.get("schemaName"),
+                   item_count=response_count(response, "assetsTriggered"),
+                   details={"resumed": bool(request.startingToken)})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 

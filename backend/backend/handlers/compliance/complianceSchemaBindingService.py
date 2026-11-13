@@ -73,6 +73,10 @@ from common.compliance.assetAccess import AssetAccess, archived_database_id, flu
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -150,6 +154,12 @@ asset_table = dynamodb.Table(asset_table_name)
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -163,6 +173,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -176,12 +187,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
     finally:
         # The denials of this request's asset checks (`AssetAccess`).
@@ -197,7 +211,12 @@ def handle_get_request(event):
     path_params = event.get("pathParameters", {}) or {}
     query_params = event.get("queryStringParameters", {}) or {}
     if API_COMPLIANCE_BIND_DATABASE.matches(path):
-        return get_bindings(event, path_params.get("databaseId"), query_params)
+        response = get_bindings(event, path_params.get("databaseId"), query_params)
+        log_action(event, "complianceBindingGet", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"),
+                   request_parameters=request_parameters(query_params, ("maxItems", "startingToken")),
+                   item_count=response_count(response, "assetOverrides"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -206,11 +225,20 @@ def handle_put_request(event):
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_BIND_ASSET.matches(path):
         request = parse(_parse_body(event), model=BindSchemaRequestModel)
-        return bind_schema_to_asset(event, path_params.get("databaseId"),
-                                    path_params.get("assetId"), request)
+        response = bind_schema_to_asset(event, path_params.get("databaseId"),
+                                        path_params.get("assetId"), request)
+        log_action(event, "complianceBindingSet", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   entity_id=path_params.get("assetId"), changes={"schemaName": request.schemaName})
+        return response
     if API_COMPLIANCE_BIND_DATABASE.matches(path):
         request = parse(_parse_body(event), model=BindSchemaRequestModel)
-        return bind_schema_to_database(event, path_params.get("databaseId"), request)
+        response = bind_schema_to_database(event, path_params.get("databaseId"), request)
+        log_action(event, "complianceBindingSet", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"),
+                   changes={"schemaName": request.schemaName,
+                            "complianceAutoEval": request.complianceAutoEval})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -218,10 +246,17 @@ def handle_delete_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_BIND_ASSET.matches(path):
-        return unbind_schema_from_asset(event, path_params.get("databaseId"),
-                                        path_params.get("assetId"))
+        response = unbind_schema_from_asset(event, path_params.get("databaseId"),
+                                            path_params.get("assetId"))
+        log_action(event, "complianceBindingDelete", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   entity_id=path_params.get("assetId"))
+        return response
     if API_COMPLIANCE_BIND_DATABASE.matches(path):
-        return unbind_schema_from_database(event, path_params.get("databaseId"))
+        response = unbind_schema_from_database(event, path_params.get("databaseId"))
+        log_action(event, "complianceBindingDelete", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 

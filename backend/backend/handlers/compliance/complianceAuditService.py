@@ -44,7 +44,10 @@ from common.compliance.cascadeAuditSummary import (
 )
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
-from customLogging.auditLogging import deferred_authorization_audit
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, deferred_authorization_audit, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -124,6 +127,12 @@ evaluation_table = dynamodb.Table(evaluation_table_name)
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -137,6 +146,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -146,12 +156,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
     finally:
         # The denials of this request's asset checks (`AssetAccess`).
@@ -167,13 +180,25 @@ def handle_get_request(event):
     path_params = event.get("pathParameters", {}) or {}
     query_params = event.get("queryStringParameters", {}) or {}
     if API_COMPLIANCE_AUDIT_ASSET.matches(path):
-        return get_asset_audit(event, knownDatabase.decoded_scope(path_params.get("databaseId")),
-                               path_params.get("assetId"), query_params)
+        database_id = knownDatabase.decoded_scope(path_params.get("databaseId"))
+        response = get_asset_audit(event, database_id, path_params.get("assetId"), query_params)
+        log_action(event, "complianceAuditList", **audit_outcome(response),
+                   database_id=database_id, asset_id=path_params.get("assetId"),
+                   request_parameters=request_parameters(query_params, (
+                       "startDate", "endDate", "maxItems", "limit", "startingToken")),
+                   item_count=response_count(response, "entries"))
+        return response
     if API_COMPLIANCE_AUDIT.matches(path):
         # The listing decides every database it may list once (D173): their refusals are written
         # together at the end of the request, not one CloudWatch call each.
         with deferred_authorization_audit():
-            return query_audit(event, query_params)
+            response = query_audit(event, query_params)
+        log_action(event, "complianceAuditList", **audit_outcome(response),
+                   request_parameters=request_parameters(query_params, (
+                       "eventType", "startDate", "endDate", "databaseId", "assetId", "text",
+                       "maxItems", "limit", "startingToken")),
+                   item_count=response_count(response, "entries"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 

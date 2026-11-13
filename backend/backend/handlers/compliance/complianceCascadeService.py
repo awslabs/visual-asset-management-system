@@ -54,6 +54,10 @@ from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -115,6 +119,12 @@ cascade_table = dynamodb.Table(cascade_table_name)
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -128,6 +138,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -139,12 +150,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
     finally:
         # The denials of this request's asset checks (`AssetAccess`).
@@ -159,9 +173,17 @@ def handle_get_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_CASCADE_BY_ID.matches(path):
-        return get_cascade(event, path_params.get("cascadeId"))
+        response = get_cascade(event, path_params.get("cascadeId"))
+        log_action(event, "complianceCascadeGet", **audit_outcome(response),
+                   cascadeId=path_params.get("cascadeId"))
+        return response
     if API_COMPLIANCE_CASCADES.matches(path):
-        return list_pending_cascades(event)
+        response = list_pending_cascades(event)
+        log_action(event, "complianceCascadeList", **audit_outcome(response),
+                   request_parameters=request_parameters(event.get("queryStringParameters"), (
+                       "state", "databaseId", "text", "maxItems", "startingToken")),
+                   item_count=response_count(response, "cascades"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -170,13 +192,25 @@ def handle_post_request(event):
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_CASCADE_APPROVE.matches(path):
         request = parse(_parse_body(event), model=ApproveCascadeRequestModel)
-        return approve_cascade(event, path_params.get("cascadeId"), request)
+        response = approve_cascade(event, path_params.get("cascadeId"), request)
+        log_action(event, "complianceCascadeApprove", **audit_outcome(response),
+                   cascadeId=path_params.get("cascadeId"),
+                   changes={"state": "executing", "approvalReason": request.reason})
+        return response
     if API_COMPLIANCE_CASCADE_REJECT.matches(path):
         request = parse(_parse_body(event), model=RejectCascadeRequestModel)
-        return reject_cascade(event, path_params.get("cascadeId"), request)
+        response = reject_cascade(event, path_params.get("cascadeId"), request)
+        log_action(event, "complianceCascadeReject", **audit_outcome(response),
+                   cascadeId=path_params.get("cascadeId"),
+                   changes={"state": "aborted", "rejectionReason": request.reason})
+        return response
     if API_COMPLIANCE_CASCADES.matches(path):
         request = parse(_parse_body(event), model=CreateCascadeRequestModel)
-        return create_cascade(event, request)
+        response = create_cascade(event, request)
+        log_action(event, "complianceCascadeCreate", **audit_outcome(response),
+                   database_id=request.databaseId, asset_id=request.assetId,
+                   changes={"requireApproval": request.requireApproval, "triggerReason": request.reason})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 

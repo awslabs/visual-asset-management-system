@@ -31,7 +31,10 @@ from common.dynamodb import query_all_items, query_has_match
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from common.workflows import pipelineRecords as pr
-from customLogging.auditLogging import log_authorization
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action, log_authorization
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -364,6 +367,12 @@ def missing_parent_warnings(casbin_enforcer, schema_body):
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -377,6 +386,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -392,12 +402,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
 
 
@@ -411,9 +424,16 @@ def handle_get_request(event):
     query_params = event.get("queryStringParameters", {}) or {}
 
     if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
-        return get_schema(event, path_params.get("schemaName"))
+        response = get_schema(event, path_params.get("schemaName"))
+        log_action(event, "complianceSchemaGet", **audit_outcome(response),
+                   schemaName=path_params.get("schemaName"))
+        return response
     if API_COMPLIANCE_SCHEMAS.matches(path):
-        return list_schemas(event, knownDatabase.decoded_scope(query_params.get("databaseId")))
+        response = list_schemas(event, knownDatabase.decoded_scope(query_params.get("databaseId")))
+        log_action(event, "complianceSchemaList", **audit_outcome(response),
+                   request_parameters=request_parameters(query_params, ("databaseId",)),
+                   item_count=response_count(response, "schemas"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -421,7 +441,12 @@ def handle_post_request(event):
     path = event["requestContext"]["http"]["path"]
     if API_COMPLIANCE_SCHEMAS.matches(path):
         body = _parse_body(event)
-        return register_schema(event, parse(body, model=CreateSchemaRequestModel))
+        request = parse(body, model=CreateSchemaRequestModel)
+        response = register_schema(event, request)
+        log_action(event, "complianceSchemaCreate", **audit_outcome(response),
+                   schemaName=request.schemaName, database_id=request.databaseId,
+                   changes={"databaseId": request.databaseId, "description": request.description})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -430,8 +455,14 @@ def handle_put_request(event):
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
         body = _parse_body(event)
-        return update_schema(event, path_params.get("schemaName"),
-                             parse(body, model=UpdateSchemaRequestModel))
+        request = parse(body, model=UpdateSchemaRequestModel)
+        response = update_schema(event, path_params.get("schemaName"), request)
+        # The rule document is caller-authored content: only whether it changed is recorded.
+        log_action(event, "complianceSchemaUpdate", **audit_outcome(response),
+                   schemaName=path_params.get("schemaName"),
+                   changes={"databaseId": request.databaseId, "description": request.description},
+                   details={"schemaBodyChanged": request.schemaBody is not None})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -439,7 +470,10 @@ def handle_delete_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_SCHEMA_BY_NAME.matches(path):
-        return delete_schema(event, path_params.get("schemaName"))
+        response = delete_schema(event, path_params.get("schemaName"))
+        log_action(event, "complianceSchemaDelete", **audit_outcome(response),
+                   schemaName=path_params.get("schemaName"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 

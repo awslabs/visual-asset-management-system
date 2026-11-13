@@ -1285,6 +1285,7 @@ AUDIT_ID_FIELDS = (
     "workflowId", "executionId", "executionGroupId", "assetLinkId", "commentId", "tagId", "tagTypeId",
     "metadataSchemaId", "subscriptionId", "roleName", "constraintId", "targetUserId", "apiKeyId",
     "uploadId", "triggerType", "sessionId", "targetDatabaseId", "targetAssetId", "targetFilePath",
+    "schemaName", "cascadeId", "evaluationId",
 )
 
 # The id field that names an entity of each type, used when log_action is given no entity_id.
@@ -1297,6 +1298,9 @@ _ENTITY_ID_FIELDS = {
     "execution": "executionId", "executionGroup": "executionGroupId", "role": "roleName",
     "userRole": "targetUserId", "constraint": "constraintId", "user": "targetUserId",
     "workstation": "sessionId",
+    "complianceSchema": "schemaName", "complianceBinding": "databaseId",
+    "complianceEvaluation": "evaluationId", "complianceState": "assetId",
+    "complianceCascade": "cascadeId",
 }
 
 # Actions of these kinds record the request only: log_action drops the write sections (changes,

@@ -60,6 +60,12 @@ OUTCOME_FAILED = "failed"
 OUTCOME_DENIED = "denied"
 
 
+def audit_records_reads():
+    """The reads switch as the real module reads it: on unless AUDIT_RECORD_READS is "false"."""
+    import os
+    return os.environ.get("AUDIT_RECORD_READS", "").strip().lower() != "false"
+
+
 @contextlib.contextmanager
 def audit_request(event, lambda_context=None, *, on_behalf_of=None):
     """No-op stand-in for the request audit context: nothing is buffered when nothing is written."""

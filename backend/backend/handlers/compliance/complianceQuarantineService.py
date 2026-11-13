@@ -39,6 +39,10 @@ from common.compliance import listing
 from common.compliance.assetAccess import AssetAccess, flush_denials
 from common.compliance.knownDatabase import database_not_found
 from common.validators import validate
+from common.compliance.routeAudit import (
+    audit_outcome, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -90,6 +94,12 @@ asset_table = store.asset_table
 #######################
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
@@ -103,6 +113,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 method_allowed_on_api = True
 
         if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
             return authorization_error()
 
         if method == "GET":
@@ -116,12 +127,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
         return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
         return internal_error(event=event)
     finally:
         # The denials of this request's asset checks (`AssetAccess`).
@@ -136,7 +150,12 @@ def handle_get_request(event):
     path = event["requestContext"]["http"]["path"]
     query_params = event.get("queryStringParameters", {}) or {}
     if API_COMPLIANCE_QUARANTINE.matches(path):
-        return list_quarantined(event, query_params)
+        response = list_quarantined(event, query_params)
+        log_action(event, "complianceQuarantineList", **audit_outcome(response),
+                   request_parameters=request_parameters(query_params, (
+                       "databaseId", "text", "maxItems", "startingToken")),
+                   item_count=response_count(response, "quarantinedAssets"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -145,12 +164,20 @@ def handle_post_request(event):
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_QUARANTINE_RELEASE.matches(path):
         request = parse(_parse_body(event), model=ReleaseQuarantineRequestModel)
-        return release_quarantine(event, path_params.get("databaseId"),
-                                  path_params.get("assetId"), request)
+        response = release_quarantine(event, path_params.get("databaseId"),
+                                      path_params.get("assetId"), request)
+        log_action(event, "complianceQuarantineRelease", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   changes={"complianceState": "compliant", "releaseReason": request.reason})
+        return response
     if API_COMPLIANCE_QUARANTINE_EXCEPTION.matches(path):
         request = parse(_parse_body(event), model=GrantExceptionRequestModel)
-        return grant_exception(event, path_params.get("databaseId"),
-                               path_params.get("assetId"), request)
+        response = grant_exception(event, path_params.get("databaseId"),
+                                   path_params.get("assetId"), request)
+        log_action(event, "complianceExceptionGrant", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   changes={"complianceState": "exception", "exceptionReason": request.reason})
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -158,7 +185,10 @@ def handle_delete_request(event):
     path = event["requestContext"]["http"]["path"]
     path_params = event.get("pathParameters", {}) or {}
     if API_COMPLIANCE_QUARANTINE_EXCEPTION.matches(path):
-        return revoke_exception(event, path_params.get("databaseId"), path_params.get("assetId"))
+        response = revoke_exception(event, path_params.get("databaseId"), path_params.get("assetId"))
+        log_action(event, "complianceExceptionRevoke", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"))
+        return response
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
