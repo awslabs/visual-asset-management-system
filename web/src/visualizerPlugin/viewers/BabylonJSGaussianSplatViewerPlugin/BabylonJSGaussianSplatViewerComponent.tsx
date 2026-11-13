@@ -5,11 +5,16 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
 import BabylonJSPanel from "./BabylonJSPanel";
+import { VIEWER_LAYER } from "../../core/viewerLayers";
+import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
+import { appCache } from "../../../services/appCache";
+import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 
 // Declare BABYLON as it will be loaded dynamically
 declare const BABYLON: any;
@@ -50,6 +55,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     // loading and the viewer instance becomes available.
     const [sceneReady, setSceneReady] = useState(false);
     const [showPanel, setShowPanel] = useState(true);
+    const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
 
     useEffect(() => {
         if (!assetKey || initializationRef.current) return;
@@ -266,9 +272,17 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     const head = await readFileHead(response[1]);
                     if (cancelled) return;
                     if (head) {
+                        // SuperSplat reads SPZ version 4 and is offered only where the
+                        // deployment config the API returned enables ALLOWUNSAFEEVAL.
+                        const features: unknown = appCache.getItem("config")?.featuresEnabled;
                         const refusal = unsupportedSplatMessage(
                             identifySplatFile(head),
-                            assetKey.split("/").pop() || assetKey
+                            assetKey.split("/").pop() || assetKey,
+                            {
+                                superSplatOffered:
+                                    Array.isArray(features) &&
+                                    features.includes(featuresEnabled.ALLOWUNSAFEEVAL),
+                            }
                         );
                         if (refusal) {
                             console.warn(`BabylonJS Gaussian Splat Viewer: ${refusal}`);
@@ -377,6 +391,9 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     }
                 } else {
                     console.error("BabylonJS Gaussian Splat Viewer: Failed to download asset");
+                    setUnsupportedMessage(
+                        downloadFailureMessage(response, "Failed to download the splat file.")
+                    );
                     setIsLoading(false); // Hide loading on error
                 }
             } catch (error) {
@@ -525,7 +542,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         textAlign: "center",
                         padding: "20px",
                         boxSizing: "border-box",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.cover,
                     }}
                 >
                     {unsupportedMessage}
@@ -535,6 +552,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (
                 <BabylonJSPanel
+                    panelRef={panelRef}
                     scene={viewerInstanceRef.current.scene}
                     camera={viewerInstanceRef.current.camera}
                     engine={viewerInstanceRef.current.engine}
@@ -560,7 +578,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         borderRadius: "4px",
                         cursor: "pointer",
                         fontSize: "0.8em",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.panel,
                     }}
                     title="Show controls panel"
                 >
@@ -571,6 +589,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
             {/* Compact HUD — viewer name, mouse hint and live splat count */}
             {sceneReady && viewerInstanceRef.current && (
                 <div
+                    ref={infoBoxRef}
                     style={{
                         position: "absolute",
                         top: "10px",
@@ -580,7 +599,8 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         backgroundColor: "rgba(0,0,0,0.7)",
                         padding: "8px",
                         borderRadius: "4px",
-                        zIndex: 1000,
+                        zIndex: VIEWER_LAYER.info,
+                        visibility: infoBoxVisibility,
                     }}
                 >
                     <div style={{ fontWeight: "bold", marginBottom: "4px" }}>

@@ -91,18 +91,18 @@ global_settings:
         # Documentation code samples (request and response examples).
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 875
-          line_end: 875
+          line_start: 877
+          line_end: 877
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 955
-          line_end: 955
+          line_start: 957
+          line_end: 957
           reason: masked API key placeholder (vams_ followed by x characters) in a response example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 1074
-          line_end: 1074
+          line_start: 1076
+          line_end: 1076
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/files.md
@@ -116,33 +116,33 @@ global_settings:
           reason: pagination token (base64 of an example JSON key) in a response example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1042
-          line_end: 1042
+          line_start: 1056
+          line_end: 1056
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1337
-          line_end: 1337
+          line_start: 1353
+          line_end: 1353
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1517
-          line_end: 1517
+          line_start: 1533
+          line_end: 1533
           reason: example pipeline execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1543
-          line_end: 1543
+          line_start: 1559
+          line_end: 1559
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1553
-          line_end: 1553
+          line_start: 1569
+          line_end: 1569
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 2164
-          line_end: 2164
+          line_start: 2180
+          line_end: 2180
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
           path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
@@ -151,18 +151,18 @@ global_settings:
           reason: username:password placeholder in a proxy URL example, not a credential
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/deployment/configuration-reference.md
-          line_start: 1516
-          line_end: 1517
+          line_start: 1626
+          line_end: 1627
           reason: CDK construct paths and example role names in a configuration example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/developer/physna-integration.md
-          line_start: 44
-          line_end: 44
-          reason: your-physna-client-secret placeholder in a configuration example
+          line_start: 43
+          line_end: 43
+          reason: credentialsSecretArn key holding a placeholder Secrets Manager ARN in a configuration example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/pipelines/custom-pipelines.md
-          line_start: 1768
-          line_end: 1768
+          line_start: 1777
+          line_end: 1777
           reason: example workflow execution identifier in a payload example, not a secret
 
         # grype matches the action tag `v4` as version 4.0.0, inside the advisory's affected range

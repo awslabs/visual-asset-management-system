@@ -267,6 +267,16 @@ File Reindexing Results:
   Failed: 0
 ```
 
+### Exit codes
+
+The exit code tells a script or CI job whether the reindex completed.
+
+| Exit code | Meaning                                                                                                                                                                                                                                                                                                             |
+| :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`       | The run completed with nothing failed, or an `--async` invocation was submitted.                                                                                                                                                                                                                                    |
+| `1`       | The run failed: the invocation failed, the Lambda function raised an error or reached its own time limit, the reindexer answered with an error, or it reported records that failed, errors, or an index clear that did not finish. The utility logs the error, or each reason under `Reindexing did not complete:`. |
+| `2`       | The synchronous invocation timed out on the client. The Lambda function keeps running and its outcome is unverified; check Amazon CloudWatch Logs for the reindexer Lambda function to confirm it completed. A usage error, such as a mistyped option, also exits `2` (from argparse); nothing is invoked then.     |
+
 ## Post-Migration Usage
 
 After running a VAMS version upgrade migration script (e.g., `v2.4_to_v2.5_migration.py`), run the reindex utility to ensure search indexes reflect the migrated data:

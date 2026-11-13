@@ -12,7 +12,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
@@ -829,19 +828,21 @@ export function storageResourcesBuilder(
         cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
     }
 
-    // Audit log group for the orchestration bus
+    // Audit log group for the orchestration bus. The name is a synth-time literal so the log group's own
+    // resource policy below can name it without a Ref to itself.
+    const orchestrationBusAuditLogGroupName =
+        "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+        generateUniqueNameHash(
+            config.env.coreStackName,
+            config.env.account,
+            "VAMSOrchestrationBusAudit",
+            10
+        );
     const orchestrationBusAuditLogGroup = new logs.LogGroup(
         scope,
         "OrchestrationBusAuditLogGroup",
         {
-            logGroupName:
-                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
-                generateUniqueNameHash(
-                    config.env.coreStackName,
-                    config.env.account,
-                    "VAMSOrchestrationBusAudit",
-                    10
-                ),
+            logGroupName: orchestrationBusAuditLogGroupName,
             retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
@@ -856,9 +857,49 @@ export function storageResourcesBuilder(
         },
     });
 
-    orchestrationBusAuditRule.addTarget(
-        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
-    );
+    // EventBridge needs a CloudWatch Logs resource policy to write to the audit log group. The CDK
+    // aws-events-targets CloudWatchLogGroup target creates an ACCOUNT-level policy per stack
+    // (Custom::CloudwatchLogResourcePolicy), and an account holds at most 10 of those per Region, which
+    // capped VAMS at 10 deployments per Region (#1266). Instead, the grant is the log group's own resource
+    // policy (AWS::Logs::LogGroup ResourcePolicyDocument): it does not count against the account-level
+    // limit and is created, updated and deleted with the log group, so one stack's uninstall never touches
+    // another stack's grant. The target is bound by ARN so no account-level policy is created. The source
+    // rule is matched by the deployment-unique bus name (rule/<bus>/*), not by the rule's own ARN, which
+    // would make the log group depend on the rule that already depends on it.
+    const auditStack = cdk.Stack.of(scope);
+    const orchestrationBusAuditLogGroupArn = auditStack.formatArn({
+        service: "logs",
+        resource: "log-group",
+        arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+        resourceName: orchestrationBusAuditLogGroupName,
+    });
+    const cfnOrchestrationBusAuditLogGroup = orchestrationBusAuditLogGroup.node
+        .defaultChild as logs.CfnLogGroup;
+    cfnOrchestrationBusAuditLogGroup.resourcePolicyDocument = new iam.PolicyDocument({
+        statements: [
+            new iam.PolicyStatement({
+                sid: "OrchestrationBusAuditRuleWrite",
+                effect: iam.Effect.ALLOW,
+                principals: [Service("EVENTS").Principal],
+                actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources: [`${orchestrationBusAuditLogGroupArn}:*`],
+                conditions: {
+                    StringEquals: { "aws:SourceAccount": auditStack.account },
+                    ArnLike: {
+                        "aws:SourceArn": auditStack.formatArn({
+                            service: "events",
+                            resource: "rule",
+                            resourceName: `${orchestrationBusName}/*`,
+                        }),
+                    },
+                },
+            }),
+        ],
+    });
+
+    orchestrationBusAuditRule.addTarget({
+        bind: (): events.RuleTargetConfig => ({ arn: orchestrationBusAuditLogGroupArn }),
+    });
 
     // Externally owned pipeline bridges publish registration events onto this bus. IAM accepts no
     // wildcard in a Principal and binds an exact role principal to that role's unique id (a bridge role
@@ -910,6 +951,26 @@ export function storageResourcesBuilder(
             {
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
+            },
+            // The asset export service's staged payloads (vams.assetExports/<databaseId>/<assetId>/
+            // <id>.json), one per export response too large to return inline. The service never
+            // deletes one: the client reads it through a presigned URL, possibly more than once, until
+            // the URL expires. The expiry outlives the longest lifetime a presigned URL can have, so it
+            // never removes a payload a live URL still points at. The bucket is versioned, so the
+            // expiry only writes a delete marker: the noncurrent expiry reclaims the storage, and the
+            // expired delete markers go with it. The abort rule above covers the prefix too. The
+            // prefix carries a dot, which no database ID can, so these rules never reach the preview
+            // and viewer data keyed under {databaseId}/. Always on, because the export API always is.
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiration: Duration.days(Config.ASSET_EXPORT_STAGING_EXPIRATION_DAYS),
+                noncurrentVersionExpiration: Duration.days(1),
+            },
+            {
+                enabled: true,
+                prefix: Config.ASSET_EXPORT_STAGING_PREFIX,
+                expiredObjectDeleteMarker: true,
             },
             // The video SOP/BOM pipeline's scratch objects (pipelines/<pipelineId>/<executionId>/...:
             // definition document, extracted audio, Transcribe output, analysis artefacts). A run deletes
@@ -1012,7 +1073,9 @@ export function storageResourcesBuilder(
         // pipeline schema bundles live in the same bucket under vamsSchema/, uploaded by a separate
         // per-registration deployment, so they are excluded from the prune — otherwise refreshing an
         // artefact deletes every bundle while the registration resources still expect to read them.
-        exclude: ["vamsSchema/*"],
+        // addon/ is reserved for the trees the add-on stacks upload under addon/<addon>/, and is
+        // excluded for the same reason.
+        exclude: ["vamsSchema/*", "addon/*"],
     });
 
     //S3 Buckets handling for assets

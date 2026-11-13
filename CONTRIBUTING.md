@@ -73,6 +73,14 @@ To send us a pull request, please:
    below) and linking the issue it resolves.
 8. Pay attention to any automated CI failures reported in the pull request, and stay involved in the conversation.
 
+### Core or add-on
+
+A change that integrates VAMS with an external solution, depends on an AWS service outside the set VAMS core is built
+on, or implements a use-case lens for one industry is built as an **add-on** with its own on/off setting, not in core.
+Viewers and processing pipelines keep their own plugin and pipeline mechanisms. The
+[Add-ons Overview](documentation/docusaurus-site/docs/developer/addons-overview.md#when-functionality-is-an-add-on)
+lists the core AWS services and the exceptions; if you are unsure which applies, ask on the issue before you start.
+
 ### Structuring your pull request
 
 The repository's pull request template asks for four things; please fill each one in:

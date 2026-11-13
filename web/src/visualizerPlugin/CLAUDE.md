@@ -13,8 +13,12 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
 -   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
+-   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
+-   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
--   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
+-   **extensionMatching.ts** (`core/extensionMatching.ts`) — The one filename rule (`filenameExtension`, `extensionToken`), the `NO_EXTENSION` token `(none)`, `describeExtensionToken` and `supportsAllExtensions` (see "Files Without an Extension and the Binary Guard")
+-   **textContent.ts** (`core/textContent.ts`) — `classifyTextSample(bytes, isComplete)` (text, binary or unsupported encoding, from a file's first 8 KiB) and `loadTextFile(url, signal)`, the bounded loader both text viewers use (see "Files Without an Extension and the Binary Guard")
+-   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?]`) into the sentence a viewer shows, from the API's status only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, anything else `subject`; `downloadStatusMessage(status, subject)` does the same for a viewer that fetched the streaming route itself. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer adopts it in its own change; Cesium and Potree name stream failures through `describeStreamFailure`.
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
 
@@ -24,7 +28,8 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 
 | ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
 | ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
+| `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)  | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
 | `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
 | `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
@@ -33,21 +38,21 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `columnar-viewer`                  | Columnar Data Viewer              | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `text-diff-viewer`                 | Text Diff Viewer                  | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc. (same list as `text-viewer`)                                                    | enabled (compare-only: 2 files, cross-asset)        |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (`(none)`)                                  | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer                  | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (same list as `text-viewer`)                       | enabled (compare-only: 2 files, cross-asset)        |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz, .splat, .sog                                                                                                                 | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .ksplat, .lcc, .ply, .sog, .splat, .spz                                                                                                  | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
 | `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
+| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .usd, .usda, .usdc, .usdz, .stp, .step, .iges, .igs, .brep                        | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see "A Framed Viewer Must Not Receive a Signed URL in the Query String" below before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see "A Framed Viewer Must Not Receive a Signed URL in the Query String" below before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor. The install removes the editor's WebMCP tool registration (`registerWebMCP` in upstream `src/main.ts`, v3.7.0+) before building and fails if the built bundle still references `modelContext`: the framed editor is same-origin with VAMS, so its tools must not be offered to a browser agent.
 
 > `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component (`RoboticsDataViewerPlugin/`) presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (`roboticsDeepLink.ts`). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
@@ -96,7 +101,7 @@ Every entry point decides what to offer with the SAME predicates, never with its
 | -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
 | Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`           | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
 | Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`          | `areFilesComparableTogether(files)` (derives count + shape)          |
-| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isExtensionComparableAsVersions(ext)`                               |
+| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isFilenameComparableAsVersions(name)`                               |
 | Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)`    | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
 | What pair does a lone file enter Compare with?           | `seedCompareFromSingleFile(file)` (`core/compareShape.ts`) | — (hosts call it directly)                                           |
 
@@ -111,7 +116,7 @@ Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` 
     instead of mounting `DynamicViewer`.
 -   **A lone file admits Compare as two versions of itself.** `availableViewerModes` judges a
     one-file selection by `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`, pure) — the same
-    question as `isExtensionComparableAsVersions` — so one `.txt` offers BOTH modes and one `.png`/`.glb`
+    question as `isFilenameComparableAsVersions` — so one `.txt` (or `README`) offers BOTH modes and one `.png`/`.glb`
     (no differ admits it) offers Visualize only. In Compare the host hands the viewer
     `seedCompareFromSingleFile(file)` = `[the viewed entry (pinned versionId, else latest), the same
 file at latest]`; the differ's per-side picker takes it from there, and toggling back shows the one
@@ -125,7 +130,7 @@ file at latest]`; the differ's per-side picker takes it from there, and toggling
     real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
     neither).
 -   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
-    only when `isExtensionComparableAsVersions(ext)` holds; it opens the differ with the row's version
+    only when `isFilenameComparableAsVersions(relativeKey)` holds; it opens the differ with the row's version
     on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
 
 All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
@@ -210,6 +215,55 @@ renders a readable side beside a denied/archived one.
 
 ---
 
+## Files Without an Extension and the Binary Guard
+
+A viewer opts into files that have no extension (README, LICENSE, Makefile, `.gitignore`) by listing
+the reserved token `(none)` (`NO_EXTENSION`, `core/extensionMatching.ts`) in `supportedExtensions`.
+The shipped `text-viewer` and `text-diff-viewer` list it; no other viewer does
+(`config/viewerConfig.test.ts` and `core/viewerSelection.test.ts` pin that).
+
+-   **One filename rule.** `filenameExtension(name)` reads the last path segment and splits it like
+    Python's `os.path.splitext`: leading dots do not start an extension, and a trailing dot leaves
+    none. `.gitignore`, `.bashrc` and `file.` have no extension; `.eslintrc.json` has `.json`;
+    `.env.example` has `.example` (no viewer). `extensionToken(name)` is that extension lowercased,
+    `(none)` when there is none, and undefined when there is no file name at all (a key ending in
+    `/` is a folder). `PluginRegistry.getFileExtension`/`getFileExtensions`, `extensionOfFilename` and
+    every lookup in `core/viewableExtensions.ts` apply it. A dotfile name declared as an extension
+    (`".gitignore"`) never matches; only `.`-prefixed lowercase values, `*` and `(none)` are valid.
+-   **Same matching.** The token rides the existing string-set matching, so every file must still
+    match: one `README` offers only the Text Viewer (it auto-opens) and, as a lone file, Compare;
+    `LICENSE` + `LICENSE.txt` is admitted by the differ; `README` + `model.glb`, or `README` + `x.3dm`
+    in the multi-file Online 3D Viewer, is admitted by nothing. The `*` wildcard matches the token.
+-   **Gate by name, not by extension.** Entry points ask the filename-based lookups:
+    `isViewableFilename(name)` (the file manager's eye icon, the search row's eye icon and checkbox
+    selection through `isViewableSearchRow`), `isFilenameComparableAsVersions(name)` (the version
+    lists' per-row Compare), `areFilenamesViewableTogether`, `areFilesComparableTogether` and
+    `availableModesForFiles`. Search rows are judged by `str_key`, not the indexed `str_fileext`
+    (the indexer stores `gitignore` for `.gitignore` and nothing for `README`).
+    `extensionOfFilename` is for display and format dispatch only.
+-   **Never show the token.** User-facing text names it with `describeExtensionToken` ("no
+    extension"): `DynamicViewer`'s "No compatible viewers found for file types: …" and
+    `FileViewerModal`'s no-viewer state.
+-   **Binary guard.** A text viewer is offered by name, so it can be handed an image or an archive.
+    Both text viewers load through `loadTextFile` (`core/textContent.ts`) from the presigned URL
+    `downloadAsset` returns. It sends `Range: bytes=0-8191`, classifies the first 8 KiB with
+    `classifyTextSample`, and stops there when they are not text: a binary file is never downloaded
+    whole and never reaches the highlighter. A larger text file takes one more full GET; a 200 (the
+    server ignored `Range`) is read as a stream and cancelled on binary content; S3's 416 for a range
+    on an empty object is empty text; a network `TypeError` (a bucket whose CORS refuses the `Range`
+    preflight) is retried once without `Range`. Classification: a UTF-32 byte-order mark is an
+    unsupported encoding; a UTF-16 LE/BE mark is text, decoded with `TextDecoder`; any NUL byte
+    otherwise is binary, except NULs on one side of each byte pair (UTF-16 without a mark: an
+    unsupported encoding); then the share of control bytes (TAB, LF, VT, FF, CR, backspace and ESC
+    excepted) is binary above 10 %, or above 2 % when the sample is not valid UTF-8. Latin-1 text
+    still renders, with replacement characters. The Text Viewer then shows an info notice
+    (`data-testid="text-viewer-binary-notice"` or `text-viewer-encoding-notice`); the Text Diff
+    Viewer shows it on that side only (`text-diff-side-binary` / `text-diff-side-encoding`) while the
+    other side renders, and logs nothing for it. A new text-style viewer loads through
+    `loadTextFile` too.
+
+---
+
 ## Adding a New Viewer Plugin
 
 **Step 1:** Create the viewer directory:
@@ -290,7 +344,7 @@ export const VIEWER_COMPONENTS = {
 
 ### Add-on and fork viewers
 
-An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
 The registry loads three tiers, merged in this order by `core/viewerSources.ts`:
 
@@ -306,42 +360,108 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 
 ## Plugin Config Fields
 
-| Field                        | Type              | Description                                          |
-| ---------------------------- | ----------------- | ---------------------------------------------------- |
-| `id`                         | string            | Unique plugin identifier                             |
-| `componentPath`              | string            | Path for manifest lookup                             |
-| `dependencyManager`          | string?           | Path to dependency loader module                     |
-| `dependencyManagerClass`     | string?           | Class name in dependency module                      |
-| `dependencyManagerMethod`    | string?           | Load method name                                     |
-| `dependencyCleanupMethod`    | string?           | Cleanup method name                                  |
-| `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
-| `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
-| `canFullscreen`              | boolean           | Supports fullscreen mode                             |
-| `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
-| `category`                   | string            | Viewer category (3d, media, document, data, preview) |
-| `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
-| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
-| `enabled`                    | boolean           | Whether the plugin is active                         |
-| `customParameters`           | object?           | Viewer-specific configuration                        |
-| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)         |
+| Field                        | Type              | Description                                                                   |
+| ---------------------------- | ----------------- | ----------------------------------------------------------------------------- |
+| `id`                         | string            | Unique plugin identifier                                                      |
+| `componentPath`              | string            | Path for manifest lookup                                                      |
+| `dependencyManager`          | string?           | Path to dependency loader module                                              |
+| `dependencyManagerClass`     | string?           | Class name in dependency module                                               |
+| `dependencyManagerMethod`    | string?           | Load method name                                                              |
+| `dependencyCleanupMethod`    | string?           | Cleanup method name                                                           |
+| `supportedExtensions`        | string[]          | Lowercase `.ext` values, `*` (any file) or `(none)` (files with no extension) |
+| `supportsMultiFile`          | boolean           | Can handle multiple files at once                                             |
+| `canFullscreen`              | boolean           | Supports fullscreen mode                                                      |
+| `priority`                   | number            | Lower = listed first when multiple viewers match                              |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use                                     |
+| `category`                   | string            | Viewer category (3d, media, document, data, preview)                          |
+| `featuresEnabledRestriction` | string[]?         | Required feature flags                                                        |
+| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                                              |
+| `enabled`                    | boolean           | Whether the plugin is active                                                  |
+| `customParameters`           | object?           | Viewer-specific configuration                                                 |
+| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)                                  |
+
+---
+
+## Three.js Selection Highlight (`ThreeJSViewerPlugin/utils/selectionHighlight.ts`)
+
+-   A selected object wears a highlight clone of its material library entry, made only by `createHighlightMaterial` and put back only by `releaseHighlight` / `syncSelectionHighlight`, which track each clone by identity (a `WeakMap` to the material it came from) and dispose it on deselect. Never detect a highlight from a colour value; the material editor can set any colour.
+-   A lit mesh material glows through `emissive` (0x4caf50, intensity 0.5). A material with no emissive colour (`PointsMaterial`, line and sprite materials, `MeshBasicMaterial`) is tinted green with `vertexColors` off (#1275).
+-   `supportsWireframe(material)` is false for point, line and sprite materials: Wireframe Mode (Controls tab), the material editor's Wireframe option and the material reset skip them, and never add a `wireframe` property to them.
+
+## Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
+
+Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; do not fetch a referenced file anywhere else.
+
+-   `assetDependencyResolver.ts` — path rules (relative to the naming file; nothing above the asset root, absolute, or with a scheme is fetched), named limits (`DEPENDENCY_LIMITS`), one download per key, stream-route URLs, and the `LoadingManager` URL modifier: resolved names map to blob URLs, `blob:`/`data:` pass through, anything else gets a transparent placeholder and is recorded for the viewer's notice. `revokeAll()` runs in viewer cleanup.
+-   `dependencyLoading.ts` — `loadWithDependencies()` per format: glTF URI rewrite (`gltfDependencyLoader.ts`), OBJ `mtllib` + `MTLLoader`, COLLADA `<init_from>` pre-scan, 3DS/FBX probe parse (record requests, resolve, re-parse only when a texture loaded). A USD load with no mesh, point or line throws `USD_NO_GEOMETRY_MESSAGE`, which the component shows instead of an empty canvas.
+-   `usdDependencies.ts` — collects USD asset paths (USDA `@…@` scan; USDC: only asset-path-typed fields, read with the bundled `USDCParser`); `subLayers` entries are listed as `sublayer` (not shown) instead of downloaded while `USD_FETCH_SUBLAYERS` is `false` (`buildUsdPackage` option `fetchSubLayers`), stores each file under the exact key three's `USDComposer` looks up (un-normalized join), and repacks an in-memory `.usdz` (root first) for `USDLoader.parse`. `checkUsdzSize()` (`USDZ_LIMITS`) runs before any `.usdz` is extracted.
+-   `fileLoaders.ts` — `loadFile()` passes a `LoadingManager` to every loader; without one it uses an isolating manager, so no loader fetches by URL on its own. `USD_FORMATS` and `OCCT_FORMATS` are checked against `viewerConfig.json` by `config/viewerConfig.test.ts`.
+-   The bundle (`web/customInstalls/threejs/threejsInstall.js`) exports `USDLoader`, `USDCParser`, `MTLLoader` and `fflate` (`zipSync`, `unzipSync`) for these modules.
+
+---
+
+## Stacking Over the Scene
+
+`core/viewerLayers.ts` holds the one stacking scale for what a viewer draws over its scene,
+`VIEWER_LAYER`, lowest first: `info` (1000, the read-only box with the viewer name, controls hint and
+scene stats), `panel` (1010, the side panel with its tabs, buttons, scene tree and resize handle, and the
+Panel button that shows it again), `notice` (1020, dismissible notices across the top, such as
+files that failed to load) and `cover` (1030, the shared `LoadingSpinner` and a message that replaces the
+scene). A viewer with a side panel takes each such element's `zIndex` from it and writes no number of
+its own; at an equal z-index the element later in the document is drawn above. The scale mirrors
+`features/orchestration/components/zLayers.ts`.
+
+-   **Local to the viewer.** `DynamicViewer` mounts every viewer inside `.visualizer-container-canvases`,
+    whose `transform` (`web/src/styles/index.scss`) makes it a stacking context and the containing block
+    of a panel's `position: fixed`. The values order one viewer's elements only: they cannot rise above
+    the application header (1002), toasts (4000) or Cloudscape modals, and the host's wide and fullscreen
+    controls (`.visualizer-footer`, painted after that container) stay above the whole viewer. Do not
+    raise a viewer value to win against something outside the viewer.
+-   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material
+    dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered
+    within the panel and keeps its own value.
+-   **The info box beside the open panel.** On a narrow container the open panel covers the info box,
+    whose text would show through the panel's translucent background. `useInfoBoxClearOfPanel()`
+    (`core/useOverlap.ts`) measures the two elements' rectangles (after every render of the viewer, when
+    either element or its container changes size, and when the window does) and gives the info box
+    `visibility: hidden` while they overlap: it keeps its place in the layout, so it is still measured,
+    and takes no clicks. It shows when there is room beside the panel (a wide window, wide or fullscreen
+    mode) and while the panel is hidden. A viewer passes `panelRef` to its panel's root element, and
+    `infoBoxRef` and `infoBoxVisibility` to its info box. `useOverlap(a, b)` is the measurement on its own.
+-   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and
+    VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes
+    a z-index number; each of the six viewers' `*ViewerComponent.stacking.test.tsx` renders it with its
+    real panel and checks the rendered order and the info box beside the open panel. A new viewer with
+    a side panel uses the scale and `useInfoBoxClearOfPanel()`, gets a stacking test, and joins that
+    list. The Cesium viewer still writes its own values: its controls hint
+    and measurement instructions sit over the bottom of its panel at every width, and its picked-feature
+    box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision
+    rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.
+-   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
+    Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
+    wide one.
 
 ---
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Four carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Five carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
 -   ThatOpen IFC BIM Viewer (web-ifc)
 -   Robotics Data Viewer (Lichtblick, also iframe-embedded)
+-   Online 3D Viewer (Rhinoceros 3D, rhino3dm)
 
-The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) and USD (.usd/.usda/.usdc/.usdz, parsed by three.js's pure-JavaScript `USDLoader`) need no `eval`, and gating the whole plugin would remove them too. So a deployment without `allowUnsafeEvalFeatures` still opens USD; with it, Needle and Three.js both match USD at priority 1 and the user picks. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
 
 `cesium-viewer` is not gated either. The viewer builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
 
+The Online 3D Viewer is registered twice for this reason (#921): `online3d-viewer` offers .amf/.bim/.off/.wrl ungated, and `online3d-viewer-rhino` offers .3dm only under the gate, both rendering `Online3dViewerComponent` from the one bundle `web/customInstalls/online3dviewer/` builds when either is enabled. If eval is refused anyway, `Online3dViewerPlugin/utils/evalBlocked.ts` replaces the viewer's "Failed to load rhino3dm" with a message naming `app.webUi.allowUnsafeEvalFeatures`.
+
 When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+
+**No runtime CDN fetches.** A viewer library that loads a helper module from a public CDN at run time (unpkg, jsDelivr) is blocked by the CSP and cannot work in an air-gapped, GovCloud or EU Sovereign deployment. The install script rewrites each such URL in the built bundle to a same-origin copy (or turns the feature off), fails when an expected URL is missing, and fails when any reachable CDN URL remains: `web/customInstalls/online3dviewer/online3dviewerInstall.js` and `web/customInstalls/babylonjs/runtimeFetches.js`. Babylon.js 9's `@adobe/spz` path (SPZ version 4) stays off because Babylon loads it through an inline module script and it needs `unsafe-eval`; the BabylonJS viewer refuses SPZ version 4 with a message (`splatFileHead.ts`).
 
 ---
 

@@ -205,6 +205,7 @@ Private and public subnets are created when any of the following are enabled:
 -   NVIDIA Gr00t pipeline
 -   Image to 3D pipeline
 -   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
+-   An add-on configured to place its functions in private subnets (the add-on's own pages name the setting)
 
 ### Availability Zone Configuration
 
@@ -298,6 +299,8 @@ These non-pipeline endpoints are created based on the deployment configuration:
 | AWS Deadline Cloud                              | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas`       | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
 | Amazon Bedrock AgentCore                        | `useGenAiCadStepAgent` with `runtime: "agentcore"` + `useGlobalVpc.useForAllLambdas`  | `bedrock-agentcore` — the GenAI CAD STEP agent's invoke Lambda calls `InvokeAgentRuntime` from the isolated subnets. The `agentcore` runtime is commercial-only, so this endpoint is too.           |
 | Amazon S3 (cross-Region, one per bucket Region) | `useGlobalVpc.addCrossRegionS3Endpoints` + an external asset bucket in another Region | `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set — reaches an asset bucket in another Region from the isolated subnets. Commercial partition only.                                        |
+
+An enabled add-on can add interface endpoints, and security groups for its own functions, to the VPC; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)).
 
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 

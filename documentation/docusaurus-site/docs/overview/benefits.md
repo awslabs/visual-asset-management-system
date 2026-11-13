@@ -41,7 +41,7 @@ VAMS includes 21 built-in viewer plugins that allow users to visualize a wide ra
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
 -   Visualize Gaussian splats with BabylonJS or PlayCanvas viewers, including WebXR support
 -   Render CAD files (STEP, IGES, BREP) via Three.js with WebAssembly-based loaders
--   Open USD scenes (USD, USDA, USDC, USDZ) through the Needle Engine WASM viewer
+-   Open USD scenes (USD, USDA, USDC, USDZ), including their referenced layers and textures, in the Three.js viewer, or in the Needle Engine WASM viewer where `allowUnsafeEvalFeatures` is enabled
 -   Play video, audio, and view images, PDFs, columnar data, and text files with dedicated viewers
 -   Plugin-based architecture allows adding custom viewers for proprietary or emerging formats
 
@@ -127,6 +127,6 @@ VAMS is designed as an open, extensible platform that development teams can cust
 -   Plugin-based viewer architecture for adding custom visualization capabilities
 -   Pipeline and workflow system for integrating custom processing logic
 -   REST API layer for building custom applications and integrations
--   Addon framework (e.g., Garnet Framework, Physna Sync) for connecting VAMS to external systems
+-   Addon framework (e.g., Garnet Framework, Physna Sync, EDH Workstations) for connecting VAMS to external systems
 -   CDK-based infrastructure for customizing deployment topology and AWS service configuration
 -   Configurable metadata schemas for adapting data models to domain-specific requirements

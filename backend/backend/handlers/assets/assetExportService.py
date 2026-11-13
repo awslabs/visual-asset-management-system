@@ -27,7 +27,7 @@ from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
-from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -100,10 +100,12 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
 # client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
-# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
-# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
-# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
-EXPORT_STAGING_PREFIX = "assetExports/"
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
+# bucket's lifecycle expiry for staged payloads are scoped to this prefix
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together. The
+# bucket's preview and viewer data sits under {databaseId}/, and the dot is a character no database
+# ID can contain, so the expiry on this prefix never reaches a database's auxiliary data.
+EXPORT_STAGING_PREFIX = "vams.assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10
@@ -1036,10 +1038,11 @@ def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[s
         
         if version_id and version_id != 'null':
             params['VersionId'] = version_id
-            
+
+        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params=params,
+            Params=presigned_get_object_params(params),
             ExpiresIn=int(presigned_url_timeout)
         )
         

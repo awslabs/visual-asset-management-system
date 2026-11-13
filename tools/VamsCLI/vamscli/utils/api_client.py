@@ -1,10 +1,11 @@
 """API client for VamsCLI."""
 
 import json
+import re
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -64,6 +65,39 @@ _AUTHORIZER_DENIED_MESSAGE = (
     "deployment may restrict API access by source IP address, or this credential is not accepted. "
     "Contact your administrator."
 )
+# The version check carries no token, so an authorizer deny there is not about a credential.
+_VERSION_CHECK_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API is reachable, but its authorizer refused the version check (HTTP 403). "
+    "That request carries no sign-in, so the deployment most likely restricts API access by source IP "
+    "address and this machine's address is not in the allowed ranges. Contact your administrator."
+)
+# A per-call token handed to APIClient(bearer_token=...) is never refreshed, so its
+# rejection is reported at once, and in words that do not tell the caller to run a CLI login.
+_INJECTED_TOKEN_REJECTED_MESSAGE = (
+    "Authentication failed: the VAMS API did not accept the supplied token (HTTP 401). It may be "
+    "expired, or issued to a client this deployment does not accept. Sign in again to get a new token."
+)
+_INJECTED_TOKEN_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the supplied token. The deployment may restrict "
+    "API access by source IP address, or this token is not accepted. Contact your administrator."
+)
+
+
+def _validated_bearer_token(token: Any) -> str:
+    """Return a per-call bearer token, refusing one that cannot be sent as a header value as is.
+
+    The value is the raw token (a JWT or a VAMS API key), without a "Bearer " prefix; whitespace or a
+    control character anywhere would split or corrupt the Authorization header. The token itself is
+    never echoed in the error.
+    """
+    if not isinstance(token, str) or not token:
+        raise ValueError("bearer_token must be a non-empty string")
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in token):
+        raise ValueError(
+            "bearer_token must be the raw token without a 'Bearer ' prefix, whitespace or control characters")
+    return token
+
+
 _REDIRECT_TARGET_REFUSED_MESSAGE = (
     "The request was redirected to {host}, which refused it (HTTP 403). That host is not the VAMS API, so "
     "signing in again does not change the result: a presigned URL may have expired, or the network path "
@@ -81,6 +115,17 @@ def _is_cognito_unavailable(error_message: str) -> bool:
     """
     text = (error_message or "").lower()
     return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
+def _api_error_code(response) -> Optional[str]:
+    """The machine-readable `code` an HTTP error body carries (a handler-defined string such as
+    `SOME_CODE`), or None. Never raises, for the reason `_api_error_message` gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _api_error_message(response, fallback: str) -> str:
@@ -262,9 +307,10 @@ from .exceptions import (
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
-from .exceptions import GlobalInfrastructureError
+from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
 
 
@@ -297,21 +343,60 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     )
 
 
-class APIClient(CustomAPIClientMixin):
+def _request_path(endpoint: str) -> str:
+    """The endpoint as it is joined onto the base URL, refused before any request when its path has an
+    empty, '.' or '..' segment, raw or percent-encoded: the join drops an empty segment and resolves a dot
+    segment (requests decodes an encoded dot first), so a path value carrying one would address another
+    route."""
+    path = endpoint.lstrip('/')
+    for segment in re.split(r'[?#]', path, maxsplit=1)[0].split('/'):
+        decoded = segment
+        while unquote(decoded) != decoded:
+            decoded = unquote(decoded)
+        # A dot segment behind an encoded slash, or before a ';' parameter, is refused too.
+        if not segment or any(part.split(';', 1)[0] in ('.', '..') for part in decoded.split('/')):
+            raise InvalidRequestPathError(
+                "A request path may not have an empty, '.' or '..' segment: it would address another route")
+    return path
+
+
+class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     """HTTP client for VAMS API Gateway.
 
-    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    Inherits the methods the optional add-ons add (``addon_api_client.AddonAPIClientMixin``) and
+    the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
     """
     
-    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
+    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None,
+                 bearer_token: Optional[str] = None):
+        """Create a client for one VAMS API.
+
+        ``bearer_token`` is for a process that serves several users, such as a remote
+        MCP server: it builds one client per request from the caller's own token. The token lives
+        on this instance only. It is sent as ``Authorization: Bearer <token>`` on every
+        authenticated request, never written to a profile file, never refreshed (the client holds
+        no refresh token), and a 401 or authorizer deny is reported at once rather than retried. In
+        that mode no profile is read or written: with no ``profile_manager`` given,
+        ``self.profile_manager`` is None and nothing reads the active profile. The CLI's own
+        commands keep passing a ``profile_manager`` and never set this.
+        """
         self.base_url = base_url.rstrip('/')
-        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
-        # constructed without one would read another deployment's credentials.
-        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
+        self._bearer_token = _validated_bearer_token(bearer_token) if bearer_token is not None else None
+        if self._bearer_token is not None:
+            self.profile_manager = profile_manager
+        else:
+            # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+            # constructed without one would read another deployment's credentials.
+            self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         # requests reads a timeout only from the per-request keyword, never from an attribute on the
         # Session, so the pair is applied in _make_request instead.
         self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
+    @property
+    def uses_injected_token(self) -> bool:
+        """True when this client authenticates with a per-instance ``bearer_token``."""
+        return self._bearer_token is not None
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
@@ -321,6 +406,9 @@ class APIClient(CustomAPIClientMixin):
         }
         
         if include_auth:
+            if self._bearer_token is not None:
+                headers['Authorization'] = f"Bearer {self._bearer_token}"
+                return headers
             auth_profile = self.profile_manager.load_auth_profile()
             if auth_profile and 'access_token' in auth_profile:
                 headers['Authorization'] = f"Bearer {auth_profile['access_token']}"
@@ -329,7 +417,9 @@ class APIClient(CustomAPIClientMixin):
         
     def _validate_token_before_request(self, include_auth: bool = True):
         """Validate token before making request (pre-flight check for override tokens)."""
-        if not include_auth:
+        if not include_auth or self._bearer_token is not None:
+            # An injected token is checked by the API's authorizer, which answers 401 for an
+            # expired one; there is no saved profile to read an expiry from.
             return
             
         # Check if we have an override token and validate it
@@ -349,13 +439,20 @@ class APIClient(CustomAPIClientMixin):
 
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
-        response body onto their own domain exception.
+        response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
+        segment raises `InvalidRequestPathError` before anything is sent (`_request_path`).
 
         A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
         ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
         every deployed route an `APIError`, and, with auth, a handler's or the resource policy's refusal
         `PermissionDeniedError`. Only the authorizer's deny, or a 403 of no known shape, is refreshed and
         resent.
+
+        A 401 means the credential did not authenticate (VAMS 2.7.0 and later answer an expired or
+        invalid token, and an unknown, disabled or expired API key, with 401; issue #1212). It is
+        refreshed and resent up to MAX_AUTH_RETRIES times, and one that persists raises
+        `AuthenticationError`. The authorizer-deny refresh above is kept for deployments older than
+        2.7.0, which answer the same credentials with a 403.
         """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
@@ -364,7 +461,7 @@ class APIClient(CustomAPIClientMixin):
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
-        url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
+        url = urljoin(self.base_url + '/', _request_path(endpoint))
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
         # The bearer token this request carries — passed to _try_refresh_token so concurrent 401/403
@@ -441,6 +538,9 @@ class APIClient(CustomAPIClientMixin):
                     raise RetryExhaustedError(error_msg)
             
             # Handle 401 errors with retry logic
+            if response.status_code == 401 and include_auth and self._bearer_token is not None:
+                # An injected per-call token has no refresh token behind it, so nothing is retried.
+                raise AuthenticationError(_INJECTED_TOKEN_REJECTED_MESSAGE)
             if response.status_code == 401 and include_auth and retry_count < MAX_AUTH_RETRIES:
                 # For override tokens, don't retry - fail immediately with clear message
                 if self.profile_manager.is_override_token():
@@ -458,6 +558,16 @@ class APIClient(CustomAPIClientMixin):
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
+
+            # A 401 that persists through every refresh: the API's authorizer answers a credential
+            # that does not authenticate (expired, invalid, or an unknown, disabled or expired API
+            # key) with 401. Reported as a sign-in problem, whatever raise_http_errors says, instead
+            # of falling through to a generic "API request failed (401)" APIError.
+            if response.status_code == 401 and include_auth:
+                raise AuthenticationError(
+                    "Authentication failed: the VAMS API did not accept the credential even after "
+                    "refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate."
+                )
             
             # A 403 is answered by one of several parties, told apart by the response, or by the host a
             # followed redirect reached. Only the authorizer's deny can be cured by a fresh token, so
@@ -482,8 +592,13 @@ class APIClient(CustomAPIClientMixin):
                 if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
                     raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
                 if include_auth and forbidden == FORBIDDEN_HANDLER:
-                    raise PermissionDeniedError(
-                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}")
+                    code = _api_error_code(response)
+                    raise PermissionDeniedError.for_code(code)(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
+                        code=code)
+                if include_auth and self._bearer_token is not None:
+                    # The authorizer refused the injected token; there is no refresh to try.
+                    raise PermissionDeniedError(_INJECTED_TOKEN_DENIED_MESSAGE)
                 if include_auth and retry_count < MAX_AUTH_RETRIES:
                     # For override tokens, check if expired
                     if self.profile_manager.is_override_token():
@@ -581,6 +696,10 @@ class APIClient(CustomAPIClientMixin):
         see that the saved access token already changed from the one their request used
         (token_before) and reuse it instead of triggering another refresh + token rotation."""
         from .logging import log_auth_diagnostic, log_config_diagnostic
+
+        if self._bearer_token is not None:
+            # An injected token is never refreshed or replaced from a profile.
+            return False
 
         with _TOKEN_REFRESH_LOCK:
             # Another thread may have already refreshed while we waited for the lock. If the saved
@@ -872,6 +991,9 @@ class APIClient(CustomAPIClientMixin):
                         "AWS WAF web ACL blocked the request, or the stored API Gateway URL names no deployed "
                         "stage (see 'vamscli profile info')."
                     )
+                if forbidden == FORBIDDEN_AUTHORIZER:
+                    # The API answered, so this is a refusal and not an outage.
+                    raise PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)
 
             response.raise_for_status()
             version_data = response.json()
@@ -926,8 +1048,9 @@ class APIClient(CustomAPIClientMixin):
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [401, 403]:
-                # Authentication failed - clear credentials
-                self.profile_manager.delete_auth_profile()
+                # Authentication failed - clear credentials (an injected token has none saved)
+                if self.profile_manager is not None and self._bearer_token is None:
+                    self.profile_manager.delete_auth_profile()
                 
                 if e.response.status_code == 401:
                     raise AuthenticationError(

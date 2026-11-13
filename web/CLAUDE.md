@@ -80,6 +80,8 @@ web/
                             #   chunks — never one re-rendered string) ResultDownloadButton.tsx
                             #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
                             #   with a not-abortable note when abortable === false)
+                            #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
+                            #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -92,7 +94,7 @@ web/
     FedAuth/oauthSignInState.ts  # External OAuth: opaque state, same-origin return page, one-time values
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
 
-    services/               # API and data services (ONLY files that may import apiClient)
+    services/               # API and data services (may import apiClient — Rule 3 lists the other directories that may)
       APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
@@ -104,7 +106,8 @@ web/
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
-    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see addons/edh/CLAUDE.md
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
       customNavigation.ts   #   customNavSections, appended to the side navigation
@@ -115,6 +118,7 @@ web/
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
@@ -214,8 +218,9 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. So a Cloudscape page that happens to use a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module, either use a VAMS-defined class or no class at all.
+-   **An add-on module's glob widens that global sheet on every deployment.** The utilities a Tailwind add-on module under `src/addons/<addon>/**` uses are emitted into the same stylesheet whether or not the add-on is enabled (the EDH module adds about 25), so the naming rule above covers them too.
 
     This is not hypothetical: `<div className="container">` wrapped the asset-view comment editor, and because VAMS defines no `.container` rule, the only match was Tailwind's `.container` utility with its responsive max-widths (640/768/1024/1280/1536px). It capped the comment box on any wide viewport. Nothing in the source pointed at it — the editor was filling its parent correctly, the parent was the clamped element — so the cause was only visible by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
 
@@ -253,7 +258,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -263,9 +268,10 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `MetadataSchemaService.ts` — schema management
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -283,6 +289,8 @@ npm run build
 # INCORRECT — NEVER use yarn
 yarn install
 ```
+
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
 
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
@@ -486,7 +494,8 @@ Key patterns to follow:
 2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
 3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
-5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
+6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`; the asset and file pages)
 
 ### 4.2 Consuming API Results
 
@@ -620,7 +629,7 @@ This codebase uses NO global state library. State is managed through:
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
 5. **URL params** via React Router v7 `useParams()`
-6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
+6. **TanStack Query** for server state in the Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory
 
 ### 6.2 Context Pattern
 
@@ -652,10 +661,11 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### 6.3 Existing Contexts
 
-| Context              | File                            | Purpose                          |
-| -------------------- | ------------------------------- | -------------------------------- |
-| `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
-| `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
+| Context                | File                              | Purpose                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AssetContext`         | `context/AssetContext.ts`         | Asset list state                                                                                                                                                                                                                                                                                                                                             |
+| `AssetDetailContext`   | `context/AssetDetailContext.ts`   | Single asset detail with reducer                                                                                                                                                                                                                                                                                                                             |
+| `RuntimeConfigContext` | `context/RuntimeConfigContext.ts` | The live runtime config, provided by `FedAuth/Auth.tsx` around the logged-in app; `useFeaturesEnabled()` re-evaluates when the secure config lands, so a feature-gated surface (a feature-restricted navigation entry, an add-on page) appears on a first login without a reload. Outside the provider both hooks fall back to `appCache.getItem("config")`. |
 
 The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
@@ -857,9 +867,9 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 ### 7.5 Adding Pages in a Fork
 
-An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do: without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ---
 
@@ -870,7 +880,7 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
 -   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers, which ship disabled) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts` in that order
 -   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
 -   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
@@ -919,11 +929,25 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the
+flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config
+carries no `featuresEnabled` until the secure config lands after the first login, and only the context
+re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry
+`featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses:
+`layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route
+check when the switches arrive, and strips the field before the items reach `SideNavigation`. An
+add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in
+`infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in
+`custom/customFeatures.ts`.
+
 Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval)
+-   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1242,17 +1266,17 @@ See section 9.4 for the full Synonyms rules.
 | ------------------------------- | -------------------- | ------------------------------------ |
 | `react`                         | 18.3                 | UI framework (upgraded from 17.0.2)  |
 | `typescript`                    | ^5.0.0               | Type system (upgraded from 4.4.4)    |
-| `vite`                          | ^8.0.0               | Build tooling (upgraded from ^6)     |
+| `vite`                          | ^8.0.16              | Build tooling (upgraded from ^6)     |
 | `aws-amplify`                   | v6 (latest)          | Auth integration (v6)                |
 | `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI (existing pages)   |
 | `@tanstack/react-query`         | v5                   | Server-state (orchestration module)  |
 | `@tanstack/react-table`         | v8                   | Headless tables (orchestration)      |
-| `tailwindcss`                   | latest               | Utility-first CSS (orchestration)    |
-| `@radix-ui/*`                   | latest               | Headless primitives (orchestration)  |
+| `tailwindcss`                   | ^3.4.14              | Utility-first CSS (orchestration)    |
+| `@radix-ui/*`                   | ^1.1.1 to ^2.2.2     | Headless primitives (orchestration)  |
 | `@rjsf/core`                    | v5                   | Dynamic tag forms (orchestration)    |
-| `@monaco-editor/react`          | latest               | Config editor (lazy-loaded)          |
+| `@monaco-editor/react`          | ^4.6.0               | Config editor (lazy-loaded)          |
 | `react-hook-form`               | v7                   | Form validation                      |
-| `zod`                           | latest               | Schema validation                    |
+| `zod`                           | ^3.23.8              | Schema validation                    |
 | `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
 | `react-router-dom`              | ^7.18.2              | Client-side routing                  |

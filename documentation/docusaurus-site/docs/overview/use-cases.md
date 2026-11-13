@@ -96,16 +96,17 @@ Robotics and Physical AI teams need to manage simulation environments, training 
 
 ### How VAMS Solves It
 
-VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Needle Engine viewer, and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
+VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Three.js viewer (and the Needle Engine viewer where `allowUnsafeEvalFeatures` is enabled), and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
 
 **Key features used:**
 
 -   NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
--   Needle USD Viewer for Universal Scene Description file visualization
+-   Three.js and Needle USD viewers for Universal Scene Description file visualization
 -   Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
 -   Workflow system for chaining asset processing steps
 -   API and CLI access for CI/CD integration with robotics development pipelines
 -   Metadata schemas for tracking simulation parameters and training configurations
+-   EDH Workstations add-on for GPU desktops with NVIDIA Isaac Sim and the VAMS Isaac Sim connector pre-installed, and for containerized simulation jobs
 
 ---
 
@@ -123,6 +124,7 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 
 -   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
 -   Physna Sync addon for VAMS->Physna data sync to support 3D/CAD AI geometric 3D searching in Physna
+-   EDH Workstations addon for launching Amazon DCV desktops next to the assets they work on, optionally with the user's VAMS CLI signed in on the desktop
 -   Asset versioning with alias naming for tracking as-built model revisions
 -   Cross-database asset linking for connecting related twin representations
 -   Multiple viewer plugins for visualizing different aspects of the digital twin

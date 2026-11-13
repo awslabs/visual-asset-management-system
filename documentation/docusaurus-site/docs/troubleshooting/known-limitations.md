@@ -147,7 +147,11 @@ Safari does not support the cross-origin isolation requirements needed by WebAss
 -   Three.js Viewer CAD formats (.stp, .step, .iges, .brep)
 -   Cesium 3D Tileset Viewer (.json tilesets)
 
-Standard mesh formats in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl) work correctly in Safari because they do not require WASM.
+Standard mesh formats and USD in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl, .usd, .usda, .usdc, .usdz) work correctly in Safari because they do not require WASM.
+
+### Three.js Viewer USD Composition Limits
+
+The Three.js Viewer composes a USD scene from the files it loads from the asset, using the three.js USD loader. It does not compose UDIM texture sets (`<UDIM>`), a `.usdz` referenced from another layer, or references written inside a binary (`.usdc`) layer, and it does not load files outside the asset. It does not compose or download sublayers (`subLayers`); the notice lists each one as not shown by this viewer. Scenes that place their geometry in sublayers or behind variant sets or payloads may compose only in part or not at all; when nothing in a scene can be drawn, the viewer shows a message instead of an empty view. Flattening the scene into one layer (for example with `usdcat --flatten`) or opening it in a desktop USD viewer shows the full scene. A notice on the viewer lists every referenced file it did not load. See [Referenced files in the Three.js Viewer](../concepts/viewers.md#referenced-files-in-the-threejs-viewer).
 
 ### Needle USD Viewer Compressed File Limitations
 
@@ -219,3 +223,9 @@ VAMS supports either Amazon CloudFront or Application Load Balancer for web host
 ### VPC Subnet IP Requirements
 
 When using a VPC, each subnet must have sufficient IP addresses for all deployed Lambda functions and VPC endpoints. The number of required IPs scales with the number of enabled pipelines and services. Refer to the [Configuration Guide](../deployment/configuration-reference.md) for subnet sizing guidance.
+
+---
+
+## Add-on Limitations
+
+Add-ons have limitations of their own, which each add-on's page lists; see [Add-ons Overview](../developer/addons-overview.md).

@@ -44,6 +44,10 @@ VAMS supports three approaches to external identity providers:
 Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
 :::
 
+:::info[Tokens issued to other clients]
+By default the authorizer accepts only tokens issued to the VAMS web application: a Cognito ID token whose `aud`, or access token whose `client_id`, is the web app client, or an external IdP token whose `aud` is `lambdaAuthorizorJWTAudience`. A deployment can accept tokens issued to further clients, such as a remotely hosted MCP server, by listing their app client ids (Cognito) or audiences (external IdP) in `additionalTokenAudiences`. Signature, issuer, expiry and token-use checks are unchanged, and the user's roles decide each request as usual. A listed client must be a user sign-in client (for example the authorization code grant), not a machine-to-machine client (the client credentials grant). For tokens accepted only through an additional audience, the authorizer rejects with `401`: with Amazon Cognito, an access token without a `username` claim; with an external OAuth IdP, a token with no user identity (`cognito:username`, `username` or `sub`), a token whose identity equals its own `client_id`, `azp` or `cid`, and a token carrying an app-only marker (`gty` = `client-credentials` (Auth0), `idtyp` = `app` (Microsoft Entra ID), or `preferred_username` starting with `service-account-` (Keycloak)). Tokens issued to the web app's own client or audience are not subject to these checks. Other identity providers' machine tokens may carry none of these markers, so list only audiences of clients that sign in users. See [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences).
+:::
+
 ### API Key
 
 VAMS supports API key authentication for programmatic access. API keys are sent directly in the `Authorization` header:
@@ -53,7 +57,22 @@ Authorization: vams_ak_abc123...
 ```
 
 :::info[Token Refresh]
-When using Cognito or external OAuth, tokens expire after a configured period. The frontend client automatically refreshes tokens using the refresh token grant. API key tokens do not expire but can be revoked through the API key management endpoints.
+When using Cognito or external OAuth, tokens expire after a configured period. The frontend client automatically refreshes tokens using the refresh token grant. API keys do not refresh: a key can carry an optional expiration date, and can be disabled or revoked through the API key management endpoints.
+:::
+
+### When a Credential Is Not Accepted: 401 and 403
+
+The custom Lambda authorizer answers a request it refuses with one of two status codes. The response body is always API Gateway's generic message; the reason is recorded in the authorization audit log, never returned.
+
+| Status | Body                                                                                  | Meaning                                                                                                                                                                                                                                 | What a client does                                                                           |
+| ------ | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `401`  | `{"message": "Unauthorized"}`                                                         | The credential did not authenticate: the `Authorization` header is missing or malformed, the token is expired, badly signed or issued for another audience or issuer, or the API key is unknown, disabled or expired.                   | Refresh the token (or sign in again) and resend once. Use a new API key.                     |
+| `403`  | `{"message": "User is not authorized to access this resource with an explicit deny"}` | The credential was accepted and the request refused: the source IP address is outside the deployment's allowed ranges, or an API key's user has no roles. The authorizer also answers `403` when it cannot verify tokens at the moment. | Do not refresh. Contact the administrator, or retry later if the identity provider was down. |
+
+A `403` can also come from the two-tier authorization below or from AWS WAF (see [Error Codes](overview.md#error-codes)); signing in again does not change any of them.
+
+:::note[Changed in v2.7.0]
+Before v2.7.0 the authorizer answered an expired or invalid token with `403` too. A script that refreshes its token only on `403` must also refresh on `401`. The VAMS web application and CLI handle both.
 :::
 
 ---

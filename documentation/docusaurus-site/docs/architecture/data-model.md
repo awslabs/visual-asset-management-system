@@ -384,6 +384,16 @@ bounds how often a status read polls Step Functions). Deliberately carries no ou
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
 
+A `SKIPPED` main row records the `fileUpload` trigger launches a concurrency lock refused. Its id is a
+uuid5 of the lock key and the blocking execution's id, so every refusal by one blocking execution on one
+lock lands on the same record. Each refusal writes the record's configuration row first (the trigger's
+output target and its `pipelineExecutionParameters`, which a re-run replays; kept from the first
+refusal), then its workflow-input rows (the refused launches' files, for the first 100 refusals), and
+last the main row, with one `UpdateItem` that sets the identity fields only if absent and adds one to
+`skippedLaunchCount`. The main row also carries `lastSkippedDate`, `skipScope`, `skipReason` and
+`blockingExecutionId`, and has no ARNs; the record has no pipeline or lock rows. Rows written before skip
+records existed carry none of these attributes and read as not skipped.
+
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 
@@ -530,6 +540,8 @@ Tags and tag types are database-namespaced. The partition key is the `databaseId
 | AppFeatureEnabledStorageTable | `featureName` | --                                                   |
 | S3AssetBucketsStorageTable    | `bucketId`    | `bucketName:baseAssetsPrefix` (GSI: `bucketNameGSI`) |
 
+An enabled add-on can add tables of its own; the add-on's page describes their schemas (see [Add-ons Overview](../developer/addons-overview.md)).
+
 ## Amazon S3 Bucket Organization
 
 ### Asset Buckets
@@ -603,14 +615,15 @@ Stores the built React frontend static assets. Served as an origin for Amazon Cl
 
 ### Artefacts Bucket
 
-Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with one prefix that separate uploads write:
+Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with two prefixes that separate uploads write:
 
 ```text
 {artefact files from infra/lib/artefacts/}
 vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
+addon/{addon}/...
 ```
 
-`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes `vamsSchema/`.
+`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. `addon/` is reserved for the trees the add-on stacks upload, one prefix per add-on; an add-on's resources page describes its own (see [Add-ons](../developer/addons-overview.md)). The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes both prefixes.
 
 ### Access Logs Bucket
 
