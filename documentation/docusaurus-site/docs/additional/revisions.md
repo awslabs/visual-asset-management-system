@@ -37,6 +37,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Major changes:**
 
+-   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim. An identity provider that issued `vams:tokens` with a different value must have its users' role assignments, user-level constraints and per-user records keyed by the username claim instead (see [Update the solution](../deployment/update-the-solution.md#v267-and-later-external-oauth-idp-user-identifier)). (PR #1491)
+
 **Breaking changes:**
 
 **Added:**
@@ -114,6 +116,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **VamsCLI request paths** — VamsCLI refuses, before sending anything, a request whose path has an empty, `.` or `..` segment. (PR #554)
 -   **Splat Toolbox job log lists keys and names** — The Splat Toolbox container's job log lists the pipeline definition's top-level keys and the names of its `INPUT_*`, `VAMS_*`, `AWS_*` and `TASK_*` environment variables instead of their values; only the AWS Region and AWS Batch job ID and attempt are printed with values. A definition that does not parse is reported by its length. (PR #1446)
 -   **Pipeline container job logs list keys and lengths** — The NVIDIA Cosmos 3, Cosmos Predict 2.5, Cosmos Reason, Cosmos Transfer and GR00T containers' job logs list the pipeline definition's top-level keys and say whether it came inline or as a file and its length, instead of printing the definition; a definition that does not parse is reported by its length. The Isaac Lab container's launch banner prints the job configuration's length instead of its text, and the Isaac Lab Batch job submission log masks the job environment's callback value by its variable name, whatever its length. (PR #1454)
+-   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1491)
 
 **Other changes:**
 
