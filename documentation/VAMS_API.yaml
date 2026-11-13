@@ -4360,7 +4360,7 @@ paths:
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload]
-                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
+                                    description: "Trigger type (default manual; set by trigger dispatch otherwise). A system trigger value (System-<Identifier>) is refused with 400: system pipeline runs are launched by VAMS itself, never through this request."
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4577,6 +4577,7 @@ paths:
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -7941,6 +7942,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: string
+                description: "Stored trigger value (Manual, File-Upload, or a system trigger value such as System-MyFeature, compared as given); the request spellings manual and fileUpload are accepted too."
               - in: query
                 name: groupId
                 required: false
@@ -8558,6 +8560,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 execution's metadata source asset list — cannot
                 be reproduced exactly, so the re-run is answered 400 instead of launching a run that
                 differs from the original. Start a new execution supplying those values.
+
+
+                A system pipeline run (a triggerType that starts with System-, launched by VAMS for a system
+                feature) is never re-run: the request is answered 400 and nothing is launched. Start
+                the operation again from the feature that created it.
             parameters:
               - in: path
                 name: executionId
@@ -15162,6 +15169,7 @@ components:
                     description: "Empty while the execution is still running. For a SKIPPED record, the first refused launch."
                 triggerType:
                     type: string
+                    description: "Stored trigger value: Manual, File-Upload, or a system trigger value (System-<Identifier>, chosen by the feature) on a run VAMS launched for a system feature. A system run cannot be re-run."
                 triggeredByUserId:
                     type: string
                 executionGroupId:

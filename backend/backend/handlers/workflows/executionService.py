@@ -29,6 +29,7 @@ from common.workflows import subExecutionStages as ses
 from common.workflows import availableLogs as al
 from common.workflows import executionAccess as ea
 from common.workflows import executionLogCapture as elc
+from common.workflows import systemPipelines as sp
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -81,7 +82,8 @@ claims_and_roles = {}
 
 def _stored_trigger_type(value) -> str:
     """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
-    and 'File-Upload'; any other value is compared as given."""
+    and 'File-Upload'; any other value (a system trigger value included, whose request and stored
+    spellings are the same) is compared as given."""
     value = (value or "").strip()
     return TRIGGER_TYPE_TO_STORED.get(value, value)
 
@@ -4113,9 +4115,15 @@ def handle_details_results_request(event):
     return get_execution_results(event, execution_id, queryParameters)
 
 
-def _reconcile_main_status(execution_id, main_item):
+def _reconcile_main_status(execution_id, main_item, force=False, raise_on_failure=False):
     """Lazily reconcile a non-terminal main row's status against Step Functions (in place). No-op
-    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort.
+    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort for a read.
+
+    `force` skips the poll interval, for the status change event that reports the execution ended
+    (handle_sfn_status_change). `raise_on_failure` (the status change event) re-raises a failed
+    DescribeExecution or a failed guarded write instead of logging it, so the event is retried by
+    Lambda's asynchronous retries.
+    A lost guard is never a failure: another writer finished the row.
 
     The row was non-terminal when this request read it, and the write below carries the terminal guard
     so it stays that way: the end-state lambda can finish the execution between the read and the write,
@@ -4124,7 +4132,7 @@ def _reconcile_main_status(execution_id, main_item):
     if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
         return
     last_sync = main_item.get("lastSfnSyncCheckDate", "")
-    if er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
+    if not force and er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
         return
     arn = main_item.get("workflow_execution_arn", "")
     if not arn:
@@ -4132,6 +4140,10 @@ def _reconcile_main_status(execution_id, main_item):
     try:
         described = sfn.describe_execution(executionArn=arn)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Status reconcile poll of execution {execution_id} failed; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Details status reconcile poll failed (non-critical): {e}")
         return
     main_item["lastSfnSyncCheckDate"] = er.iso_now()
@@ -4173,6 +4185,10 @@ def _reconcile_main_status(execution_id, main_item):
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
+        if raise_on_failure:
+            logger.warning(f"Could not persist the reconciled main row of execution {execution_id}; "
+                           f"the status change event will be retried: {e}")
+            raise
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
         written = False
     # The locks go whenever Step Functions reports the run ended, whether or not this poll's write
@@ -4184,6 +4200,72 @@ def _reconcile_main_status(execution_id, main_item):
     # not been published either: the reconcile that won the guard announces it.
     if written:
         _announce_reconciled_completion(main_item, reconciled_snapshot)
+
+
+# The Step Functions execution status change event (EventBridge default bus) the execution service
+# consumes, and the statuses its rule matches (infra: lambdaBuilder/workflowStatusEvents.ts).
+SFN_STATUS_CHANGE_SOURCE = "aws.states"
+SFN_STATUS_CHANGE_DETAIL_TYPE = "Step Functions Execution Status Change"
+
+
+def is_sfn_status_change_event(event):
+    """True for an EventBridge Step Functions execution status change event. An API Gateway request
+    cannot be one: the proxy integration builds the event itself, and it has no top-level `source` or
+    `detail-type`. The handler trusts nothing in the event beyond the execution it names: the status it
+    records comes from its own DescribeExecution call."""
+    return (isinstance(event, dict)
+            and event.get("source") == SFN_STATUS_CHANGE_SOURCE
+            and event.get("detail-type") == SFN_STATUS_CHANGE_DETAIL_TYPE
+            and isinstance(event.get("detail"), dict))
+
+
+def handle_sfn_status_change(event):
+    """Reconcile a workflow execution Step Functions reports as ended, without waiting for a read.
+
+    The rule matches every terminal status of the state machines named with the backend's `vams-`
+    prefix in this account and Region, which several deployments can share, so the event is acted on
+    only when its execution has a main row in THIS deployment whose recorded execution ARN is the
+    event's. The reconcile is the details read path's own (_reconcile_main_status, poll interval
+    skipped) under the shared terminal guard, so the push, a read and a VAMS terminal writer never
+    revert each other, and a duplicate event finds the row terminal and does nothing.
+
+    Unlike a read, the push raises when it cannot do its work: a failed main-row read, a failed
+    DescribeExecution (for example throttling when many runs end at once), or a failed guarded write.
+    EventBridge delivers the event asynchronously, so a raise makes Lambda retry it (twice, with
+    backoff), and a retry is safe: nothing was written, or the row is now
+    terminal and the retry ends like a duplicate. A lost guard is not a failure. An event whose
+    retries are all spent is dropped, and the run falls back to the read paths, which reconcile the
+    status when the run is next read.
+
+    Applies to every workflow run, not only system runs: what it writes is exactly what the next read
+    would have written, and it releases the locks and settles the pipeline rows of a run stopped
+    outside VAMS at once instead of when someone opens it. A run that finished through the state
+    machine is already terminal when the event arrives, so it costs one read. A feature that launched
+    the run (a system pipeline run) sees the result on the row it reads by its stored
+    workflowExecutionId; this handler names no pipeline and calls no feature. Never logs the event's
+    input or output. Returns a small dict for the log; EventBridge ignores it."""
+    detail = event.get("detail") or {}
+    execution_arn = detail.get("executionArn", "") or ""
+    execution_id = detail.get("name", "") or ""
+    status = detail.get("status", "") or ""
+    if os.environ.get(EXECUTION_SERVICE_ROUTES_ENV, "") == ROUTE_SET_PERMANENT_DELETE:
+        return {"handled": False, "reason": "not served by this function"}
+    if status not in TERMINAL_STATUSES:
+        return {"handled": False, "reason": "not a terminal status"}
+    (valid, _message) = validate({'executionId': {'value': execution_id, 'validator': 'GUID'}})
+    if not valid or not execution_arn:
+        logger.info("Ignored a status change event that names no VAMS workflow execution")
+        return {"handled": False, "reason": "not a workflow execution"}
+    main_item = get_execution_main_row(execution_id)
+    if not main_item or main_item.get("workflow_execution_arn", "") != execution_arn:
+        logger.info(f"Ignored the {status} status change of {execution_id}: no execution of this "
+                    f"deployment has that execution ARN")
+        return {"handled": False, "reason": "no matching execution"}
+    logger.info(f"Step Functions reported execution {execution_id} {status}")
+    if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
+        return {"handled": True, "reconciled": False}
+    _reconcile_main_status(execution_id, main_item, force=True, raise_on_failure=True)
+    return {"handled": True, "reconciled": True}
 
 
 def _settle_reconciled_terminal(execution_id, main_item, status):
@@ -6182,6 +6264,14 @@ def rerun_execution(event, execution_id, request_model):
         logger.info(f"Re-run not authorized for execution {execution_id}")
         return authorization_error()
 
+    # A system-pipeline run is launched by the feature that owns it, with a server-only context the
+    # stored records do not replay; re-running it as an ordinary run would execute it outside that
+    # feature. Checked after the visibility check, so the refusal reveals nothing to a caller who
+    # cannot see the execution.
+    if sp.is_system_trigger(main_item.get("triggerType")):
+        logger.info(f"Re-run refused for system execution {execution_id}")
+        return validation_error(body={"message": sp.SYSTEM_RERUN_REFUSED_MESSAGE}, event=event)
+
     workflow_database_id = main_item.get("workflowDatabaseId", "")
     workflow_id = main_item.get("workflowId", "")
     execute_path = f"/workflows/{workflow_database_id}/{workflow_id}/execute"
@@ -6568,6 +6658,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
     DELETE /workflows/executions/{executionId}/permanent -> permanent delete of the DynamoDB rows."""
     global claims_and_roles
+    # A Step Functions status change event is handled before the request log line: its detail carries
+    # the execution's input and output, which this function must not log.
+    if is_sfn_status_change_event(event):
+        return handle_sfn_status_change(event)
     logger.info(event)
     # Normalize the REST (v1) proxy event before the first requestContext.http /
     # queryStringParameters access (coerces null params to {} and injects the

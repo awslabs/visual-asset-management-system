@@ -1012,7 +1012,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 | `outputFileBaseExecutionPathExtension` | string | No       | Base path (under the output asset) that output files are written beneath, inserted immediately before each output file's own name. May contain dynamic tag placeholders (e.g. `{{firstAssetFileFileNameNoExt}}`) resolved at launch. **Omit** to inherit the workflow's `defaultOutputFileBaseExecutionPathExtension`; send `""` or `/` to write at the asset root regardless. Must not contain `..` or backslashes. See [Output path prefix](#output-path-prefix).                                                                                                                   |
 | `pipelineExecutionParameters`          | object | No       | Per-pipeline execution parameters, keyed by `pipelineId`. Each value may set `templateId`, `templateTags`, or a `customTemplateOverride`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group: 3-63 characters of letters, numbers, `-` and `_`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`. A system trigger value (`System-<Identifier>`) returns `400`: system pipeline runs are started by VAMS itself, never through this request.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 `relativeFileKey` is asset-relative (leading `/`); `/` selects the whole asset and `/folder/` a folder.
 
@@ -1125,7 +1125,7 @@ Each filter is optional and all supplied filters are AND-ed.
 | `workflowDatabaseId` | string | No       | --                 | List only executions of workflows in this database. Accepts `GLOBAL` for the shared workflow catalog.                                                                                       |
 | `status`             | string | No       | --                 | List only executions with this `executionStatus` (for example `RUNNING`, `SUCCEEDED`, `FAILED`).                                                                                            |
 | `excludeStatus`      | string | No       | --                 | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                                        |
-| `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
+| `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual`, `File-Upload`, or a system trigger value such as `System-MyFeature`).                                                                |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
 | `startingToken`      | string | No       | --                 | Continuation token from a previous response's `NextToken`. A token that cannot be decoded returns 400 rather than serving the first page again.                                             |
 
@@ -1211,7 +1211,7 @@ GET /workflows/executions
 | `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                                                                                                                                                    |
 | `status`                      | string  | No       | Filter by execution status.                                                                                                                                                        |
 | `excludeStatus`               | string  | No       | Leave out executions of these statuses (one, or comma-separated), before the page is cut. See [Skipped trigger launches](#skipped-trigger-launches).                               |
-| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                                                                  |
+| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`, or a system trigger value such as `System-MyFeature`).                                                                            |
 | `groupId`                     | string  | No       | Filter by execution group id.                                                                                                                                                      |
 | `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                                                                    |
 
@@ -1396,6 +1396,8 @@ A re-run reproduces the original request exactly, with input file versions resol
 
 Input file versions: for each input file, a re-run reuses the version recorded as pinned at launch; otherwise it reads the file's current version. A version is pinned only when the caller chose it: a `versionId` named in an execute request through the API or the CLI, or a version picked in the web: an older version chosen in the execute wizard, or a file run from the file manager while an asset version is browsed, even when that version is still the current one. A web launch from the current asset view and a launch by a `fileUpload` trigger are not pinned (the trigger's run still reads the uploaded version), so their re-runs read the current version. Executions recorded before version 2.7.0 carry no pinned record, so their re-runs read the current version. A pinned version that has since been deleted is refused the same way as an execute request naming that version.
 
+A system pipeline run (a `triggerType` that starts with `System-`, started by VAMS for a system feature) cannot be re-run: the request returns `400` and launches nothing. Start the operation again from the feature that created it.
+
 ```
 POST /workflows/executions/{executionId}/rerun
 ```
@@ -1422,13 +1424,13 @@ A re-run requires that the caller can view the original execution (`GET` on its 
 
 ### Error responses
 
-| Status | Description                                                                                                                                                |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `executionId` or `executionGroupId`, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
-| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)                                                                      |
-| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone                                                                     |
-| `429`  | Throttling -- too many requests                                                                                                                            |
-| `500`  | Internal server error, or re-run is unavailable in this deployment                                                                                         |
+| Status | Description                                                                                                                                                                       |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `executionId` or `executionGroupId`, a system pipeline run, a stored configuration value too large to reproduce exactly, or the reconstructed execution failed validation |
+| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)                                                                                             |
+| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone                                                                                            |
+| `429`  | Throttling -- too many requests                                                                                                                                                   |
+| `500`  | Internal server error, or re-run is unavailable in this deployment                                                                                                                |
 
 ---
 

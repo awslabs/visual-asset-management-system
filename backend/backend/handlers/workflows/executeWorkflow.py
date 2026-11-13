@@ -68,6 +68,7 @@ from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
 from common.workflows import executionLocks as el
+from common.workflows import systemPipelines as sp
 from common.workflows import workflowAsl
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
@@ -2176,9 +2177,14 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
                      filtered_inputs_by_composite=None, metadata_source_assets=None,
                      metadata_source_database_id="", metadata_source_databases=None,
-                     run_prefix=""):
+                     run_prefix="", system_execution_context=""):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
-    records. Run I/O (manifest, config files, output/aux prefixes) lives in run_bucket; input files
+    records.
+
+    system_execution_context is the serialized server-only context of a system-pipeline launch ("" for
+    every other run). When set it is added to pipeline 1's manifest and to the main execution row, and
+    nowhere else: the Step Functions input below never carries it, because the workflow lambdas log
+    their input. Run I/O (manifest, config files, output/aux prefixes) lives in run_bucket; input files
     are read from their own asset buckets (carried per manifest entry). Returns the executionId.
 
     run_prefix is the VAMS-owned area within run_bucket (its normalized baseAssetsPrefix, "" for a
@@ -2293,6 +2299,10 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             database_id=output_database_id,
             file_base_execution_path_extension=output_extension),
     )
+    # A system-pipeline run hands its pipeline the server-only context in a reserved manifest key of its
+    # own, never inside systemConfig. Every other run's manifest is unchanged (no key at all).
+    if system_execution_context:
+        first_manifest[sp.SYSTEM_EXECUTION_CONTEXT_MANIFEST_KEY] = json.loads(system_execution_context)
 
     # Render pipeline 1's resolved config against its manifest now; pipelines 2+ keep their resolved
     # (but un-rendered-against-task-manifest) config text — the interim lambda re-renders per task.
@@ -2452,7 +2462,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                 metadata_source_database_id=metadata_source_database_id,
                 metadata_source_databases=metadata_source_databases,
                 filtered_inputs_by_composite=filtered_inputs_by_composite,
-                step_metadata_gates=step_metadata_gates)
+                step_metadata_gates=step_metadata_gates,
+                system_execution_context=system_execution_context)
         except Exception:
             logger.exception(
                 f"Failed persisting execution records for {execution_id}; stopping the started execution "
@@ -2657,7 +2668,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                                execution_group_id, output_location_type=OUTPUT_LOCATION_TYPE_ASSET,
                                metadata_source_assets=None, metadata_source_database_id="",
                                metadata_source_databases=None, filtered_inputs_by_composite=None,
-                               step_metadata_gates=None, run_prefix=""):
+                               step_metadata_gates=None, run_prefix="",
+                               system_execution_context=""):
     """Write the main execution row, per-input workflow-input rows, the workflow configuration row,
     one PipelineExecutions row + config-snapshot per pipeline, and the output index rows.
 
@@ -2700,7 +2712,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
         execution_log_group_arn=workflow_execution_log_group_arn,
         execution_group_id=execution_group_id or "",
-        workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
+        workflow_version_arn=workflow.get("workflowVersionArn", "") or "",
+        system_execution_context=system_execution_context)
     main_table.put_item(Item=main_row)
 
     # 2) One workflow-input row per selected input (asset-scoped GET source of truth). A file named
@@ -2908,6 +2921,15 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     """Validate, authorize, resolve templates, cross-validate, and launch an asset-less execution.
 
     Returns the API response (success with the new execution id + any warnings, or an error)."""
+    # 0) A system-pipeline launch (a marked cross-call only; see common.workflows.systemPipelines)
+    #    records a system trigger value and carries a server-only context. Every other caller gets
+    #    None here, whatever its body or event says, so the public request can never reach either.
+    try:
+        system_execution = sp.resolve_system_execution(event)
+    except sp.SystemExecutionError as se:
+        logger.error(f"Refused a system-pipeline launch of {workflow_database_id}:{workflow_id}: {se}")
+        return validation_error(body={"message": sp.SYSTEM_EXECUTION_INVALID_MESSAGE}, event=event)
+
     # 1) Resolve + authorize the workflow; gate enabled + not archived.
     # Tier-2 GET on the workflow object: the right to execute comes from Tier-1 on the execute route,
     # while GET confirms the caller may see the workflow being run (the referenced pipelines are
@@ -3168,6 +3190,9 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 
     # 12) Launch + persist.
     trigger_type_stored = TRIGGER_TYPE_TO_STORED.get(request_model.triggerType, "Manual")
+    system_execution_context = ""
+    if system_execution is not None:
+        trigger_type_stored, system_execution_context = system_execution
     output_extension = _resolve_requested_output_extension(request_model, workflow)
     warnings = _missing_metadata_source_warnings(
         pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
@@ -3185,7 +3210,8 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             filtered_inputs_by_composite=filtered_inputs_by_composite,
             metadata_source_assets=metadata_source_assets,
             metadata_source_database_id=metadata_source_database_id,
-            metadata_source_databases=metadata_source_databases)
+            metadata_source_databases=metadata_source_databases,
+            system_execution_context=system_execution_context)
     except el.ExecutionLockConflict as conflict:
         # The key and the holder are for the log; the caller gets a fixed body naming only the scope
         # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery

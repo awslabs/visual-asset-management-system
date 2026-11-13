@@ -15,9 +15,14 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from common.validators import execution_id_pattern, iso8601_utc_pattern
 from customLogging.logger import safeLogger
+from common.workflows.systemPipelines import is_system_trigger, SYSTEM_TRIGGER_PREFIX
 
 logger = safeLogger()
 
+# Stored trigger values. A stored row may also hold a system trigger value
+# (common.workflows.systemPipelines.is_system_trigger: a fixed prefix plus a safe identifier), set only
+# by a marked system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below,
+# which does not include them.
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
 
@@ -54,6 +59,10 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Server-only system execution context (serialized JSON object), written only on a system-trigger
+    # run launched by a marked cross-call (also handed to the first step's manifest); never projected
+    # by the list or details APIs.
+    systemExecutionContext: Optional[str] = ""
     # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
     # concurrency restriction refused (one row per blocking run and lock key; see
     # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
@@ -66,8 +75,9 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
-        if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}")
+        if v not in TRIGGER_TYPES and not is_system_trigger(v):
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}, "
+                             f"or a {SYSTEM_TRIGGER_PREFIX}<identifier> system trigger value")
         return v
 
 
@@ -353,7 +363,8 @@ class WorkflowExecutionConfigurationRecord(
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
 # "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
-# handler maps them (TRIGGER_TYPE_TO_STORED).
+# handler maps them (TRIGGER_TYPE_TO_STORED). The system trigger values are deliberately absent: a
+# request naming one is refused here, whoever sends it.
 EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
 TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
 

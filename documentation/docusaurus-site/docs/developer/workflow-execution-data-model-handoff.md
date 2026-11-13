@@ -51,7 +51,9 @@ the read source for the data migration. No handler reads it.
 -   **`triggeredByUserId` and `triggerType`** are recorded on the main row. `triggerType` is stored as
     `Manual` or `File-Upload`; the execute request accepts the lowercase `manual` / `fileUpload` forms and
     the handler maps them. A trigger-launched run is attributed to `SYSTEM_USER`, because a user may
-    upload a file without holding permission to run the workflow the upload triggers.
+    upload a file without holding permission to run the workflow the upload triggers. A system pipeline
+    run stores a system trigger value such as `System-MyFeature`, which the execute request never accepts
+    (see [System pipeline runs](#system-pipeline-runs)).
 -   **Every write path stamps the global-list partition.** `allListPartition` carries the constant value
     `execution` on every main row and is the partition key of `WorkflowExecutionsByDateGSI`, which backs the
     global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
@@ -93,6 +95,31 @@ Pipeline rows start at `NEW` (queued), advance to `RUNNING` when the step begins
 status. `TERMINAL_STATUSES` is `SUCCEEDED`, `FAILED`, `ABORTED`, `TIMED_OUT`; a reconcile or an abort leaves
 a row that already reached one of those untouched.
 
+### Terminal writers
+
+Five paths write a terminal status on the main row, and all of them use the same terminal guard
+(`executionOutputs.not_terminal_condition`), so the first to write wins and the others leave the row alone:
+
+| Writer              | Code                                                                            | Status written                                                   |
+| ------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| End state           | `processWorkflowExecutionOutput` (`_write_execution_outputs`)                   | `SUCCEEDED`, or `FAILED` on an output failure                    |
+| Error handler       | `sfn/handleExecutionError.py` (`executionOutputs.finalize_main_row`)            | `FAILED`                                                         |
+| Abort               | `executionService.abort_execution`                                              | `ABORTED`                                                        |
+| Group abort         | `executionService.abort_group`, through `abort_execution` per member            | `ABORTED`                                                        |
+| Read-path reconcile | `executionService._reconcile_main_status` (details) and `get_executions` (list) | the status Step Functions reports for a run stopped outside VAMS |
+| Status change event | `executionService.handle_sfn_status_change`, through `_reconcile_main_status`   | the status Step Functions reports for a run stopped outside VAMS |
+
+The status change event writer is the push form of the details reconcile. An Amazon EventBridge rule on
+the default bus matches the Step Functions "Execution Status Change" events with a terminal status for
+this account and Region's `vams-` workflow state machines and invokes the execution service. The handler
+acts only when the event names an execution with a main row in this deployment whose recorded
+`workflow_execution_arn` is the event's (several deployments share the prefix), takes the status from its
+own `DescribeExecution` call rather than from the event, and does not log the event, whose detail
+carries the execution's input and output. A run that finished through the state machine is already
+terminal when the event arrives, so the handler only reads the row. It handles every run, not only
+system runs, because what it writes is what the next read would write, and it releases the locks of a
+run stopped outside VAMS right away.
+
 ### `executionLog` compared with `executionError`
 
 The main row captures the full CloudWatch log for the run in `executionLog` on **every** terminal
@@ -118,6 +145,43 @@ route (`GET /workflows/executions/{executionId}/logs`), which the shipped Databa
 permission templates deny; both fields are passed through log redaction before they leave the handler.
 The per-asset executions list returns a shortened copy of `executionLog` (the newest 16 KB,
 `LISTED_EXECUTION_LOG_MAX_BYTES`) so a 200-row page stays under the Lambda response limit.
+
+## System pipeline runs
+
+A system pipeline run is an execution VAMS itself launches for a system feature. The workflow core
+treats it as an ordinary run, with two differences, both implemented in
+`common/workflows/systemPipelines.py` so the core never imports, names or calls the feature:
+
+-   **Server-only trigger.** The run's `triggerType` is a system trigger value the feature chooses. Core
+    keeps no list of them: it accepts any value of the form `System-` followed by ASCII letters and
+    digits in words joined by single hyphens, at most 64 characters (for example `System-MyFeature`),
+    and stores it as given. The execute handler sets it only for a `lambdaCrossCall` carrying
+    `SYSTEM_USER` **and** the `vamsSystemPipeline` source marker, plus a top-level `systemExecution`
+    object (`{"triggerType": "System-MyFeature", "context": {...}}`). An API Gateway request cannot carry
+    either top-level key, and the public request model accepts only `manual` and `fileUpload`, so a
+    public request naming a system value is answered `400`. A malformed marked call is answered `400`
+    with a fixed message before any record is read.
+-   **Server-only context.** The marked call may carry `context`, a JSON object of at most 4096 bytes once
+    serialized. It is written to the first pipeline step's manifest under `systemExecutionContext` and to
+    the main row as serialized text, and nowhere else: not in `systemConfig` or `effectiveSystemConfig`,
+    not in the Step Functions input (which the workflow Lambda functions log), not in the list or details
+    responses, and never replayed. Later steps of a multi-step system workflow do not receive it.
+
+There is no terminal callback. The feature stores the `workflowExecutionId` the launch returns on its
+own record and reads the run's status from the ordinary execution tracking when its own record is read:
+the main execution row, which the terminal writers above keep current, the read-time reconcile, and the
+status change rule, which records a run stopped outside VAMS as soon as Step Functions reports it. Every
+terminal writer handles a system run exactly as it handles an ordinary run. A feature cleans up its own
+leftover artefacts with Amazon S3 lifecycle rules (for example, aborting incomplete multipart uploads),
+not with a hook in the workflow core.
+
+The launch path's trust rests on who can invoke the execute function directly: any principal with
+`lambda:InvokeFunction` on `executeWorkflowV2` can send the marked call and start a system run under any
+well-formed system trigger value. Today only the execution service (re-run) and the workflow trigger
+dispatcher hold that grant, and neither sends the marker, so a new invoke grant on that function is a
+grant to launch system runs and is reviewed as one.
+
+A re-run (`POST /workflows/executions/{executionId}/rerun`) of a system run is refused with `400`.
 
 ## Which record populates when
 

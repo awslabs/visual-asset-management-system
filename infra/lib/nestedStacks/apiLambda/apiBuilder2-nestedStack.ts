@@ -42,6 +42,7 @@ import {
     buildRegisterPipelineExecutionFunction,
     buildWorkflowRole,
     grantWorkflowServiceInternalInvoke,
+    buildWorkflowStatusChangeRule,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
@@ -396,6 +397,12 @@ export class ApiBuilder2NestedStack extends NestedStack {
             vpc,
             subnets
         );
+
+        // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
+        // state machine level) is reconciled when Step Functions reports it, through the execution
+        // service's read-path reconcile, so its execution row does not wait for a read. A feature that
+        // launched the run tracks it from that row by its stored workflowExecutionId.
+        buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
         // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).

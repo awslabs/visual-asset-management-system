@@ -896,8 +896,13 @@ def build_workflow_execution_record(
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
     last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
+    system_execution_context="",
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
+
+    system_execution_context is the serialized server-only context of a system-pipeline run
+    (common.workflows.systemPipelines). It is written only when set, so every other row keeps its
+    existing shape, and no list or details projection reads it.
 
     execution_group_id groups executions launched together (bulk / re-run). When set it is the PK of
     the WorkflowExecutionsByGroupGSI (SK executionStartDate), so abort-by-group can enumerate a group's
@@ -942,6 +947,8 @@ def build_workflow_execution_record(
     # Absent for an execution started on the unqualified state machine ARN.
     if workflow_version_arn:
         record["workflowVersionArn"] = workflow_version_arn
+    if system_execution_context:
+        record["systemExecutionContext"] = system_execution_context
     return record
 
 
