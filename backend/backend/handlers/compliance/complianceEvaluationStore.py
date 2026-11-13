@@ -2715,6 +2715,130 @@ def apply_finalized_state_if_missing(evaluation: Dict[str, Any]) -> bool:
     return bool(outcome)
 
 
+# --- A superseding outcome of the same execution (#1504) ---
+#
+# A workflow execution can announce its end twice: attempts of its end-state output step can overlap
+# (#1271), and a later attempt's SUCCEEDED replaces an earlier attempt's end-state FAILED on the
+# execution's main row. The first announcement recorded the rule FAILED (and may have finalized the
+# evaluation); the later SUCCEEDED of the SAME execution supersedes it. Nothing else does: a FAILED
+# never replaces a SUCCEEDED, an announcement of another execution never touches the rule, and an
+# evaluation closed without a verdict (superseded by a newer one, its asset or database removed) stays
+# closed. The steps are conditional and each is safe to repeat, so a redelivery after a failure at any
+# step converges: reopen the finalized evaluation (`completed`/`error` -> `pending_pipeline`, on the
+# finalization it was read with), replace the tracking row's outcome (`executionStatus = FAILED` of
+# that `executionId` -> SUCCEEDED), then finalize through `_finalize_when_complete`, so the verdict, the
+# asset state, quarantine, exceptions and the audit trail follow the normal rules: an evaluation that
+# no longer owns the asset state records its outcome on its own row only, and a release or exception
+# granted after the evaluation began still outranks it (`notApplied`).
+
+SUPERSEDED_EXECUTION_STATUS = "FAILED"
+SUPERSEDING_EXECUTION_STATUS = "SUCCEEDED"
+# The evaluation-row attributes a finalization writes only when they apply, removed when a superseded
+# outcome reopens the evaluation so the next finalization sets them afresh.
+_REOPEN_REMOVED_FIELDS = ("verdict", "violations", "exceptionApplied", "errorRules", "hasRuleErrors")
+
+
+def _condition(clauses: List[Tuple[str, str, Any]]) -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    """An AND of `attribute = value` clauses, as a `(ConditionExpression, names, values)` triple."""
+    names = {f"#sup{index}": attribute for index, (attribute, _, _) in enumerate(clauses)}
+    values = {f":sup{index}": value for index, (_, _, value) in enumerate(clauses)}
+    expression = " AND ".join(f"#sup{index} {op} :sup{index}"
+                              for index, (_, op, _) in enumerate(clauses))
+    return expression, names, values
+
+
+def superseded_failure(evaluation: Dict[str, Any], rule_name: str,
+                       execution_id: Optional[str]) -> bool:
+    """Whether a SUCCEEDED announcement of `execution_id` supersedes the rule's recorded outcome: the
+    rule's tracking row is `completed` with `executionStatus` FAILED for that same execution, and the
+    evaluation is still pending or was finalized with a verdict (not closed without one)."""
+    if not execution_id:
+        return False
+    if evaluation.get(engine.CLOSED_REASON_FIELD):
+        return False
+    if evaluation.get("status") not in (engine.EVALUATION_STATUS_PENDING_PIPELINE,
+                                        engine.EVALUATION_STATUS_COMPLETED,
+                                        engine.EVALUATION_STATUS_ERROR):
+        return False
+    row = get_evaluation(pipeline_execution_record_id(evaluation["evaluationId"], rule_name),
+                         consistent_read=True) or {}
+    return (row.get("status") == PIPELINE_EXECUTION_COMPLETED
+            and row.get("executionStatus") == SUPERSEDED_EXECUTION_STATUS
+            and row.get("executionId") == execution_id)
+
+
+def supersede_pipeline_rule_outcome(
+    evaluation: Dict[str, Any],
+    rule_name: str,
+    execution_id: str,
+    compliance_output: Optional[Dict[str, Any]],
+    started_at: Optional[str],
+    completed_at: Optional[str],
+) -> Dict[str, Any]:
+    """Replace the rule's FAILED outcome with the SUCCEEDED of the same execution and finalize the
+    evaluation again (see the section comment). Returns the finalization's outcome with
+    `superseded: True` when this call replaced the outcome, or `{superseded: False}` when the rows no
+    longer allow it (another delivery did it, or the evaluation was closed meanwhile)."""
+    evaluation_id = evaluation["evaluationId"]
+    tracking_id = pipeline_execution_record_id(evaluation_id, rule_name)
+    pending_rules = engine.pipeline_rules_from_json(evaluation.get("pipelineRulesPending", "[]"))
+    rule = pending_rules.get(rule_name)
+    if rule is None:
+        logger.warning(f"Evaluation {evaluation_id} holds no pipeline rule '{rule_name}'")
+        return {"evaluationId": evaluation_id, "ruleName": rule_name, "superseded": False}
+
+    # 1. Reopen a finalized evaluation, on the finalization this call read: a later finalization (of
+    #    a concurrent delivery) or a close makes the condition fail, and the rows decide from there.
+    if evaluation.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        clauses = [("status", "=", evaluation.get("status"))]
+        if evaluation.get("completedAt"):
+            clauses.append(("completedAt", "=", evaluation["completedAt"]))
+        try:
+            update_evaluation(evaluation_id, {
+                "status": engine.EVALUATION_STATUS_PENDING_PIPELINE,
+                "supersededOutcomeAt": now_iso(),
+            }, condition=_condition(clauses), remove_fields=_REOPEN_REMOVED_FIELDS)
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.info(f"Evaluation {evaluation_id} changed while its rule '{rule_name}' was "
+                        "superseded; the rows as they stand decide")
+            current = get_evaluation(evaluation_id, consistent_read=True) or {}
+            if current.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+                return {"evaluationId": evaluation_id, "ruleName": rule_name, "superseded": False}
+
+    # 2. Replace the outcome, only over the FAILED of this same execution.
+    rule_results = engine.evaluate_pipeline_rules(
+        {rule_name: rule}, SUPERSEDING_EXECUTION_STATUS, compliance_output, started_at,
+        completed_at, execution_id=execution_id)
+    replaced = True
+    try:
+        update_evaluation(tracking_id, {
+            "executionStatus": SUPERSEDING_EXECUTION_STATUS,
+            "ruleResults": json.dumps([r.dict() for r in rule_results]),
+            "completedAt": now_iso(),
+            "supersededExecutionStatus": SUPERSEDED_EXECUTION_STATUS,
+        }, condition=_condition([
+            ("status", "=", PIPELINE_EXECUTION_COMPLETED),
+            ("executionStatus", "=", SUPERSEDED_EXECUTION_STATUS),
+            ("executionId", "=", execution_id),
+        ]))
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        replaced = False
+        logger.info(f"Evaluation {evaluation_id} rule '{rule_name}' no longer records the FAILED of "
+                    f"execution {execution_id}; finalizing from the rows as they stand")
+
+    # 3. Finalize from the tracking rows, as the completion path does.
+    current = get_evaluation(evaluation_id, consistent_read=True) or evaluation
+    if current.get("status") != engine.EVALUATION_STATUS_PENDING_PIPELINE:
+        return {"evaluationId": evaluation_id, "ruleName": rule_name, "superseded": False}
+    outcome = _finalize_when_complete(current, phase="pipeline_superseded",
+                                      execution_status=SUPERSEDING_EXECUTION_STATUS)
+    return {**outcome, "ruleName": rule_name, "superseded": replaced}
+
+
 def _finalize_when_complete(evaluation: Dict[str, Any], phase: str,
                             execution_status: Optional[str] = None) -> Dict[str, Any]:
     """Finalize a `pending_pipeline` evaluation once every launched pipeline rule has reported:

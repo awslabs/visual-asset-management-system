@@ -151,6 +151,7 @@ class TestTheWorkflowCallback:
                 patch.object(store, "resolve_pipeline_execution",
                              return_value=(dict(self.EVALUATION), "rule-1")), \
                 patch.object(store, "asset_removal_reason", return_value=removed), \
+                patch.object(store, "superseded_failure", return_value=False), \
                 patch.object(store, "close_evaluation_of_removed_asset"), \
                 patch.object(callback, "read_execution_failure_reason", return_value="boom"), \
                 patch.object(callback, "read_compliance_output", return_value=None), \
@@ -173,6 +174,26 @@ class TestTheWorkflowCallback:
         (_event, _action, fields), = self._process(
             "SUCCEEDED", {"evaluationId": "eval-cb", "finalized": False})
         assert fields["changes"] is None and fields["details"]["finalized"] is False
+
+    def test_a_superseding_succeeded_is_recorded_with_the_status_it_replaced(self):
+        # #1504: the SUCCEEDED of the execution that reported FAILED replaces the rule's outcome.
+        outcome = {"evaluationId": "eval-cb", "finalized": True, "verdict": "compliant",
+                   "complianceState": "compliant", "superseded": True}
+        with _records(callback) as calls, \
+                patch.object(store, "resolve_pipeline_execution",
+                             return_value=(dict(self.EVALUATION), "rule-1")), \
+                patch.object(store, "superseded_failure", return_value=True), \
+                patch.object(store, "asset_removal_reason", return_value=None), \
+                patch.object(callback, "read_compliance_output", return_value=None), \
+                patch.object(store, "supersede_pipeline_rule_outcome", return_value=outcome), \
+                patch.object(store, "complete_pipeline_rule") as complete:
+            callback.process_completed_execution("exec-1", "SUCCEEDED", None, None)
+        complete.assert_not_called()
+        (_event, action, fields), = calls
+        assert action == "compliancePipelineRuleComplete"
+        assert fields["changes"] == {"complianceState": "compliant"}
+        assert fields["details"]["supersededExecutionStatus"] == "FAILED"
+        assert fields["details"]["superseded"] is True
 
     def test_an_evaluation_closed_for_a_removed_asset_is_recorded(self):
         (_event, action, fields), = self._process("SUCCEEDED", {}, removed="deleted")
