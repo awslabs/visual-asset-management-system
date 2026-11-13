@@ -60,7 +60,7 @@ def test_tools_sit_in_their_tiers():
     writes = _line_of("if CONFIG.enable_writes:")
     destructive = _line_of("if CONFIG.enable_destructive:")
     main = _line_of("def main()")
-    for name in ("list_zip_downloads", "list_asset_zip_downloads_all_users", "get_zip_download"):
+    for name in ("list_zip_downloads", "get_zip_download"):
         assert _def_line(name) < writes, f"{name} is a read tool"
     for name in ("create_zip_download", "get_zip_download_url"):
         assert writes < _def_line(name) < destructive, f"{name} belongs to the write tier"
@@ -89,17 +89,30 @@ def test_all_users_list_calls_the_all_users_route(reads):
     reads.api.list_zip_downloads.return_value = {
         "Items": [{"requestId": "r1", "requestedBy": "bob", "canDownload": True}],
         "NextToken": None}
-    result = server_module.list_asset_zip_downloads_all_users("db", "a", max_items=3)
+    result = server_module.list_zip_downloads("db", "a", all_users=True, max_items=3)
     assert result["Items"][0]["requestedBy"] == "bob"
     kwargs = reads.api.list_zip_downloads.call_args.kwargs
     assert kwargs["all_users"] is True
     assert kwargs["database_id"] == "db" and kwargs["asset_id"] == "a"
 
 
+def test_the_callers_list_does_not_ask_for_every_user(reads):
+    reads.api.list_zip_downloads.return_value = {"Items": [], "NextToken": None}
+    server_module.list_zip_downloads()
+    kwargs = reads.api.list_zip_downloads.call_args.kwargs
+    assert kwargs["all_users"] is False and kwargs["database_id"] is None
+
+
+def test_the_list_states_the_api_decisions_on_other_users_rows():
+    doc = " ".join((server_module.list_zip_downloads.__doc__ or "").split())
+    assert "all_users" in doc and "canDownload" in doc and "canRemove" in doc
+
+
 @pytest.mark.asyncio
-async def test_all_users_list_is_a_default_read_tool():
+async def test_there_is_one_zip_list_tool():
     names = {tool.name for tool in await server_module.mcp.list_tools()}
-    assert "list_asset_zip_downloads_all_users" in names
+    assert "list_zip_downloads" in names
+    assert "list_asset_zip_downloads_all_users" not in names
 
 
 def test_disabled_is_returned_as_data(reads):

@@ -54,8 +54,8 @@ zip-download
 `zip-download` (`create`, `list`, `get`, `download`, `cancel`, `delete`) drives the Download as Zip API. It is
 gated on `FEATURE_ZIPDOWNLOADS` from the profile's feature switches first and the API's 404 body second, and
 raises `ZipDownloadDisabledError` (`Zip downloads are not available for this deployment`). `download` streams the
-archive from the URL route and never prints the URL. `list --all-users` (with `-d`/`-a`) calls the all-users list route. MCP mirrors it as `list_zip_downloads`,
-`list_asset_zip_downloads_all_users` and `get_zip_download` (read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
+archive from the URL route and never prints the URL. `list --all-users` (with `-d`/`-a`) calls the all-users list route. MCP mirrors it as `list_zip_downloads`
+(`all_users=True` for the all-users route) and `get_zip_download` (read), `create_zip_download` and `get_zip_download_url` (write tier, not in `autoApprove`), and
 `cancel_zip_download` and `delete_zip_download` (destructive tier). Command file
 `vamscli/commands/zip_download.py`, helpers `vamscli/utils/zip_downloads.py`.
 

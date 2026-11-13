@@ -47,6 +47,7 @@ COMPUTE_TOOLS = {
     "create_edh_workstation", "renew_edh_workstation", "start_edh_workstation", "stop_edh_workstation",
     "stop_edh_admin_instance", "submit_edh_container_job", "start_edh_ami_recipe_build",
     "deactivate_edh_admin_instance", "kill_edh_container_job",
+    "create_zip_download", "cancel_zip_download",
 }
 
 # The typed read tools (Rule 13): each publishes an outputSchema with these fields.
@@ -61,6 +62,7 @@ TYPED_TOOLS = {
     "get_execution_details": "truncatedCollections", "get_execution_results": "resultContent",
     "generate_download_url": "downloadUrl", "generate_download_urls_bulk": "files",
     "get_file_info": "relativePath", "export_asset": "totalAssetsInTree", "list_features": "fetched_at",
+    "list_zip_downloads": "Items", "get_zip_download": "requestId",
 }
 
 

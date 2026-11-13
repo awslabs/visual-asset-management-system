@@ -49,7 +49,7 @@ from .client import (  # noqa: E402
 )
 from . import __version__ as MCP_VERSION  # noqa: E402
 from . import results  # noqa: E402
-from .annotations import COMPUTE, DESTRUCTIVE, READ, WRITE  # noqa: E402
+from .annotations import COMPUTE, DESTRUCTIVE, DESTRUCTIVE_COMPUTE, READ, WRITE  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 from .addon_tools import register_addon_tools  # noqa: E402
 from .addon_tools import ADDON_TOOL_MODULES, addon_deployed  # noqa: E402
@@ -1715,28 +1715,19 @@ def list_user_api_keys(
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List zip downloads", annotations=READ)
 @tool_result
 def list_zip_downloads(
     database_id: Optional[str] = None,
     asset_id: Optional[str] = None,
+    all_users: bool = False,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List the AUTHENTICATED user's zip download jobs, newest first (auto-paginated).
-
-    Give `database_id` and `asset_id` together for one asset's jobs, or neither for every asset.
-    Each row carries requestId, status (QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED),
-    archiveFileName, archiveFormat, progress, errorMessage and expiresAt. Jobs are private to their
-    creator, expire at expiresAt (7 days after creation; an expired job is not
-    listed and cannot be downloaded), and rows on assets the caller can no
-    longer read are left out — so an empty list says nothing about other users' jobs.
-
-    The walk is BOUNDED: `truncated` means jobs were not seen and `NextToken` continues it via
-    `starting_token`. Never conclude a job does not exist from a truncated result; use
-    get_zip_download() for one job. A deployment without zip downloads answers with
-    `error_type` ZipDownloadDisabledError.
-    """
+) -> results.ZipDownloadPage:
+    """Use to list zip download jobs, newest first: the caller's own (database_id + asset_id for
+    one asset, or neither), or with all_users=True every user's jobs for one asset (both ids). Rows
+    from other users carry `requestedBy` and the API's `canDownload` / `canRemove` flags. Jobs
+    expire after 7 days. `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_zip_downloads(
             database_id=database_id,
@@ -1744,55 +1735,18 @@ def list_zip_downloads(
             max_items=params["pageSize"],
             page_size=params["pageSize"],
             starting_token=params.get("startingToken"),
+            all_users=all_users,
         ),
         max_items=max_items,
         starting_token=starting_token,
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Get a zip download", annotations=READ)
 @tool_result
-def list_asset_zip_downloads_all_users(
-    database_id: str,
-    asset_id: str,
-    max_items: Optional[int] = None,
-    starting_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List EVERY user's zip download jobs for one asset, newest first (auto-paginated).
-
-    The Download Queue's "Show all users". The API allows it only to a role granted this list
-    route that may also read the asset; otherwise it answers AssetNotFoundError (the same answer as
-    for a missing asset) or an authorization error. Each row adds `requestedBy` (the requester's
-    user id), `isOwn`, and the API's own decisions for the caller: `canDownload` (whether
-    get_zip_download_url() would sign this archive) and `canRemove` (only the requester may cancel
-    or delete). Other users' rows carry the selection summary, not the selection preview. Jobs made
-    before this list existed appear only in their requester's own list. Bounded like
-    list_zip_downloads(): `truncated` means more jobs exist, and `NextToken` continues the walk via
-    `starting_token`.
-    """
-    return CLIENT.paginate(
-        lambda params: CLIENT.api.list_zip_downloads(
-            database_id=database_id,
-            asset_id=asset_id,
-            max_items=params["pageSize"],
-            page_size=params["pageSize"],
-            starting_token=params.get("startingToken"),
-            all_users=True,
-        ),
-        max_items=max_items,
-        starting_token=starting_token,
-    )
-
-
-@mcp.tool()
-@tool_result
-def get_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
-    """Read one of the caller's zip download jobs: status, progress and, on failure, the reason.
-
-    Poll this (every few seconds) after create_zip_download() until `status` is SUCCEEDED, FAILED or
-    CANCELLED; then get_zip_download_url() issues the download link for a SUCCEEDED job. A job of
-    another user, of another asset, or past its expiry reads as ZipDownloadNotFoundError.
-    """
+def get_zip_download(database_id: str, asset_id: str, request_id: str) -> results.ZipDownload:
+    """Use to poll one of the caller's zip jobs until `status` is SUCCEEDED, FAILED (see
+    `errorMessage`) or CANCELLED."""
     return CLIENT.api.get_zip_download(database_id, asset_id, request_id)
 
 
@@ -2263,7 +2217,7 @@ if CONFIG.enable_writes:
             payload["isActive"] = "true" if is_active else "false"
         return CLIENT.api.update_user_api_key(api_key_id, payload)
 
-    @mcp.tool()
+    @mcp.tool(title="Start a zip download", annotations=COMPUTE)
     @tool_result
     def create_zip_download(
         database_id: str,
@@ -2277,23 +2231,11 @@ if CONFIG.enable_writes:
         compression: Optional[str] = None,
         archive_file_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Start a server-side job that archives part or all of one asset into a zip, tar or tar.gz.
-
-        Select with `files` (asset-relative paths; `PATH@VERSIONID` pins one file's version, and a
-        path containing '@' with no version ends in a bare '@'), `folders` (everything under each),
-        or `whole_asset=True` alone. At most 1000 entries. `asset_version_id` or
-        `asset_version_alias` instead archives the selection as recorded in that asset version, and
-        cannot be combined with per-file versions. `compression` is `store` (default) or `deflate`,
-        zip only.
-
-        The WHOLE job is refused when any selected file is archived, deleted, in an archive storage
-        tier or of a blocked type, or the selection exceeds the deployment's file/size limits; the
-        error names the rule. A caller with the maximum number of active jobs gets
-        ZipDownloadLimitError — wait for one to finish rather than retrying.
-
-        Starts real AWS compute (a Batch job) that runs for minutes to hours on large assets, so keep
-        this tool out of `autoApprove`. Returns the job (status QUEUED); poll get_zip_download().
-        """
+        """Use only when the user asked for an archive: a job builds a zip, tar or tar.gz of `files`
+        (`PATH@VERSIONID` pins one), `folders` or `whole_asset=True` (at most 1000 entries), or of an
+        asset version's files (`asset_version_id` / `_alias`); poll get_zip_download(). Refused whole
+        for an archived, deleted, archive-tier or blocked file or over the limits (the error names
+        the rule). Starts billed compute: keep out of `autoApprove`."""
         selection = build_zip_selection(files or [], folders or [], whole_asset)
         body = build_zip_create_request(
             selection,
@@ -2305,24 +2247,12 @@ if CONFIG.enable_writes:
         )
         return CLIENT.api.create_zip_download(database_id, asset_id, body)
 
-    @mcp.tool()
+    @mcp.tool(title="Get a zip download URL", annotations=WRITE)
     @tool_result
     def get_zip_download_url(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
-        """Issue a short-lived presigned download URL for a SUCCEEDED zip download.
-
-        Returns `url`, `expiresIn` (seconds), `archiveFileName` and `archiveSizeBytes`. A job that
-        has not succeeded is ZipDownloadNotReadyError; a job past its expiresAt reads as not found
-        (ZipDownloadNotFoundError), and a job whose archive is no longer stored is
-        ZipDownloadExpiredError. Another user's job (from list_asset_zip_downloads_all_users(), row
-        `canDownload`) is signed only when the caller may download from the asset and every archived
-        file is still downloadable; otherwise it reads as not found or is refused.
-
-        The URL is a bearer credential: anyone holding it can download the archive — possibly the
-        whole asset — until it expires, with no further authentication. Returning it puts it in the
-        agent transcript and whatever logs the host keeps. Issue one only when a download was
-        actually asked for, keep this tool out of `autoApprove`, and treat any URL issued as
-        disclosed. `vamscli zip-download download` streams the archive without exposing the URL.
-        """
+        """Use only when the user asked to download a SUCCEEDED zip job: a presigned `url` with
+        `expiresIn`. The URL is a bearer credential for the whole archive and lands in the
+        transcript: keep this tool out of `autoApprove` and treat a URL as disclosed."""
         return CLIENT.api.get_zip_download_url(database_id, asset_id, request_id)
 
 
@@ -2543,27 +2473,17 @@ if CONFIG.enable_destructive:
         update_user_api_key(is_active=False)."""
         return CLIENT.api.delete_user_api_key(api_key_id)
 
-    @mcp.tool()
+    @mcp.tool(title="Cancel a zip download", annotations=DESTRUCTIVE_COMPUTE)
     @tool_result
     def cancel_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
-        """Cancel one of the caller's QUEUED or RUNNING zip downloads. Not reversible.
-
-        The Zip Archive run is stopped and its partial archive discarded; the job stays listed as
-        CANCELLED. A job that has already finished is refused with ZipDownloadStateError (use
-        delete_zip_download). The request carries the cancel intent, so a cancel never deletes a
-        job: should it finish between the state check and the call, the result's `action` reads
-        "ended" and `status` gives the job's final status (SUCCEEDED or FAILED) — report that.
-        """
+        """Use to stop one of the caller's QUEUED or RUNNING zip jobs. Not reversible. If it finished
+        meanwhile the answer's `action` is "ended" with its final `status`: report that."""
         return CLIENT.api.cancel_zip_download(database_id, asset_id, request_id)
 
-    @mcp.tool()
+    @mcp.tool(title="Delete a zip download", annotations=DESTRUCTIVE)
     @tool_result
     def delete_zip_download(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete one of the caller's finished zip downloads and its stored archive.
-
-        Only a SUCCEEDED, FAILED or CANCELLED job is deleted; a QUEUED or RUNNING one is refused with
-        ZipDownloadStateError (cancel it first). Any download URL already issued stops working.
-        """
+        """Use to PERMANENTLY delete one of the caller's finished zip jobs and its archive."""
         return CLIENT.api.delete_zip_download(database_id, asset_id, request_id)
 
 

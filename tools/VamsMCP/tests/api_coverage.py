@@ -52,6 +52,13 @@ TOOLS = {
     "unarchive_file": ("unarchive_file",),
     "delete_file": ("delete_file",),
     "download_asset_file": ("generate_download_url",),
+    # Download as Zip: one list tool covers the caller's lists and, with all_users, every user's.
+    "list_zip_downloads": ("list_zip_downloads",),
+    "get_zip_download": ("get_zip_download",),
+    "create_zip_download": ("create_zip_download",),
+    "get_zip_download_url": ("get_zip_download_url",),
+    "cancel_zip_download": ("cancel_zip_download",),
+    "delete_zip_download": ("delete_zip_download",),
     "download_asset_files_bulk": ("generate_download_urls_bulk",),
     # --- Asset versions ---
     "get_asset_versions": ("find_and_summarize", "list_asset_versions"),
@@ -227,6 +234,8 @@ EXCLUDED = {
     # --- Covered by another tool ---
     "get_metadata_schema": "the same rows as list_metadata_schemas(database_id=...)",
     "search_simple": "search_assets / search_files send the full search request (search_query)",
+    # --- Writes a local file ---
+    "download_zip_archive": "streams a finished archive to a local file (vamscli zip-download download)",
     # --- Never returned to an agent ---
     "get_edh_workstation_os_sign_in": "the desktop sign-in (a Windows password) is shown to its owner only",
 }

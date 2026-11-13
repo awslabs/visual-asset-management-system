@@ -270,3 +270,33 @@ class Status(ToolResult):
     cliVersion: Optional[str] = None
     reason: Optional[str] = None
     note: Optional[str] = None
+
+
+class ZipDownloadPage(Page):
+    Items: Optional[List[Any]] = Field(
+        None,
+        description="Jobs: requestId, status, archiveFileName, archiveFormat, progress, errorMessage, "
+        "expiresAt; the all-users list adds requestedBy, isOwn, canDownload, canRemove.",
+    )
+
+
+class ZipDownload(ToolResult):
+    requestId: Optional[str] = None
+    status: Optional[str] = Field(None, description="QUEUED, RUNNING, SUCCEEDED, FAILED or CANCELLED.")
+    databaseId: Optional[str] = None
+    assetId: Optional[str] = None
+    assetName: Optional[str] = None
+    assetVersionId: Optional[str] = None
+    archiveFileName: Optional[str] = None
+    archiveFormat: Optional[str] = None
+    compression: Optional[str] = None
+    archiveSizeBytes: Optional[Any] = None
+    progress: Optional[Dict[str, Any]] = Field(None, description="filesDone, filesTotal, bytesDone, bytesTotal.")
+    errorMessage: Optional[str] = Field(None, description="Why a FAILED job failed.")
+    cancelledBy: Optional[str] = None
+    selectionSummary: Optional[Dict[str, Any]] = None
+    selectionPreview: Optional[List[Any]] = None
+    createdAt: Optional[str] = None
+    startedAt: Optional[str] = None
+    completedAt: Optional[str] = None
+    expiresAt: Optional[Any] = Field(None, description="When the job and its archive are removed.")
