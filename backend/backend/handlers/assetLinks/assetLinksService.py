@@ -561,6 +561,7 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
 # PUT Operations
 #######################
 
+
 def _link_ids(link_item):
     """The record ids of both ends of an asset link: the source as databaseId/assetId, the target
     as targetDatabaseId/targetAssetId."""

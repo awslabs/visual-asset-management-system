@@ -21,6 +21,9 @@ from backend.backend.handlers.addon.garnetFramework import (
 )
 
 
+STREAM_ARN = "arn:aws:dynamodb:us-east-1:123456789012:table/{}/stream/x"
+
+
 def _sqs_record(message_id, source_arn, event_name, keys):
     message = {"eventSourceARN": source_arn, "eventName": event_name, "dynamodb": {"Keys": keys}}
     body = {"Type": "Notification", "Message": json.dumps(message)}
@@ -40,7 +43,7 @@ def _wire(monkeypatch, module, event, send_results):
 class TestOneRecordPerEntity:
     def test_an_asset_batch_records_each_asset(self, monkeypatch):
         m = garnetDataIndexAsset
-        arn = f"arn:aws:dynamodb:us-east-1:123456789012:table/{m.asset_storage_table_name}/stream/x"
+        arn = STREAM_ARN.format(m.asset_storage_table_name)
         event = {"Records": [
             _sqs_record("m1", arn, "REMOVE", {"databaseId": {"S": "db1"}, "assetId": {"S": "a1"}}),
             _sqs_record("m2", arn, "REMOVE", {"databaseId": {"S": "db1"}, "assetId": {"S": "a2"}}),
@@ -63,7 +66,7 @@ class TestOneRecordPerEntity:
 
     def test_a_database_batch_records_each_database(self, monkeypatch):
         m = garnetDataIndexDatabase
-        arn = f"arn:aws:dynamodb:us-east-1:123456789012:table/{m.database_storage_table_name}/stream/x"
+        arn = STREAM_ARN.format(m.database_storage_table_name)
         event = {"Records": [
             _sqs_record("m1", arn, "REMOVE", {"databaseId": {"S": "db1"}}),
             _sqs_record("m2", arn, "REMOVE", {"databaseId": {"S": "db2"}}),
