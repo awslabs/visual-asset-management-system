@@ -434,7 +434,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Major changes:**
 
--   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the token's `cognito:username`, `username` or `sub` claim and no longer reads a `vams:tokens` claim. An identity provider that issued `vams:tokens` with a different value must have its users' role assignments, user-level constraints and per-user records keyed by the username claim instead (see [Update the solution](../deployment/update-the-solution.md#v267-and-later-external-oauth-idp-user-identifier)). (PR #1490)
+-   Behavior changes to review before upgrading: on a deployment with an external OAuth identity provider, VAMS identifies each user by the first present of the token's `cognito:username`, `username` and `sub` claims and no longer reads a `vams:tokens` claim. An identity provider that issued `vams:tokens` with a different value must have its users' role assignments, user-level constraints and per-user records keyed by the username claim instead, and one whose access tokens carry none of the three claims has every request refused (see [Update the solution](../deployment/update-the-solution.md#v267-and-later-external-oauth-idp-user-identifier)). (PR #1490, PR #1491)
 
 **Breaking changes:**
 
@@ -456,7 +456,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Current Amazon Bedrock model for GenAI 3D Metadata Labeling** — The pipeline defaults to Claude Sonnet 5.5 (`global.anthropic.claude-sonnet-5-5`) in the commercial template. Amazon Bedrock refused the previous default, the Legacy Claude Sonnet 4.5, to accounts that had not used it for 30 days. A deployment that sets its own model keeps it; one on Claude Sonnet 4.5 changes it and redeploys. (issue #1353)
 -   **GenAI 3D Metadata Labeling works with Claude Sonnet 5.5** — Runs no longer fail with `ModelResponseError` when the model opens its answer with a thinking block; the pipeline reads the first text block of each response. (issue #1428)
 -   **Ingest-asset upload completion** — The complete stage of `POST /ingest-asset` (the request that carries `uploadId`) finishes the upload instead of always failing with `400` "Invalid API path or method". (issue #1453)
--   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1490)
+-   **The authorizer derives the caller's identity from the username claim** — The API authorizer identifies the caller only by the token's username claim (the first present of `cognito:username`, `username` and `sub`) and ignores claims a token carries under the reserved `vams:` prefix; a verified token with none of those claims is refused. Amazon Cognito users and API keys keep their identity. (PR #1490, PR #1491)
 
 **Other changes:**
 
