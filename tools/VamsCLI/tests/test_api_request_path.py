@@ -1,18 +1,22 @@
-"""`_make_request` refuses a request path with an empty, '.' or '..' segment before anything is sent.
+"""`_make_request` refuses a request path that would address another route before anything is sent.
 
 `_make_request` joins the endpoint onto the base URL. The join resolves a '.' or '..' segment and drops
-an empty one, and requests decodes a percent-encoded dot before sending, so a path value of any method
-carrying such a segment would address another route (an API key's among them). Such a path raises
-`InvalidRequestPathError` before any request, whichever method built it.
+an empty one, requests decodes a percent-encoded dot before sending, and a '?' or '#' ends the path.
+So a path value of any method carrying such a segment or character would
+address another route (an API key's among them). Such a path raises `InvalidRequestPathError` before
+any request, whichever method built it. `route_path` puts each value into its own segment, so a '/',
+'?', '#' or '%' in a value is sent percent-encoded to the route the method names.
 """
 
+import ast
 import re
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from vamscli import constants
-from vamscli.utils.api_client import APIClient
+from vamscli.utils.api_client import APIClient, build_comment_path, route_path
 from vamscli.utils.exceptions import APIError, GlobalInfrastructureError, InvalidRequestPathError
 
 # Every route constant constants.py exposes (the re-exported add-on paths included), with each
@@ -148,3 +152,190 @@ class TestRequestPathHasNoDotOrEmptySegment:
         # reads as an infrastructure failure.
         assert issubclass(InvalidRequestPathError, APIError)
         assert not issubclass(InvalidRequestPathError, GlobalInfrastructureError)
+
+
+def _refusal(error):
+    # A method may wrap the refusal in its own APIError; the refusal stays the cause.
+    while not isinstance(error, InvalidRequestPathError) and error.__context__ is not None:
+        error = error.__context__
+    return error
+
+
+class TestRequestPathHasNoControlCharacter:
+    """A request path that contains a control character, raw or percent-encoded, is refused before
+    anything is sent."""
+
+    @pytest.mark.parametrize("verb", ["GET", "PUT", "DELETE"])
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            f"/database/.\t./{API_KEY}",
+            f"/database/.\n./{API_KEY}",
+            f"/database/.\r./{API_KEY}",
+            f"/database/\t../{API_KEY}",
+            f"/database/%2e\t%2e/{API_KEY}",
+            f"/database/%2e%09%2e/{API_KEY}",
+            f"/database/.\x00./{API_KEY}",
+            f"/database/.\x0b./{API_KEY}",
+            f"/database/.\x7f./{API_KEY}",
+            "/database/db\t1",
+            "/database/db%0A1",
+            "/database/db%7F1",
+        ],
+    )
+    def test_a_path_with_a_control_character_is_refused_unsent(self, monkeypatch, verb, endpoint):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        with pytest.raises(InvalidRequestPathError):
+            client._make_request(verb, endpoint)
+        assert sent == []
+
+    @pytest.mark.parametrize("value", [f".\t./{API_KEY}", f"%2e\t%2e/{API_KEY}", f".\n./{API_KEY}"])
+    def test_a_value_carrying_one_is_refused_unsent(self, monkeypatch, value):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        with pytest.raises(APIError) as excinfo:
+            client.get_database(value)
+        assert sent == []
+        assert isinstance(_refusal(excinfo.value), InvalidRequestPathError)
+
+
+class TestPathValueStaysInItsOwnSegment:
+    """A '/', '?' or '#' in a value would end its segment or the path, and the API decodes a '%'
+    escape once; `route_path` sends each of them percent-encoded, and the guard refuses a raw '?' or
+    '#' however the endpoint was built."""
+
+    @pytest.mark.parametrize("endpoint", ["/database/db1#/assets/a-1", "/database/db1?/assets/a-1"])
+    def test_a_raw_query_or_fragment_mark_is_refused_unsent(self, monkeypatch, endpoint):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        with pytest.raises(InvalidRequestPathError):
+            client._make_request("PUT", endpoint)
+        assert sent == []
+
+    @pytest.mark.parametrize(
+        "method,args,verb,path",
+        [
+            ("get_database", ("db1/assets",), "GET", "/database/db1%2Fassets"),
+            ("get_asset", ("db1?", "a-1"), "GET", "/database/db1%3F/assets/a-1"),
+            ("update_asset", ("db1#", "a-1", {"description": "d"}), "PUT", "/database/db1%23/assets/a-1"),
+            # An asset id may end in '#'; it reaches its own asset, not the id before the mark.
+            ("update_asset", ("db-1", "a-1#", {"description": "d"}), "PUT", "/database/db-1/assets/a-1%23"),
+        ],
+    )
+    def test_a_value_is_sent_to_its_own_route(self, monkeypatch, method, args, verb, path):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)(*args)
+        assert sent == [(verb, "https://api.example.com" + path)]
+
+    def test_a_comment_key_and_a_login_profile_value_stay_in_their_segment(self, monkeypatch):
+        assert build_comment_path("a-1", "v/1", "c#1").endswith("/v%2F1:c%231")
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        client.call_login_profile("jane.doe@example.com")
+        assert sent == [("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com")]
+
+    @pytest.mark.parametrize("value", ["jane.doe@example.com", "a b", "x-1:c-1", "a+b", "a;b"])
+    def test_every_other_character_is_left_as_it_was(self, value):
+        """Control: only '/', '?', '#' and '%' change; requests encodes the rest as before."""
+        assert route_path("/database/{databaseId}", databaseId=value) == f"/database/{value}"
+
+    @pytest.mark.parametrize(
+        "asset_id,suffix",
+        [
+            # The API decodes each path value once: sent raw, `x-q%23` would read asset `x-q#`.
+            ("x-q%23", "x-q%2523"),
+            # A lone '%', which requests also sends as '%25'.
+            ("x-q%", "x-q%25"),
+        ],
+    )
+    def test_a_percent_sign_is_sent_as_part_of_the_value(self, monkeypatch, asset_id, suffix):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        client.get_asset("db-1", asset_id)
+        assert sent == [("GET", f"https://api.example.com/database/db-1/assets/{suffix}")]
+
+    @pytest.mark.parametrize(
+        "method,args,verb",
+        [
+            ("get_workflow_trigger", (), "GET"),
+            ("set_workflow_trigger", ({},), "PUT"),
+            ("delete_workflow_trigger", (), "DELETE"),
+        ],
+    )
+    def test_a_trigger_key_is_encoded_once(self, monkeypatch, method, args, verb):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)("db-1", "wf-1", "fileUpload#t-1", *args)
+        assert sent == [
+            (verb, "https://api.example.com/database/db-1/workflows/wf-1/triggers/fileUpload%23t-1")]
+
+    def test_route_path_imports_nothing_from_the_package(self):
+        """`api_client` imports the add-on and fork mixins at its top, so a mixin can import
+        `route_path` at module level only from a module that imports nothing from the package."""
+        source = Path(constants.__file__).parent / "utils" / "request_paths.py"
+        imports = [node for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+                   if isinstance(node, (ast.Import, ast.ImportFrom))]
+        assert imports, "control: the walk sees the module's imports"
+        assert [node for node in imports if isinstance(node, ast.ImportFrom) and (
+            node.level or (node.module or "").startswith("vamscli"))] == []
+        assert [alias.name for node in imports if isinstance(node, ast.Import)
+                for alias in node.names if alias.name.startswith("vamscli")] == []
+
+    def test_core_endpoints_are_built_with_route_path(self):
+        """Ratchet: a core method that formats a route constant itself would put a value into the path
+        unencoded. The EDH client encodes each value with `_edh_path_value`, and a compliance method
+        sends its path through `_compliance_request`, which encodes it; both are held by their own
+        tests."""
+        package = Path(constants.__file__).parent
+        offenders = []
+        for source in sorted(package.rglob("*.py")):
+            if source.name == "edh_api_client.py":
+                continue
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            # shortcut: a compliance path is exempt only inside a method that sends it through
+            # `_compliance_request`, whose quote(safe='/%') leaves a '/' or '%' in a value as typed;
+            # move those methods to route_path if the compliance routes adopt the same rule.
+            exempt = set()
+            for function in ast.walk(tree):
+                if isinstance(function, ast.FunctionDef) and any(
+                        isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "_compliance_request" for call in ast.walk(function)):
+                    exempt.update(id(node) for node in ast.walk(function))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "format" and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id.startswith("API_")
+                        and not (node.func.value.id.startswith("API_COMPLIANCE_") and id(node) in exempt)):
+                    offenders.append(f"{source.relative_to(package)}:{node.lineno}")
+        assert offenders == []
+
+    def test_the_ratchet_sees_the_package(self):
+        # Control: the walk above reads the client and finds its route_path calls.
+        source = (Path(constants.__file__).parent / "utils" / "api_client.py").read_text(encoding="utf-8")
+        assert len(re.findall(r"\broute_path\(\s*API_", source)) > 90
+
+
+class TestAssetIdEndingInHash:
+    """#1476: an asset id may end in '#'. Assets `x-q` and `x-q#` in one database are two assets, and
+    each method reaches its own asset's route; the '#' is never read as the start of a fragment."""
+
+    OPERATIONS = [
+        ("get_asset", (), "GET", ""),
+        ("update_asset", ({"description": "d"},), "PUT", ""),
+        ("list_asset_files", (), "GET", "/listFiles"),
+        ("archive_asset", (), "DELETE", "/archiveAsset"),
+        ("delete_asset_permanent", (None, True), "DELETE", "/deleteAsset"),
+    ]
+
+    @pytest.mark.parametrize("method,extra,verb,suffix", OPERATIONS)
+    def test_each_sibling_reaches_its_own_asset(self, monkeypatch, method, extra, verb, suffix):
+        client = _client()
+        sent = _record_requests(monkeypatch, client)
+        getattr(client, method)("db-1", "x-q#", *extra)
+        getattr(client, method)("db-1", "x-q", *extra)
+        assert sent == [
+            (verb, f"https://api.example.com/database/db-1/assets/x-q%23{suffix}"),
+            (verb, f"https://api.example.com/database/db-1/assets/x-q{suffix}"),
+        ]

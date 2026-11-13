@@ -564,6 +564,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed the complete stage of `POST /ingest-asset` (the request that carries `uploadId`) always failing with `400` "Invalid API path or method": ingest-asset now forwards the completion to the upload-completion route `/uploads/{uploadId}/complete`, so the upload is completed. An `uploadId` that is not a single path segment is refused with `400` "Invalid uploadId" before anything is written. ([#1453](https://github.com/awslabs/visual-asset-management-system/issues/1453))
 -   **Backend/Auth** The API authorizer derives the caller's identity only from the token's username claim and ignores claims a token carries under the reserved `vams:` prefix. ([PR #1490](https://github.com/awslabs/visual-asset-management-system/pull/1490))
     -   Note: the username claim is the first present of `cognito:username`, `username` and `sub`; a verified token with none of them is refused. Amazon Cognito users and API keys keep their identity. See the update guide for external OAuth identity providers.
+-   **CLI** VamsCLI and VamsMCP send a `/`, `?`, `#` or `%` in an ID they put into a request path percent-encoded, as part of that ID, so an asset whose ID ends in `#` is read, updated, archived and deleted as itself; they also refuse, before sending, a request path that contains a control character. ([#1476](https://github.com/awslabs/visual-asset-management-system/issues/1476), [#1483](https://github.com/awslabs/visual-asset-management-system/pull/1483))
 
 ### Chores
 
