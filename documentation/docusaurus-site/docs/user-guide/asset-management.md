@@ -226,6 +226,8 @@ To add files to an existing asset:
 
 5. Select **Finalize and Upload**. Upload progress is displayed for each file.
 
+![Add Files page with the destination folder /scene/, files at existing paths marked Exists: uploads a new version, and two Duplicate path errors](/img/upload_add_files_destination_20261113_v2.7.png)
+
 :::tip
 You can also navigate to the dedicated upload page for the asset from the asset detail page to use the full upload wizard with metadata and relationship options.
 :::
