@@ -25,9 +25,6 @@ from backend.tests.handlers.addon.edh.edhRowWriteTestSupport import (
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 import backend.backend.handlers.addon.edh.edhAdminService as service
 
-NOW = datetime.now(timezone.utc)
-RECENT = (NOW - timedelta(minutes=5)).isoformat()
-OLD = (NOW - timedelta(hours=5)).isoformat()
 BOOTSTRAP_LAUNCH = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
 
 
@@ -45,17 +42,30 @@ CLEARED_KEY = dict(bootstrap.CLEARED_KEY_ATTRIBUTES)
 CLEARED_ALL = {**CLEARED_KEY, **bootstrap.CLEARED_SECRET_ATTRIBUTES}
 
 
+def _recent():
+    """Five minutes before the call: inside the 15-minute creating grace and the 120-minute stale
+    cutoff. Taken when a test builds its rows, never at import, because the service compares it with
+    its own clock when the test runs, and a worker may reach this file long after collecting it."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+
+def _old():
+    """Five hours before the call: past the creating grace and the stale cutoff."""
+    return (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+
+
 def _rows():
+    recent, old = _recent(), _old()
     launch = session_row(bootstrapId=BOOTSTRAP_LAUNCH, userId="erin", edhUid=edh_uid_for("erin"),
-                         name="fresh", state="CREATING", edhState=None, connectionAvailable=False, updatedAt=RECENT)
+                         name="fresh", state="CREATING", edhState=None, connectionAvailable=False, updatedAt=recent)
     launch.pop("sessionId")
     return [
         session_row(bootstrapId="b-1", sessionId="s-1", userId="alice", edhUid="vowner1", name="cad-1",
-                    imageId="7", osFamily="linux", instanceType="g4dn.xlarge", updatedAt=RECENT),
+                    imageId="7", osFamily="linux", instanceType="g4dn.xlarge", updatedAt=recent),
         session_row(bootstrapId="b-9", sessionId="s-9", userId="bob", edhUid="vowner9", name="orphan",
-                    imageId="8", osFamily="windows", instanceType="g5.xlarge", updatedAt=OLD),
+                    imageId="8", osFamily="windows", instanceType="g5.xlarge", updatedAt=old),
         session_row(bootstrapId="b-6", sessionId="s-6", userId="dave", edhUid="vowner6", name="parked",
-                    state="STOPPED", edhState="stopped", connectionAvailable=False, updatedAt=RECENT),
+                    state="STOPPED", edhState="stopped", connectionAvailable=False, updatedAt=recent),
         session_row(bootstrapId="b-0", sessionId="s-0", userId="zoe", edhUid="vowner0", name="gone",
                     state="DELETED", connectionAvailable=False),
         launch,
@@ -313,7 +323,7 @@ class TestStopAndDeactivate:
         # start, and one it deletes cannot be started again, so the owner's next start is not held off.
         _install_revoke(monkeypatch)
         rows = _keyed_rows() if keyed else _rows()
-        next(row for row in rows if row["bootstrapId"] == "b-1")["startRequestedAt"] = RECENT
+        next(row for row in rows if row["bootstrapId"] == "b-1")["startRequestedAt"] = _recent()
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=rows)
 
         response = fakes.module.lambda_handler(
@@ -383,7 +393,7 @@ class TestStopAndDeactivate:
 
     def test_an_old_creating_launch_edh_does_not_list_is_deactivated_locally(self, monkeypatch):
         rows = _rows()
-        rows[-1]["updatedAt"] = OLD
+        rows[-1]["updatedAt"] = _old()
         fakes = install_admin_fakes(monkeypatch, edh=_client([]), rows=rows)
 
         response = fakes.module.lambda_handler(
