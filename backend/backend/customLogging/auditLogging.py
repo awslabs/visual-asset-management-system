@@ -13,7 +13,8 @@ as one auditFallback line and counted in the VAMS/Audit AuditWriteFailures metri
 log_action writes action records in the record contract (auditVersion 1): the
 action, its outcome, the actor, the request and the entity, with what a write
 changed. audit_request opens a request's audit context, which resolves the actor
-once and writes the request's successful action records together when it ends.
+once and writes the request's successful action records and allowed authorization
+records together when it ends.
 The action registry is common/auditActions.py.
 """
 
@@ -742,6 +743,11 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
     """
     Log authorization events with silent failure using claims_and_roles directly.
 
+    Inside the request audit context of this thread, an allowed decision is buffered and written in
+    the request's end-of-request flush, also inside deferred_authorization_audit(). A denial is
+    written at once, or at the end of a deferred_authorization_audit() block. Outside a context the
+    behaviour is unchanged. The record is the same either way.
+
     Args:
         claims_and_roles: The claims and roles dictionary
         authorized: Whether authorization was successful
@@ -756,9 +762,7 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         }
         
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
-        message = _format_log_message(event_type, user_context, custom_data,
-                                      _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
-        
+
         # Create a minimal mock event for CloudWatch logging
         mock_event = {
             'requestContext': {
@@ -771,6 +775,13 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
                 }
             }
         }
+
+        if _buffer_allowed_authorization(current_audit_context(), authorized, event_type, user_context,
+                                         custom_data, mock_event):
+            return
+
+        message = _format_log_message(event_type, user_context, custom_data,
+                                      _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION))
 
         log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
@@ -820,6 +831,10 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
     """
     Log API authorization events with silent failure using full API Gateway event.
 
+    Inside the request audit context opened for this event, an allowed decision is buffered and
+    written in the request's end-of-request flush; a denial is written at once. Outside a context
+    every decision is written at once. The record is the same either way.
+
     Args:
         event: The API Gateway event
         authorized: Whether authorization was successful
@@ -828,12 +843,34 @@ def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: 
     try:
         user_context = _extract_user_context(event)
         event_type = _event_type(("AUTHORIZATION", None), ("authorized", authorized))
+        if _buffer_allowed_authorization(_context_for(event), authorized, event_type, user_context,
+                                         custom_data, event):
+            return
         _write_audit_entry(ResourceKeys.AUDIT_LOG_AUTHORIZATION, event_type, user_context, custom_data, event)
         
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to log authorization audit event: {e}")
         report_undelivered_audit_records(ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", [None])
+
+
+def _buffer_allowed_authorization(ctx: Optional["AuditContext"], authorized: Any, event_type: str,
+                                  user_context: Dict[str, Any], custom_data: Any,
+                                  event: Optional[Dict[str, Any]]) -> bool:
+    """
+    Hand an allowed authorization record to the request audit context's end-of-request flush.
+
+    Only a decision that is exactly ``True`` and made inside an open context is buffered; a denial,
+    or any decision outside a context, is left to the caller to write at once. The record is
+    formatted exactly as an immediate write formats it (same prefix, payload and event echo, no
+    contract keys); only when it is written changes. Returns True when the record was handed over.
+    """
+    if ctx is None or authorized is not True:
+        return False
+    log_type = _audit_log_type(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+    message = _format_log_message(event_type, user_context, custom_data, log_type)
+    _enqueue_records(ctx, log_type, _records_with_echo([message], event), buffer=True)
+    return True
 
 
 def log_file_upload(
@@ -1502,9 +1539,10 @@ def audit_request(event: Dict[str, Any], lambda_context: Any = None, *,
     Inside it the actor (user, roles, MFA, auth method, API key id, cross-call and on-behalf-of) and
     the request facts (request id, method, route template, source IP, Lambda request id) are
     resolved once, and every audit function reuses them instead of resolving claims per record.
-    Successful action records are buffered and written when the block ends, one parallel write per
-    audit log group, bounded by AUDIT_FLUSH_DEADLINE_SECONDS; denials, failures and errors are
-    written at once. A record the flush cannot confirm in time is reported as undelivered.
+    Successful action records and allowed authorization records are buffered and written when the
+    block ends, one parallel write per audit log group, bounded by AUDIT_FLUSH_DEADLINE_SECONDS;
+    denials, failures and errors are written at once. A record the flush cannot confirm in time is
+    reported as undelivered.
 
     A nested block joins the outer one. Outside a context every audit function writes as it is
     called, as before. Records written from another thread (a worker pool) are written at once,
