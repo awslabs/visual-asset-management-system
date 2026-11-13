@@ -16,6 +16,7 @@ from common.validators import validate, normalize_userid_array
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id, query_all_items
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
 logger = safeLogger(service="UnsubscriptionService")
@@ -162,6 +163,7 @@ def delete_subscription(body):
     return response
 
 
+@audited_handler
 def lambda_handler(event, context):
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
@@ -199,7 +201,7 @@ def lambda_handler(event, context):
             },
             'entityId': {
                 'value': event['body']['entityId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'subscribers': {
                 'value': event['body']['subscribers'],
@@ -252,7 +254,14 @@ def lambda_handler(event, context):
                 allowed = True
 
         if allowed and httpMethod == 'DELETE':
-            return delete_subscription(event['body'])
+            result = delete_subscription(event['body'])
+            if result.get('statusCode') == 200:
+                body = event['body']
+                log_action(event, "subscriptionUnsubscribe", database_id=asset_object.get('databaseId'),
+                           asset_id=body.get('entityId'),
+                           subscriptionId=f"{body.get('eventName')}#{body.get('entityName')}#{body.get('entityId')}",
+                           changes={"subscribers": body.get('subscribers')})
+            return result
         else:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})

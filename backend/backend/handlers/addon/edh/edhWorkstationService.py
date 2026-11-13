@@ -44,7 +44,8 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import AUTH_METHOD_API_KEY, request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions, log_authorization
+from customLogging.auditLogging import audited_handler, log_actions, log_authorization
+from .common.edhAudit import records_route_action
 from models.common import (
     APIGatewayProxyResponseV2, internal_error, success,
     validation_error, general_error, authorization_error,
@@ -354,7 +355,7 @@ def _call_edh(event, client, wrapper, operation, edh_uid, *args):
     try:
         result = call(*args)
     except Exception as err:
-        log_actions(event, "edhProxy", {**audit, "edhStatus": type(err).__name__})
+        log_actions(event, "edhProxy", {**audit, "edhStatus": type(err).__name__}, outcome="failed")
         raise
     log_actions(event, "edhProxy", {**audit, "edhStatus": "ok"})
     return result
@@ -2027,6 +2028,8 @@ def handle_delete(event, path):
     return validation_error(body={'message': 'Unsupported route'}, event=event)
 
 
+@audited_handler
+@records_route_action
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles, request_deadline
     claims_and_roles = request_to_claims(event)

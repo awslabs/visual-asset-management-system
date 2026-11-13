@@ -126,7 +126,7 @@ Enable the pipeline in `infra/config/config.json`:
                 "useCodeBuild": true,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false,
-                "bedrockModelId": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
                 "openAi": { "modelId": "", "apiKeySecretArn": "" },
                 "allowInternetResearch": true,
                 "bedrockGuardrail": { "guardrailId": "", "guardrailVersion": "" },
@@ -144,7 +144,7 @@ Enable the pipeline in `infra/config/config.json`:
 
 Every option is described in the [Configuration Reference](../deployment/configuration-reference.md#genai-cad-step-agent-apppipelinesusegenaicadstepagent). Three points shape a deployment:
 
--   **Model.** Set `bedrockModelId` to a model available in the deployment's Region (an Anthropic Claude model by default). To offer OpenAI models, store the API key in AWS Secrets Manager (as a plain string or as JSON with an `apiKey` key) and set `openAi.apiKeySecretArn` and `openAi.modelId`; a run then selects it with the `MODEL_PROVIDER` tag. The container role's Amazon Bedrock grant names only `bedrockModelId`, so the `MODEL_ID` tag can override the OpenAI model but not the Bedrock one; to use another Bedrock model, change `bedrockModelId` and redeploy.
+-   **Model.** Set `bedrockModelId` to a model available in the deployment's Region whose lifecycle status is `ACTIVE` (the commercial template uses `global.anthropic.claude-sonnet-5-5`; the GovCloud and EU Sovereign Cloud templates leave it empty). [Choosing an Amazon Bedrock model](../deployment/configuration-reference.md#choosing-an-amazon-bedrock-model) shows how to check a model and which model ids each partition accepts. To offer OpenAI models, store the API key in AWS Secrets Manager (as a plain string or as JSON with an `apiKey` key) and set `openAi.apiKeySecretArn` and `openAi.modelId`; a run then selects it with the `MODEL_PROVIDER` tag. The container role's Amazon Bedrock grant names only `bedrockModelId`, so the `MODEL_ID` tag can override the OpenAI model but not the Bedrock one; to use another Bedrock model, change `bedrockModelId` and redeploy.
 -   **Guardrail.** Leave `bedrockGuardrail` empty and the deployment creates an Amazon Bedrock guardrail with a prompt-attack input filter (strength `LOW`) and applies it to every run; or name an existing guardrail's id and numbered version (or `DRAFT`) to apply your own, for example one that adds denied topics or word filters. The guardrail is applied whichever model provider a run uses.
 -   **Internet research.** `allowInternetResearch` is the deployment master switch. With it on, a run's `ALLOW_INTERNET_RESEARCH` tag decides; with it off, the search and fetch tools are never registered.
 

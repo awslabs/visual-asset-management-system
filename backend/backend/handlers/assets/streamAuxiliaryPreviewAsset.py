@@ -15,7 +15,7 @@ from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_streamed
+from customLogging.auditLogging import log_file_download_streamed, audited_handler
 from common.s3 import (
     validateUnallowedFileExtensionAndContentType,
     region_routing_s3_client,
@@ -236,6 +236,8 @@ def handle_head_request(event, claims_and_roles):
             logger.exception(f"S3 ClientError during HEAD request: {e}")
             return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auxiliary preview asset streaming APIs"""
     global claims_and_roles

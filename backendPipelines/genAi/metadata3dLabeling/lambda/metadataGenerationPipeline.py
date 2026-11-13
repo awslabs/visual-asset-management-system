@@ -155,10 +155,14 @@ def invoke_claude_3_with_text(prompt, base64_image_data = None):
 
 def extract_model_text(claude_result) -> str:
     """
-    Read the text of the model response's first content block.
+    Read the text of the model response's first text content block.
+
+    A model may return other blocks before the text: Claude Sonnet 5.5 can open its answer with a
+    ``thinking`` block although the request asks for no extended thinking. A block with no ``type``
+    is read as text, as older responses carried only ``text``.
 
     :param claude_result: Parsed response body from invoke_claude_3_with_text.
-    :return: The text of the first content block.
+    :return: The text of the first text content block.
     :raises ModelResponseError: With a shape-specific message, so a model that legitimately
         returned no content blocks is distinguishable from a malformed response.
     """
@@ -179,11 +183,12 @@ def extract_model_text(claude_result) -> str:
     if len(content) == 0:
         raise ModelResponseError("Model response returned an empty 'content' list.")
 
-    block = content[0]
-    if not isinstance(block, dict) or not isinstance(block.get("text"), str):
-        raise ModelResponseError("Model response content block carries no 'text' string.")
+    for block in content:
+        if (isinstance(block, dict) and block.get("type", "text") == "text"
+                and isinstance(block.get("text"), str)):
+            return block["text"]
 
-    return block["text"]
+    raise ModelResponseError("Model response content block carries no 'text' string.")
 
 
 def metadata_dict_to_str_array(metadata_dict):

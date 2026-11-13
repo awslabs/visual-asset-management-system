@@ -17,6 +17,7 @@ from common.tagScope import GLOBAL_SCOPE, normalize_scope, verify_database_exist
 TAG_NAME_INDEX = "tagNameIndex"
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.tag import (
     CreateTagRequestModel, UpdateTagRequestModel, TagOperationResponseModel
@@ -60,6 +61,11 @@ database_table = dynamodb.Table(database_table_name)
 # Business Logic Functions
 #######################
 
+
+class TagAccessDenied(Exception):
+    """The caller may not perform this tag operation (raised so no success path runs)."""
+
+
 def create_tag(tag_data, claims_and_roles):
     """Create a new tag
     
@@ -81,10 +87,10 @@ def create_tag(tag_data, claims_and_roles):
             "databaseId": database_id,
         }
         if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
+            raise TagAccessDenied()
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(tag_obj, "POST"):
-            return authorization_error()
+            raise TagAccessDenied()
 
         # Scope-conflict rule, asymmetric by design:
         #   GLOBAL  over a database-specific name -> ALLOWED, with a warning. Promoting a name to the
@@ -171,7 +177,7 @@ def create_tag(tag_data, claims_and_roles):
             warnings=warnings or None
         )
         
-    except VAMSGeneralErrorResponse:
+    except (VAMSGeneralErrorResponse, TagAccessDenied):
         raise
     except Exception as e:
         logger.exception(f"Error creating tag: {e}")
@@ -202,10 +208,10 @@ def update_tag(tag_data, claims_and_roles):
         # Authorization uses the STORED scope (a DB-X admin cannot edit a global/DB-Y tag)
         tag_obj = {"object__type": "tag", "tagName": tag_name, "databaseId": stored_scope}
         if len(claims_and_roles["tokens"]) == 0:
-            return authorization_error()
+            raise TagAccessDenied()
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(tag_obj, "PUT"):
-            return authorization_error()
+            raise TagAccessDenied()
 
         # Scope is immutable: reject any attempt to change databaseId
         if tag_data.get('databaseId') is not None and normalize_scope(tag_data['databaseId']) != stored_scope:
@@ -252,7 +258,7 @@ def update_tag(tag_data, claims_and_roles):
             timestamp=now
         )
         
-    except VAMSGeneralErrorResponse:
+    except (VAMSGeneralErrorResponse, TagAccessDenied):
         raise
     except Exception as e:
         logger.exception(f"Error updating tag: {e}")
@@ -294,14 +300,16 @@ def handle_post_request(event):
         request_model = parse(body, model=CreateTagRequestModel)
         
         # Create the tag
-        result = create_tag(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
-        
+        tag_data = request_model.dict(exclude_unset=True)
+        result = create_tag(tag_data, claims_and_roles)
+        log_action(event, "tagCreate", tagId=tag_data.get("tagName"), database_id=tag_data.get("databaseId"),
+                   changes=tag_data)
+
         # Return success response
         return success(body=result.dict())
         
+    except TagAccessDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
@@ -344,14 +352,16 @@ def handle_put_request(event):
         request_model = parse(body, model=UpdateTagRequestModel)
         
         # Update the tag
-        result = update_tag(
-            request_model.dict(exclude_unset=True),
-            claims_and_roles
-        )
-        
+        tag_data = request_model.dict(exclude_unset=True)
+        result = update_tag(tag_data, claims_and_roles)
+        log_action(event, "tagUpdate", tagId=tag_data.get("tagName"), database_id=tag_data.get("databaseId"),
+                   changes=tag_data)
+
         # Return success response
         return success(body=result.dict())
         
+    except TagAccessDenied:
+        return authorization_error()
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
@@ -362,6 +372,8 @@ def handle_put_request(event):
         logger.exception(f"Error handling PUT request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for tag creation and update APIs"""
     global claims_and_roles

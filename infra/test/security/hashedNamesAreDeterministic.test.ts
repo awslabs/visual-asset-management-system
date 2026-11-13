@@ -117,4 +117,13 @@ describe("hashed names are identical across two synths of one configuration", ()
     test("every OpenSearch Serverless access-policy name is the same in both synths", () => {
         expect(policyNames(second)).toEqual(policyNames(first));
     });
+
+    test("the REST API deployment logical id is the same in both synths", () => {
+        // It is an md5 over the API definition, the gateway responses and the authorizer invoke role's
+        // name (#1210); a token string in any of them would give each deploy a new deployment.
+        const deploymentIds = (s: SynthResult) =>
+            s.ofType("AWS::ApiGateway::Deployment").map((r) => r.logicalId);
+        expect(deploymentIds(first)).toHaveLength(1);
+        expect(deploymentIds(second)).toEqual(deploymentIds(first));
+    });
 });

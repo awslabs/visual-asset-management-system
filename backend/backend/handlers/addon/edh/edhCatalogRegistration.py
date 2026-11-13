@@ -28,6 +28,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.resourceNames import get_bucket_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.addon.edh import RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel
 from .common.edhCatalogFields import (
     EDH_STACK_FIELD_AMI_ID, KIND_DCV, KIND_TARGET_NODES, ensure_stack_in_project, project_assign_error,
@@ -415,6 +416,7 @@ def _response_data(result: Dict[str, List[str]]) -> Dict[str, str]:
     }
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     request_type = event.get("RequestType")
     resource_properties = event.get("ResourceProperties") or {}

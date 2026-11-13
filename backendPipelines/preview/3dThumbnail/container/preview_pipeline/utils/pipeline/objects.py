@@ -104,6 +104,33 @@ class PipelineExecutionParams(JsonEncodable):
 # with no room for an unknown key, while it reads only the command's first argument.
 INPUT_VERSIONS_KEY = "inputVersions"
 
+# The execution's results location travels in the same document, {"inputVersions": {...}, "outputResults":
+# {"bucketName": ..., "objectDir": ...}}, for the same reason: a stage field would be an unknown key to an
+# image built before it. The document always carries inputVersions (empty when the run has no version), so
+# an image that reads only inputVersions accepts it and ignores the location.
+RESULTS_LOCATION_KEY = "outputResults"
+
+
+def results_location(extra_args) -> dict:
+    """The execution's results location named in the command's later arguments, as
+    ``{"bucketName", "objectDir"}`` with ``objectDir`` ending in ``/``, or None when none names a usable
+    one. Never raises: a run without a results location renders exactly as before, it only has nowhere
+    to write a result document."""
+    location = None
+    for arg in extra_args or []:
+        try:
+            document = json.loads(arg)
+        except (TypeError, ValueError):
+            continue
+        named = document.get(RESULTS_LOCATION_KEY) if isinstance(document, dict) else None
+        if not isinstance(named, dict):
+            continue
+        bucket, directory = named.get("bucketName"), named.get("objectDir")
+        if isinstance(bucket, str) and bucket and isinstance(directory, str) and directory:
+            location = {"bucketName": bucket,
+                        "objectDir": directory if directory.endswith("/") else directory + "/"}
+    return location
+
 
 def apply_input_versions(params: dict, extra_args) -> dict:
     """Put the launch version named in the command's later arguments on the ``inputFile`` of each stage of

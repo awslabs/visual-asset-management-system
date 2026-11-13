@@ -31,6 +31,7 @@ import re
 import numpy as np
 import pyvista as pv
 
+from .. import scene_parts
 from ..utils.logging import get_logger
 from .scene_limits import SceneLimit
 
@@ -327,10 +328,12 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
 
     coloured = any(colour or face_colours for _, _, colour, face_colours in parts)
     points, cells, colours = [], [], []
+    part_points = []
     offset = 0
     for shape, location, colour, face_colours in parts:
         if limit.reached:
             break
+        part_points.append(0)
         BRepMesh_IncrementalMesh(shape, deflection, False, ANGULAR_DEFLECTION, True)
         matrix = None if location.IsIdentity() else _transform_matrix(location)
         faces = face_map(shape)
@@ -346,6 +349,7 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
             points.append(nodes)
             cells.append(triangles + offset)
             offset += len(nodes)
+            part_points[-1] += len(nodes)
             if coloured:
                 rgb = face_colours.get(index) or colour or DEFAULT_RGB
                 colours.append(np.tile(np.asarray(rgb, dtype=np.uint8), (len(triangles), 1)))
@@ -359,6 +363,7 @@ def tessellate_parts(parts, limit: SceneLimit = None) -> pv.PolyData:
     mesh = pv.PolyData(vertices, pv_faces)
     if coloured:
         mesh.cell_data["RGB"] = np.vstack(colours)
+    scene_parts.record_parts(mesh, part_points)
     logger.info(f"Tessellated CAD model: {len(vertices)} vertices, {len(triangles)} faces"
                 f"{', coloured' if coloured else ''}")
     return mesh
