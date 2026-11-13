@@ -182,6 +182,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** Fixed a file manager selection made with Ctrl- or Shift-click while the file list was still loading: when the next page of files arrived, every item but the first one clicked was dropped, so an action such as Download as Zip got a smaller selection than the one shown. ([#1125](https://github.com/awslabs/visual-asset-management-system/issues/1125))
 -   **Backend** Asset version resolution errors no longer repeat the requested asset version ID or alias. ([#1134](https://github.com/awslabs/visual-asset-management-system/issues/1134))
 -   **Backend** Fixed a workflow run ending `FAILED` although its output files landed, when writing them back took longer than 60 seconds: the write-back was sent again while the first one still ran. It is now sent once and waits up to the 15-minute function timeout, and a repeated write-back for the same upload answers with the first one's result. ([#1205](https://github.com/awslabs/visual-asset-management-system/issues/1205))
 -   **Backend** Fixed a workflow with more than 1,000 output files writing nothing back to its asset; the outputs are now written back in batches of up to 1,000 files, and a failed write-back names the files that did not land. ([#1204](https://github.com/awslabs/visual-asset-management-system/issues/1204))

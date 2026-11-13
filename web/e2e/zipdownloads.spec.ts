@@ -404,8 +404,9 @@ test.describe("Download as Zip", () => {
         await openFileManager(page, ref!.databaseId, ref!.assetId);
         await page.getByText("Show archived files").click();
         // The tree reloads with the archived files. Select only once it lists the archived one and
-        // its requests are done, so the reload cannot replace the selection, or the Export menu,
-        // under the clicks below (#1125 D32).
+        // its requests are done, so the reload cannot replace the Export menu under the clicks
+        // below. A page merged after the clicks keeps the whole selection (#1125 D32: the reducer
+        // keeps selectedItemPaths in step with a Ctrl-click, which a page merge re-resolves from).
         const archivedName = ref!.archivedKey.split("/").filter(Boolean).pop()!;
         await expect(treeNode(page, archivedName)).toBeVisible({ timeout: 60_000 });
         await page.waitForLoadState("networkidle").catch(() => undefined);

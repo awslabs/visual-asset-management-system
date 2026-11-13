@@ -179,6 +179,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1125).
 -   **Version resolution errors** — Asset version resolution errors no longer repeat the requested asset version ID or alias. (issue #1134)
 -   **Slow output write-back no longer fails the run** — A workflow run whose output write-back took longer than 60 seconds was sent the write-back a second time and ended `FAILED`, although its files landed. The write-back is now sent once and waits up to the 15-minute function timeout, and a repeated write-back for the same upload answers with the first one's result. (issue #1205)
 -   **Workflows with more than 1,000 output files** — A workflow whose output step produced more than 1,000 files wrote none of them back to its asset. The outputs are now written back in batches of up to 1,000 files, and a failed write-back names the files that did not land. (issue #1204)
