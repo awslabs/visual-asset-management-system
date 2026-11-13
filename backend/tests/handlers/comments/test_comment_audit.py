@@ -120,8 +120,24 @@ class TestCommentRecords:
         monkeypatch.setattr(comment_svc, "get_comments", lambda *args: {"Items": []})
         event = _event("GET", path={"assetId": "asset-01"})
         assert comment_svc.lambda_handler(event, None)["statusCode"] == 200
-        recorder.assert_called_once_with(event, "commentList", asset_id="asset-01", assetVersionId=None,
-                                         request_parameters={})
+        recorder.assert_called_once_with(event, "commentList", database_id="db1", asset_id="asset-01",
+                                         assetVersionId=None, request_parameters={})
+
+    def test_a_get_records_the_asset_database(self, wired, monkeypatch):
+        recorder, _ = wired
+        monkeypatch.setattr(comment_svc, "get_single_comment", lambda *args: {"commentId": "cmt-0001"})
+        event = _event("GET")
+        assert comment_svc.lambda_handler(event, None)["statusCode"] == 200
+        recorder.assert_called_once_with(event, "commentGet", database_id="db1", asset_id="asset-01",
+                                         assetVersionId="ver-01", commentId="cmt-0001", request_parameters={})
+
+    def test_an_archived_asset_read_records_its_database(self, wired, monkeypatch):
+        recorder, _ = wired
+        monkeypatch.setattr(comment_svc, "asset_authorization_object", lambda asset, *args, **kwargs: asset)
+        monkeypatch.setattr(comment_svc, "get_comments", lambda *args: {"Items": []})
+        event = _event("GET", path={"assetId": "asset-01"}, query={"showArchived": "true"})
+        assert comment_svc.lambda_handler(event, None)["statusCode"] == 200
+        assert recorder.call_args.kwargs["database_id"] == "db1"
 
     def test_a_get_of_a_missing_asset_records_nothing(self, wired, monkeypatch):
         recorder, _ = wired

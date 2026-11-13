@@ -120,6 +120,66 @@ class TestExecutionReadRecord:
         recorder.assert_not_called()
 
 
+def _allow_execution(monkeypatch, input_assets, config_row=None):
+    """Run the real access rule over an execution whose reads are stubbed: every check allows."""
+    enforcer = MagicMock()
+    enforcer.return_value.enforce.return_value = True
+    monkeypatch.setattr(execution_svc, "claims_and_roles", CLAIMS, raising=False)
+    monkeypatch.setattr(execution_svc, "CasbinEnforcer", enforcer)
+    monkeypatch.setattr(execution_svc, "_authz_decision_cache", {})
+    monkeypatch.setattr(execution_svc, "_held_execution_entities", {})
+    monkeypatch.setattr(execution_svc, "get_execution_input_assets", lambda execution_id: list(input_assets))
+    monkeypatch.setattr(execution_svc, "prewarm_asset_details", lambda pairs: None)
+    monkeypatch.setattr(execution_svc, "_get_asset_details_cached",
+                        lambda database_id, asset_id: {"databaseId": database_id, "assetId": asset_id})
+    main_item = {"workflowDatabaseId": "db1", "workflowId": "wf-01"}
+    return execution_svc.authorize_execution_access("exec-01", main_item, "GET", config_row=config_row or {})
+
+
+@pytest.mark.unit
+class TestExecutionReadIds:
+    """An execution read names the database (and asset) its access check already resolved."""
+
+    def _read(self, monkeypatch):
+        recorder = MagicMock()
+        monkeypatch.setattr(execution_svc, "log_action", recorder)
+        event = {"pathParameters": {"executionId": "exec-01"}, "queryStringParameters": {}}
+        execution_svc._log_execution_read(event, "workflowExecutionGet", {"statusCode": 200})
+        recorder.assert_called_once()
+        return recorder.call_args.kwargs
+
+    def test_a_run_over_one_asset_names_its_database_and_asset(self, monkeypatch):
+        assert _allow_execution(monkeypatch, [("db1", "asset-01")]) == (True, "")
+        kwargs = self._read(monkeypatch)
+        assert kwargs["database_id"] == "db1"
+        assert kwargs["asset_id"] == "asset-01"
+
+    def test_a_run_over_assets_of_one_database_names_the_database(self, monkeypatch):
+        _allow_execution(monkeypatch, [("db1", "asset-01")],
+                         config_row={"outputDatabaseId": "db1", "outputAssetId": "asset-02"})
+        kwargs = self._read(monkeypatch)
+        assert kwargs["database_id"] == "db1"
+        assert kwargs["asset_id"] is None
+
+    def test_a_run_across_databases_names_none(self, monkeypatch):
+        _allow_execution(monkeypatch, [("db1", "asset-01"), ("db2", "asset-02")])
+        kwargs = self._read(monkeypatch)
+        assert kwargs["database_id"] is None
+        assert kwargs["asset_id"] is None
+
+    def test_a_refused_check_holds_nothing(self, monkeypatch):
+        _allow_execution(monkeypatch, [("db1", "asset-01")])
+        execution_svc._held_execution_entities.clear()
+        monkeypatch.setattr(execution_svc, "_get_asset_details_cached", lambda *args: None)
+        enforcer = MagicMock()
+        enforcer.return_value.enforce.return_value = False
+        monkeypatch.setattr(execution_svc, "CasbinEnforcer", enforcer)
+        allowed, _ = execution_svc.authorize_execution_access(
+            "exec-01", {"workflowDatabaseId": "db1", "workflowId": "wf-01"}, "GET", config_row={})
+        assert allowed is False
+        assert execution_svc._held_execution_entities == {}
+
+
 @pytest.mark.unit
 class TestSystemRecords:
     def test_an_import_records_the_bundle_ids_and_what_it_applied(self, monkeypatch):

@@ -1817,7 +1817,7 @@ def _execution_workflow_casbin_object(casbin_enforcer, workflow_database_id, wor
 
 
 def _execution_access_check(execution_id, main_item, asset_action, config_row=None,
-                            config_row_loader=None, casbin_enforcer=None):
+                            config_row_loader=None, casbin_enforcer=None, entities_out=None):
     """The Tier-2 rule over the entities an execution actually read or wrote: workflow GET, GET on EVERY
     database whose metadata was captured, `asset_action` on EVERY distinct asset the run read, and
     `asset_action` on the asset it wrote to whenever the configuration row names one.
@@ -1853,6 +1853,10 @@ def _execution_access_check(execution_id, main_item, asset_action, config_row=No
     used instead, so a caller that also needs the row for its own projection (the global list, which
     reports the output target) memoizes the same single read. `casbin_enforcer` may be passed in so a
     batch caller builds one enforcer for a whole page instead of one per row.
+
+    `entities_out`, when a list, receives the (databaseId, assetId) pairs the rule resolved (the assets
+    the run read and the asset it wrote to), so a single-execution read can name them in its audit record
+    without a read of its own.
 
     Returns (allowed: bool, denied_reason: str); denied_reason is for logging only."""
     if len(claims_and_roles["tokens"]) == 0:
@@ -1891,6 +1895,8 @@ def _execution_access_check(execution_id, main_item, asset_action, config_row=No
     # and the memo is shared across a whole list page, so an asset several rows reference is read once.
     entity_pairs = read_assets + ([(output_database_id, output_asset_id)]
                                   if output_database_id and output_asset_id else [])
+    if entities_out is not None:
+        entities_out.extend(entity_pairs)
     # A list page resolves a bounded number of DISTINCT assets. Once that bound is reached the page stops
     # resolving new ones, and this row is DENIED rather than authorized on assets it never resolved: the
     # rule stays "every asset the run read must allow the action", so the rows the page does return are
@@ -1948,8 +1954,33 @@ def authorize_execution_access(execution_id, main_item, asset_action, config_row
     """Tier-2 authorization for an execution operation (details, logs, abort). `config_row` supplies an
     already-read configuration row so a caller that holds one does not pay for a second read.
 
-    Returns (allowed: bool, denied_reason: str); the rule itself is _execution_access_check."""
-    return _execution_access_check(execution_id, main_item, asset_action, config_row=config_row)
+    Returns (allowed: bool, denied_reason: str); the rule itself is _execution_access_check. An allowed
+    execution's (databaseId, assetId) pairs are held for this request's audit record (the first decision
+    per execution: a details read that also checks a blocking run keeps its own)."""
+    entities = []
+    allowed, reason = _execution_access_check(execution_id, main_item, asset_action, config_row=config_row,
+                                              entities_out=entities)
+    if allowed:
+        _held_execution_entities.setdefault(execution_id, entities)
+    return allowed, reason
+
+
+# The (databaseId, assetId) pairs each execution this request was allowed to read resolved during its
+# access check, keyed by execution id; cleared per request. Read only to name the ids on the audit record.
+_held_execution_entities = {}
+
+
+def _held_execution_ids(execution_id):
+    """The databaseId (and assetId) to record for a read of one execution: named only when the run's
+    resolved assets share one database (and are one asset), so a run across databases names none."""
+    pairs = {pair for pair in _held_execution_entities.get(execution_id) or [] if all(pair)}
+    databases = {database_id for database_id, _ in pairs}
+    ids = {}
+    if len(databases) == 1:
+        ids["database_id"] = next(iter(databases))
+        if len(pairs) == 1:
+            ids["asset_id"] = next(iter(pairs))[1]
+    return ids
 
 
 def authorize_abort(execution_id, main_item, config_row=None):
@@ -6578,8 +6609,10 @@ def _log_execution_read(event, action, response):
     if status != 200:
         return response
     path_parameters = event.get('pathParameters') or {}
-    log_action(event, action, database_id=path_parameters.get('databaseId'),
-               asset_id=path_parameters.get('assetId'), workflowId=path_parameters.get('workflowId'),
+    held = _held_execution_ids(path_parameters.get('executionId')) if path_parameters.get('executionId') else {}
+    log_action(event, action, database_id=path_parameters.get('databaseId') or held.get('database_id'),
+               asset_id=path_parameters.get('assetId') or held.get('asset_id'),
+               workflowId=path_parameters.get('workflowId'),
                executionId=path_parameters.get('executionId'),
                request_parameters=dict(event.get('queryStringParameters') or {}))
     return response
@@ -6621,6 +6654,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     _deadline_job_cache.clear()
     _deadline_sessions_cache.clear()
     _sagemaker_describe_cache.clear()
+    _held_execution_entities.clear()
     _disarm_authz_entity_budget()
 
     try:
