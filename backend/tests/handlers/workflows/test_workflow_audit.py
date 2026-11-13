@@ -136,25 +136,66 @@ class TestSystemRecords:
         assert kwargs["pipelineId"] == "pipe-01" and kwargs["workflowId"] == "wf-01"
         assert kwargs["item_count"] == 1 and kwargs["details"]["requestType"] == "Register"
 
-    def test_an_execution_error_records_a_failed_end_for_its_user(self, monkeypatch):
+    @staticmethod
+    def _run_error_handler(monkeypatch, main_row, input_rows, more_inputs=False):
+        """Run the real error handler on the input its Step Functions state passes (the error handler
+        payload of the generated state machine names only the execution and the workflow), with the
+        execution tables faked."""
         recorder = MagicMock()
         monkeypatch.setattr(error_svc, "log_action", recorder)
-        monkeypatch.setattr(error_svc, "reconcile_failed_execution", lambda body, info: None)
-        event = {"body": {"workflowExecutionId": "exec-01", "workflowId": "wf-01", "databaseId": "db1",
-                          "assetId": "asset-01", "executingUserName": "alice", "workflowDatabaseId": "db1"},
-                 "errorInfo": {}}
+        inputs = {"Items": input_rows}
+        if more_inputs:
+            inputs["LastEvaluatedKey"] = {"workflowExecutionId": "exec-01"}
+        tables = {error_svc.workflow_execution_database_v2: MagicMock(query=MagicMock(
+                      return_value={"Items": [main_row]})),
+                  error_svc.workflow_execution_inputs_table: MagicMock(query=MagicMock(return_value=inputs))}
+        monkeypatch.setattr(error_svc.dynamodb, "Table", lambda name: tables.get(name, MagicMock()))
+        for name in ("_get_pipeline_rows", "_fetch_execution_log", "_refresh_execution_log",
+                     "_execution_start_date"):
+            monkeypatch.setattr(error_svc, name, MagicMock(return_value=[] if name == "_get_pipeline_rows" else ""))
+        monkeypatch.setattr(error_svc.eo, "finalize_main_row", MagicMock())
+        monkeypatch.setattr(error_svc.el, "release_locks_for_execution", MagicMock())
+        event = {"body": {"workflowExecutionId": "exec-01", "workflowDatabaseId": "db1", "workflowId": "wf-01"},
+                 "errorInfo": {"Error": "States.TaskFailed", "Cause": "{}"}}
         assert error_svc.lambda_handler(event, MagicMock()) == {"handled": True}
+        return recorder, event
+
+    def test_the_error_handler_payload_names_only_the_execution_and_workflow(self):
+        from backend.backend.common.workflows import workflowAslBuilder
+        source = open(workflowAslBuilder.__file__).read()
+        payload = source[source.index("error_handler_payload = {"):source.index("error_handler_state =")]
+        assert '"workflowExecutionId.$"' in payload and '"workflowId.$"' in payload
+        assert "executingUserName" not in payload and "assetId" not in payload, (
+            "the failed-end record must not rely on fields the error handler does not receive")
+
+    def test_a_failed_run_records_its_user_duration_and_asset(self, monkeypatch):
+        recorder, event = self._run_error_handler(
+            monkeypatch, {"executionStatus": "RUNNING", "triggeredByUserId": "alice",
+                          "executionStartDate": "2020-01-01T00:00:00Z"},
+            [{"databaseId": "db1", "assetId": "asset-01"}, {"databaseId": "db1", "assetId": "asset-01"}])
+        recorder.assert_called_once()
         kwargs = recorder.call_args.kwargs
         assert recorder.call_args.args == (event, "workflowExecutionEnd")
         assert kwargs["outcome"] == "failed" and kwargs["on_behalf_of"] == "alice"
-        assert kwargs["executionId"] == "exec-01" and kwargs["asset_id"] == "asset-01"
+        assert kwargs["duration_ms"] > 0
+        assert (kwargs["database_id"], kwargs["asset_id"]) == ("db1", "asset-01")
+        assert kwargs["executionId"] == "exec-01" and kwargs["workflowId"] == "wf-01"
 
     def test_a_trigger_run_names_no_user(self, monkeypatch):
-        recorder = MagicMock()
-        monkeypatch.setattr(error_svc, "log_action", recorder)
-        monkeypatch.setattr(error_svc, "reconcile_failed_execution", lambda body, info: None)
-        error_svc.lambda_handler({"body": {"workflowExecutionId": "e", "executingUserName": "SYSTEM_USER"}}, None)
+        recorder, _ = self._run_error_handler(
+            monkeypatch, {"executionStatus": "RUNNING", "triggeredByUserId": "SYSTEM_USER",
+                          "executionStartDate": "2020-01-01T00:00:00Z"}, [])
         assert recorder.call_args.kwargs["on_behalf_of"] is None
+
+    @pytest.mark.parametrize("rows, more", [
+        ([{"databaseId": "db1", "assetId": "a1"}, {"databaseId": "db1", "assetId": "a2"}], False),
+        ([{"databaseId": "db1", "assetId": "a1"}], True)])
+    def test_a_run_over_several_assets_names_none(self, monkeypatch, rows, more):
+        recorder, _ = self._run_error_handler(
+            monkeypatch, {"executionStatus": "RUNNING", "triggeredByUserId": "alice",
+                          "executionStartDate": "2020-01-01T00:00:00Z"}, rows, more_inputs=more)
+        kwargs = recorder.call_args.kwargs
+        assert kwargs["database_id"] is None and kwargs["asset_id"] is None
 
     def test_the_execution_end_record_carries_outcome_and_duration(self, monkeypatch):
         recorder = MagicMock()
