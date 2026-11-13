@@ -675,6 +675,10 @@ own file convention:
 | Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                  |
 | Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`       |
 
+A pipeline that backs a compliance rule reports its measurements in one results file,
+`compliance-output.json`; see
+[Building a pipeline for compliance checks](../user-guide/compliance.md#building-a-pipeline-for-compliance-checks).
+
 Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
 `"type": "metadata"` or `"type": "attribute"`. The file-name suffix decides where the values land and

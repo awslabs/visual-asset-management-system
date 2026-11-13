@@ -260,7 +260,17 @@ export const downloadAsset = async ({
         if (error.status === 410) {
             return [false, "This file version has been archived and cannot be downloaded", 410];
         }
-        return [false, error?.message, isRequestBlocked(error) ? undefined : error?.status];
+        // The fourth entry is the API's own `message` from the response body, so a viewer or a
+        // preview can show why the API refused (for example a quarantined asset while the download
+        // block is on, D166) instead of its generic text (core/streamFailure.ts).
+        // It is present only with the status (an ApiError carries the parsed body; it is read by
+        // shape so a test double of the client without the class is not a TypeError here).
+        const status = isRequestBlocked(error) ? undefined : error?.status;
+        const failure: any[] = [false, error?.message, status];
+        if (typeof status === "number" && typeof error?.body?.message === "string") {
+            failure.push(error.body.message);
+        }
+        return failure;
     }
 };
 

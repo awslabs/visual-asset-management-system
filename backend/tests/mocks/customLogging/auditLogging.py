@@ -26,6 +26,7 @@ def _noop(*args, **kwargs):
 # Mirror the public audit functions exported by the real module.
 log_authentication = _noop
 log_authorization = _noop
+log_authorization_denials = _noop
 log_authorization_api = _noop
 report_undelivered_audit_records = _noop
 
@@ -57,6 +58,12 @@ flush_audit_context = _noop
 OUTCOME_SUCCESS = "success"
 OUTCOME_FAILED = "failed"
 OUTCOME_DENIED = "denied"
+
+
+def audit_records_reads():
+    """The reads switch as the real module reads it: on unless AUDIT_RECORD_READS is "false"."""
+    import os
+    return os.environ.get("AUDIT_RECORD_READS", "").strip().lower() != "false"
 
 
 @contextlib.contextmanager

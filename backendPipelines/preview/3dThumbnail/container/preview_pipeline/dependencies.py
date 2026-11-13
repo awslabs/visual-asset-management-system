@@ -172,7 +172,10 @@ KIND_METADATA = "metadata"
 # A material module the renderer resolves from its own search path (a bare ``OmniPBR.mdl``), not a
 # file of the asset: still looked up as before, not reported.
 KIND_RENDERER_MDL = "rendererMdl"
-_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+# A texture of a format whose loader does not sample textures (FBX): still fetched as before, but a
+# missing one removes nothing from the preview, so it is not reported.
+KIND_UNSAMPLED_TEXTURE = "unsampledTexture"
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL, KIND_UNSAMPLED_TEXTURE)
 
 
 @dataclass
@@ -631,6 +634,10 @@ def _fbx_references(path: str) -> List[tuple]:
     FBX keeps a texture's absolute ``FileName`` from the authoring machine and its ``RelativeFilename``;
     both are offered and the resolver discards the absolute one. The scan reads at most the first
     512 MiB.
+
+    The FBX loader draws vertex and material colours and does not sample textures, so no texture can
+    change the preview: each name is offered as ``KIND_UNSAMPLED_TEXTURE`` and a texture that is
+    missing, or refused (the absolute path beside a fetched relative one), is not reported.
     """
     with open(path, "rb") as handle:
         data = handle.read(_FBX_SCAN_LIMIT)
@@ -639,14 +646,14 @@ def _fbx_references(path: str) -> List[tuple]:
         name = match.group(0).decode("utf-8", errors="replace").strip()
         if name not in names:
             names.append(name)
-    references = [(name, False) for name in names]
+    references = [(name, False, KIND_UNSAMPLED_TEXTURE) for name in names]
     # An authoring machine's absolute path keeps the file name as its last segment, and a binary
     # string record's length bytes can read as text and prefix the match; the bare file name is
     # offered too, as a sibling of the FBX -- where an uploader most often puts the textures.
     for name in names:
         base = name.replace("\\", "/").rsplit("/", 1)[-1]
-        if (base, False) not in references:
-            references.append((base, False))
+        if (base, False, KIND_UNSAMPLED_TEXTURE) not in references:
+            references.append((base, False, KIND_UNSAMPLED_TEXTURE))
     return references
 
 
@@ -734,22 +741,21 @@ def _dae_references(path: str) -> List[tuple]:
     return references
 
 
-# The data files an XGRIDS LCC scene (``meta.lcc``) reads beside it; ``environment`` may name another.
-_LCC_SIBLINGS = ("data.bin", "index.bin", "shcoef.bin", "environment.bin")
-
-
 def _lcc_references(path: str) -> List[tuple]:
-    """The data files beside an LCC scene description, plus the environment file its JSON names."""
-    references = [(name, False, False, KIND_DATA_FILE) for name in _LCC_SIBLINGS]
+    """The data files beside an LCC scene description that the converter reads for it
+    (``lcc_meta.lcc_data_files``): ``index.bin`` and ``data.bin``, and ``shcoef.bin`` only for a scene
+    with spherical harmonics. ``environment.bin`` is never read for a thumbnail, so it is not fetched.
+    A description that is not JSON names the two files every scene needs; the converter then refuses
+    it."""
+    from .format_handlers import lcc_meta
+
+    meta = None
     try:
         with open(path, "rb") as handle:
             meta = json.loads(handle.read(_JSON_SCAN_LIMIT).decode("utf-8", errors="replace"))
-        environment = meta.get("environment") if isinstance(meta, dict) else None
-        if isinstance(environment, str) and (environment, False, False, KIND_DATA_FILE) not in references:
-            references.append((environment, False, False, KIND_DATA_FILE))
     except (OSError, ValueError):
         pass
-    return references
+    return [(name, False, KIND_DATA_FILE) for name in lcc_meta.lcc_data_files(meta)]
 
 
 def _lcc2_references(path: str, max_splats: Optional[int] = None) -> List[tuple]:

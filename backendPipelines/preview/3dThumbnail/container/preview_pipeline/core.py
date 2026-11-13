@@ -566,7 +566,8 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     """
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
-    files were fetched into (USD reads textures only from inside it). ``budgets`` bounds the points
+    files were fetched into (USD reads textures, and glTF and OBJ their referenced files, only from
+    inside it). ``budgets`` bounds the points
     a point-cloud reader and the splats a splat reader keep, and the triangles a 3MF, COLLADA, STEP or
     FBX scene expands to.
 
@@ -595,7 +596,7 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     if xml_mesh_handler.can_handle(ext):
         return xml_mesh_handler.load(file_path, ext, max_triangles=max_triangles)
     if mesh_handler.can_handle(ext):
-        return mesh_handler.load(file_path, max_triangles=max_triangles)
+        return mesh_handler.load(file_path, max_triangles=max_triangles, asset_root=asset_root)
     elif pointcloud_handler.can_handle(ext):
         if budgets is None:
             return pointcloud_handler.load(file_path)

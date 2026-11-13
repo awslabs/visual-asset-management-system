@@ -106,6 +106,14 @@ tools/VamsMCP/
     test_comment_subscription_tools.py
                              # the comment / subscription / metadata-schema / API-key tools: the three
                              # response shapes they span, and their docstring contracts
+    test_compliance_tools.py # the compliance tools: the two single-response listings, the
+                             # maxItems-keyed pages (evaluations, audit, quarantine), the
+                             # page-returning overview/bindings reads, the write/destructive
+                             # bodies, docstring contracts
+    test_compliance_toolset.py
+                             # the `compliance` tool set: its members, its own budget, the gates
+                             # inside it, the outcome checks, and over the remote server the
+                             # user's own token on every compliance call (D201)
     addon/
       test_edh_tools.py      # the EDH tools on a recording fake mcp, one Config per gate setting:
                              # payloads, the pre-flight switch of each tool, the connect tool with
@@ -173,6 +181,10 @@ asymmetry other callers rely on):
 -   `_bounded_message_list(page, max_items, page_size, noun)` — lifts a **bare
     array** nested under `message` onto `Items`, and flags the bound the route
     applied. Used by the two asset-scoped comment listings (Mandatory Rule 7).
+-   `_single_response_list(page, items_key)` — lifts a list a route returns
+    WHOLE, under its own field name and with no envelope and no token, onto
+    `Items` + `count`, carrying the other top-level fields through. Used by the
+    compliance schema and pending-cascade listings (Mandatory Rule 7).
 
 ---
 
@@ -202,6 +214,24 @@ asymmetry other callers rely on):
    fans out across a group), so keep all three out of `autoApprove`. The tier is
    about stored data; that list is about compute. Three places state this and must
    agree: this rule, the README's caution paragraph, and the tool's own docstring.
+   The compliance tools that evaluate assets belong on that compute list too: a
+   pipeline rule runs one workflow execution per evaluated asset, so
+   `evaluate_asset_compliance` (one asset), `sweep_compliance_schema` (every asset
+   bound to the schema), `evaluate_database_compliance` (every tracked asset of one
+   database), `create_compliance_cascade` (starts the run at once with
+   `require_approval=False`) and `approve_compliance_cascade` (starts the run; both
+   return 202 and the run continues in the background — poll
+   `get_compliance_cascade`) are write-tier and stay out of `autoApprove`, as do
+   `bind_compliance_schema` and `unbind_compliance_schema`, since under automatic
+   evaluation a binding change queues an evaluation of each asset it reaches
+   (`evaluationsQueued`); a database bind or unbind is applied in the background
+   (202, `apply`), and their docstrings tell the model to read its status with
+   `get_compliance_bindings` before calling it done; `unbind_compliance_schema`
+   deletes compliance records but is write-tier because the history it reverses is
+   recomputable from a re-evaluation, and its docstring names the removal;
+   `revoke_quarantine_exception` is write-tier too, although it can put an asset back
+   into quarantine (and notify its subscribers) — it only restores the asset's last
+   recorded verdict.
    The same three-place rule covers a read that BILLS on every call: `search_nlp`
    embeds the query with Bedrock, so it stays out of `autoApprove` and its docstring
    says so.
@@ -259,10 +289,30 @@ asymmetry other callers rely on):
     dict, and `paginate()` reads `items_key` off whatever it gets — so for
     `{"message": [row, ...]}` both hand back zero rows on a successful call, which
     reads as an empty thread rather than a wiring defect. The asset-scoped comment
-    listings are that shape; use `_bounded_message_list()`. Three variants now
+    listings are that shape; use `_bounded_message_list()`. Three envelope variants
     exist across the API, so check which one a route returns before choosing a
-    helper: a bare array under `message`, an `Items`/`NextToken` page under
-    `message` (subscriptions), and no envelope at all (metadata schemas, API keys).
+    helper: a bare array under `message` (the asset-scoped comment listings —
+    `_bounded_message_list()`), an `Items`/`NextToken` page under `message`
+    (subscriptions), and no envelope at all (metadata schemas, API keys, every
+    compliance route). Two compliance listings — `schemas` and pending `cascades` —
+    return a WHOLE list under a route-specific field with no token and go through
+    `_single_response_list(page, items_key)`, because `paginate()` would send paging
+    parameters the route ignores and stop after one page anyway. The compliance
+    `evaluations`, audit `entries` and `quarantinedAssets` are
+    `maxItems`/`startingToken`/`NextToken` pages driven by `paginate()` with that
+    field as `items_key`; the database overview and bindings reads return the
+    route's own page (`summary`, `totalAssets`, `assetOverrideCount` describe the
+    full set; `summary.error` is an overlay count of assets whose last evaluation
+    errored, not a state) with `max_items`/`starting_token` forwarded and `NextToken`
+    passed through. Schema records carry a top-level `schemaFormat`
+    (`vams-rules-v1` | `legacy`).
+
+    **A page can name its page size something other than `pageSize`.** The compliance
+    evaluation history, audit trails and quarantine listing page on `maxItems` +
+    `startingToken` and return `NextToken`; `paginate()` still drives them, but the
+    `fetch_page` callable renames `params["pageSize"]` to the route's `maxItems`
+    (clamped to the route's cap) and passes the route's list field as `items_key`
+    (`evaluations`, `entries`, `quarantinedAssets`).
 
     **A route can accept the pagination parameters and discard the token.** The
     comment listings apply `maxItems`/`pageSize` and return no `NextToken` — the
@@ -365,9 +415,11 @@ asymmetry other callers rely on):
     quirks, why a helper exists and other maintainer rationale go in code comments or this file,
     never in the docstring. Each description stays within 1,200 characters, except the short named
     list in `tests/test_agent_surface.py` (`DESCRIPTION_EXCEPTIONS`, each with its reason and
-    ceiling), and each tool set's descriptions together within 30,000 (`toolsets.MAX_DESCRIPTION_CHARS_PER_SET`,
-    Rule 17; the full core surface, which only `all` over stdio lists, within 32,000). Before adding text,
-    cut text. Many older
+    ceiling), each tool set's descriptions together within 30,000 (`toolsets.MAX_DESCRIPTION_CHARS_PER_SET`,
+    Rule 17; the full core surface other than the compliance tools, which only `all` over stdio lists,
+    within 32,000), and the 25 compliance tools (`COMPLIANCE_TOOLS`, the `compliance` tool set) together
+    within 18,700. Before
+    adding text, cut text. Many older
     contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
     changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
     `evals/agent-scenarios.md` against a test deployment in Kiro and Claude Code.
@@ -461,7 +513,10 @@ asymmetry other callers rely on):
       challenge does not name). The SDK still carries the protocol and its DNS rebinding check,
       which `transport_security_settings` configures for the resource's host and loopback only.
 17. **Every tool is in a tool set, and every set fits a remote client.** `toolsets.py` names the sets
-    (`consumer`, `operator`, `admin`, `edh`, `edh-admin`; plus `custom` for a fork's tools and `all`).
+    (`consumer`, `operator`, `admin`, `compliance`, `edh`, `edh-admin`; plus `custom` for a fork's tools and
+    `all`). The 25 compliance tools (`toolsets.COMPLIANCE_TOOLS`) are in `compliance` only, with the
+    orientation reads, and each compliance write names a compliance read as its outcome check
+    (`server._CORE_OUTCOME_CHECKS`); `tests/test_compliance_toolset.py` holds them there.
     `_ToolSetServer.tool` registers only the selected sets' tools, under the gates as before. A new
     core or add-on tool goes into at least one set (`consumer` takes reads only, never a write), and
     each set stays within `MAX_TOOLS_PER_SET` (100, the most Amazon Quick lists per connection) and

@@ -185,6 +185,52 @@ ADMIN: FrozenSet[str] = frozenset(
     }
 )
 
+# Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades and the
+# compliance audit trail, for the people who run compliance, with the reads that orient a session.
+# The compliance tools are in this set only, and their descriptions keep a total of their own
+# (tests/test_agent_surface.py MAX_COMPLIANCE_TOTAL_CHARS), so they take no room from another set.
+# The gates apply as everywhere: the reads are always registered, the writes (create, update, bind,
+# unbind, evaluate, sweep, release, exceptions, cascades) only with VAMS_ENABLE_WRITES, and
+# delete_compliance_schema only with VAMS_ENABLE_DESTRUCTIVE.
+COMPLIANCE_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "list_compliance_schemas",
+        "get_compliance_schema",
+        "get_compliance_bindings",
+        "get_asset_compliance_state",
+        "get_database_compliance_overview",
+        "list_compliance_evaluations",
+        "list_quarantined_assets",
+        "list_compliance_cascades",
+        "get_compliance_cascade",
+        "query_compliance_audit",
+        "get_asset_compliance_audit",
+        "create_compliance_schema",
+        "update_compliance_schema",
+        "bind_compliance_schema",
+        "unbind_compliance_schema",
+        "evaluate_asset_compliance",
+        "sweep_compliance_schema",
+        "evaluate_database_compliance",
+        "release_quarantine",
+        "grant_quarantine_exception",
+        "revoke_quarantine_exception",
+        "create_compliance_cascade",
+        "approve_compliance_cascade",
+        "reject_compliance_cascade",
+        "delete_compliance_schema",
+    }
+)
+COMPLIANCE: FrozenSet[str] = COMPLIANCE_TOOLS | frozenset(
+    {
+        "vams_status",
+        "list_features",
+        "list_allowed_api_routes",
+        "list_databases",
+        "get_database",
+    }
+)
+
 # EDH Workstations add-on, for the people who use workstations and container jobs.
 EDH: FrozenSet[str] = frozenset(
     {
@@ -247,6 +293,7 @@ TOOLSETS = {
     "consumer": CONSUMER,
     "operator": OPERATOR,
     "admin": ADMIN,
+    "compliance": COMPLIANCE,
     "edh": EDH,
     "edh-admin": EDH_ADMIN,
 }

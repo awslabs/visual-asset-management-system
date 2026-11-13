@@ -111,8 +111,8 @@ global_settings:
           reason: S3 ETag (MD5 of an empty object) in a response example, not a secret
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/overview.md
-          line_start: 164
-          line_end: 164
+          line_start: 166
+          line_end: 166
           reason: pagination token (base64 of an example JSON key) in a response example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
@@ -161,8 +161,8 @@ global_settings:
           reason: credentialsSecretArn key holding a placeholder Secrets Manager ARN in a configuration example
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/pipelines/custom-pipelines.md
-          line_start: 1803
-          line_end: 1803
+          line_start: 1807
+          line_end: 1807
           reason: example workflow execution identifier in a payload example, not a secret
 
         # grype matches the action tag `v4` as version 4.0.0, inside the advisory's affected range

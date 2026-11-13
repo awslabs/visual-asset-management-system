@@ -19,9 +19,10 @@
  * zero, and the DLQ holding the dropped batches with nothing alerting on it.
  *
  * The opt-out is scoped as narrowly as the cause. Only the created-events function writes back to its
- * own trigger; the deleted-events function keeps the default, and the property is emitted only in the
- * partitions where the detection exists: commercial and EU Sovereign. GovCloud documents it as not
- * available and gets no property. The opt-out is a stopgap until the self-write is removed (#1207).
+ * own trigger; the deleted-events function and every other function keep the default, and the property
+ * is emitted only in the partitions where the detection exists: commercial and EU Sovereign. GovCloud
+ * documents it as not available and gets no property. The opt-out is a stopgap until the self-write is
+ * removed (#1207).
  *
  * The two vector functions that continue their own work opt out too: the vector reindexer continues a
  * run by asynchronous self-invocation every 15-minute window, and the vector indexer continues an asset-
@@ -29,6 +30,12 @@
  * would stop either chain after about 16 hops. Each handler caps its chain itself (`MAX_RUN_INVOCATIONS`,
  * `MAX_CONTINUATION_HOPS`). Same partition rule; vector search ships on only in the commercial template,
  * so the GovCloud branch is reached by mutation below.
+ *
+ * The compliance job Lambda opts out too, in the same partitions: a deleted database's compliance
+ * move and a database binding change applied in the background continue themselves on its queue, one
+ * message per run, for as many runs as the database's size needs (D161), each job stopped by its own
+ * run limit instead. The compliance trigger, which evaluates the jobs' evaluations, keeps the default
+ * in every partition, as does every other function.
  */
 
 import * as Config from "../../config/config";
@@ -43,8 +50,14 @@ const INDEXER_HANDLER = "handlers.osVectorSearch.vectorIndexer.lambda_handler";
 const LAUNCHER_HANDLER = "handlers.osVectorSearch.systemWorkflowLauncher.lambda_handler";
 /** The vector functions that continue their own work (the launcher by sending a waiting launch back). */
 const VECTOR_SELF_CONTINUING_HANDLERS = [REINDEXER_HANDLER, INDEXER_HANDLER, LAUNCHER_HANDLER];
-/** The functions that may set `RecursiveLoop`, each only where the partition has the detection. */
-const OPTED_OUT_HANDLERS = [CREATED_HANDLER, ...VECTOR_SELF_CONTINUING_HANDLERS];
+const COMPLIANCE_TRIGGER_HANDLER = "handlers.compliance.complianceTrigger.lambda_handler";
+const COMPLIANCE_JOBS_HANDLER = "handlers.compliance.complianceJobs.lambda_handler";
+/** The functions that opt out of recursive-loop detection where the partition has it. */
+const OPTED_OUT = new Set([
+    CREATED_HANDLER,
+    COMPLIANCE_JOBS_HANDLER,
+    ...VECTOR_SELF_CONTINUING_HANDLERS,
+]);
 
 /** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
 const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
@@ -174,10 +187,22 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         }
     );
 
+    test("the compliance job Lambda allows recursion in commercial and EU Sovereign only", () => {
+        const jobs = functionsWithHandler(synth, COMPLIANCE_JOBS_HANDLER);
+        expect(jobs).toHaveLength(1);
+        expect(jobs[0].properties.RecursiveLoop).toBe(EXPECTED_RECURSIVE_LOOP[templateName]);
+    });
+
+    test("the compliance trigger keeps the detection on in every partition", () => {
+        const triggers = functionsWithHandler(synth, COMPLIANCE_TRIGGER_HANDLER);
+        expect(triggers).toHaveLength(1);
+        expect(triggers[0].properties.RecursiveLoop).toBeUndefined();
+    });
+
     test("no other function changes its recursive-loop setting", () => {
         const offenders = synth
             .ofType("AWS::Lambda::Function")
-            .filter((fn) => !OPTED_OUT_HANDLERS.includes(fn.properties.Handler))
+            .filter((fn) => !OPTED_OUT.has(fn.properties.Handler))
             .filter((fn) => fn.properties.RecursiveLoop !== undefined)
             .map((fn) => `${fn.stack}/${fn.logicalId}`);
         expect(synth.countOfType("AWS::Lambda::Function")).toBeGreaterThan(1);

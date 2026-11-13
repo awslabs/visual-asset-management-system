@@ -29,11 +29,26 @@ ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS
 # --- Budgets (Mandatory Rule 11) --------------------------------------------------------------------
 
 MAX_DESCRIPTION_CHARS = 1200
-# Every core tool together: the whole surface a stdio client with every gate on reads. The 30,000
+# Every core tool together other than the compliance tools: the whole surface a stdio client with every
+# gate on reads, less the compliance tools, which keep a total of their own (below). The 30,000
 # character budget a client reads at the start of a session holds per tool set
 # (toolsets.MAX_DESCRIPTION_CHARS_PER_SET, tests/test_toolsets.py); this ceiling only keeps the full
 # surface from growing unnoticed.
 MAX_CORE_TOTAL_CHARS = 32000
+# The compliance tools (`vams_mcp/server.py` "Compliance" sections) are core tools with a total of
+# their own, so adding them did not take the room of the other core tools: together within this.
+MAX_COMPLIANCE_TOTAL_CHARS = 18700
+COMPLIANCE_TOOLS = {
+    "list_compliance_schemas", "get_compliance_schema", "get_compliance_bindings",
+    "get_asset_compliance_state", "get_database_compliance_overview", "list_compliance_evaluations",
+    "list_quarantined_assets", "list_compliance_cascades", "get_compliance_cascade",
+    "query_compliance_audit", "get_asset_compliance_audit", "create_compliance_schema",
+    "update_compliance_schema", "bind_compliance_schema", "unbind_compliance_schema",
+    "evaluate_asset_compliance", "sweep_compliance_schema", "evaluate_database_compliance",
+    "release_quarantine", "grant_quarantine_exception", "revoke_quarantine_exception",
+    "create_compliance_cascade", "approve_compliance_cascade", "reject_compliance_cascade",
+    "delete_compliance_schema",
+}
 # The only tools allowed past MAX_DESCRIPTION_CHARS, each with its own ceiling and the reason. Keep
 # this list short: a long description is read on every session by every connected agent.
 DESCRIPTION_EXCEPTIONS = {
@@ -51,6 +66,11 @@ COMPUTE_TOOLS = {
     "create_edh_workstation", "renew_edh_workstation", "start_edh_workstation", "stop_edh_workstation",
     "stop_edh_admin_instance", "submit_edh_container_job", "start_edh_ami_recipe_build",
     "deactivate_edh_admin_instance", "kill_edh_container_job",
+    # A compliance evaluation runs the schema's pipeline rules as workflow executions; a binding
+    # change under automatic evaluation queues the evaluations of the assets it reaches.
+    "evaluate_asset_compliance", "evaluate_database_compliance", "sweep_compliance_schema",
+    "create_compliance_cascade", "approve_compliance_cascade", "bind_compliance_schema",
+    "unbind_compliance_schema",
 }
 
 # The typed read tools (Rule 13): each publishes an outputSchema with these fields.
@@ -160,10 +180,16 @@ async def test_the_exceptions_are_still_needed_and_still_exist(every_tool):
 
 
 async def test_the_core_descriptions_stay_within_the_total_budget(every_tool):
-    core = _core_names()
+    core = _core_names() - COMPLIANCE_TOOLS
     assert len(core) > 90
     total = sum(len(every_tool[name].description or "") for name in core)
     assert total <= MAX_CORE_TOTAL_CHARS, total
+
+
+async def test_the_compliance_descriptions_stay_within_their_total_budget(every_tool):
+    assert COMPLIANCE_TOOLS <= _core_names(), sorted(COMPLIANCE_TOOLS - _core_names())
+    total = sum(len(every_tool[name].description or "") for name in COMPLIANCE_TOOLS)
+    assert total <= MAX_COMPLIANCE_TOTAL_CHARS, total
 
 
 async def test_every_core_description_opens_with_when_to_use_the_tool(every_tool):

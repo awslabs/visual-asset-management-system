@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import Box from "@cloudscape-design/components/box";
 import Spinner from "@cloudscape-design/components/spinner";
 import { downloadAsset, fetchAsset } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import cacheManager from "./SearchCacheManager";
 import "./PreviewThumbnailCell.css";
 
@@ -32,6 +33,8 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<boolean>(false);
+    // The API's own reason when it refused the file (D166), shown in place of the fixed text.
+    const [refusal, setRefusal] = useState<string | null>(null);
     const [assetPreviewKey, setAssetPreviewKey] = useState<string | null>(null);
 
     useEffect(() => {
@@ -95,6 +98,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                         setAssetPreviewKey(assetPreviewKey);
                         setLoading(false);
                         setError(false);
+                        setRefusal(null);
                         return;
                     }
 
@@ -128,6 +132,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                     setUrl(null);
                     setLoading(true);
                     setError(false);
+                    setRefusal(null);
                     // Cache miss - fetch asset details from API
                     //console.log(`[Cache MISS] Asset details for ${assetId}`);
                     const assetDetails = await fetchAsset({
@@ -204,6 +209,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                     if (response[0] === false) {
                         console.error("Error downloading preview:", response[1]);
                         setError(true);
+                        setRefusal(downloadRefusalReason(response));
                     } else {
                         const imageDataUrl = response[1];
                         setUrl(imageDataUrl);
@@ -249,6 +255,15 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
     const handleImageError = () => {
         setError(true);
     };
+
+    // A preview the API refused shows the API's reason (D166); any other failure shows nothing.
+    if (!loading && refusal) {
+        return (
+            <div className="preview-thumbnail-error" title={refusal} style={{ fontSize: "12px" }}>
+                {refusal}
+            </div>
+        );
+    }
 
     // If we're not loading and there's an error or no URL, show blank
     if (!loading && (error || !url)) {
