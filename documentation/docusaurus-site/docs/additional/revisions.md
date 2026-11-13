@@ -344,6 +344,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Execution menu names the view it opens** — The first item of an execution row's actions menu reads **View details** instead of **View results**, since it opens the execution's details view, not its results. (issue #1431)
 -   **GenAI 3D metadata labeling with a geographic inference profile** — With a `us.`, `eu.`, `apac.` or `us-gov.` `bedrockModelId`, the metadata generation Lambda function's Amazon Bedrock grant names the configured foundation model in every Region the profile can route to; it named the deployment Region only, so a request routed elsewhere could be refused. (issue #1390)
 -   **GLB combine keeps the output it reports** — `vamscli industry spatial glbassetcombine` without `--local-path` keeps the combined GLB and the export JSON in the temporary folder its result names, unless it uploaded them with `--asset-create-name`; `--no-delete-temporary-files` keeps them, also after a failed upload. Its cleanup removes the whole folder it created in the system temp directory; it removed the files it had just reported and left an empty `vams_glb_combine_*` folder behind. (issues #1388, #1389)
+-   **CLI sign-in names an IP restriction** — `vamscli auth login` reports a 403 from the API's authorizer on its version check as `Permission Denied`, says the API is reachable, and names the deployment's source IP restriction as the likely cause; it reported `API Unavailable`. (issue #1358)
 
 **Other changes:**
 
