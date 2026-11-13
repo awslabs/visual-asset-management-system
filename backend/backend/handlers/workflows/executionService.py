@@ -6265,8 +6265,9 @@ def permanent_delete_execution(event, execution_id):
     """Permanently delete an execution's DynamoDB rows across all sub-tables (admin-gated at the
     route/permission level; not-in-progress guarded here). Does NOT touch Step Functions history.
 
-    Removes: main row, workflow inputs, workflow configuration, output index, and — per pipeline —
-    the PipelineExecutions row plus its input/output/log/config sub-rows."""
+    Removes: main row, workflow inputs, workflow configuration, output index, the end-state step's
+    ingest ledger, and — per pipeline — the PipelineExecutions row plus its input/output/log/config
+    sub-rows."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
@@ -6338,7 +6339,11 @@ def permanent_delete_execution(event, execution_id):
         dynamodb.Table(pipeline_executions_table).delete_item(
             Key={"pipelineExecutionId": pexec_id, "workflowExecutionId": execution_id})
 
-    # Workflow-level rows.
+    # Workflow-level rows. The end-state step's ingest ledger is output-files rows under the run's own
+    # partition (common.workflows.executionOutputs.ingest_ledger_partition).
+    _delete_all_rows(pipeline_execution_output_files_table,
+                     Key("pipelineExecutionId").eq(eo.ingest_ledger_partition(execution_id)),
+                     ["pipelineExecutionId", "fileType:relativeFilePath"])
     _delete_all_rows(workflow_execution_inputs_table,
                      Key("workflowExecutionId").eq(execution_id),
                      ["workflowExecutionId", "databaseId:assetId:inputAssetFileKey"])

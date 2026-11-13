@@ -33,8 +33,9 @@ from common.s3PathPatterns import (
 
 logger = safeLogger()
 
-# ASL schema version stamped in the definition Comment field.
-ASL_SCHEMA_VERSION = 1
+# ASL schema version stamped in the definition Comment field; equal to workflowAsl.ASL_SCHEMA_VERSION
+# (bumped together, see there).
+ASL_SCHEMA_VERSION = 2
 
 # Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
 # argument: the single quote closes the intrinsic's string literal, the braces are its
@@ -42,6 +43,20 @@ ASL_SCHEMA_VERSION = 1
 # produces an intrinsic Step Functions rejects when the definition is created.
 _ASL_INTRINSIC_UNSAFE_CHARS = "'{}\\"
 
+
+
+# The errors the process-output state retries (see build_* below). Changing this list changes every
+# workflow's definition: bump workflowAsl.ASL_SCHEMA_VERSION (and this module's) in the same change so deployed
+# workflows are redeployed at their next launch.
+PROCESS_OUTPUT_RETRY_ERRORS = [
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+    "Lambda.TooManyRequestsException",
+    "States.Timeout",
+    "Sandbox.Timedout",
+    "EarlierIngestionInProgress",
+]
 
 def _validate_asl_pipeline_name(name):
     """Reject a pipeline name that cannot be embedded in the generated ASL's States.Format
@@ -387,17 +402,17 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
 
     # Create retry and catch configs for process output (Catch routes through the
     # error-handler state, capturing the error at $.errorInfo).
-    # Retry only transient AWS/Lambda faults. This handler ingests produced files into the output
-    # asset before it records them, so a blanket States.ALL retry of an application error would
-    # re-run ingestion and duplicate files/versions; such errors go straight to the Catch instead.
+    # Retry only transient AWS/Lambda faults, a timed-out attempt, and an attempt that stood aside for
+    # another attempt still ingesting. A blanket States.ALL retry of an application error would re-run
+    # a failed write-back; such errors go straight to the Catch instead. Retrying is safe because every
+    # attempt claims each output in the run's ingest ledger before ingesting it (#1271): a retry
+    # records what earlier attempts ingested and never ingests an output twice.
+    #   Sandbox.Timedout - the Lambda's own timeout on current runtimes (#1290); States.Timeout is
+    #     raised only for a state TimeoutSeconds.
+    #   EarlierIngestionInProgress - processWorkflowExecutionOutput left outputs to a live earlier
+    #     attempt that had not finished them within this attempt's time.
     po_retry_config = create_retry_config(
-        error_equals=[
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException",
-            "States.Timeout",
-        ],
+        error_equals=PROCESS_OUTPUT_RETRY_ERRORS,
         interval_seconds=5,
         backoff_rate=2.0,
         max_attempts=3

@@ -34,6 +34,7 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
 )
 from models.common import VAMSGeneralErrorResponse
+from common.workflows import executionOutputs as eo
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -67,6 +68,9 @@ allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 try:
     from common.resourceNames import ResourceKeys, get_table_name
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    # The run's ingest ledger, where a workflow output's copy claim lives (#1271).
+    pipeline_execution_output_files_table = get_table_name(
+        ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
@@ -276,6 +280,23 @@ def delete_s3_object(bucket: str, key: str) -> bool:
     except Exception as e:
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
+
+def destination_written_by_execution(bucket: str, key: str, workflow_execution_id: str) -> bool:
+    """Whether the current version at ``key`` was written by workflow execution
+    ``workflow_execution_id`` (mirrors uploadFile.destination_written_by_execution). False for no
+    execution id or an unreadable destination, so the copy goes ahead as before."""
+    if not workflow_execution_id:
+        return False
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except Exception as e:
+        if not (isinstance(e, ClientError)
+                and e.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound')):
+            logger.warning(f"Could not read destination {key} before the copy (non-critical): {e}")
+        return False
+    metadata = head.get('Metadata') or {}
+    return metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY) == workflow_execution_id
+
 
 def is_preview_file(file_path: str) -> bool:
     """
@@ -758,7 +779,60 @@ def log_processing_metrics(correlation_ids: Dict[str, str], step: str, duration:
         logger.warning(f"Error logging processing metrics: {e}")
 
 
+class CopyClaimHeld(Exception):
+    """Another worker holds the copy claim on this workflow output. Raised out of the handler so the
+    message returns to the queue and is redelivered after the visibility timeout, when the holder's
+    outcome is known (or its claim has gone stale and is taken over)."""
+
+
+def _claim_holder(correlation_ids: Dict[str, str]) -> str:
+    """The SQS message id: a redelivery of the holder's own message takes its claim back at once."""
+    return correlation_ids.get('messageId') or correlation_ids.get('recordCorrelationId') or 'unknown'
+
+
 def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str]) -> bool:
+    """Validate and move one queued file; for a workflow-run output, under the output's copy claim.
+
+    A workflow end-state step retried after a timeout can queue the same output twice. Only the
+    worker holding the claim (common.workflows.executionOutputs.acquire_copy_claim) copies; a worker
+    that finds the copy already done removes the staged source and succeeds, and one that finds a live
+    claim raises CopyClaimHeld so its message is redelivered later. An upload with no workflow
+    execution id copies as before, with no claim."""
+    execution_id = file_info.get('workflowExecutionId')
+    if not execution_id:
+        return _validate_and_move_large_file(file_info, correlation_ids)
+
+    destination_key = file_info['finalS3Key']
+    holder = _claim_holder(correlation_ids)
+    try:
+        claim = eo.acquire_copy_claim(dynamodb, pipeline_execution_output_files_table, execution_id,
+                                      destination_key, holder, utc_now().timestamp())
+    except Exception as e:
+        # Copying without the claim could write a second version, and failing would let the clean-up
+        # delete the staged output, so the message goes back to the queue instead.
+        logger.warning(f"Could not take the copy claim on {destination_key}: {e}")
+        raise CopyClaimHeld(f"The copy claim on {destination_key} could not be taken") from e
+    if claim == eo.CLAIM_COPIED:
+        logger.info(f"{destination_key} already copied for this workflow execution; removing the staged source only")
+        delete_s3_object(file_info.get('sourceBucketName') or file_info['bucketName'], file_info['tempS3Key'])
+        return True
+    if claim == eo.CLAIM_HELD:
+        raise CopyClaimHeld(f"Another worker is copying {destination_key}")
+
+    copied = False
+    try:
+        copied = _validate_and_move_large_file(file_info, correlation_ids)
+        return copied
+    finally:
+        try:
+            eo.finish_copy_claim(dynamodb, pipeline_execution_output_files_table, execution_id,
+                                 destination_key, holder, copied)
+        except Exception as e:
+            # A claim left in place is taken over after COPY_CLAIM_TAKEOVER_SECONDS.
+            logger.warning(f"Could not finish the copy claim on {destination_key} (non-critical): {e}")
+
+
+def _validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str]) -> bool:
     """
     Validate file content and MIME type, then move file from temporary to final location.
     Ported from uploadFile.py complete_upload function.
@@ -814,6 +888,13 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             # This validation is simplified for async processing - we assume the base file exists
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
+
+        # A retried workflow end-state step can queue an output a second time; when this run already
+        # wrote it (an earlier message's copy landed), finish without a second version.
+        if destination_written_by_execution(bucket_name, final_s3_key, file_info.get('workflowExecutionId')):
+            logger.info(f"{final_s3_key} already written by this workflow execution; removing the staged source only")
+            delete_s3_object(source_bucket, temp_s3_key)
+            return True
 
         # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
@@ -1029,7 +1110,10 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
         total_duration = (utc_now() - start_time).total_seconds()
         logger.info(f"Large file processing completed successfully in {total_duration:.2f}s - {correlation_str}")
         return True
-        
+
+    except CopyClaimHeld:
+        # Not a failure: the staged file belongs to the claim holder, so no clean-up runs here.
+        raise
     except Exception as e:
         total_duration = (utc_now() - start_time).total_seconds()
         logger.exception(f"Unexpected error processing large file after {total_duration:.2f}s - {correlation_str}: {e}")
@@ -1100,6 +1184,7 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
             correlation_ids = {
                 'requestId': request_id,
                 'recordCorrelationId': record_correlation_id,
+                'messageId': record.get('messageId', ''),
                 'uploadId': file_info.get('uploadId'),
                 'assetId': file_info.get('assetId'),
                 'databaseId': file_info.get('databaseId'),
@@ -1152,7 +1237,12 @@ def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> None:
                 failure_count += 1
                 
             processed_count += 1
-                
+
+        except CopyClaimHeld as held:
+            # The event source mapping delivers one message per invocation, so failing the invocation
+            # returns only this message to the queue; it is redelivered after the visibility timeout.
+            logger.info(f"{held} - CorrelationId: {record_correlation_id}; returning the message to the queue")
+            raise
         except Exception as e:
             logger.exception(f"Unexpected error processing SQS record - CorrelationId: {record_correlation_id}, Error: {e}")
             failure_count += 1

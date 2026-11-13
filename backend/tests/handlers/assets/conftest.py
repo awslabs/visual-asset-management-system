@@ -7,6 +7,10 @@ import types
 
 import pytest
 
+# sqsUploadFileLarge resolves the output-files table (the run's ingest ledger, which holds a workflow
+# output's copy claim) at import. Seeded at module level, with the value every workflows test module
+# also seeds, so whichever directory collects first leaves the others' expectations intact.
+os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME", "t-of")
 # The root harness replaces `common` with a mock package, so the REAL `common.compliance` package
 # is registered here as a package object whose `__path__` points at the source tree (the same way
 # `tests/handlers/compliance/conftest.py` and `tests/conftest.py` register `common.compliance` and
